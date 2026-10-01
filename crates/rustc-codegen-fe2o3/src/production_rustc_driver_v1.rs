@@ -25,7 +25,9 @@ pub use source_bitselect_promotion_driver_v1::run_bitselect_source_promotion_dri
 #[path = "production_rustc_driver_v1/source_local_order_recipe_driver_v1.rs"]
 pub(crate) mod source_local_order_recipe_driver_v1;
 #[cfg(target_os = "linux")]
-pub use source_local_order_recipe_driver_v1::run_source_local_order_recipe_driver_v1;
+pub use source_local_order_recipe_driver_v1::{
+    run_source_local_order_recipe_driver_measured_v1, run_source_local_order_recipe_driver_v1,
+};
 
 #[cfg(test)]
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
@@ -68,8 +70,12 @@ pub use physical_lds_exchange_diagnostic_export_v22::run_diagnostic_physical_lds
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
 pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
+
 #[path = "production_rustc_driver_v1/ordered_program_origin_export_v1.rs"]
 mod ordered_program_origin_export_v1;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "production_rustc_driver_v1/ordered_program_stage_measurement_v1_tests.rs"]
+mod ordered_program_stage_measurement_v1_tests;
 pub use ordered_program_origin_export_v1::run_diagnostic_ordered_program_origin_driver_v1;
 #[path = "production_rustc_driver_fixed_checked_output_v1.rs"]
 mod fixed_checked_output_v1;
@@ -1069,3 +1075,25 @@ mod gfx942_bf16_call_source_cpu_qualification_v1_tests;
 mod gfx942_bf16_tile_values_qualification_v1_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_tiled_region_qualification_v1_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_bf16_generated_source_qualification_v1_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_bf16_publication_sidecar_v1_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_bf16_publication_tap_v1_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "production_rustc_driver_v1/source_bindings_checkpoint_v1_tests.rs"]
+mod source_bindings_checkpoint_v1_tests;
+
+#[cfg(target_os = "linux")]
+#[path = "production_rustc_driver_v1/bf16_tile_source_driver_v1.rs"]
+mod bf16_tile_source_driver_v1;
+#[cfg(target_os = "linux")]
+pub use bf16_tile_source_driver_v1::{
+    run_bf16_tile_source_inspection_driver_v1, run_bf16_tile_source_promotion_driver_v1,
+};
+
+#[cfg(target_os = "linux")]
+pub use bf16_tile_source_driver_v1::run_bf16_generated_source_admission_driver_v1;

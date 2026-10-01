@@ -1258,3 +1258,6 @@ mod tests {
         }
     }
 }
+
+#[path = "module_handoff_v2_storage_v1.rs"]
+mod logical_storage;

@@ -16,6 +16,8 @@ pub(crate) struct SourceOwnedBf16MfmaRegionV1<'a, 'tcx> {
     emission: &'a Emission<'a>,
     source: &'a Bf16MfmaSourceFileObservationV1,
     expressions: [&'tcx Expr<'tcx>; 6],
+    publish_ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    publish_floor: usize,
 }
 impl<'a, 'tcx> SourceOwnedBf16MfmaRegionV1<'a, 'tcx> {
     pub(crate) const fn emission(&self) -> &'a Emission<'a> {
@@ -295,6 +297,8 @@ impl<'tcx> AuthenticatedBf16MfmaSourceSeedV1<'tcx> {
                 emission,
                 source: &source,
                 expressions,
+                publish_ledger: ledger,
+                publish_floor: floor,
             },
             budget,
         );
@@ -314,3 +318,11 @@ impl<'tcx> AuthenticatedBf16MfmaSourceSeedV1<'tcx> {
         result
     }
 }
+
+#[path = "production_tiled_region_publish_v1.rs"]
+mod publish;
+pub(crate) use publish::{
+    Bf16SourcePublicationEffectV1, Bf16SourcePublicationProgressV1, Bf16SourcePublishReasonV1,
+    Bf16TileReturnOrderV1, Bf16TileSourcePublishErrorV1, Bf16TileSourcePublishRequestV1,
+    PublishedBf16TileSourceV1, publish_bf16_tile_helper_source_v1,
+};

@@ -17,6 +17,9 @@ use crate::{
     inspect_operation_tree_details,
 };
 
+#[path = "graph_analysis_v1/snapshot_policy_v1.rs"]
+pub(crate) mod snapshot_policy_v1;
+
 pub(crate) const OPERATION_GRAPH_DIGEST_DOMAIN_V1: &[u8] =
     b"fe2o3.pliron.transient-graph-digest.v1\0";
 pub(crate) const OPERATION_GRAPH_REPLAY_DIGEST_DOMAIN_V1: &[u8] =
@@ -435,6 +438,16 @@ impl PlironSession {
         &mut self,
         pointer: pliron::context::Ptr<Operation>,
     ) -> Result<[u8; 32], OperationHandleError> {
+        if let Some(policy) = self.snapshot_policy.as_mut() {
+            let context = &self.context;
+            let result =
+                policy.digest(|sink| fmt::write(sink, format_args!("{}", pointer.disp(context))));
+            if result.is_err() {
+                self.poisoned = true;
+            }
+            return result;
+        }
+        // Preserve the original default path and digest framing byte-for-byte.
         let presentation =
             catch_unwind(AssertUnwindSafe(|| pointer.disp(&self.context).to_string())).map_err(
                 |_| {

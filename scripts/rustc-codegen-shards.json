@@ -10,12 +10,14 @@
     {
       "id": "02-production-drivers",
       "tests": [
+        "bf16_source_promotion_api_v1",
         "production_device_math_sqrt_v1",
         "production_extraction_driver_v1",
         "production_general_matrix_driver_v1",
         "production_neutral_workgroup_reduce_driver_v1",
         "production_ranked_bounds_driver_v1",
-        "production_semantic_conformance_v3"
+        "production_semantic_conformance_v3",
+        "source_local_order_recipe_measurement_api_v1"
       ]
     },
     {

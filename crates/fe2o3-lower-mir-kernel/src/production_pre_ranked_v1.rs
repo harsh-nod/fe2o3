@@ -542,6 +542,35 @@ impl ProductionSemanticKirOwnerV1 {
         receipt: ProductionMaterializedRankedModuleReceiptV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::try_attach_materialized_ranked_checks_using_allowance_v1(receipt, budget, None)
+    }
+
+    /// Same consuming attachment and original caller ledger, additionally
+    /// preserving the materialized owner's legacy local translation work and
+    /// live-scratch ceilings across the complete root roster. Only native helper
+    /// scan/cache/expansion is charged; graph/canonical/receipt costs stay excluded.
+    pub fn try_attach_materialized_ranked_checks_with_bounded_translation_budget_v1(
+        receipt: ProductionMaterializedRankedModuleReceiptV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let limits = receipt.materialized.limits;
+        let mut allowance = native_helper_value_expansion_v1::TranslationAllowanceV1::new(
+            budget,
+            limits.max_argument_correspondence_work,
+            limits.max_argument_correspondence_storage,
+        );
+        Self::try_attach_materialized_ranked_checks_using_allowance_v1(
+            receipt,
+            budget,
+            Some(&mut allowance),
+        )
+    }
+
+    fn try_attach_materialized_ranked_checks_using_allowance_v1(
+        receipt: ProductionMaterializedRankedModuleReceiptV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+        mut allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         receipt
             .materialized
             .require_legacy_helper_policy_v1("ranked attachment")?;
@@ -565,19 +594,19 @@ impl ProductionSemanticKirOwnerV1 {
         let mut generic_checks = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
-            let translation_validation =
-                validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                    Some(semantic),
-                    executable.module(),
-                    &correspondence,
-                    &function_name,
-                    &root.lowering,
-                    &root.access_sources,
-                    &root.executable_effect_sources,
-                    limits.max_operations,
-                    budget,
-                )
-                .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+            let translation_validation = validate_mir_pliron_translation_with_allowance_v1(
+                Some(semantic),
+                executable.module(),
+                &correspondence,
+                &function_name,
+                &root.lowering,
+                &root.access_sources,
+                &root.executable_effect_sources,
+                limits.max_operations,
+                budget,
+                allowance.as_deref_mut(),
+            )
+            .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
             generic_checks.push(RetainedGenericKernelChecksV1 {
                 selected_root: root.selected_root,
                 launch_rank: root.launch_rank,

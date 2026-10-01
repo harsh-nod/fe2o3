@@ -1122,17 +1122,26 @@ impl TargetNeutralProductionCompilation {
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
+        self.admit_formal_memory_with_translation_budget_v1(None)
+    }
+
+    // Formal obligation derivation is unchanged and is NOT charged here.
+    fn admit_formal_memory_with_translation_budget_v1(
+        self,
+        budget: Option<&mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>>,
+    ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
         let Self {
             lowered,
             ranked_verification,
             bindings,
         } = self;
         let envelopes = formal_envelope_preflight_v2::authenticated_envelopes(&lowered, &bindings)?;
-        let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit_for_launch_envelopes_v2(
-            lowered,
-            &envelopes,
-        )
-        .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
+        let admitted = match budget {
+            Some(budget) => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::
+                try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(lowered, &envelopes, budget),
+            None => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::
+                try_admit_for_launch_envelopes_v2(lowered, &envelopes),
+        }.map_err(ProductionPipelineError::FormalMemoryAdmission)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,
@@ -3740,18 +3749,10 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             materialized,
             ranked_roots,
             bindings,
-        } = self.materialize_prepared_v29(use_root, |semantic_ssa, launch, budget| {
-            let owner =
-                fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                    semantic_ssa,
-                    launch,
-                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                    budget,
-                )
-                .map_err(ProductionPipelineError::PreRankedMaterialization)?;
-            let retained = owner.retained_analysis_storage_v1();
-            Ok((owner, retained))
-        })?;
+        } = self.materialize_prepared_v29(
+            use_root,
+            retained_materialization_phase_v1::retained_target_pipeline_v1::materialize_ordinary_owner_with_budget_v1,
+        )?;
         Ok(MaterializedNeutralProductionCompilation {
             materialized,
             ranked_roots,
@@ -3788,23 +3789,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         ) -> Result<R, Box<ProductionPipelineError>>,
     ) -> Result<R, Box<ProductionPipelineError>> {
-        let prepared = self.prepare_materialization_inputs_v29(|typed_roots| {
-            typed_roots
-                .iter()
-                .map(|typed_root| {
-                    let source_launch = typed_root.source_launch().ok_or(
-                        ProductionPipelineError::Geometry(
-                            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-                        ),
-                    )?;
-                    Ok(crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
-                        typed_root.logical_name(),
-                        typed_root.kernel_binding_bytes(),
-                        source_launch,
-                    ))
-                })
-                .collect::<Result<Vec<_>, ProductionPipelineError>>()
-        })?;
+        let prepared = self.prepare_materialization_roster_v1()?;
         let resource_error = materialization_resource_error_v29;
         let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
             .map_err(|_| {
@@ -4086,6 +4071,15 @@ impl RankedVerifiedProductionCompilation {
     fn attach_target_neutral_checks(
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
+        self.attach_target_neutral_checks_with_translation_budget_v1(None)
+    }
+
+    // Only the helper translation scan/cache/expansion selects this caller
+    // ledger. Receipt conversion and the other checks keep their old scope.
+    fn attach_target_neutral_checks_with_translation_budget_v1(
+        self,
+        budget: Option<&mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>>,
+    ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let roster_receipt = ranked
             .into_verified_roster_receipt()
@@ -4100,11 +4094,14 @@ impl RankedVerifiedProductionCompilation {
             .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(ranked_verification.every_functional_verification_is_coherent());
-        let lowered =
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
-                receipt,
-            )
-            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        let lowered = match budget {
+            Some(budget) =>
+                fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::
+                    try_attach_materialized_ranked_checks_with_bounded_translation_budget_v1(receipt, budget),
+            None =>
+                fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::
+                    try_attach_materialized_ranked_checks(receipt),
+        }.map_err(ProductionPipelineError::TargetNeutralLowering)?;
         let exact_translation_roster = {
             let mut translations = lowered.mir_pliron_translation_validations();
             translations.len() == lowered.module().kernels.len()
@@ -4922,3 +4919,24 @@ mod storage_component_profile_tests {
         );
     }
 }
+
+#[path = "production_bindings_debug_retained_storage_v1.rs"]
+pub(crate) mod bindings_debug_retained_storage_v1;
+
+#[path = "production_bindings_context_retained_storage_v1.rs"]
+mod context_retained_storage_v1;
+
+#[path = "production_bindings_typed_descriptor_retained_storage_v1.rs"]
+mod bindings_typed_descriptor_retained_storage_v1;
+
+#[path = "production_bindings_reference_retained_storage_v1.rs"]
+mod reference_retained_storage_v1;
+
+#[path = "production_bindings_retained_storage_v1.rs"]
+pub(crate) mod bindings_retained_storage_v1;
+
+#[path = "production_pipeline/bf16_tile_source_promotion_v1.rs"]
+mod bf16_tile_source_promotion_v1;
+
+#[path = "production_pipeline/retained_materialization_phase_v1.rs"]
+mod retained_materialization_phase_v1;

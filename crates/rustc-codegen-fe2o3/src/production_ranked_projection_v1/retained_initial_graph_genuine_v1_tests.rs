@@ -61,7 +61,7 @@ impl GraphOracle {
         self.observation
     }
 }
-fn comparison_work(
+pub(in super::super) fn comparison_work(
     count: usize,
     edges: usize,
     stores: usize,
@@ -156,8 +156,75 @@ fn compare_rows(
     }
     Ok(expected)
 }
+// Seed-specific DATA comparison only. Old compare_rows remains byte-exact.
+pub(in super::super) fn compare_seed_successor_graph_rows(
+    pending: &PendingWholeRootBeforeArgumentWritersV1<'_>,
+    oracle: &GraphOracle,
+    source: &Source<'_>,
+) -> BResult<GraphObservation> {
+    let scalar_stage = &pending.earlier.earlier.earlier;
+    let enumeration_stage = &scalar_stage.earlier;
+    let initial = &enumeration_stage.options.initial;
+    let stage = &pending.initial_graph;
+    let count = source.function.locals().len();
+    let expected = oracle.observation.ok_or_else(accounting)?;
+    // Expected dimensions bound every scan before any element comparison.
+    if expected.locals != count
+        || expected.blocks != source.function.blocks().len()
+        || !oracle.populated
+        || stage.phase != GraphPhase::Complete
+        || stage.failure.is_some()
+        || stage.source != oracle.source
+        || stage.launch_extent != Some(0)
+        || stage.local_definitions.len() != count
+        || oracle.counts.len() != count
+        || initial.indices.len() != count
+        || initial.leaders.len() != count
+        || initial.predicates.len() != count
+        || initial.edges.len() != count
+        || oracle.graph.edges.len() != count
+        || pending.arguments.runtime_index_arguments.len() != count
+        || pending.arguments.runtime_slice_extent_arguments.len() != count
+        || oracle.indices.len() != count
+        || oracle.slices.len() != count
+        || pending.arguments.edge_count != expected.edges
+        || initial.stores.len() != expected.stores
+        || initial.loads.len() != expected.loads
+        || pending.arguments.borrowed_locals.len() != expected.borrowed
+        || oracle.graph.edge_count != expected.edges
+        || oracle.graph.stores.len() != expected.stores
+        || oracle.graph.loads.len() != expected.loads
+        || oracle.graph.borrowed.len() != expected.borrowed
+        || pending.prefix.entry_operations.is_empty()
+    {
+        return Err(accounting());
+    }
+    // Sum row lengths under the paid local scan before nested equality.
+    let actual_edges = initial.edges.iter().try_fold(0usize, |n, row| {
+        n.checked_add(row.len()).ok_or_else(arithmetic)
+    })?;
+    let oracle_edges = oracle.graph.edges.iter().try_fold(0usize, |n, row| {
+        n.checked_add(row.len()).ok_or_else(arithmetic)
+    })?;
+    if actual_edges != expected.edges
+        || oracle_edges != expected.edges
+        || initial.leaders.iter().any(Option::is_some)
+        || initial.predicates.iter().any(Option::is_some)
+        || stage.local_definitions != oracle.counts
+        || initial.edges != oracle.graph.edges
+        || initial.stores != oracle.graph.stores
+        || initial.loads != oracle.graph.loads
+        || pending.arguments.borrowed_locals != oracle.graph.borrowed
+        || pending.arguments.runtime_index_arguments != oracle.indices
+        || pending.arguments.runtime_slice_extent_arguments != oracle.slices
+        || Some(&pending.prefix.entry_operations[0]) != oracle.execution.as_ref()
+    {
+        return Err(accounting());
+    }
+    Ok(expected)
+}
 #[allow(clippy::too_many_arguments)]
-pub(in super::super) fn observe_in_scope<'s>(
+pub(in super::super) fn observe_before_reentry_in_scope<'s>(
     pending: &mut PendingWholeRootBeforeArgumentWritersV1<'s>,
     oracle: &mut GraphOracle,
     owner: &'s ProductionPreRankedKirOwnerV1,
@@ -218,6 +285,19 @@ pub(in super::super) fn observe_in_scope<'s>(
             oracle.ledger = resources.retained_custody_snapshot_v1();
             Ok(observed)
         })?;
+    Ok(observed)
+}
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn observe_in_scope<'s>(
+    pending: &mut PendingWholeRootBeforeArgumentWritersV1<'s>,
+    oracle: &mut GraphOracle,
+    owner: &'s ProductionPreRankedKirOwnerV1,
+    function_id: SemanticFunctionIdV1,
+    facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
+    owned: &mut usize,
+) -> BResult<GraphObservation> {
+    let observed =
+        observe_before_reentry_in_scope(pending, oracle, owner, function_id, facts, owned)?;
     let held = facts.retained_whole_root_snapshot_v1(owner, function_id, owned, None)?;
     if pending
         .completed_for(owner, function_id, facts, owned)
@@ -441,7 +521,7 @@ pub(in super::super) fn postflight(
     compare_rows(pending, oracle, &source)
 }
 pub(in super::super) fn frame() -> BResult<usize> {
-    const ROWS: usize = 7;
+    const ROWS: usize = 9;
     let rows = [
         super::frame::bytes()?,
         size_of::<(
@@ -525,6 +605,29 @@ pub(in super::super) fn frame() -> BResult<usize> {
             &(usize, usize),
             Option<usize>,
             Option<&Backend>,
+        )>(),
+        // Nonterminal factoring and seed-only DATA comparator add source-carrier
+        // frames without changing the old graph marker/reentry semantics.
+        size_of::<(
+            &mut PendingWholeRootBeforeArgumentWritersV1<'static>,
+            &mut GraphOracle,
+            &ProductionPreRankedKirOwnerV1,
+            SemanticFunctionIdV1,
+            &mut CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>,
+            &mut usize,
+            GraphObservation,
+            BResult<GraphObservation>,
+        )>(),
+        size_of::<(
+            &PendingWholeRootBeforeArgumentWritersV1<'static>,
+            &GraphOracle,
+            &Source<'static>,
+            GraphObservation,
+            usize,
+            usize,
+            usize,
+            BResult<GraphObservation>,
+            bool,
         )>(),
         size_of::<(
             [usize; ROWS],

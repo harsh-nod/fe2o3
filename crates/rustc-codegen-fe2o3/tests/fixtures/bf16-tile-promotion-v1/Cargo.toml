@@ -8,6 +8,7 @@ publish = false
 identity = []
 swap01 = []
 wrong-launch = []
+single-strided-read = []
 
 [dependencies]
 fe2o3-device = { path = "../../../../fe2o3-device" }

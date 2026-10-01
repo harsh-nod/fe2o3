@@ -245,6 +245,41 @@
       "before": "class native_adapter final {",
       "after": "// Debug-type observability only: no call or object construction.\n[[gnu::used]] static const loaded_maintenance_scratch *\nloaded_maintenance_debug_type (const loaded_maintenance_scratch *p) noexcept\n{ return p; }\nclass native_adapter final {",
       "count": 1
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-resume-v1.inc",
+      "stage": "finish-event-context",
+      "count": 1,
+      "before": "void native_adapter::before_finish_step (thread_info *thread,const target_waitstatus &wait,\n                                        bool had_inline,bool trap_expected,std::uint64_t inline_address) {\n  if (!selected ()) return;\n  if (m_callback_progress!=callback_progress::step_inflight) return;\n  require (m_path==path::none && thread==m_host && thread==inferior_thread ()\n           && wait.kind ()==TARGET_WAITKIND_STOPPED && wait.sig ()==GDB_SIGNAL_TRAP\n           && had_inline && trap_expected && inline_address==m_callback_pc\n           && !thread->executing () && !thread->resumed ()\n           && m_owner.check_owner (current_identity ()),failure::resume_scope);\n  m_callback_progress=callback_progress::continue_ready;\n  // Actual native stopped event, not a CLI step claim. The source hook precedes\n  // finish_step_over clearing the actual inline/trap identity.\n}\n",
+      "after": "void native_adapter::before_finish_step (thread_info *thread,const target_waitstatus &wait,\n                                        bool had_inline,bool trap_expected,std::uint64_t inline_address) {\n  if (!selected ()) return;\n  if (m_callback_progress!=callback_progress::step_inflight) return;\n  // Borrow only the null-thread event context; retain every native check.\n  debit (counter::work,1);\n  require (thread!=nullptr && thread==m_host && m_inferior!=nullptr\n           && current_inferior ()==m_inferior && thread->inf==m_inferior\n           && (inferior_ptid==null_ptid || inferior_thread ()==thread),\n           failure::resume_scope);\n  std::optional<scoped_restore_current_thread> event_context;\n  if (inferior_ptid==null_ptid) {\n    event_context.emplace ();\n    switch_to_thread (thread);\n  }\n  require (m_path==path::none && thread==m_host && thread==inferior_thread ()\n           && wait.kind ()==TARGET_WAITKIND_STOPPED && wait.sig ()==GDB_SIGNAL_TRAP\n           && had_inline && trap_expected && inline_address==m_callback_pc\n           && !thread->executing () && !thread->resumed ()\n           && m_owner.check_owner (current_identity ()),failure::resume_scope);\n  m_callback_progress=callback_progress::continue_ready;\n}\n"
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "stage": "finish-event-context",
+      "count": 1,
+      "before": "#include <sys/stat.h>\n",
+      "after": "#include <sys/stat.h>\n#include <optional>\n"
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "stage": "finish-event-context",
+      "count": 1,
+      "before": "  /* sizeof includes owner + every concrete scratch/data member. Additional\n     4096 prepays fixed constants, parser/scalar stack scratch and fixed RAII\n     guards, with the sole128-byte library callback allocation separate.\n     The new snapshot adds its own1024-byte fixed scalar/temporary envelope;\n     retained snapshot arrays are already included in sizeof(native_adapter).\n     Another256 bytes prepay simultaneous borrowed output pointers/closures,\n     without silently reusing any of those existing reservations. */\n",
+      "after": "  /* sizeof owns all retained members. Additions separately prepay scalar/RAII,\n     snapshot, entry, loaded-maintenance and publication scratch, the one\n     library callback allocation, and the finish-step context guard. These are\n     logical reservations, not allocator overhead or stack-peak measurements. */\n"
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "stage": "finish-event-context",
+      "count": 1,
+      "before": "    + entry_maintenance_scalar_scratch + loaded_maintenance_scalar_scratch\n",
+      "after": "    + entry_maintenance_scalar_scratch + loaded_maintenance_scalar_scratch\n    + sizeof (std::optional<scoped_restore_current_thread>)\n"
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "stage": "finish-event-context",
+      "count": 1,
+      "before": "static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + sizeof (loaded_maintenance_scratch) + limits::client_output_bytes + 256\n",
+      "after": "static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + sizeof (loaded_maintenance_scratch) + limits::client_output_bytes + 256\n               + sizeof (std::optional<scoped_restore_current_thread>)\n"
     }
   ],
   "reverse_exact": true

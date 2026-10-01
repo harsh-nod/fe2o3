@@ -3617,3 +3617,6 @@ mod storage_bridge_profile_tests {
         assert!(preserved_operation_kind(&kind).is_err());
     }
 }
+
+#[path = "kir_bridge_optimized_retained_storage_v1.rs"]
+mod retained_storage_v1;

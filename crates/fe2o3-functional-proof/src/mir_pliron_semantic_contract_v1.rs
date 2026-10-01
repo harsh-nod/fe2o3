@@ -1151,3 +1151,6 @@ mod tests {
         );
     }
 }
+
+#[path = "mir_pliron_semantic_retained_storage_v1.rs"]
+mod retained_storage_v1;

@@ -4,8 +4,11 @@ use super::*;
 use std::mem::size_of;
 #[path = "retained_initial_capability_graph_frame_v1.rs"]
 mod frame;
+#[path = "retained_invocation_seed_v1.rs"]
+mod invocation_seed;
 #[path = "whole_root_initial_capability_graph_bridge_v1.rs"]
 mod whole;
+pub(super) use invocation_seed::RetainedInvocationSeedV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GraphPhase {
@@ -349,3 +352,6 @@ mod tests;
 #[cfg(test)]
 #[path = "retained_initial_graph_genuine_v1_tests.rs"]
 pub(super) mod genuine;
+
+#[cfg(test)]
+pub(super) use invocation_seed::genuine as genuine_seed;

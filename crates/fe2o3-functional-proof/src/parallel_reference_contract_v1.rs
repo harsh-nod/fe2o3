@@ -751,3 +751,6 @@ mod tests {
         assert_ne!(contract.canonical_sha256(), DigestV1::ZERO);
     }
 }
+
+#[path = "parallel_reference_retained_storage_v1.rs"]
+mod retained_storage_v1;

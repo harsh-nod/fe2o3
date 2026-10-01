@@ -131,8 +131,21 @@ impl<'s> PendingWholeRootBeforeArgumentWritersV1<'s> {
         facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
         owned: &mut usize,
     ) -> BResult<()> {
-        if self.phase != WholePhase::AfterInitialCapabilityGraph
-            || self.failure.is_some()
+        if self.phase != WholePhase::AfterInitialCapabilityGraph {
+            return Err(accounting());
+        }
+        self.check_initial_capability_graph_state(owner, function_id, facts, owned)
+    }
+    // A successor revokes the public phase first; this unchanged source/custody
+    // remainder is called only before any successor mutates its writer floor.
+    pub(in super::super) fn check_initial_capability_graph_state(
+        &self,
+        owner: &ProductionPreRankedKirOwnerV1,
+        function_id: SemanticFunctionIdV1,
+        facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
+        owned: &mut usize,
+    ) -> BResult<()> {
+        if self.failure.is_some()
             || !self.owner.is_some_and(|bound| std::ptr::eq(bound, owner))
             || self.function != Some(function_id)
         {

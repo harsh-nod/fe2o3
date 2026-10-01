@@ -31,8 +31,8 @@
     },
     {
       "path": "controller.rs",
-      "bytes": 25675,
-      "sha256": "1d1e068cfa690e91b1443946ea4ce855c7306d16dcbdd2c49bff268adb88bd72"
+      "bytes": 25718,
+      "sha256": "8811bdd6107989f516368c39f0c98190f1f4de8adc9dc4f10ced5b0dbdfbc3d9"
     },
     {
       "path": "lib.rs",
@@ -76,8 +76,8 @@
     },
     {
       "path": "native/profile.rs",
-      "bytes": 4468,
-      "sha256": "d97a4f4fc1a1d35ebf61f6c5e3a722552d8da4f7aaeca1dbe1d728ee42e9607d"
+      "bytes": 5745,
+      "sha256": "29b9c6bf130c97e38bde99f1b420fa299a45fecdfa2d96bd2d6578c331e91bb6"
     },
     {
       "path": "native/publication.rs",
@@ -131,8 +131,8 @@
     },
     {
       "path": "tests.rs",
-      "bytes": 22685,
-      "sha256": "f0b7298490a95a09c20e3c620301b60137df5d1cdce5658c4a147e514cfede5e"
+      "bytes": 26548,
+      "sha256": "c4f77aebceb651d0904ba9dc3d37c310b8d08474046366b21a0516817b7db1cb"
     },
     {
       "path": "transitions.rs",

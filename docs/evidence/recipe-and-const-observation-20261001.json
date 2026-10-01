@@ -1,0 +1,3169 @@
+{
+  "schema": "fe2o3-recipe-and-const-observation-v1",
+  "date_utc": "2026-10-01",
+  "host": "mi350",
+  "gpu_executed": false,
+  "source_head": "188b0a6984460ecf7441b9c39a61072ab6af434e",
+  "source_census": {
+    "files": 9561,
+    "bytes": 135335844,
+    "sha256": "6cd77f1125c6c6e4f8320e4c7488309289717e4f9482c48d33f0306a09feea9a"
+  },
+  "binary": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+    "bytes": 321432344,
+    "sha256": "b3a7aab1e67c2bdd2178c29f8b1368dd038c7a09e076e7e776e0a835a4278b9d"
+  },
+  "source_manifest": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-warm-const-final-source-root-r48-r3/MANIFEST.json",
+    "bytes": 9553,
+    "sha256": "9dc5020eb09dc6f958cb8ce5921cb7c7747144ab95d46b51007fb0a51cf60c20"
+  },
+  "controls": {
+    "schema": "root-qualification-audit/v1",
+    "receipt": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r48-compiler-recipe-streamed-artifact-controls-r3/receipt.json",
+      "bytes": 23963,
+      "sha256": "f36c2ddbba3158160d05bba0a6f9250e8cdfdce9e5f63a69b65b32288dc40cac"
+    },
+    "status": "passed",
+    "terminal_stream_tool_input_source_checks": "all passed",
+    "source": {
+      "files": 9561,
+      "bytes": 135335844,
+      "sha256": "6cd77f1125c6c6e4f8320e4c7488309289717e4f9482c48d33f0306a09feea9a"
+    }
+  },
+  "passing_tests": {
+    "ordered": 49,
+    "recipe": 37,
+    "preparation": 5,
+    "external_api": 1,
+    "total": 92
+  },
+  "recipe": {
+    "audit": {
+      "schema": "root-recipe-series-audit/v1",
+      "receipt": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r48-compiler-recipe-source-campaign-r2/receipt.json",
+        "bytes": 54289,
+        "sha256": "a727da685d91fdcce0801c63a523fb6d94ff53936fb0edfa87fab3280a89f8b5"
+      },
+      "summary": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/SUMMARY.json",
+        "bytes": 37276,
+        "sha256": "4025dea236c71a2773f225c5bfb30e39d7f370b6ff5aae1ade53b1e11096b567"
+      },
+      "status": "passed",
+      "outer_terminal_stream_input_tool_source_checks": "passed",
+      "all_eight_direct_child_terminal_and_stream_checks": "passed",
+      "full_source": {
+        "files": 9561,
+        "bytes": 135335844,
+        "sha256": "6cd77f1125c6c6e4f8320e4c7488309289717e4f9482c48d33f0306a09feea9a"
+      },
+      "test_build": true,
+      "source_wire_applicability": "Exact cfg(test) binary compiled from this full source census; no shipping-release equivalence claimed.",
+      "attempts": 8,
+      "adapter_frontend_processes": 4,
+      "original_adapter_calls": 38,
+      "calibration": 5,
+      "measured": 30,
+      "statistics": {
+        "p50_ns": 94105939,
+        "p95_ns": 94760289,
+        "max_ns": 94804949
+      },
+      "exact_external_oracle": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/ordinary-replay.normal.json",
+        "bytes": 15326,
+        "sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170"
+      },
+      "all35_byte_equal": true,
+      "retained_logical_128MiB_qualified": false,
+      "full_peak_or_rss": false,
+      "milestones_closed": [],
+      "first_failed_attempt_retained": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-source-campaign-audit-root-r48-r1/AUDIT.json"
+    },
+    "summary": {
+      "schema": "root-recipe-series-campaign-result-v1",
+      "status": "completed",
+      "config": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-series-campaign-root-r48-r2/CONFIG.json",
+        "bytes": 8540,
+        "sha256": "178b5e4a3c678c09a5df678b5b42fa300b95e7f8c54267193138e654d34ec854"
+      },
+      "head": "188b0a6984460ecf7441b9c39a61072ab6af434e",
+      "root_supplied_source_census": {
+        "files": 9561,
+        "bytes": 135335844,
+        "sha256": "6cd77f1125c6c6e4f8320e4c7488309289717e4f9482c48d33f0306a09feea9a"
+      },
+      "attempts": [
+        {
+          "index": 0,
+          "id": "sysroot",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+            "--print",
+            "sysroot"
+          ],
+          "environment": {},
+          "planned_adapter_calls": 0,
+          "status": "process-passed",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22651718",
+            "elapsed_ms": 14,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/00-sysroot.stdout",
+                "bytes": 78,
+                "sha256": "257f4991fbf7ad5108d7c7d18430f8afa7b8cb2ef06af6378cfeaa5e5ce6ab9e"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/00-sysroot.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 1,
+          "id": "metadata",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+            "metadata",
+            "--locked",
+            "--offline",
+            "--no-deps",
+            "--format-version=1",
+            "--manifest-path",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml"
+          ],
+          "environment": {},
+          "planned_adapter_calls": 0,
+          "status": "process-passed",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22651802",
+            "elapsed_ms": 28,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/01-metadata.stdout",
+                "bytes": 583514,
+                "sha256": "5d913159e96c45c29bd79f573f2c1b995aa95ec0d99d64991134d86cdd2e40d1"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/01-metadata.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 2,
+          "id": "dependencies",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+            "check",
+            "--release",
+            "--locked",
+            "--offline",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-device",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--message-format=json",
+            "--manifest-path",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml",
+            "--target-dir",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/dependencies"
+          ],
+          "environment": {
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS": "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Coverflow-checks=on"
+          },
+          "planned_adapter_calls": 0,
+          "status": "process-passed",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22651889",
+            "elapsed_ms": 18490,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/02-dependencies.stdout",
+                "bytes": 66317,
+                "sha256": "74f6325dcd15b732ecd1f4042952640c371281f37b58802d10670a21d4da23c6"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/02-dependencies.stderr",
+                "bytes": 3984,
+                "sha256": "917126480ebd6bd6139722aa2c0b316978fb07915dbf78ea7cf4fa5611f45a21"
+              }
+            }
+          }
+        },
+        {
+          "index": 3,
+          "id": "prepare",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::source_bitselect_feasibility_v1_tests::roundtrip::local_order::series_prepare::actual_source_local_order_recipe_series_prepare_v1",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_RECIPE_SERIES_PREPARE_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/preparation.config.json",
+            "FE2O3_RECIPE_SERIES_PREPARE_SHA256": "e5e9714bab23fa3fdd673905d138b78807f68ed079bbada6798c1543249b084c"
+          },
+          "planned_adapter_calls": 0,
+          "status": "validated",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22653864",
+            "elapsed_ms": 582,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/03-prepare.stdout",
+                "bytes": 7169,
+                "sha256": "2ce077017b87eff3ac98925fe31abb6598464fe211387f6f23f81e9e86cd12a7"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/03-prepare.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 4,
+          "id": "create",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::source_local_order_recipe_driver_v1::warm_series::actual_source_local_order_recipe_series_child_v1",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_CRATE_BINDING_ID_V1": "c36bc0149fd8aaee54c86d048351fba237d76dafde9f7a6775b3448d3a4b9d80",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "a00caac1429c64e43aebaf38983dd5b5e568d2cdd3e398509c76003b27631538",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_RECIPE_SERIES_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/create.config.json",
+            "FE2O3_RECIPE_SERIES_CONFIG_SHA256": "10d1fde6d3fb65848bebc87d88f083c69a9ef6579b09c424624f16157f1fb576"
+          },
+          "planned_adapter_calls": 1,
+          "status": "validated",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22654054",
+            "elapsed_ms": 151,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/04-create.stdout",
+                "bytes": 21779,
+                "sha256": "78906e38e5ff749465c7bb60c14a8fcd43aae4c2e614e5d44a8836edff2e44a5"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/04-create.stderr",
+                "bytes": 1450,
+                "sha256": "9fd133e9ce808d1e34298d53b6a5d8446fc84723c17b09e42e523973c737f9dd"
+              }
+            }
+          }
+        },
+        {
+          "index": 5,
+          "id": "ordinary-replay",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::source_local_order_recipe_driver_v1::warm_series::actual_source_local_order_recipe_series_child_v1",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_CRATE_BINDING_ID_V1": "c36bc0149fd8aaee54c86d048351fba237d76dafde9f7a6775b3448d3a4b9d80",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "a00caac1429c64e43aebaf38983dd5b5e568d2cdd3e398509c76003b27631538",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_RECIPE_SERIES_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/ordinary-replay.config.json",
+            "FE2O3_RECIPE_SERIES_CONFIG_SHA256": "5b3cc9bb8d8ff445b2d73ad3c42cc6a686c7145482e2a6c904668e10906f9770"
+          },
+          "planned_adapter_calls": 1,
+          "status": "validated",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22654199",
+            "elapsed_ms": 155,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/05-ordinary-replay.stdout",
+                "bytes": 15604,
+                "sha256": "d39f8864afe50c01794b4fbee84c5e89e0be117086f921a27db76a6c70229282"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/05-ordinary-replay.stderr",
+                "bytes": 1450,
+                "sha256": "f50456f2e8b9e157c6d49cb3c707fcc404709359241b9db526c125f6601d8534"
+              }
+            }
+          }
+        },
+        {
+          "index": 6,
+          "id": "measured-replay",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::source_local_order_recipe_driver_v1::warm_series::actual_source_local_order_recipe_series_child_v1",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_CRATE_BINDING_ID_V1": "c36bc0149fd8aaee54c86d048351fba237d76dafde9f7a6775b3448d3a4b9d80",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "a00caac1429c64e43aebaf38983dd5b5e568d2cdd3e398509c76003b27631538",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_RECIPE_SERIES_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/measured-replay.config.json",
+            "FE2O3_RECIPE_SERIES_CONFIG_SHA256": "80f5372b7186e2a3c1837a4df15ccd753e5c2cce05d62787e6ab731880a253b1"
+          },
+          "planned_adapter_calls": 1,
+          "status": "validated",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22654344",
+            "elapsed_ms": 150,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/06-measured-replay.stdout",
+                "bytes": 15604,
+                "sha256": "7f10eaab1160eb4ecdd9ccc507e37f906fb1ea218c40e4e97270e6e7eb09a7f2"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/06-measured-replay.stderr",
+                "bytes": 1455,
+                "sha256": "f607cf478ed4e5a56064892be5bb961358a5c97e854e0aa074e6ba6aa18e3e83"
+              }
+            }
+          }
+        },
+        {
+          "index": 7,
+          "id": "warm-replay",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::source_local_order_recipe_driver_v1::warm_series::actual_source_local_order_recipe_series_child_v1",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_CRATE_BINDING_ID_V1": "c36bc0149fd8aaee54c86d048351fba237d76dafde9f7a6775b3448d3a4b9d80",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "a00caac1429c64e43aebaf38983dd5b5e568d2cdd3e398509c76003b27631538",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_RECIPE_SERIES_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/warm-replay.config.json",
+            "FE2O3_RECIPE_SERIES_CONFIG_SHA256": "0ab6eaa5dfb19311ca4d244ba026fa2f38d3ce7da2eb4269cf9798aedebffa6f"
+          },
+          "planned_adapter_calls": 35,
+          "status": "validated",
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22654489",
+            "elapsed_ms": 3384,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/07-warm-replay.stdout",
+                "bytes": 15604,
+                "sha256": "6313834cf10f61d0afbc98d420c43da6e0bb0ab04429e63a883e24c45ecf6748"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r2/07-warm-replay.stderr",
+                "bytes": 10778,
+                "sha256": "ed115c9947dfe5a75f02da61f856aa0d449fdf7d447a8a4569962061ea54eef5"
+              }
+            }
+          }
+        }
+      ],
+      "results": [
+        {
+          "id": "create",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/create.config.json",
+            "bytes": 2289,
+            "sha256": "10d1fde6d3fb65848bebc87d88f083c69a9ef6579b09c424624f16157f1fb576"
+          },
+          "normal": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/create.normal.json",
+            "bytes": 21501,
+            "sha256": "9d40d59436c5bbd4fe686f3a47c3b19b5bd5f1423915efbd35c9cee19c26ac1d"
+          },
+          "recipe": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/current.recipe.json",
+            "bytes": 1932,
+            "sha256": "3aa3305d42526bf9cb5ce40b93f856bc56fe5f1717a6b8394514ad0ea5217bc2"
+          },
+          "telemetry": {
+            "attempt": {
+              "callback_count": 1,
+              "callback_stage_elapsed_ns_decimal": null,
+              "compiler_callback_count": 1,
+              "compiler_fatal": false,
+              "diagnostic": null,
+              "kind": "attempt",
+              "mode": "ordinary",
+              "result_phase": null,
+              "warm": false
+            },
+            "complete": {
+              "exact_external_oracle_equal": false,
+              "external_oracle_compared": false,
+              "grants_authority": false,
+              "kind": "complete",
+              "mode": "ordinary",
+              "normal_bytes": 21501,
+              "normal_sha256": "9d40d59436c5bbd4fe686f3a47c3b19b5bd5f1423915efbd35c9cee19c26ac1d",
+              "retained_logical_bytes": null,
+              "warm_statistics": null
+            }
+          }
+        },
+        {
+          "id": "ordinary-replay",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/ordinary-replay.config.json",
+            "bytes": 2401,
+            "sha256": "5b3cc9bb8d8ff445b2d73ad3c42cc6a686c7145482e2a6c904668e10906f9770"
+          },
+          "normal": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/ordinary-replay.normal.json",
+            "bytes": 15326,
+            "sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170"
+          },
+          "telemetry": {
+            "attempt": {
+              "callback_count": 1,
+              "callback_stage_elapsed_ns_decimal": null,
+              "compiler_callback_count": 1,
+              "compiler_fatal": false,
+              "diagnostic": null,
+              "kind": "attempt",
+              "mode": "ordinary",
+              "result_phase": null,
+              "warm": false
+            },
+            "complete": {
+              "exact_external_oracle_equal": false,
+              "external_oracle_compared": false,
+              "grants_authority": false,
+              "kind": "complete",
+              "mode": "ordinary",
+              "normal_bytes": 15326,
+              "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+              "retained_logical_bytes": null,
+              "warm_statistics": null
+            }
+          }
+        },
+        {
+          "id": "measured-replay",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/measured-replay.config.json",
+            "bytes": 2616,
+            "sha256": "80f5372b7186e2a3c1837a4df15ccd753e5c2cce05d62787e6ab731880a253b1"
+          },
+          "normal": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/measured-replay.normal.json",
+            "bytes": 15326,
+            "sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170"
+          },
+          "telemetry": {
+            "attempt": {
+              "callback_count": 1,
+              "callback_stage_elapsed_ns_decimal": "113543141",
+              "compiler_callback_count": 1,
+              "compiler_fatal": false,
+              "diagnostic": null,
+              "kind": "attempt",
+              "mode": "measured",
+              "result_phase": null,
+              "warm": false
+            },
+            "complete": {
+              "exact_external_oracle_equal": true,
+              "external_oracle_compared": true,
+              "grants_authority": false,
+              "kind": "complete",
+              "mode": "measured",
+              "normal_bytes": 15326,
+              "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+              "retained_logical_bytes": null,
+              "warm_statistics": null
+            }
+          }
+        },
+        {
+          "id": "warm-replay",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/warm-replay.config.json",
+            "bytes": 2612,
+            "sha256": "0ab6eaa5dfb19311ca4d244ba026fa2f38d3ce7da2eb4269cf9798aedebffa6f"
+          },
+          "normal": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/warm-replay.normal.json",
+            "bytes": 15326,
+            "sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170"
+          },
+          "telemetry": {
+            "plan": {
+              "calibration": 5,
+              "calls": 35,
+              "cfg_test_build": true,
+              "fresh_request_admissions": 35,
+              "fresh_retained_source_inputs": 35,
+              "kind": "plan",
+              "measured": 30,
+              "retained_logical_bytes": null,
+              "source_wire_test_branch_applicability": "root_must_bind",
+              "storage_walks_in_timer": false,
+              "upfront_selected_input_reservations": {
+                "calls": 35,
+                "maximum_additional_capture_path_read_bytes": 2293795,
+                "maximum_selected_recipe_read_bytes": 860265,
+                "maximum_selected_retained_source_read_bytes": 110100585
+              }
+            },
+            "samples": [
+              {
+                "calibration": true,
+                "elapsed_ns": 115560142,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 1
+              },
+              {
+                "calibration": true,
+                "elapsed_ns": 97408381,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 2
+              },
+              {
+                "calibration": true,
+                "elapsed_ns": 94445429,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 3
+              },
+              {
+                "calibration": true,
+                "elapsed_ns": 94290759,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 4
+              },
+              {
+                "calibration": true,
+                "elapsed_ns": 94217739,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 5
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94182968,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 6
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 93985848,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 7
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 93946898,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 8
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94146769,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 9
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94029298,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 10
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94804949,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 11
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94107438,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 12
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94122988,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 13
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94115428,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 14
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94001188,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 15
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 93984409,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 16
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94104858,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 17
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94140458,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 18
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94059718,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 19
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 93987179,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 20
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94384999,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 21
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94508979,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 22
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94105939,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 23
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94135768,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 24
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 93994118,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 25
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94046968,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 26
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94050329,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 27
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94036978,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 28
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94153788,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 29
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94030338,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 30
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94117409,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 31
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94760289,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 32
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94249129,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 33
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94149609,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 34
+              },
+              {
+                "calibration": false,
+                "elapsed_ns": 94020308,
+                "exact_external_oracle_equal": true,
+                "normal_bytes": 15326,
+                "normal_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+                "ordinal": 35
+              }
+            ],
+            "complete": {
+              "admitted_owner_reused": false,
+              "all35_exact_external_oracle_equal": true,
+              "api_internal_checks_in_timer": true,
+              "calibration": 5,
+              "callback_count": 1,
+              "companion_serialization_hash_equality_in_timer": false,
+              "external_oracle_sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170",
+              "frontend_reused": true,
+              "grants_authority": false,
+              "kind": "complete",
+              "measured": 30,
+              "mode": "warm",
+              "p95_within_target": true,
+              "peak_heap_measured": false,
+              "percentile_method": "nearest_rank_30_rank15_rank29_rank30",
+              "raw_samples": 35,
+              "retained_logical_bytes": null,
+              "rss_measured": false,
+              "scope": "same_active_tcx_fresh_transaction_creation_through_original_consuming_recipe_return",
+              "target_ns": 500000000,
+              "warm_statistics": {
+                "max_ns": 94804949,
+                "p50_ns": 94105939,
+                "p95_ns": 94760289
+              }
+            },
+            "statistics": {
+              "p50_ns": 94105939,
+              "p95_ns": 94760289,
+              "max_ns": 94804949
+            }
+          }
+        }
+      ],
+      "adapter_frontend_processes": 4,
+      "verified_original_adapter_calls": 38,
+      "warm_calibration": 5,
+      "warm_measured": 30,
+      "warm_p95_within_500ms": true,
+      "retained_logical_128MiB_qualified": false,
+      "peak_heap_measured": false,
+      "rss_measured": false,
+      "dependencies": {
+        "files": 459,
+        "bytes": 360634279,
+        "manifest_sha256": "98cce5bbad4f6cb6a445fd7082f9f0d994ab80a8494ec9654d04122db75f34e2"
+      },
+      "selected_artifacts": {
+        "fe2o3_device": {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/dependencies/amdgcn-amd-amdhsa/release/deps/libfe2o3_device-fa94c99c650f7d04.rmeta",
+          "bytes": 1909532,
+          "sha256": "b78f3532dad46746b82e760bf0ca161193ad6fe2f9353335b9078ff5ac5fae58"
+        },
+        "noprelude:core": {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/dependencies/amdgcn-amd-amdhsa/release/deps/libcore-e74fefb5084d4e32.rmeta",
+          "bytes": 41173933,
+          "sha256": "a4c64c985a6d6d937bc1a3458a90dea1229fa32fd5335d8603caa566b3822c95"
+        }
+      },
+      "source": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/target/source-bitselect-candidate-roundtrip/phase28-recipe-series-source-r48-r2/positive/source.rs",
+        "bytes": 366,
+        "sha256": "5ef32f88bf89683a8b920a93d89aea0f31eef4c3c9b571752548dcce08305be8"
+      },
+      "recipe": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/current.recipe.json",
+        "bytes": 1932,
+        "sha256": "3aa3305d42526bf9cb5ce40b93f856bc56fe5f1717a6b8394514ad0ea5217bc2"
+      },
+      "ordinary_replay_oracle": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-recipe-series-source-r48-r2/ordinary-replay.normal.json",
+        "bytes": 15326,
+        "sha256": "e727af55c4f9c40e9f903e2530c751353be83559f47f218f2b5c711c416ee170"
+      },
+      "elapsed_ms": 33862.32469,
+      "scope": "Exact test artifact: original Create and Replay results, opt-in single fresh-frontend stage, and 35 fresh transactions in one warm live frontend. API-internal work included; companion serialization/hash/equality and request/source opening excluded.",
+      "evidence_scope": "Runtime/selected source/input byte pins and fresh dependency tree are verified before/after. Full compiler source census/build applicability is root-owned outside this parent. No exhaustive shared-library/cache/kernel-input attestation.",
+      "failure_custody": "Original attempt identity and raw streams are retained with no retry; missing/partial series is never zero or success.",
+      "source_wire_test_branch_applicability": "root_must_bind",
+      "escaped_descendant_closure": false,
+      "milestone_complete": false
+    }
+  },
+  "ordered_const": {
+    "audit": {
+      "schema": "root-ordered-const-audit/v1",
+      "status": "passed",
+      "receipt": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r48-compiler-ordered-const-source-campaign-r2/receipt.json",
+        "bytes": 35299,
+        "sha256": "578cb088a53e2beccf5eb4bf2b5ea7c51973bde13bae34c9e2c67ff7dfd52128"
+      },
+      "summary": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/SUMMARY.json",
+        "bytes": 58781,
+        "sha256": "63aa31d926240a06984db51a2caf56fd2fd2502f2301c5f761574126787867d6"
+      },
+      "source": {
+        "files": 9561,
+        "bytes": 135335844,
+        "sha256": "6cd77f1125c6c6e4f8320e4c7488309289717e4f9482c48d33f0306a09feea9a"
+      },
+      "outer_and_all10_child_terminal_stream_input_tool_source_checks": "passed",
+      "adapter_compiler_sessions": 6,
+      "positive_cases": 3,
+      "metrics": [
+        {
+          "case": "one",
+          "steps": 1,
+          "selected_provider_row": 5,
+          "inclusive_selected_provider_ns": "166840",
+          "metric_scope": "selected-provider-inclusive-envelope",
+          "upstream_provider_identity_independently_observed": false,
+          "warm_generation": false,
+          "pure_helper_loop": false,
+          "target_qualified": false,
+          "attribution": {
+            "actual_hir_marker_calls": 1,
+            "canonical_function_identity": "6e3977a3d99cceafcf32c109dbab1186a63131e3c036fa3bd1a714e2e234ec57",
+            "const_definition": [
+              0,
+              30
+            ],
+            "function_definition": [
+              0,
+              14
+            ],
+            "inclusive_ctfe_and_checking_ns": "166840",
+            "nested_rows_summed": false,
+            "nontrivial_const_provider_path": true,
+            "normalized_callsite_end": 852,
+            "normalized_callsite_sha256": "d1a5d5cbf80be36ceaf681c9ebeb9963648ea328118bdd4864d16079d6df3b59",
+            "normalized_callsite_start": 696,
+            "normalized_source_bytes": 4220,
+            "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+            "provider_ordinal": 5,
+            "timing_is_inclusive": true,
+            "trusted_helper_definition": [
+              2,
+              906
+            ],
+            "trusted_macro_definition": [
+              2,
+              920
+            ],
+            "trusted_marker_definition": [
+              2,
+              205
+            ],
+            "warm_generation": false,
+            "words_definition": [
+              0,
+              28
+            ]
+          },
+          "canonical_bytes": 1419
+        },
+        {
+          "case": "three",
+          "steps": 3,
+          "selected_provider_row": 5,
+          "inclusive_selected_provider_ns": "177710",
+          "metric_scope": "selected-provider-inclusive-envelope",
+          "upstream_provider_identity_independently_observed": false,
+          "warm_generation": false,
+          "pure_helper_loop": false,
+          "target_qualified": false,
+          "attribution": {
+            "actual_hir_marker_calls": 1,
+            "canonical_function_identity": "33b4002b74017aac60b05fde2bf826dae5f873acff54dc649c61524de89304e5",
+            "const_definition": [
+              0,
+              30
+            ],
+            "function_definition": [
+              0,
+              14
+            ],
+            "inclusive_ctfe_and_checking_ns": "177710",
+            "nested_rows_summed": false,
+            "nontrivial_const_provider_path": true,
+            "normalized_callsite_end": 3893,
+            "normalized_callsite_sha256": "8ae18d097ff9e2d17a21f411ee019825ce706d293d475bf58a85d8248c48365d",
+            "normalized_callsite_start": 3651,
+            "normalized_source_bytes": 4220,
+            "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+            "provider_ordinal": 5,
+            "timing_is_inclusive": true,
+            "trusted_helper_definition": [
+              2,
+              906
+            ],
+            "trusted_macro_definition": [
+              2,
+              920
+            ],
+            "trusted_marker_definition": [
+              2,
+              205
+            ],
+            "warm_generation": false,
+            "words_definition": [
+              0,
+              28
+            ]
+          },
+          "canonical_bytes": 1419
+        },
+        {
+          "case": "sixteen",
+          "steps": 16,
+          "selected_provider_row": 5,
+          "inclusive_selected_provider_ns": "394480",
+          "metric_scope": "selected-provider-inclusive-envelope",
+          "upstream_provider_identity_independently_observed": false,
+          "warm_generation": false,
+          "pure_helper_loop": false,
+          "target_qualified": false,
+          "attribution": {
+            "actual_hir_marker_calls": 1,
+            "canonical_function_identity": "a0fb286d3354eafccbdffcb28a3644034213f83607ada4b4a9dcd8403dd428f0",
+            "const_definition": [
+              0,
+              30
+            ],
+            "function_definition": [
+              0,
+              14
+            ],
+            "inclusive_ctfe_and_checking_ns": "394480",
+            "nested_rows_summed": false,
+            "nontrivial_const_provider_path": true,
+            "normalized_callsite_end": 1571,
+            "normalized_callsite_sha256": "9f720b6ad11c26fc5d73e1fd203d1386c2d8d947cbe4f313d276e1c8ad9f18b0",
+            "normalized_callsite_start": 930,
+            "normalized_source_bytes": 4220,
+            "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+            "provider_ordinal": 5,
+            "timing_is_inclusive": true,
+            "trusted_helper_definition": [
+              2,
+              906
+            ],
+            "trusted_macro_definition": [
+              2,
+              920
+            ],
+            "trusted_marker_definition": [
+              2,
+              205
+            ],
+            "warm_generation": false,
+            "words_definition": [
+              0,
+              28
+            ]
+          },
+          "canonical_bytes": 1419
+        }
+      ],
+      "upstream_provider_identity_independently_observed": false,
+      "warm_generation": false,
+      "pure_helper_loop": false,
+      "generation_target_qualified": false,
+      "milestones_closed": []
+    },
+    "summary": {
+      "schema": "root-ordered-const-campaign-result-v1",
+      "status": "passed",
+      "config": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-const-campaign-root-r48-r2/CONFIG.json",
+        "bytes": 4625,
+        "sha256": "a7fbe1adfd3fb456b2cff327552a88f2705f8eb2228f21db5aa347ee79c17447"
+      },
+      "attempts": [
+        {
+          "index": 0,
+          "id": "sysroot",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+            "--print",
+            "sysroot"
+          ],
+          "environment": {},
+          "status": "transport-passed",
+          "rustc_session": false,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22660329",
+            "elapsed_ms": 27,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/00-sysroot.stdout",
+                "bytes": 78,
+                "sha256": "257f4991fbf7ad5108d7c7d18430f8afa7b8cb2ef06af6378cfeaa5e5ce6ab9e"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/00-sysroot.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 1,
+          "id": "metadata",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+            "metadata",
+            "--locked",
+            "--offline",
+            "--no-deps",
+            "--format-version=1",
+            "--manifest-path",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml"
+          ],
+          "environment": {},
+          "status": "transport-passed",
+          "rustc_session": false,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22660459",
+            "elapsed_ms": 44,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/01-metadata.stdout",
+                "bytes": 583514,
+                "sha256": "5d913159e96c45c29bd79f573f2c1b995aa95ec0d99d64991134d86cdd2e40d1"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/01-metadata.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 2,
+          "id": "dependencies",
+          "command": [
+            "/home/harmenon/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+            "check",
+            "--release",
+            "--locked",
+            "--offline",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-device",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--message-format=json",
+            "--manifest-path",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml",
+            "--target-dir",
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/dependencies"
+          ],
+          "environment": {
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS": "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Coverflow-checks=on"
+          },
+          "status": "transport-passed",
+          "rustc_session": false,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22660593",
+            "elapsed_ms": 18542,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/02-dependencies.stdout",
+                "bytes": 66317,
+                "sha256": "84805ecbfd36f6444d74f44a2529ecdf0878d825ee3adefb6bd915bad12c51a1"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/02-dependencies.stderr",
+                "bytes": 3984,
+                "sha256": "9d227121dea88e6b92c196bb507b239f9b4faf0f13e1df2176c804b3c8fa7b36"
+              }
+            }
+          }
+        },
+        {
+          "index": 3,
+          "id": "prepare",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::operational::prepare_invocations",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2"
+          },
+          "status": "transport-passed",
+          "rustc_session": false,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22662611",
+            "elapsed_ms": 161,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/03-prepare.stdout",
+                "bytes": 232,
+                "sha256": "81dc6373de5abccbe410c2830c2b1cb3e10a87150fef291142a88e7cf5a0f76c"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/03-prepare.stderr",
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            }
+          }
+        },
+        {
+          "index": 4,
+          "id": "baseline-one",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::operational::export_original_baseline",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "88904b20e27a3c9750ddce13415bf5ade716f3ef5704214eec8773b087a3e7f3",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "20a7847971f8a82fbd3b8ff96ce545b81375063835e9b7610b59a326485a01b7",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_STAGE_BASELINE_CASE_V1": "one"
+          },
+          "status": "transport-passed",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22662797",
+            "elapsed_ms": 153,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/04-baseline-one.stdout",
+                "bytes": 3962,
+                "sha256": "a014ad3de6777a6845977f28e2d49bab95ec9f6086f0e204c2a813f33b3a6499"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/04-baseline-one.stderr",
+                "bytes": 2458,
+                "sha256": "18e4fb39667ca901b26dcdb1a2f670561c3b576c111daf51216b00ce56c7d5f1"
+              }
+            }
+          }
+        },
+        {
+          "index": 5,
+          "id": "baseline-three",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::operational::export_original_baseline",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "f938d955dfc69853009386aeb7ad8d6b4644b29bed35cff974581c7dba59da71",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "113d09dd8cce39aa43450d9fba3eddb131b50ebcab7043b4ce164da652f09908",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_STAGE_BASELINE_CASE_V1": "three"
+          },
+          "status": "transport-passed",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22662987",
+            "elapsed_ms": 160,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/05-baseline-three.stdout",
+                "bytes": 3956,
+                "sha256": "8ac817525de160c03fc7d92f2b146b8f043fd9595fd968c259a14bdeb3c1e3da"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/05-baseline-three.stderr",
+                "bytes": 2458,
+                "sha256": "3823ba5d76854e9a9b823c1afb7d844fc63ed0af6250b13a55848ec03b97744b"
+              }
+            }
+          }
+        },
+        {
+          "index": 6,
+          "id": "baseline-sixteen",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::operational::export_original_baseline",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "ab14bb1f79f8cddba1509dfa49b7c4c408d16248fdfe1eac0d76c1ac8b0c79a1",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "1be0dd97ac493034930ed9247bb928339e5ecbb73fb8eea0cb1cad9366867a2f",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_STAGE_BASELINE_CASE_V1": "sixteen"
+          },
+          "status": "transport-passed",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22663180",
+            "elapsed_ms": 155,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/06-baseline-sixteen.stdout",
+                "bytes": 3986,
+                "sha256": "f4316f76e9556571bfd4d8d989b978af92714f3f0f5a0204b6adca7911260b46"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/06-baseline-sixteen.stderr",
+                "bytes": 2458,
+                "sha256": "2d395851aef3d41464956ac70b9c054877a562807e29b346c4530aafdb810d45"
+              }
+            }
+          }
+        },
+        {
+          "index": 7,
+          "id": "const-one",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::const_provider::actual_const_provider_probe",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "88904b20e27a3c9750ddce13415bf5ade716f3ef5704214eec8773b087a3e7f3",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "20a7847971f8a82fbd3b8ff96ce545b81375063835e9b7610b59a326485a01b7",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_CONST_PROVIDER_V1_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-one.config.json"
+          },
+          "status": "observation-accepted",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22663375",
+            "elapsed_ms": 80,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/07-const-one.stdout",
+                "bytes": 5715,
+                "sha256": "fb15eb37ee82a9a2a59ce22526d6ddfc0a0e0a813da45dfc469351ad0950ee5c"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/07-const-one.stderr",
+                "bytes": 1366,
+                "sha256": "ca4c6f033a40c35dd80c4959ca814184a7d81ffbbbb7d45b9f2b003224122c34"
+              }
+            }
+          }
+        },
+        {
+          "index": 8,
+          "id": "const-three",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::const_provider::actual_const_provider_probe",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "f938d955dfc69853009386aeb7ad8d6b4644b29bed35cff974581c7dba59da71",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "113d09dd8cce39aa43450d9fba3eddb131b50ebcab7043b4ce164da652f09908",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_CONST_PROVIDER_V1_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-three.config.json"
+          },
+          "status": "observation-accepted",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22663560",
+            "elapsed_ms": 85,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/08-const-three.stdout",
+                "bytes": 5720,
+                "sha256": "fc2bfa00b59aa1cd46da4b3e5bac9068a1e17ec946d446bddce96d46ab1274b8"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/08-const-three.stderr",
+                "bytes": 1366,
+                "sha256": "ca4c6f033a40c35dd80c4959ca814184a7d81ffbbbb7d45b9f2b003224122c34"
+              }
+            }
+          }
+        },
+        {
+          "index": 9,
+          "id": "const-sixteen",
+          "command": [
+            "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/target-milestones-phase28-r40-main-r1/debug/deps/rustc_codegen_fe2o3-cd9f534bcccfe70e",
+            "--exact",
+            "production_rustc_driver_v1::ordered_program_stage_measurement_v1_tests::const_provider::actual_const_provider_probe",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "environment": {
+            "FE2O3_ORDERED_STAGE_OPERATIONAL_ROOT_V1": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2",
+            "FE2O3_CRATE_BINDING_ID_V1": "ab14bb1f79f8cddba1509dfa49b7c4c408d16248fdfe1eac0d76c1ac8b0c79a1",
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2": "1be0dd97ac493034930ed9247bb928339e5ecbb73fb8eea0cb1cad9366867a2f",
+            "CARGO_MANIFEST_DIR": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+            "CARGO_PKG_NAME": "fe2o3-production-extraction-fixture",
+            "CARGO_PKG_VERSION": "0.1.0",
+            "CARGO_CRATE_NAME": "fe2o3_production_extraction_fixture",
+            "FE2O3_ORDERED_CONST_PROVIDER_V1_CONFIG": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-sixteen.config.json"
+          },
+          "status": "observation-accepted",
+          "rustc_session": true,
+          "terminal": {
+            "code": 0,
+            "signal": null,
+            "reason": null,
+            "direct_exit": {
+              "code": 0,
+              "signal": null
+            },
+            "close_event": {
+              "code": 0,
+              "signal": null
+            },
+            "drain_abandoned": false,
+            "signals": [],
+            "leader_start_ticks": "22663745",
+            "elapsed_ms": 91,
+            "streams": {
+              "stdout": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/09-const-sixteen.stdout",
+                "bytes": 5747,
+                "sha256": "60e310bf68fe088a72f2dd0cb0f686a8746b6c577d4b851000ed34eb4e9f1476"
+              },
+              "stderr": {
+                "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r2/09-const-sixteen.stderr",
+                "bytes": 1366,
+                "sha256": "ca4c6f033a40c35dd80c4959ca814184a7d81ffbbbb7d45b9f2b003224122c34"
+              }
+            }
+          }
+        }
+      ],
+      "rustc_sessions": 6,
+      "baselines": {
+        "one": {
+          "pin": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/one.baseline-v17.bin",
+            "bytes": 1419,
+            "sha256": "906bbe1391ecd9eee6134460977522eafe03c1744963fda1440920fd195e1994"
+          },
+          "semantic": "eca6d7aad8e974403f4b7ae984684a05a964f9316b39bb9f3b4c3ca515e21b9b",
+          "canonical": "a77d8c2cd1fbb7d2f540b6845c972cea4a85a723c58331a834fe1b9f2c7bdc00",
+          "inventory": "4faf323e8451fc55121507201e138d941fe34be359e3891825a25b211082b532",
+          "preflight": "dd49b668e1774272bec53fa19d4182503a89c1c66e4a1ea5ba7b931eca06d9ff"
+        },
+        "three": {
+          "pin": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/three.baseline-v17.bin",
+            "bytes": 1419,
+            "sha256": "0531bce8d7ad2c1d06366fe7aae3a00ae77b8b0b468f7bc563033759a728497d"
+          },
+          "semantic": "697a65f36fe6e30452fd869b4a57e443a299fdcb223cb85cfddb3fcf619436ce",
+          "canonical": "a8d7dfa3c7709878350356b9ef86bce1cdbdfd30ae4581eef19cd57075e166e5",
+          "inventory": "50cb23ea9e1c8b72b5568d493a4361252904f31b4df4fa289cf840df79e34150",
+          "preflight": "647445d93f94faf87666801e01cb9df16e53a3ab5a67110f146a9d47e24940d2"
+        },
+        "sixteen": {
+          "pin": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/sixteen.baseline-v17.bin",
+            "bytes": 1419,
+            "sha256": "7774c1dcbf8e541ffbf851048d49008ad2b4173210657761c1daabb63b9e473d"
+          },
+          "semantic": "e186142258d611b55659d4be83c8263f05d17df6d21194b050bc7d01cee3bb6f",
+          "canonical": "d3f887e3006037846d089f1ed916877f3fb42a5c2de0bca5527daa9587ce5fc9",
+          "inventory": "5162c26c1c57389b2702447bdf8f14bbfd0eb55efd6533e501e4cbb9d83b5c51",
+          "preflight": "0f31623ffbd21de6c7b303fa30574c9279bcd2299988502a0cff1f46c26fb1d2"
+        }
+      },
+      "results": [
+        {
+          "id": "const-one",
+          "source_case": "one",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-one.config.json",
+            "bytes": 2134,
+            "sha256": "cb4c5c1c25b9fcde65cc2b6699c53fe1206fce36970cffe17a3520a4ad9c1180"
+          },
+          "observation": {
+            "active_provider_depth": 0,
+            "after_analysis_calls": 1,
+            "all_nested_queries_uncached": null,
+            "artifact_or_launch_authority": false,
+            "attribution": {
+              "actual_hir_marker_calls": 1,
+              "canonical_function_identity": "6e3977a3d99cceafcf32c109dbab1186a63131e3c036fa3bd1a714e2e234ec57",
+              "const_definition": [
+                0,
+                30
+              ],
+              "function_definition": [
+                0,
+                14
+              ],
+              "inclusive_ctfe_and_checking_ns": "166840",
+              "nested_rows_summed": false,
+              "nontrivial_const_provider_path": true,
+              "normalized_callsite_end": 852,
+              "normalized_callsite_sha256": "d1a5d5cbf80be36ceaf681c9ebeb9963648ea328118bdd4864d16079d6df3b59",
+              "normalized_callsite_start": 696,
+              "normalized_source_bytes": 4220,
+              "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+              "provider_ordinal": 5,
+              "timing_is_inclusive": true,
+              "trusted_helper_definition": [
+                2,
+                906
+              ],
+              "trusted_macro_definition": [
+                2,
+                920
+              ],
+              "trusted_marker_definition": [
+                2,
+                205
+              ],
+              "warm_generation": false,
+              "words_definition": [
+                0,
+                28
+              ]
+            },
+            "baseline_sha256": "906bbe1391ecd9eee6134460977522eafe03c1744963fda1440920fd195e1994",
+            "compiler_fatal": false,
+            "compiler_invocations": 1,
+            "compiler_panicked": false,
+            "complete_owner_or_peak_bytes": null,
+            "config_calls": 1,
+            "config_sha256": "cb4c5c1c25b9fcde65cc2b6699c53fe1206fce36970cffe17a3520a4ad9c1180",
+            "failure": null,
+            "generation_target_compliance": "unqualified",
+            "metric": "one actual inclusive allocation-provider CTFE-and-checking invocation",
+            "nested_provider_observer_overhead_included": true,
+            "observation": {
+              "baseline_equal_while_owner_live": true,
+              "call_correspondence_receipt_bytes": 48,
+              "canonical_bytes": 1419,
+              "canonical_executable_receipt_bytes": 36992,
+              "canonical_identity": [
+                167,
+                125,
+                140,
+                44,
+                209,
+                251,
+                183,
+                210,
+                245,
+                64,
+                182,
+                132,
+                92,
+                151,
+                44,
+                234,
+                74,
+                133,
+                167,
+                35,
+                197,
+                131,
+                49,
+                168,
+                52,
+                254,
+                27,
+                159,
+                44,
+                123,
+                220,
+                0
+              ],
+              "complete_peak_owner_bytes": null,
+              "complete_retained_owner_bytes": null,
+              "descriptors": [
+                8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "retained_receipts_sum_bytes": 37040,
+              "semantic_identity": [
+                236,
+                166,
+                215,
+                170,
+                216,
+                233,
+                116,
+                64,
+                63,
+                75,
+                122,
+                233,
+                132,
+                104,
+                74,
+                5,
+                169,
+                100,
+                249,
+                49,
+                107,
+                57,
+                187,
+                159,
+                59,
+                76,
+                60,
+                165,
+                21,
+                226,
+                27,
+                155
+              ],
+              "source_inventory_identity": [
+                79,
+                175,
+                50,
+                62,
+                132,
+                81,
+                252,
+                85,
+                18,
+                21,
+                7,
+                32,
+                30,
+                19,
+                141,
+                148,
+                31,
+                227,
+                75,
+                227,
+                89,
+                227,
+                137,
+                24,
+                37,
+                162,
+                91,
+                33,
+                16,
+                130,
+                181,
+                50
+              ],
+              "source_preflight_identity": [
+                221,
+                73,
+                182,
+                104,
+                225,
+                119,
+                66,
+                114,
+                190,
+                197,
+                63,
+                161,
+                157,
+                65,
+                130,
+                80,
+                58,
+                137,
+                193,
+                198,
+                110,
+                74,
+                30,
+                165,
+                186,
+                123,
+                147,
+                30,
+                202,
+                6,
+                217,
+                255
+              ],
+              "steps": 1
+            },
+            "post_inputs_unchanged": true,
+            "provider_depth_cap": 64,
+            "provider_installed": true,
+            "provider_ledger_failed": false,
+            "provider_recording_fenced": true,
+            "provider_row_cap": 256,
+            "pure_helper_interpreter_loop_ns": null,
+            "query_cache_hit_time": null,
+            "rows": [
+              {
+                "definition_crate": 0,
+                "definition_index": 36,
+                "depth": 0,
+                "elapsed_ns": "1836661",
+                "empty_args": true,
+                "end_ns": "9646796",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 0,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "7810135",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 29,
+                "depth": 1,
+                "elapsed_ns": "780311",
+                "empty_args": true,
+                "end_ns": "9645756",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 1,
+                "parent": 0,
+                "returned_ok": true,
+                "start_ns": "8865445",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 2,
+                "elapsed_ns": "189780",
+                "empty_args": true,
+                "end_ns": "9543276",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 2,
+                "parent": 1,
+                "returned_ok": true,
+                "start_ns": "9353496",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 3,
+                "elapsed_ns": "35480",
+                "empty_args": true,
+                "end_ns": "9495526",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 3,
+                "parent": 2,
+                "returned_ok": true,
+                "start_ns": "9460046",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 32,
+                "depth": 0,
+                "elapsed_ns": "449560",
+                "empty_args": true,
+                "end_ns": "10101206",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 4,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9651646",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 30,
+                "depth": 1,
+                "elapsed_ns": "166840",
+                "empty_args": true,
+                "end_ns": "10097596",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 5,
+                "parent": 4,
+                "returned_ok": true,
+                "start_ns": "9930756",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 33,
+                "depth": 0,
+                "elapsed_ns": "79310",
+                "empty_args": true,
+                "end_ns": "10182876",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 6,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "10103566",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 34,
+                "depth": 0,
+                "elapsed_ns": "53220",
+                "empty_args": true,
+                "end_ns": "10238786",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 7,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "10185566",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 35,
+                "depth": 0,
+                "elapsed_ns": "45390",
+                "empty_args": true,
+                "end_ns": "10288986",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 8,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "10243596",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 0,
+                "elapsed_ns": "58440",
+                "empty_args": true,
+                "end_ns": "10599846",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 9,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "10541406",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 1,
+                "elapsed_ns": "10010",
+                "empty_args": true,
+                "end_ns": "10597006",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 10,
+                "parent": 9,
+                "returned_ok": true,
+                "start_ns": "10586996",
+                "unwound": false
+              }
+            ],
+            "schema": "fe2o3-ordered-const-provider-v1",
+            "source_authentication_exported": false,
+            "success": true,
+            "warm_generation": false
+          },
+          "accepted_interval": {
+            "selected_provider_row": 5,
+            "inclusive_selected_provider_ns": "166840",
+            "metric_scope": "selected-provider-inclusive-envelope",
+            "upstream_provider_identity_independently_observed": false,
+            "warm_generation": false,
+            "pure_helper_loop": false,
+            "target_qualified": false
+          }
+        },
+        {
+          "id": "const-three",
+          "source_case": "three",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-three.config.json",
+            "bytes": 2132,
+            "sha256": "cfd0258e5825f740960d0d142a4061e51d149efac0327e00b40b411446b3dc15"
+          },
+          "observation": {
+            "active_provider_depth": 0,
+            "after_analysis_calls": 1,
+            "all_nested_queries_uncached": null,
+            "artifact_or_launch_authority": false,
+            "attribution": {
+              "actual_hir_marker_calls": 1,
+              "canonical_function_identity": "33b4002b74017aac60b05fde2bf826dae5f873acff54dc649c61524de89304e5",
+              "const_definition": [
+                0,
+                30
+              ],
+              "function_definition": [
+                0,
+                14
+              ],
+              "inclusive_ctfe_and_checking_ns": "177710",
+              "nested_rows_summed": false,
+              "nontrivial_const_provider_path": true,
+              "normalized_callsite_end": 3893,
+              "normalized_callsite_sha256": "8ae18d097ff9e2d17a21f411ee019825ce706d293d475bf58a85d8248c48365d",
+              "normalized_callsite_start": 3651,
+              "normalized_source_bytes": 4220,
+              "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+              "provider_ordinal": 5,
+              "timing_is_inclusive": true,
+              "trusted_helper_definition": [
+                2,
+                906
+              ],
+              "trusted_macro_definition": [
+                2,
+                920
+              ],
+              "trusted_marker_definition": [
+                2,
+                205
+              ],
+              "warm_generation": false,
+              "words_definition": [
+                0,
+                28
+              ]
+            },
+            "baseline_sha256": "0531bce8d7ad2c1d06366fe7aae3a00ae77b8b0b468f7bc563033759a728497d",
+            "compiler_fatal": false,
+            "compiler_invocations": 1,
+            "compiler_panicked": false,
+            "complete_owner_or_peak_bytes": null,
+            "config_calls": 1,
+            "config_sha256": "cfd0258e5825f740960d0d142a4061e51d149efac0327e00b40b411446b3dc15",
+            "failure": null,
+            "generation_target_compliance": "unqualified",
+            "metric": "one actual inclusive allocation-provider CTFE-and-checking invocation",
+            "nested_provider_observer_overhead_included": true,
+            "observation": {
+              "baseline_equal_while_owner_live": true,
+              "call_correspondence_receipt_bytes": 48,
+              "canonical_bytes": 1419,
+              "canonical_executable_receipt_bytes": 36992,
+              "canonical_identity": [
+                168,
+                215,
+                223,
+                163,
+                199,
+                112,
+                152,
+                120,
+                53,
+                3,
+                86,
+                185,
+                239,
+                134,
+                188,
+                225,
+                205,
+                189,
+                253,
+                48,
+                174,
+                69,
+                129,
+                238,
+                241,
+                156,
+                213,
+                112,
+                117,
+                225,
+                102,
+                229
+              ],
+              "complete_peak_owner_bytes": null,
+              "complete_retained_owner_bytes": null,
+              "descriptors": [
+                133,
+                307,
+                413,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "retained_receipts_sum_bytes": 37040,
+              "semantic_identity": [
+                105,
+                122,
+                101,
+                243,
+                111,
+                230,
+                227,
+                4,
+                82,
+                253,
+                134,
+                155,
+                74,
+                87,
+                228,
+                67,
+                162,
+                153,
+                253,
+                203,
+                34,
+                60,
+                184,
+                92,
+                253,
+                219,
+                63,
+                207,
+                97,
+                148,
+                54,
+                206
+              ],
+              "source_inventory_identity": [
+                80,
+                203,
+                35,
+                234,
+                158,
+                28,
+                139,
+                114,
+                181,
+                86,
+                141,
+                73,
+                58,
+                67,
+                97,
+                37,
+                41,
+                4,
+                243,
+                27,
+                77,
+                244,
+                250,
+                40,
+                156,
+                248,
+                64,
+                223,
+                121,
+                227,
+                65,
+                80
+              ],
+              "source_preflight_identity": [
+                100,
+                116,
+                69,
+                217,
+                63,
+                148,
+                250,
+                248,
+                118,
+                102,
+                128,
+                30,
+                1,
+                203,
+                157,
+                241,
+                110,
+                83,
+                163,
+                171,
+                90,
+                103,
+                17,
+                15,
+                20,
+                106,
+                157,
+                71,
+                226,
+                73,
+                64,
+                210
+              ],
+              "steps": 3
+            },
+            "post_inputs_unchanged": true,
+            "provider_depth_cap": 64,
+            "provider_installed": true,
+            "provider_ledger_failed": false,
+            "provider_recording_fenced": true,
+            "provider_row_cap": 256,
+            "pure_helper_interpreter_loop_ns": null,
+            "query_cache_hit_time": null,
+            "rows": [
+              {
+                "definition_crate": 0,
+                "definition_index": 36,
+                "depth": 0,
+                "elapsed_ns": "1789862",
+                "empty_args": true,
+                "end_ns": "9070856",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 0,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "7280994",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 29,
+                "depth": 1,
+                "elapsed_ns": "823301",
+                "empty_args": true,
+                "end_ns": "9069676",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 1,
+                "parent": 0,
+                "returned_ok": true,
+                "start_ns": "8246375",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 2,
+                "elapsed_ns": "195961",
+                "empty_args": true,
+                "end_ns": "8977496",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 2,
+                "parent": 1,
+                "returned_ok": true,
+                "start_ns": "8781535",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 3,
+                "elapsed_ns": "33590",
+                "empty_args": true,
+                "end_ns": "8936076",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 3,
+                "parent": 2,
+                "returned_ok": true,
+                "start_ns": "8902486",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 32,
+                "depth": 0,
+                "elapsed_ns": "439890",
+                "empty_args": true,
+                "end_ns": "9515016",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 4,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9075126",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 30,
+                "depth": 1,
+                "elapsed_ns": "177710",
+                "empty_args": true,
+                "end_ns": "9511086",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 5,
+                "parent": 4,
+                "returned_ok": true,
+                "start_ns": "9333376",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 33,
+                "depth": 0,
+                "elapsed_ns": "82840",
+                "empty_args": true,
+                "end_ns": "9599826",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 6,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9516986",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 34,
+                "depth": 0,
+                "elapsed_ns": "52340",
+                "empty_args": true,
+                "end_ns": "9653956",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 7,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9601616",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 35,
+                "depth": 0,
+                "elapsed_ns": "45120",
+                "empty_args": true,
+                "end_ns": "9704756",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 8,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9659636",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 0,
+                "elapsed_ns": "59570",
+                "empty_args": true,
+                "end_ns": "10003226",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 9,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "9943656",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 1,
+                "elapsed_ns": "9980",
+                "empty_args": true,
+                "end_ns": "10000316",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 10,
+                "parent": 9,
+                "returned_ok": true,
+                "start_ns": "9990336",
+                "unwound": false
+              }
+            ],
+            "schema": "fe2o3-ordered-const-provider-v1",
+            "source_authentication_exported": false,
+            "success": true,
+            "warm_generation": false
+          },
+          "accepted_interval": {
+            "selected_provider_row": 5,
+            "inclusive_selected_provider_ns": "177710",
+            "metric_scope": "selected-provider-inclusive-envelope",
+            "upstream_provider_identity_independently_observed": false,
+            "warm_generation": false,
+            "pure_helper_loop": false,
+            "target_qualified": false
+          }
+        },
+        {
+          "id": "const-sixteen",
+          "source_case": "sixteen",
+          "configuration": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-ordered-const-source-r48-r2/const-sixteen.config.json",
+            "bytes": 2143,
+            "sha256": "4a844037968b5190c138cfd931f8864052ee9802df52ebc929833d4bd375c42b"
+          },
+          "observation": {
+            "active_provider_depth": 0,
+            "after_analysis_calls": 1,
+            "all_nested_queries_uncached": null,
+            "artifact_or_launch_authority": false,
+            "attribution": {
+              "actual_hir_marker_calls": 1,
+              "canonical_function_identity": "a0fb286d3354eafccbdffcb28a3644034213f83607ada4b4a9dcd8403dd428f0",
+              "const_definition": [
+                0,
+                30
+              ],
+              "function_definition": [
+                0,
+                14
+              ],
+              "inclusive_ctfe_and_checking_ns": "394480",
+              "nested_rows_summed": false,
+              "nontrivial_const_provider_path": true,
+              "normalized_callsite_end": 1571,
+              "normalized_callsite_sha256": "9f720b6ad11c26fc5d73e1fd203d1386c2d8d947cbe4f313d276e1c8ad9f18b0",
+              "normalized_callsite_start": 930,
+              "normalized_source_bytes": 4220,
+              "normalized_source_sha256": "7d219f07461b8eb75d8981b01f680f1b4fa59bee6314b2eff5c501778ed99f31",
+              "provider_ordinal": 5,
+              "timing_is_inclusive": true,
+              "trusted_helper_definition": [
+                2,
+                906
+              ],
+              "trusted_macro_definition": [
+                2,
+                920
+              ],
+              "trusted_marker_definition": [
+                2,
+                205
+              ],
+              "warm_generation": false,
+              "words_definition": [
+                0,
+                28
+              ]
+            },
+            "baseline_sha256": "7774c1dcbf8e541ffbf851048d49008ad2b4173210657761c1daabb63b9e473d",
+            "compiler_fatal": false,
+            "compiler_invocations": 1,
+            "compiler_panicked": false,
+            "complete_owner_or_peak_bytes": null,
+            "config_calls": 1,
+            "config_sha256": "4a844037968b5190c138cfd931f8864052ee9802df52ebc929833d4bd375c42b",
+            "failure": null,
+            "generation_target_compliance": "unqualified",
+            "metric": "one actual inclusive allocation-provider CTFE-and-checking invocation",
+            "nested_provider_observer_overhead_included": true,
+            "observation": {
+              "baseline_equal_while_owner_live": true,
+              "call_correspondence_receipt_bytes": 48,
+              "canonical_bytes": 1419,
+              "canonical_executable_receipt_bytes": 36992,
+              "canonical_identity": [
+                211,
+                248,
+                135,
+                227,
+                0,
+                96,
+                55,
+                132,
+                109,
+                8,
+                159,
+                30,
+                217,
+                22,
+                135,
+                127,
+                63,
+                180,
+                42,
+                92,
+                45,
+                224,
+                188,
+                165,
+                82,
+                125,
+                170,
+                149,
+                135,
+                206,
+                95,
+                201
+              ],
+              "complete_peak_owner_bytes": null,
+              "complete_retained_owner_bytes": null,
+              "descriptors": [
+                0,
+                141,
+                323,
+                188,
+                321,
+                58,
+                64,
+                181,
+                60,
+                331,
+                73,
+                194,
+                56,
+                333,
+                16,
+                72
+              ],
+              "retained_receipts_sum_bytes": 37040,
+              "semantic_identity": [
+                225,
+                134,
+                20,
+                34,
+                88,
+                214,
+                17,
+                181,
+                86,
+                89,
+                212,
+                190,
+                131,
+                200,
+                38,
+                63,
+                5,
+                209,
+                125,
+                246,
+                210,
+                17,
+                148,
+                176,
+                80,
+                188,
+                125,
+                1,
+                206,
+                227,
+                187,
+                111
+              ],
+              "source_inventory_identity": [
+                81,
+                98,
+                194,
+                108,
+                28,
+                87,
+                56,
+                155,
+                39,
+                2,
+                68,
+                123,
+                223,
+                143,
+                20,
+                187,
+                253,
+                14,
+                181,
+                94,
+                253,
+                101,
+                51,
+                229,
+                1,
+                228,
+                203,
+                185,
+                216,
+                59,
+                92,
+                81
+              ],
+              "source_preflight_identity": [
+                15,
+                49,
+                98,
+                63,
+                251,
+                210,
+                29,
+                230,
+                199,
+                179,
+                3,
+                250,
+                48,
+                87,
+                76,
+                146,
+                121,
+                188,
+                210,
+                41,
+                153,
+                136,
+                80,
+                42,
+                12,
+                255,
+                31,
+                70,
+                194,
+                111,
+                177,
+                210
+              ],
+              "steps": 16
+            },
+            "post_inputs_unchanged": true,
+            "provider_depth_cap": 64,
+            "provider_installed": true,
+            "provider_ledger_failed": false,
+            "provider_recording_fenced": true,
+            "provider_row_cap": 256,
+            "pure_helper_interpreter_loop_ns": null,
+            "query_cache_hit_time": null,
+            "rows": [
+              {
+                "definition_crate": 0,
+                "definition_index": 36,
+                "depth": 0,
+                "elapsed_ns": "3043382",
+                "empty_args": true,
+                "end_ns": "15190609",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 0,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "12147227",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 29,
+                "depth": 1,
+                "elapsed_ns": "1635911",
+                "empty_args": true,
+                "end_ns": "15189189",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 1,
+                "parent": 0,
+                "returned_ok": true,
+                "start_ns": "13553278",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 2,
+                "elapsed_ns": "405030",
+                "empty_args": true,
+                "end_ns": "15060809",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 2,
+                "parent": 1,
+                "returned_ok": true,
+                "start_ns": "14655779",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 28,
+                "depth": 3,
+                "elapsed_ns": "71080",
+                "empty_args": true,
+                "end_ns": "15010189",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 3,
+                "parent": 2,
+                "returned_ok": true,
+                "start_ns": "14939109",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 32,
+                "depth": 0,
+                "elapsed_ns": "743250",
+                "empty_args": true,
+                "end_ns": "15941659",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 4,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "15198409",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 30,
+                "depth": 1,
+                "elapsed_ns": "394480",
+                "empty_args": true,
+                "end_ns": "15936089",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 5,
+                "parent": 4,
+                "returned_ok": true,
+                "start_ns": "15541609",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 33,
+                "depth": 0,
+                "elapsed_ns": "100581",
+                "empty_args": true,
+                "end_ns": "16045540",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 6,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "15944959",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 34,
+                "depth": 0,
+                "elapsed_ns": "68350",
+                "empty_args": true,
+                "end_ns": "16118700",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 7,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "16050350",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 35,
+                "depth": 0,
+                "elapsed_ns": "59250",
+                "empty_args": true,
+                "end_ns": "16184570",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 8,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "16125320",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 0,
+                "elapsed_ns": "75280",
+                "empty_args": true,
+                "end_ns": "16605580",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": true,
+                "ordinal": 9,
+                "parent": null,
+                "returned_ok": true,
+                "start_ns": "16530300",
+                "unwound": false
+              },
+              {
+                "definition_crate": 0,
+                "definition_index": 18,
+                "depth": 1,
+                "elapsed_ns": "12820",
+                "empty_args": true,
+                "end_ns": "16601790",
+                "fully_monomorphized": true,
+                "item": true,
+                "no_promoted": false,
+                "ordinal": 10,
+                "parent": 9,
+                "returned_ok": true,
+                "start_ns": "16588970",
+                "unwound": false
+              }
+            ],
+            "schema": "fe2o3-ordered-const-provider-v1",
+            "source_authentication_exported": false,
+            "success": true,
+            "warm_generation": false
+          },
+          "accepted_interval": {
+            "selected_provider_row": 5,
+            "inclusive_selected_provider_ns": "394480",
+            "metric_scope": "selected-provider-inclusive-envelope",
+            "upstream_provider_identity_independently_observed": false,
+            "warm_generation": false,
+            "pure_helper_loop": false,
+            "target_qualified": false
+          }
+        }
+      ],
+      "dependencies": {
+        "files": 459,
+        "bytes": 360634279,
+        "manifest_sha256": "d3d7c1932c2a95a18fbf3ca0db2a82eebb2a1e0b31d3e7413d7fa63257aea08f"
+      },
+      "elapsed_ms": 37955.762148,
+      "scope": "Three original-route baselines and three fresh const-provider observations, six actual adapter compiler sessions. Selected-provider inclusive envelopes only; warm generation, pure helper-loop timing, source/validation budgets and whole-owner/peak targets remain unqualified.",
+      "metric_scope": "selected-provider-inclusive-envelope",
+      "upstream_provider_identity_independently_observed": false,
+      "preparation_roster": "The unchanged source preparer retains four inert case records; only one/three/sixteen are executed. No negative or retry compiler child is admitted.",
+      "evidence_scope": "Full current repository census is owned by outer runner; selected executable/runtime pins and actual Cargo outputs/dependency bytes are recorded. This is not a compiler-closure attestation or exhaustive system-library/build-cache input census.",
+      "escaped_descendant_closure": false,
+      "warm_generation": false,
+      "pure_helper_loop": false,
+      "generation_target_qualified": false,
+      "milestone_complete": false
+    }
+  },
+  "retained_prior_attempts": {
+    "failed_recipe": {
+      "schema": 1,
+      "status": "failed-preparation-before-frontends",
+      "receipt": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r48-compiler-recipe-source-campaign-r1/receipt.json",
+        "bytes": 32391,
+        "sha256": "4883140dfa42df28c2d544404dd3a82fbd6c2d2e5dd9ad0e2fb7661b11ce0c93"
+      },
+      "failure": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-recipe-series-campaign-r48-r1/FAILURE.json",
+        "bytes": 7706,
+        "sha256": "213d339dfe22d8e13f8bbce39b128d5d42128c7f769e62e0e3f39960ddd36901"
+      },
+      "source_current": {
+        "files": 9561,
+        "bytes": 135331832,
+        "sha256": "b3adab5ecc17048d6fa613ba58f50232cb86942ec3e38fd12049b568bc8fc9bf"
+      },
+      "retained_attempts": 4,
+      "adapter_frontends": 0,
+      "actual_core_metadata_bytes": 41173933,
+      "preparation_artifact_observer_cap": 16777216,
+      "reason": "Actual core rmeta exceeds setup-only selected-artifact observer cap; no adapter or warm sample ran.",
+      "milestone_complete": false
+    },
+    "prior_const": {
+      "schema": 1,
+      "status": "passed",
+      "receipt": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r48-compiler-ordered-const-source-campaign-r1/receipt.json",
+        "bytes": 35299,
+        "sha256": "d68586a1ff6ba3b877f4aada49b579a5bde6856bb2052ab01481788f5e4dc895"
+      },
+      "summary": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-ordered-const-campaign-r48-r1/SUMMARY.json",
+        "bytes": 58800,
+        "sha256": "0d520d5056d7c790761ce4dd4eca5afbc3db77ac48bd65dc59540f29d0576232"
+      },
+      "source": {
+        "files": 9561,
+        "bytes": 135331832,
+        "sha256": "b3adab5ecc17048d6fa613ba58f50232cb86942ec3e38fd12049b568bc8fc9bf"
+      },
+      "processes": 10,
+      "compiler_sessions": 6,
+      "observations": [
+        {
+          "case": "one",
+          "rows": 11,
+          "selected_row": 5,
+          "inclusive_selected_provider_ns": "194980",
+          "selected_definition": [
+            0,
+            30
+          ],
+          "callsite": [
+            696,
+            852
+          ],
+          "canonical_bytes": 1419,
+          "upstream_provider_identity_independently_observed": false
+        },
+        {
+          "case": "three",
+          "rows": 11,
+          "selected_row": 5,
+          "inclusive_selected_provider_ns": "235200",
+          "selected_definition": [
+            0,
+            30
+          ],
+          "callsite": [
+            3651,
+            3893
+          ],
+          "canonical_bytes": 1419,
+          "upstream_provider_identity_independently_observed": false
+        },
+        {
+          "case": "sixteen",
+          "rows": 11,
+          "selected_row": 5,
+          "inclusive_selected_provider_ns": "308150",
+          "selected_definition": [
+            0,
+            30
+          ],
+          "callsite": [
+            930,
+            1571
+          ],
+          "canonical_bytes": 1419,
+          "upstream_provider_identity_independently_observed": false
+        }
+      ],
+      "dependencies": {
+        "files": 459,
+        "bytes": 360634279,
+        "manifest_sha256": "d51d13d3077b8fd1a20a9d1208d9c1c63b5564199ff79db1876b158703a8eccc"
+      },
+      "elapsed_ms": 37639.777812,
+      "scope": "Actual original-provider inclusive observations with trusted flat-macro attribution; not pure helper generation, warm timing, provider identity or complete owner memory.",
+      "milestone_complete": false
+    }
+  },
+  "accepted_milestones": 6,
+  "total_milestones": 18,
+  "milestones_closed_by_this_batch": [],
+  "storage_target_qualified": false,
+  "generation_target_qualified": false
+}

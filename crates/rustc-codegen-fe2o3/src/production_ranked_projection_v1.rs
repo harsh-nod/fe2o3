@@ -3248,6 +3248,20 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_materialized_with_compile_v1(
+        materialized,
+        root_inputs,
+        reference_bindings,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+    )
+}
+
+fn project_and_verify_ranked_materialized_with_compile_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     #[cfg(test)]
     crate::production_reference_effect_join_v2::prepared_observation_v1::observe_source(
         &materialized,
@@ -3256,7 +3270,19 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
         let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         let mut ledger = ranked_projection_source_v1::projection_source_ledger_v1(&source)?;
         let roots = ledger.with_budget(|budget| {
-            project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+            if compiler.is_legacy() {
+                project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+            } else {
+                project_ranked_roots_with_progress_and_compile_v1(
+                    &source,
+                    root_inputs,
+                    reference_bindings,
+                    budget,
+                    None,
+                    compiler,
+                )?
+                .finish(&source, budget)
+            }
         })?;
         (
             roots,
@@ -3297,7 +3323,25 @@ fn project_ranked_roots_with_progress_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
+) -> Result<ProjectedReferenceRootsV1, ProductionRankedProjectionErrorV1> {
+    project_ranked_roots_with_progress_and_compile_v1(
+        source,
+        root_inputs,
+        reference_bindings,
+        budget,
+        progress,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+    )
+}
+
+fn project_ranked_roots_with_progress_and_compile_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     mut progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProjectedReferenceRootsV1, ProductionRankedProjectionErrorV1> {
     source.require_floor(budget)?;
     source
@@ -3377,6 +3421,7 @@ fn project_ranked_roots_with_progress_v1(
                                     *source_root,
                                     root_references,
                                     facts,
+                                    compiler,
                                 )
                             },
                         ),
@@ -3389,6 +3434,7 @@ fn project_ranked_roots_with_progress_v1(
                             *source_root,
                             root_references,
                             facts,
+                            compiler,
                         ),
                     }
                 })
@@ -3443,6 +3489,7 @@ fn project_and_verify_ranked_root_ssa_v1(
     source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     shared_value_reads_projection_v1::with_reads(
         owner,
@@ -3462,6 +3509,7 @@ fn project_and_verify_ranked_root_ssa_v1(
                     owner,
                     function: selection.body(),
                 }),
+                compiler,
             )
         },
     )
@@ -3487,6 +3535,7 @@ fn project_and_verify_ranked_root_v1(
         assertion_facts,
         None,
         None,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
     )
 }
 
@@ -3500,6 +3549,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let function = semantic
         .functions()
@@ -3530,6 +3580,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
                         borrows,
                         shared_reads,
                         scalar_ssa,
+                        compiler,
                     )
                 },
             )
@@ -3550,6 +3601,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     multi_entry_induction_v1::with_scope(assertion_facts, |scope, facts| {
         project_and_verify_ranked_root_with_induction_scope_v1(
@@ -3565,6 +3617,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
             shared_reads,
             scalar_ssa,
             scope,
+            compiler,
         )
     })
 }
@@ -3585,6 +3638,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     with_prepared_ranked_root_recipe_with_shared_reads_v1(
         semantic,
@@ -3600,14 +3654,26 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         scalar_ssa,
         induction_scope,
         |recipe, assertion_facts| {
-            verify_prepared_ranked_root_recipe_v1(
-                recipe,
-                selection,
-                input,
-                source_root,
-                reference_bindings,
-                assertion_facts,
-            )
+            if compiler.is_legacy() {
+                verify_prepared_ranked_root_recipe_v1(
+                    recipe,
+                    selection,
+                    input,
+                    source_root,
+                    reference_bindings,
+                    assertion_facts,
+                )
+            } else {
+                verify_prepared_ranked_root_recipe_with_compile_v1(
+                    recipe,
+                    selection,
+                    input,
+                    source_root,
+                    reference_bindings,
+                    assertion_facts,
+                    compiler,
+                )
+            }
         },
     )
 }
@@ -19782,209 +19848,16 @@ fn projected_cfg_terminator(
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
-    let block = function.blocks().get(block_index).ok_or(
-        ProductionRankedProjectionErrorV1::Unsupported("a semantic CFG block outside the function"),
-    )?;
-    let target = |target: fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1| {
-        let target = target.index() as usize;
-        (target < function.blocks().len()).then_some(target).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic CFG edge outside the function",
-            ),
-        )
-    };
-    match block.terminator().kind() {
-        SemanticTerminatorKindV1::Goto(edge) => {
-            Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
-        }
-        SemanticTerminatorKindV1::SwitchInt {
-            discriminant,
-            targets,
-        } => {
-            let predicate = simple_operand_local(discriminant).and_then(|discriminant| {
-                switch_predicates
-                    .get(discriminant.index() as usize)
-                    .and_then(Clone::clone)
-            });
-            let Some(predicate) = predicate else {
-                if let Some(projected) = deterministic_switches
-                    .get(block_index)
-                    .and_then(Clone::clone)
-                {
-                    return Ok(ProjectedCfgTerminatorV1::ExactSwitch(projected));
-                }
-                let successor_capacity = targets.values().len().checked_add(1).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch successor count overflow",
-                    ),
-                )?;
-                if successor_capacity > MAX_RANKED_BOUNDS_EDGES {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch edge count exceeds the ranked edge limit",
-                    ));
-                }
-                let otherwise = target(targets.otherwise().target())?;
-                let elide_fallback = targets.values().len() == 2
-                    && targets.values()[0].value() == 0
-                    && targets.values()[1].value() == 1
-                    && switch_fallback_is_empty_unreachable_v1(function, otherwise);
-                let mut successors = Vec::new();
-                successors
-                    .try_reserve_exact(successor_capacity)
-                    .map_err(|_| {
-                        ProductionRankedProjectionErrorV1::Unsupported(
-                            "analysis switch successor storage cannot be reserved",
-                        )
-                    })?;
-                let mut seen = HashSet::new();
-                seen.try_reserve(successor_capacity).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch successor set cannot be reserved",
-                    )
-                })?;
-                for successor in targets.values() {
-                    let successor = target(successor.edge().target())?;
-                    if seen.insert(successor) {
-                        successors.push(successor);
-                    }
-                }
-                if !elide_fallback && seen.insert(otherwise) {
-                    successors.push(otherwise);
-                }
-                if successors.len() > MAX_RANKED_BOUNDS_BLOCKS {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch successor count exceeds the ranked block limit",
-                    ));
-                }
-                return match successors.as_slice() {
-                    [] => Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch has no successor",
-                    )),
-                    [successor] => Ok(ProjectedCfgTerminatorV1::Branch(*successor)),
-                    [first_block, second_block] => Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                        first_block: *first_block,
-                        second_block: *second_block,
-                    }),
-                    _ => Ok(ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: successors }),
-                };
-            };
-            if targets.values().len() == 1 {
-                let explicit = &targets.values()[0];
-                let explicit_block = target(explicit.edge().target())?;
-                let otherwise_block = target(targets.otherwise().target())?;
-                return match explicit.value() {
-                    0 => Ok(ProjectedCfgTerminatorV1::Predicate {
-                        predicate,
-                        true_block: otherwise_block,
-                        false_block: explicit_block,
-                    }),
-                    1 => Ok(ProjectedCfgTerminatorV1::Predicate {
-                        predicate,
-                        true_block: explicit_block,
-                        false_block: otherwise_block,
-                    }),
-                    _ => Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a comparison predicate switch retained a non-boolean explicit value",
-                    )),
-                };
-            }
-            let zero = targets.values().iter().find(|target| target.value() == 0);
-            let one = targets.values().iter().find(|target| target.value() == 1);
-            if targets.values().len() != 2 || zero.is_none() || one.is_none() {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a comparison predicate switch whose exact boolean variants were not retained",
-                ));
-            }
-            let otherwise = target(targets.otherwise().target())?;
-            if !switch_fallback_is_empty_unreachable_v1(function, otherwise) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a comparison predicate switch with a reachable non-boolean successor",
-                ));
-            }
-            let one = one.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a comparison predicate switch lost its true variant",
-            ))?;
-            let zero = zero.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a comparison predicate switch lost its false variant",
-            ))?;
-            Ok(ProjectedCfgTerminatorV1::Predicate {
-                predicate,
-                true_block: target(one.edge().target())?,
-                false_block: target(zero.edge().target())?,
-            })
-        }
-        SemanticTerminatorKindV1::Call(call) => {
-            if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a call with cleanup control flow before exact unwind projection",
-                ));
-            }
-            match call.destination() {
-                Some(destination) => Ok(ProjectedCfgTerminatorV1::Branch(target(
-                    destination.edge().target(),
-                )?)),
-                None if matches!(
-                    callables.get(call.callee().index() as usize),
-                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                        operation: SemanticCompilerIntrinsicOperationV1::Trap,
-                        ..
-                    })
-                ) =>
-                {
-                    Ok(ProjectedCfgTerminatorV1::Trap)
-                }
-                None => Ok(ProjectedCfgTerminatorV1::Return),
-            }
-        }
-        SemanticTerminatorKindV1::Assert {
-            condition,
-            expected,
-            message,
-            target: edge,
-            ..
-        } => {
-            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
-                let masked_source_proof = assertion_facts.masked_assertion_source_proved_v1(
-                    function,
-                    block_index,
-                    *expected,
-                    edge.target(),
-                )?;
-                // A contradictory actual graph constant overrides a source proof.
-                let graph_condition =
-                    assertion_facts.condition(block_index, *expected, edge.target())?;
-                if !projected_assertion_is_proved_v1(
-                    graph_condition,
-                    *expected,
-                    non_bounds_assert_proved || masked_source_proof,
-                ) {
-                    return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
-                        block: block_index,
-                        kind: semantic_assert_kind_v1(message),
-                        expected: *expected,
-                        condition_local: simple_operand_local(condition)
-                            .map(SemanticLocalIdV1::index),
-                        source: Box::new(block.terminator().source()),
-                    });
-                }
-            }
-            Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
-        }
-        SemanticTerminatorKindV1::Drop { target: edge, .. } => {
-            Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
-        }
-        SemanticTerminatorKindV1::FalseEdge { .. } => {
-            Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a false edge before exact semantic CFG normalization",
-            ))
-        }
-        SemanticTerminatorKindV1::Return
-        | SemanticTerminatorKindV1::TailCall(_)
-        | SemanticTerminatorKindV1::UnwindResume
-        | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort
-        | SemanticTerminatorKindV1::Unreachable => Ok(ProjectedCfgTerminatorV1::Return),
-    }
+    root_cfg_terminator_resources_v1::project(
+        function,
+        block_index,
+        callables,
+        non_bounds_assert_proved,
+        assertion_facts,
+        switch_predicates,
+        deterministic_switches,
+        None,
+    )
 }
 
 const fn semantic_assert_kind_v1(message: &SemanticAssertMessageV1) -> &'static str {
@@ -40606,3 +40479,19 @@ pub(crate) use bf16_nominal_source_preparation_v1::observe_option_enum_scalar_pr
 
 #[cfg(test)]
 pub(crate) use bf16_nominal_source_preparation_v1::observe_actual_capability_prefix_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use bf16_nominal_source_preparation_v1::observe_initial_nonempty_reads_for_test_v1;
+
+#[path = "ranked_roster_retained_storage_v1.rs"]
+mod retained_storage_v1;
+
+#[allow(dead_code)]
+#[path = "production_ranked_projection_v1/root_cfg_terminator_resources_v1.rs"]
+mod root_cfg_terminator_resources_v1;
+
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::observe_actual_root_block_stream_for_test_v1;
+
+#[path = "production_ranked_projection_v1/paid_ranked_compile_v1.rs"]
+pub(crate) mod paid_ranked_compile_v1;

@@ -337,3 +337,6 @@ fn source_preparation_frame<R, F>() -> Result<usize> {
 pub(in crate::production_ranked_projection_v1) use root_prefix_indices_v1::{
     ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,
 };
+
+#[cfg(test)]
+pub(crate) use root_prefix_indices_v1::observe_actual_root_block_stream_for_test_v1;

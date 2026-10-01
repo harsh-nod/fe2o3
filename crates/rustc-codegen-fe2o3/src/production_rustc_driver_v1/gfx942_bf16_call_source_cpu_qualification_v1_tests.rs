@@ -13,14 +13,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[path = "gfx942_bf16_tile_values_inputs_v1_tests.rs"]
-mod inputs;
+pub(in crate::production_rustc_driver_v1) mod inputs;
 use super::gfx942_bf16_tile_values_qualification_v1_tests::observation as source_observation;
 use super::gfx942_tiled_region_qualification_v1_tests::observation::cpu::oracle;
 use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as Error;
 #[path = "gfx942_bf16_call_source_cpu_capture_v1_tests.rs"]
 mod capture;
 #[path = "gfx942_bf16_call_source_cpu_observation_v1_tests.rs"]
-mod observed;
+pub(in crate::production_rustc_driver_v1) mod observed;
 
 const OUTPUT_ENV: &str = "FE2O3_TEST_BF16_CALL_CPU_OUTPUT_V1";
 const CHILD_ENV: &str = "FE2O3_TEST_BF16_CALL_CPU_INPUTS_V1";
@@ -601,4 +601,122 @@ fn helper_cpu_acceptance_does_not_count_transport_or_normal_flags_as_execution()
         assert!(accept("swap01", &report).is_err());
     }
     assert!(accept("identity,swap01", &Value::Null).is_err());
+}
+
+#[path = "gfx942_bf16_single_strided_read_source_v1_tests.rs"]
+mod single_strided_read;
+
+// Root-supervised legacy preparation only: no compiler, child process, or CPU run.
+const LEGACY_NONE_PREPARE_ENV_V1: &str = "FE2O3_TEST_BF16_CALL_CPU_PREPARE_INPUTS_V1";
+const LEGACY_NONE_PREPARE_PREFIX_V1: &str = "FE2O3_LEGACY_BF16_CPU_PREPARATION_V1 ";
+const LEGACY_NONE_PREPARE_ROSTER_V1: [(&str, &str); 5] = [
+    ("identity", "identity"),
+    ("swap01", "swap01"),
+    ("wrong-launch", "wrong-launch"),
+    ("identity-error", "identity"),
+    ("identity-panic", "identity"),
+];
+
+#[test]
+fn legacy_none_preparation_has_exact_original_case_feature_roster() {
+    assert_eq!(
+        CORE,
+        [
+            "identity",
+            "swap01",
+            "wrong-launch",
+            "identity-error",
+            "identity-panic"
+        ]
+    );
+    assert_eq!(LEGACY_NONE_PREPARE_ROSTER_V1.len(), 5);
+    for (case, feature) in LEGACY_NONE_PREPARE_ROSTER_V1 {
+        assert_eq!(feature_for_case(case).unwrap(), feature);
+        assert!(CORE.contains(&case));
+    }
+    for case in ["", "../identity", "identity,wrong-launch", "unknown"] {
+        assert!(feature_for_case(case).is_err());
+    }
+}
+
+#[test]
+#[ignore = "nonspawning legacy None preparation; root owns setup and each existing CPU child"]
+fn prepare_legacy_none_invocations() {
+    let started = std::time::Instant::now();
+    let directory = PathBuf::from(
+        std::env::var_os(LEGACY_NONE_PREPARE_ENV_V1)
+            .expect("explicit fresh legacy preparation directory"),
+    );
+    assert!(directory.is_absolute() && directory.as_os_str().len() <= 4096);
+    assert_eq!(directory.canonicalize().unwrap(), directory);
+    let metadata = fs::symlink_metadata(&directory).unwrap();
+    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+    let repo = repository();
+    assert!(!directory.starts_with(&repo) && !repo.starts_with(&directory));
+    let analysis = directory.join("analysis-output");
+    assert_eq!(analysis.canonicalize().unwrap(), analysis);
+    assert!(fs::symlink_metadata(&analysis).unwrap().is_dir());
+    assert!(fs::read_dir(&analysis).unwrap().next().is_none());
+
+    // Refuse any prior output before writing the first record. Root supplied
+    // the actual sysroot/metadata/dependency outputs; derive_record checks them.
+    let summary_path = directory.join("legacy-none-preparation.json");
+    for path in std::iter::once(summary_path.clone()).chain(
+        LEGACY_NONE_PREPARE_ROSTER_V1
+            .iter()
+            .map(|(case, _)| directory.join(format!("{case}.invocation.json"))),
+    ) {
+        assert!(matches!(fs::symlink_metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound));
+    }
+    let mut rows = Vec::with_capacity(LEGACY_NONE_PREPARE_ROSTER_V1.len());
+    for (case, feature) in LEGACY_NONE_PREPARE_ROSTER_V1 {
+        timely(started.elapsed(), 300).unwrap();
+        assert_eq!(feature_for_case(case).unwrap(), feature);
+        let record = inputs::derive_record(&directory, feature);
+        assert_eq!(record.schema, "fe2o3-test-bf16-tile-values-invocation-v1");
+        assert_eq!(record.feature, feature);
+        let bytes = serde_json::to_vec_pretty(&record).unwrap();
+        assert!(bytes.len() <= 128 * 1024);
+        let name = format!("{case}.invocation.json");
+        publish_json(&directory, &name, &record);
+        assert_eq!(
+            read_bounded(&directory.join(&name), 128 * 1024).unwrap(),
+            bytes
+        );
+        rows.push(json!({"case":case,"feature":feature,
+            "bytes":bytes.len().to_string(),"sha256":digest(&bytes)}));
+        timely(started.elapsed(), 300).unwrap();
+    }
+    // Re-read every published record against the unchanged real derivation.
+    // No historical record, cached source owner, or fabricated authority is used.
+    for (index, (case, feature)) in LEGACY_NONE_PREPARE_ROSTER_V1.into_iter().enumerate() {
+        let current = inputs::derive_record(&directory, feature);
+        let retained = read_bounded(
+            &directory.join(format!("{case}.invocation.json")),
+            128 * 1024,
+        )
+        .unwrap();
+        assert_eq!(rows[index]["sha256"], digest(&retained));
+        assert_eq!(rows[index]["bytes"], retained.len().to_string());
+        assert_eq!(retained, serde_json::to_vec_pretty(&current).unwrap());
+        timely(started.elapsed(), 300).unwrap();
+    }
+    assert!(fs::read_dir(&analysis).unwrap().next().is_none());
+    let summary = json!({
+        "schema":"fe2o3-legacy-bf16-cpu-preparation-v1","family":"helper",
+        "case_count":"5","records":rows,"inputs_rederived":true,
+        "compiler_executed":false,"cpu_executed":false,"source_authority":false,
+        "parent_terminal_success_required":true,
+    });
+    let pretty = serde_json::to_vec_pretty(&summary).unwrap();
+    let encoded = serde_json::to_string(&summary).unwrap();
+    assert!(pretty.len() <= 8192);
+    assert!(encoded.len() + LEGACY_NONE_PREPARE_PREFIX_V1.len() <= 8192);
+    timely(started.elapsed(), 300).unwrap();
+    publish_json(&directory, "legacy-none-preparation.json", &summary);
+    assert_eq!(read_bounded(&summary_path, 8192).unwrap(), pretty);
+    timely(started.elapsed(), 300).unwrap();
+    println!("\n{LEGACY_NONE_PREPARE_PREFIX_V1}{encoded}");
+    timely(started.elapsed(), 300).unwrap();
 }

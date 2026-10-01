@@ -2,6 +2,7 @@
 use super::capture::{Events, NegativeRow, RunRow, Sink, Sites};
 use super::oracle::{self, Control};
 use super::*;
+use crate::production_rustc_driver_v1::gfx942_bf16_publication_tap_v1_tests as publication_tap;
 use fe2o3_kernel_ir::{AccessMode, AddressSpace, BlockId, ScalarType, Type, ValueId};
 use fe2o3_kir_sim::*;
 use fe2o3_lower_mir_kernel::{ProductionArgumentCoverageV1, ProductionSemanticKirErrorV1};
@@ -366,6 +367,16 @@ fn execute(
     captured: &Cell<Option<Census>>,
     case: &str,
 ) -> Result<CpuRow, Error> {
+    execute_with_publication_tap(view, budget, last, captured, case, None)
+}
+fn execute_with_publication_tap(
+    view: &SourceOwnedBf16MfmaRegionV1<'_, '_>,
+    budget: &mut Budget<'_>,
+    last: &Cell<Option<Progress>>,
+    captured: &Cell<Option<Census>>,
+    case: &str,
+    mut stream: Option<&mut publication_tap::Stream>,
+) -> Result<CpuRow, Error> {
     let fixed = 2 * std::mem::size_of::<CpuRow>() + 4096;
     if fixed > 65536 {
         return Err(Error::Unavailable("fixed CPU row observation storage"));
@@ -378,6 +389,25 @@ fn execute(
     let arguments = checked_arguments(view, budget)?;
     let sites = sites(&source, &arguments, view)?;
     let owner = view.emission().original().executable();
+    let tap_sites = publication_tap::Sites {
+        root: 0,
+        helper: None,
+        matrix: sites.matrix,
+        call: None,
+        store: sites.store,
+        matrix_results: sites.results,
+        call_results: sites.results,
+        parameters: sites.parameters,
+    };
+    if let Some(stream) = stream.as_deref_mut() {
+        stream
+            .start(
+                *view.source().sha256(),
+                Sha256::digest(owner.canonical().canonical_bytes()).into(),
+                tap_sites,
+            )
+            .map_err(Error::Unavailable)?;
+    }
     let limits = V12CpuObservationOptionsV1::default().simulation_limits();
     let (admitted, receipt) =
         AdmittedSimulationModuleV1::admit_v12_with_verification_budget(owner, limits, budget)
@@ -407,7 +437,22 @@ fn execute(
         let before = budget.work();
         let copied = budget.with_prepaid_scope(floor, 1, 8_388_608, 65536, |budget| {
             let request = oracle::request(&owner.module().kernels[0].id, pattern, length, control);
-            let mut sink = Sink::new(sites, pattern, length, control);
+            if !publication_tap::scratch_fits::<Sink>() {
+                return Err(Error::Unavailable("bounded sidecar observation scratch"));
+            }
+            let mut sink = publication_tap::Tee {
+                inner: Sink::new(sites, pattern, length, control),
+                trace: if stream.is_some() && attempt < 18 {
+                    Some(
+                        publication_tap::Trace::new(tap_sites, pattern, length)
+                            .map_err(Error::Unavailable)?,
+                    )
+                } else {
+                    None
+                },
+                tap_failure: None,
+            };
+            let mut sidecar_memory = None;
             let mut events = Events {
                 fail: matches!(control, Control::EventFailure),
             };
@@ -441,6 +486,10 @@ fn execute(
                                 owner.canonical().canonical_bytes().len() as u64
                             );
                             oracle::check_output(run, pattern, length);
+                            if stream.is_some() {
+                                sidecar_memory =
+                                    Some(publication_tap::Memory::capture(run, length)?);
+                            }
                             if case == "direct-error" {
                                 return Err("source CPU observer error control");
                             }
@@ -524,6 +573,9 @@ fn execute(
             if case == "direct-error" && observed == "observer-error" {
                 return Err(Error::Unavailable("source CPU observer error control"));
             }
+            if let Some(error) = sink.tap_failure {
+                return Err(Error::Unavailable(error));
+            }
             if observed != capture::expected_refusal(control) || sink.failure.is_some() {
                 return Err(Error::Unavailable(
                     "actual whole-graph CPU outcome differs; see retained progress/census",
@@ -537,6 +589,21 @@ fn execute(
                 return Err(Error::Unavailable(
                     "refused observation exposed matrix completion or global writes",
                 ));
+            }
+            if attempt < 18 {
+                if let Some(stream) = stream.as_deref_mut() {
+                    stream
+                        .positive(
+                            sink.trace
+                                .take()
+                                .ok_or(Error::Unavailable("actual sidecar trace absent"))?,
+                            sidecar_memory
+                                .take()
+                                .ok_or(Error::Unavailable("actual sidecar memory absent"))?,
+                            execution_steps,
+                        )
+                        .map_err(Error::Unavailable)?;
+                }
             }
             Ok((
                 sink.values,
@@ -552,6 +619,13 @@ fn execute(
         })?;
         assert_eq!(budget.storage(), floor);
         assert!(budget.work_ledger_identity_v1() == ledger);
+        if attempt >= 18 {
+            if let Some(stream) = stream.as_deref_mut() {
+                stream
+                    .negative(attempt, copied.7, copied.2, 0, copied.5, true)
+                    .map_err(Error::Unavailable)?;
+            }
+        }
         let mut progress = last.get().unwrap();
         progress.floor_restored = true;
         last.set(Some(progress));
@@ -584,6 +658,9 @@ fn execute(
     }
     drop(admitted);
     budget.release_storage(receipt.retained_storage())?;
+    if let Some(stream) = stream {
+        stream.finish().map_err(Error::Unavailable)?;
+    }
     Ok(result)
 }
 pub(super) fn observe<'tcx>(
@@ -648,4 +725,58 @@ fn fixed_rows_and_request_envelopes_are_finite() {
         oracle::PATTERNS * oracle::LENGTHS.len() + oracle::NEGATIVES.len(),
         34
     );
+}
+
+// Narrow borrowed-owner seam for generated-source qualification. All legacy
+// callers above still select None; no transaction/import is reconstructed.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(in crate::production_rustc_driver_v1) struct PublicationObservation {
+    source: Snapshot,
+    arguments: Arguments,
+    census: Census,
+    attempted_runs: usize,
+    same_original_ledger: bool,
+    source_authority_in_copied_row: bool,
+}
+#[derive(Default, Clone, Copy, Debug, Serialize)]
+pub(in crate::production_rustc_driver_v1) struct PublicationProgress {
+    last: Option<Progress>,
+    census: Option<Census>,
+}
+pub(in crate::production_rustc_driver_v1) fn observe_for_publication(
+    view: &SourceOwnedBf16MfmaRegionV1<'_, '_>,
+    budget: &mut Budget<'_>,
+    stream: &mut publication_tap::Stream,
+    progress: &mut PublicationProgress,
+) -> Result<PublicationObservation, Error> {
+    // Fixed output custody remains charged after scratch is discarded.
+    let held = 2 * std::mem::size_of::<PublicationObservation>()
+        + 2 * std::mem::size_of::<PublicationProgress>()
+        + 1024;
+    budget.reserve_storage(held)?;
+    let last = Cell::new(None);
+    let census = Cell::new(None);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget.with_prepaid_scope(budget.storage(), 1, 65536, 131072, |budget| {
+            execute_with_publication_tap(view, budget, &last, &census, "direct", Some(stream))
+        })
+    }));
+    progress.last = last.get();
+    progress.census = census.get();
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    };
+    result.map(|row| PublicationObservation {
+        source: row.source,
+        arguments: row.arguments,
+        census: row.census,
+        attempted_runs: row.attempted_runs,
+        same_original_ledger: row.same_original_ledger,
+        source_authority_in_copied_row: false,
+    })
+}
+#[test]
+fn publication_direct_tap_fits_unchanged_request_scratch() {
+    assert!(publication_tap::scratch_fits::<Sink>());
 }

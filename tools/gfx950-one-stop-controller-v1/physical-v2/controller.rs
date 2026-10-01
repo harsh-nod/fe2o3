@@ -31,7 +31,7 @@ struct Session<'a, P: Peer> {
     checkpoint_id: Option<i64>,
     normal_exit: bool,
     group_exited: bool,
-    settings: [bool; 5],
+    settings: [bool; 6],
     producer: Vec<u8>,
     transitions: Transitions,
 }
@@ -63,7 +63,7 @@ impl<'a, P: Peer> Session<'a, P> {
             checkpoint_id: None,
             normal_exit: false,
             group_exited: false,
-            settings: [false; 5],
+            settings: [false; 6],
             producer: Vec::new(),
             transitions: Transitions::default(),
         }
@@ -198,12 +198,13 @@ impl<'a, P: Peer> Session<'a, P> {
             }
             "cmd-param-changed" => {
                 fields(r, &["param", "value"], &["param", "value"])?;
-                const PARAMS: [&[u8]; 5] = [
+                const PARAMS: [&[u8]; 6] = [
                     b"auto-load gdb-scripts",
                     b"auto-load libthread-db",
                     b"auto-load local-gdbinit",
                     b"auto-load python-scripts",
                     b"startup-with-shell",
+                    b"displaced-stepping",
                 ];
                 if self.stage != 0 || self.run_sent || text(r, "value")? != b"off" {
                     return Err(Refusal::State);
@@ -556,7 +557,7 @@ impl<'a, P: Peer> Session<'a, P> {
         ] {
             self.empty(command, "done")?;
         }
-        if self.settings != [true; 5] || !self.group_added {
+        if self.settings != [true; 6] || !self.group_added {
             return Err(Refusal::State);
         }
         self.empty(

@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ $# -ne 1 || -z "$1" ]]; then
+  printf 'usage: %s OUTPUT_DIRECTORY\n' "$0" >&2
+  exit 2
+fi
+
+readonly jobs="${CARGO_BUILD_JOBS-1}"
+if [[ ! "${jobs}" =~ ^([1-9]|1[0-6])$ ]]; then
+  printf 'CARGO_BUILD_JOBS must be a canonical integer from 1 through 16\n' >&2
+  exit 2
+fi
+# One explicit build-worker bound, including every child Cargo invocation.
+export CARGO_BUILD_JOBS="${jobs}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${jobs}"
+
 umask 077
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
 readonly target_root="${FE2O3_STATIC_DEPLOYMENT_TARGET_DIR:-${repo_root}/target/static-deployment}"
 readonly target="x86_64-unknown-linux-musl"
-
-if [[ $# -ne 1 || -z "$1" ]]; then
-  printf 'usage: %s OUTPUT_DIRECTORY\n' "$0" >&2
-  exit 2
-fi
 
 output="$(realpath -m -- "$1")"
 readonly output
@@ -82,7 +91,7 @@ cmake \
   -B "${target_root}/launcher" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=/usr/bin/cc
-cmake --build "${target_root}/launcher" --parallel
+cmake --build "${target_root}/launcher" --parallel "${jobs}"
 ctest --test-dir "${target_root}/launcher" --output-on-failure
 
 readonly usr_dir="${partial}/usr"

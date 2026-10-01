@@ -620,3 +620,6 @@ pub use storage_v18::{
     MixedPureCseExecutionWitnessV18, POLICY3_EXECUTION_RECORD_BYTES_V18,
     Policy3ExecutionWitnessV18,
 };
+
+#[path = "policy3_execution_retained_storage_v1.rs"]
+mod retained_storage_v1;

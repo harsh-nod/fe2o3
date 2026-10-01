@@ -439,6 +439,8 @@ impl ContextManifest {
 /// ```
 pub struct PlironSession {
     context: Context,
+    // Opt-in presentation account; None preserves the original session path.
+    snapshot_policy: Option<graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1>,
     identity: ContextIdentity,
     manifest: ContextManifest,
     operations: BTreeMap<OperationHandleIdentity, Ptr<Operation>>,
@@ -542,6 +544,9 @@ pub enum OperationHandleError {
     OperationVerificationRejected,
     OperationGraphEpochSpaceExhausted,
     OperationGraphSnapshotMismatch,
+    OperationGraphSnapshotResourceLimit { resource: &'static str },
+    OperationGraphPresentationChanged,
+    OperationGraphPresentationRejected,
     OperationGraphChangedOutsideTransaction,
     OperationGraphMutationReportMismatch,
     ConstructionRecipeMismatch,
@@ -600,6 +605,18 @@ impl fmt::Display for OperationHandleError {
             Self::OperationGraphSnapshotMismatch => {
                 formatter.write_str("operation graph snapshot is stale or mismatched")
             }
+            Self::OperationGraphSnapshotResourceLimit { resource } => {
+                write!(
+                    formatter,
+                    "operation graph snapshot limit exceeded: {resource}"
+                )
+            }
+            Self::OperationGraphPresentationChanged => {
+                formatter.write_str("operation graph presentation changed between hash passes")
+            }
+            Self::OperationGraphPresentationRejected => {
+                formatter.write_str("operation graph presentation was rejected")
+            }
             Self::OperationGraphChangedOutsideTransaction => {
                 formatter.write_str("operation graph changed outside a checked transaction")
             }
@@ -627,6 +644,14 @@ impl PlironSession {
     pub fn new(
         limits: ShellLimits,
         registrations: impl IntoIterator<Item = DialectRegistration>,
+    ) -> Result<Self, ContextBuildError> {
+        Self::new_with_snapshot_policy_v1(limits, registrations, None)
+    }
+
+    pub(crate) fn new_with_snapshot_policy_v1(
+        limits: ShellLimits,
+        registrations: impl IntoIterator<Item = DialectRegistration>,
+        snapshot_policy: Option<graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1>,
     ) -> Result<Self, ContextBuildError> {
         let mut registration_iter = catch_unwind(AssertUnwindSafe(|| registrations.into_iter()))
             .map_err(|_| ContextBuildError::RegistrationInputPanicked)?;
@@ -680,6 +705,7 @@ impl PlironSession {
 
         Ok(Self {
             context,
+            snapshot_policy,
             identity,
             manifest: ContextManifest {
                 pliron_revision: PLIRON_REVISION,
@@ -2034,3 +2060,16 @@ pub use neutral_optimization_v1::{
     optimize_neutral_kernel_ir_mixed_fixedpoint_v18, optimize_neutral_kernel_ir_mixed_pure_cse_v18,
     optimize_neutral_kernel_ir_v18,
 };
+
+pub use production::{
+    ProductionRankedAnalysisAllowanceErrorV1, ProductionRankedAnalysisAllowanceV1,
+    compile_ranked_kernel_for_gfx942_lowering_with_analysis_allowance_v1,
+    compile_ranked_kernel_for_lowering_with_analysis_allowance_v1,
+};
+
+pub use production::{
+    ProductionRankedSnapshotAllowanceErrorV1, ProductionRankedSnapshotAllowanceV1,
+    compile_ranked_kernel_for_lowering_with_analysis_and_snapshot_allowances_v1,
+};
+
+pub use production::compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1;

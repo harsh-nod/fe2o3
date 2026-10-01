@@ -658,3 +658,6 @@ fn words_digest(words: [u64; 4]) -> DigestV1 {
     }
     DigestV1::from_untrusted_bytes(bytes)
 }
+
+#[path = "reconciled_semantic_retained_storage_v1.rs"]
+mod retained_storage_v1;

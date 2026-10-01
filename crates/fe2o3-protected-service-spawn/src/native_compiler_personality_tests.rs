@@ -2,6 +2,29 @@
 use super::*;
 
 #[test]
+fn procfs_type_accepts_only_exact_magic_in_signed_and_unsigned_abis() {
+    assert!(is_procfs_type(0x9fa0_i32));
+    assert!(is_procfs_type(0x9fa0_u32));
+    assert!(is_procfs_type(0x9fa0_i64));
+    assert!(is_procfs_type(0x9fa0_u64));
+    for value in [0_u64, 0x9f9f, 0x9fa1, 0x0102_1994] {
+        assert!(!is_procfs_type(value));
+        assert!(!is_procfs_type(i64::try_from(value).unwrap()));
+    }
+}
+
+#[test]
+fn procfs_type_rejects_negative_overflow_and_truncated_magic_aliases() {
+    for value in [-1_i64, i64::MIN, -0x1_0000_0000 + 0x9fa0] {
+        assert!(!is_procfs_type(value));
+    }
+    for value in [u64::MAX, 0x1_0000_9fa0, 0x8000_0000_0000_9fa0] {
+        assert!(!is_procfs_type(value));
+    }
+    assert!(!is_procfs_type((1_u128 << 64) | 0x9fa0));
+}
+
+#[test]
 fn kernel_personality_record_is_exact_and_preserves_the_observed_bits() {
     for (text, value) in [
         (&b"00000000\n"[..], 0),

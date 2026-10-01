@@ -2216,3 +2216,6 @@ fn append_descendant_with_meter(
     });
     Ok(())
 }
+
+#[path = "kir_occurrence_retained_storage_v1.rs"]
+mod retained_storage_v1;

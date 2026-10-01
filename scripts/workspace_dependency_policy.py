@@ -48,11 +48,12 @@ def _parse_policy(
     dict[str, str],
     list[tuple[str, str]],
     set[tuple[str, str]],
-    set[tuple[str, str, str]],
+    set[tuple[str, str, str, str | None]],
     int,
 ]:
-    if raw.get("schema_version") != 1:
-        raise PolicyConfigurationError("policy schema_version must be 1")
+    version = raw.get("schema_version")
+    if version not in (1, 2):
+        raise PolicyConfigurationError("policy schema_version must be 1 or 2")
 
     package_layers: dict[str, str] = {}
     layer_names: set[str] = set()
@@ -131,13 +132,26 @@ def _parse_policy(
                 )
             forbidden.add(direction)
 
-    allowed_edges: set[tuple[str, str, str]] = set()
+    allowed_edges: set[tuple[str, str, str, str | None]] = set()
     for index, entry in enumerate(
         _require_list(raw.get("allowed_dependency_edges", []), "policy allowed_dependency_edges")
     ):
         if not isinstance(entry, dict):
             raise PolicyConfigurationError(
                 f"allowed_dependency_edges[{index}] must be an object"
+            )
+        if entry.keys() - {"from", "to", "kinds", "target"}:
+            raise PolicyConfigurationError(
+                f"allowed_dependency_edges[{index}] has unknown fields"
+            )
+        condition = None
+        if "target" in entry:
+            if version != 2:
+                raise PolicyConfigurationError(
+                    "target-scoped exceptions require policy schema_version 2"
+                )
+            condition = _require_string(
+                entry["target"], f"allowed_dependency_edges[{index}].target"
             )
         source = _require_string(
             entry.get("from"), f"allowed_dependency_edges[{index}].from"
@@ -161,10 +175,10 @@ def _parse_policy(
                 raise PolicyConfigurationError(
                     f"allowed dependency edge {source!r} -> {target!r} has unknown kind {kind!r}"
                 )
-            edge = (source, target, kind)
+            edge = (source, target, kind, condition)
             if edge in allowed_edges:
                 raise PolicyConfigurationError(
-                    f"duplicate allowed dependency edge {source!r} -> {target!r} ({kind})"
+                    f"duplicate allowed dependency edge {source!r} -> {target!r} ({kind}, {condition!r})"
                 )
             allowed_edges.add(edge)
 
@@ -289,9 +303,12 @@ def check_policy(
             kind = dependency.get("kind") or "normal"
             if not isinstance(kind, str):
                 kind = str(kind)
-            if (package["name"], target_package["name"], kind) in allowed_edges:
-                continue
             target_condition = dependency.get("target")
+            if target_condition is not None:
+                target_condition = _require_string(target_condition, "dependency target")
+            edge = (package["name"], target_package["name"], kind)
+            if (*edge, None) in allowed_edges or (*edge, target_condition) in allowed_edges:
+                continue
             condition = f", target {target_condition}" if target_condition else ""
             violations.append(
                 "forbidden dependency: "

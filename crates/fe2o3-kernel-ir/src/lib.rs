@@ -128,7 +128,9 @@ mod ir;
 #[path = "launch_kernel_v2.rs"]
 mod launch_kernel_contract_v2;
 mod local_frame_effects_v1;
+mod logical_retained_storage_v1;
 mod matrix;
+mod module_retained_storage_v11;
 mod operation_capability_visitation_v1;
 mod production_semantic_debug_fragment_v1;
 mod region_effects;
@@ -247,6 +249,7 @@ pub use launch_kernel_contract_v2::{
     canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
 };
 pub use local_frame_effects_v1::*;
+pub use logical_retained_storage_v1::*;
 pub use matrix::*;
 pub(crate) use operation_capability_visitation_v1::*;
 pub use operation_capability_visitation_v1::{

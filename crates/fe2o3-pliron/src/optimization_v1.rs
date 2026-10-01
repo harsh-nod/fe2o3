@@ -1200,3 +1200,6 @@ include!("optimization_commutative_owner_v1.rs");
 #[cfg(test)]
 #[path = "optimization_mixed_fixedpoint_v18_tests.rs"]
 mod mixed_fixedpoint_v18_tests;
+
+#[path = "optimization_report_retained_storage_v1.rs"]
+mod retained_storage_v1;

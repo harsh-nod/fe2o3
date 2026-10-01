@@ -178,6 +178,845 @@ All three runs retained unchanged source/tool inventories. Log SHA-256:
 - r165: `e15631f1ecbfe19e244f9cdbfc06e893cc30d2009de80304c422be37846dc84c`
 - r167: `8444c28cb45dfd5b8cd89682b8cc8c7ee966110410ba45a1077905f03f376703`
 
-The frontend candidate incorporates this owner, but its combined execution
-tests, Pliron bridge and actual source-scope emission remain unfinished. No
+At that checkpoint the frontend candidate incorporated this owner, but its combined execution
+tests, Pliron bridge and actual source-scope emission were unfinished. No
 default production activation, protected proof, simulator or GPU credit follows.
+
+## Scoped Pliron Bridge
+
+Candidate `25f5d69168280a734e3359c205b668c662644699` carries the actual V23
+owner through the shared storage-profile import/extraction engine. V18 and V23
+remain distinct nominal owners with separate identities, epochs and ledgers.
+Extraction retains actual operands and scope-close payloads, then readmits the
+result as V23. No conversion to a V18 graph or new production route is added.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r183 | Initial bridge candidate | Compilation failed; no tests executed |
+| r185 | Complete dialect/Pliron libraries | 2,446 passed, none failed or ignored |
+| r187 | Preserved execution dialect integration | Four passed, none failed or ignored |
+| r188 | V23 bridge compile-fail examples | Three passed |
+
+r183 exposed an ambiguous macro `core` import. Explicitly naming the existing
+bridge core resolved it. r185 covers 76 dialect and 2,370 Pliron tests, including
+all 12 new scoped bridge controls. The latter exercise actual operand extraction,
+scope-close/use-after-close rejection, owner identity and resource boundaries.
+Historical bridge behavior remains in the same full library run. DCO for the
+two bridge commits, whitespace and hygiene-delta checks passed.
+
+The final three runs retained unchanged source/tool inventories, source snapshot
+`2b16aeab01eec23ba6aaa79c3adfcaac3fb651c1ae4b35d61f998a9cbc69cce8`.
+Log SHA-256:
+
+- r183: `9cb07e7ca77654a9aac71f6fb89b5bb58a154b524d70ac323c65a1fe4fb3c286`
+- r185: `a34c9667b3b498effecd1d98f89053f890cd8deb5b6c328bbb58d41e3652b002`
+- r187: `1353bc0265b0ec3c99bb72192cda474df44f0a02164e013f6deacc7d5092afd9`
+- r188: `debbd98d98408db81797298807bd6fc762f37b83682445ef7a0fec8613009607`
+
+## Typed Scoped Inventory
+
+Candidate `6099f1a3dd3609be82f310df2c821b9bcc6f661d` adds
+`CanonicalKirInventoryV23` by instantiating the existing private inventory
+engine with the actual V23 owner. Its graph and operand records borrow that
+owner; no executable graph is copied. Equal canonical bytes do not substitute
+another owner's borrow. Existing V12/V18 constructors and schedules are unchanged.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r189 | Eight new V23 inventory controls | Eight passed |
+| r190 | Complete kernel-analysis library | 687 passed, none failed or ignored |
+| r191 | V23 inventory documentation | Eight compile-fail and one compile-only example passed |
+
+The eight controls cover scoped operations and their exact uses/close roster,
+parallel edge occurrences, scalar definitions, equal-content foreign owners,
+legacy-profile work/storage agreement, exact and one-short resource limits,
+prior denials, owned storage windows, and retained-size query accounting.
+r190 includes r189's eight tests; they are not additional distinct passes.
+The compile-only example is not runtime execution.
+
+All runs retained unchanged source/tool inventories, source snapshot
+`d55bc997bff0c5dedc546d93caeabdfdb0db48adbecc25915909d7506fb4dbce`.
+Log SHA-256:
+
+- r189: `a44cf2599e995a181c731447fd2424d85f2af13a328ccb55b9d2f8beb717c3e9`
+- r190: `0b5d9152c2807ae38fdeb0350ca35373099b8a027ff380ee4079f174ce301467`
+- r191: `b4942d7c7d4642fb3f7cd130832ca2a1513a25eb891d26a942b2c122af0fd77f`
+
+These are frozen component candidates, not qualification of their subsequent
+composition with the production compiler. Actual source materialization,
+typed pending-owner custody, optimizer/verification consumption, protected
+proof and safe launch still need integrated acceptance. M1-M7 remain incomplete;
+strict production-to-required-proof-to-safe-GPU coverage remains **0/47**.
+
+## Source-Owner Integration
+
+Candidate `ea42e151850a667e0faab92c69376fe02373c584` composes the scoped
+frontend, original-source invocation dependencies, deferred emission, V23 bridge
+and inventory with immutable #271 candidate
+`9533203467e356595b2f383ef9e739f9d65f40f0`. A private closed profile now lets
+the existing materialization/replay engine retain either its historical V18
+owner or the distinct V23 owner. V23 reconstruction keeps the original source,
+SSA, launch inputs, graph and attachments together on their original account;
+it does not convert a V18 owner or grant optimization/launch authority.
+
+| Run | Candidate | Result |
+| --- | --- | --- |
+| r192 | `4f5dd5d3f` | Library check failed with six deferred-type lifetime errors |
+| r193 | `dee83a59e` | Test compilation failed with 11 fixture errors; no tests ran |
+| r194 | `ea42e1518` | Test compilation succeeded; 174 passed, 25 failed, none ignored |
+
+r192 exposed missing propagation of the sidecar-backed type lifetime through
+five signatures. The fix changes no ownership or accounting predicate. r193
+then exposed missing launch-type imports and unchecked fixture projection
+constructor results. Both failures are preserved, not reported as test passes.
+
+r194 ran 199 selected lowerer tests, not the whole repository. All eight r186
+failures now pass. All seven scalar-forwarding controls also pass after removal
+of the duplicate V31 DFS and adaptation to the shared V32 forwarding service.
+The three new closed-profile compatibility controls pass, but the complete
+historical source-owner suite still needs a separate run.
+
+Twenty-three failures stop at the shared invocation fixture's
+`InvalidTypeLayout` admission error, before dependency, emission, census or
+pending-owner assertions. None earns positive or intended-negative coverage.
+The fixture's nominal `usize` declaration omitted `rustc_layout_is_noundef`,
+required by the existing nominal-type validator. Successor `f470d3b99` supplies
+that fixture property without weakening admission; its result is not included
+in r194. The remaining two failures match #271's known byte-initialization
+type-closure fixture and call-return mutation hitting an earlier identity guard.
+
+The eight integration commits after `4f5dd5d3f` passed exact DCO sign-off,
+whitespace and hygiene-delta checks. All three runs retained unchanged
+source/tool inventories. r194 source snapshot:
+`d6c4657945157b645881e1b9672ba263c03c29b7dd04d5a36edb50a399298714`.
+Log SHA-256:
+
+- r192: `0010130cbd332170f903a163f75d94eedc0074e3758ca435a0a1d7d740765362`
+- r193: `17a7cb9c41444bd1a69aa877f974c347e1d31b865f6fc699809b89d5a1e0d33c`
+- r194: `883c71f5493e43bb441e396e9eb48c009da9397e5b8927426f7623c6dcca8192`
+
+r195 repeated the focused invocation, census and pending-owner tests at
+`f470d3b99924e6a339df6a5db587fc8b431524b8`, and added the complete historical
+source-owner controls: **19 passed, 23 failed, zero ignored**. All 16 historical
+controls and three profile-compatibility controls passed. The 23 invocation
+fixtures now pass the former type-layout boundary but stop at the shared
+`InvalidFunctionAbi` admission error, before their intended assertions. They
+still earn no positive or intended-negative coverage; this is not a green
+integration result. The source and tool inventories remained unchanged.
+
+r195 source snapshot SHA-256:
+`09e55f66a84187ecc07f8fe97f1551107c8f21dfc13c8938b89d530a4c0f7cde`.
+Log SHA-256:
+`679d8003026538e3ae6b8671c60fec4cbcec81f703cd0a7279e8853f92d6de40`.
+
+Genuine V41 source-to-pending consumption, branch/terminal invocation cleanup,
+simulator execution and AMD lowering are separate active integration scopes.
+The V23 optimizer still needs typed structural, transition, analysis and
+source-owner consumers through the existing pipeline. No protected proof,
+simulator or kernel GPU execution occurred in these runs. M1-M7 and **0/47**
+are unchanged; the compiler candidate is not public-main qualification.
+
+## Scoped Transition Payloads
+
+Isolated candidate `fd51516564fde40c116b739bcbd128d026e65dbc` extends the
+existing transition payload comparator for the five scoped operations. Exact
+operation variants remain distinct; scope-end payload lengths are compared,
+while the existing operand visitor retains SSA identity, order and multiplicity
+checks. None of these operations becomes pure. This is raw payload comparison,
+not a checked V23 optimizer transition or production authority.
+
+r196 ran the complete kernel-analysis library: **698 passed, zero failed,
+zero ignored**. This includes five new controls for variant separation, each
+SSA operand position, repeated/reordered operands, visitor early termination,
+legacy separation and exact/one-short work limits on the original account.
+The source and tool inventories remained unchanged.
+
+Source snapshot SHA-256:
+`2e7fc25b6090e8b9d7bb1bb61cc5651754ab03c5b80a5e1d905e92a0b21d23fc`.
+Log SHA-256:
+`61e373da4d7e9156b1b1bc30f7e5cfef18802fa2f450d5b16da23b26a03fff92`.
+
+The typed structural, transition, analysis and source-owner optimizer consumers
+still need integration. No protected proof, simulator or GPU ran in r196;
+M1-M7 remain open and strict end-to-end coverage remains **0/47**.
+
+## Scoped Source and AMD Integration
+
+The integration candidate now retains invocation lifetimes across source CFG
+and helper boundaries, composes normal scope closure with terminal cleanup,
+and carries genuine source custody into pending scoped materialization. These
+changes remain candidates until their integrated acceptance tests pass.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r197 | `db0759255a0e84b52ca52e3f4ba8b5fbf3401154` | Selected source/lifetime tests | Compilation failed with E0716; no tests ran |
+| r198 | `ca5de3161e7dc9319b9ce8f405909e490ee6a089` | AMD library | Compilation failed on a missing test import; no tests ran |
+| r199 | `30db4d6d164ae2ead6bb8511bc8466a45500fb7b` | `rustc-codegen-fe2o3 --all-targets` check | Passed; no tests executed |
+| r200 | `237689b629e9c3664112de56ec714eb81415e571` | Complete AMD library | 253 passed, zero failed, three ignored |
+| r201 | `237689b629e9c3664112de56ec714eb81415e571` | Complete AMD documentation tests | 28 passed, zero failed or ignored |
+| r202 | `3291b9b2fdc0a228752ff3ea6e3986490efd9bbd` | Scoped AMD tests with explicit LLVM 22 verification | 11 passed, zero failed or ignored |
+
+r197's temporary occurrence-view lifetime was corrected without relaxing
+admission. r198's missing `MemoryAccess` fixture import was corrected before
+r200. These earlier failures remain failures, not intended-negative coverage.
+r199 includes immutable #271 candidate
+`c23b709a3b6c55a13d7e9fefc188fbe4e252bea2`, but predates the later AMD and
+terminal-cleanup composition. It is a compiler build check, not production
+source or launch acceptance.
+
+The AMD component passes the exact scoped owner to the existing shared emitter;
+it does not convert that owner into a historical profile. Context and invocation
+remain logical, zero-ABI capabilities. Index reads retain their selected SSA
+identity, checked pointer formation uses unsigned bounds, and unsupported
+operation families fail before emission. r200 includes ten new scoped controls;
+its three ignored tests are pre-existing explicit inert-fixture exports.
+
+r202 includes those ten controls and a new explicit LLVM verification test,
+so these counts are not disjoint. LLVM 22 accepted all four combinations of
+gfx942/gfx950 and workgroup size 64/128. Four malformed-LLVM controls returned
+the expected rejection status and diagnostic. The test used
+`/opt/rocm-7.2.0/llvm/bin/opt`, SHA-256
+`13cb4c99d1810b4db40bca5db0759ca94c8efd3c437bb8f7fe1a94f5bda66203`.
+This is LLVM structural validation, not machine-code generation or refinement.
+
+All six runs retained unchanged before/after source and tool inventories.
+Log SHA-256:
+
+- r197: `eaff9a73b1e1cf46f215b17f0cfbdff1dc5142d07d73d4d9dbe2e263d42ff200`
+- r198: `3c5affa0d2cf4213e5853ad0051db7539b88bd9d1325ad14e864e927560b1ad4`
+- r199: `58e552edd8b9415e4b3ac224ab9d7cb8ba58f64b8d8151f843eee4b1be0841e7`
+- r200: `0de1b6b7749b9f9887d43712a9848b1a38496afcb25eaff6ac05ee9647b3ec7d`
+- r201: `aab0fb69e6fdc0f22f744e11231a781f612fb51a490af3acd1618ce3c5f52ee2`
+- r202: `934435e2ed6a090b44e912749d7645ea8a1d86201fcf3a1211d64119bb8d027e`
+
+Simulator and typed optimizer integration remain separate unfinished work.
+No protected proof or GPU execution occurred in these runs. M0 remains complete,
+M1-M7 remain incomplete, and strict production-to-required-proof-to-safe-GPU
+coverage remains **0/47**. Publishing this evidence does not activate the
+integration candidate on public main.
+
+r203 subsequently tested the combined source/lifetime/terminal-cleanup candidate
+`5b87cc8e4f684b10ffc8d3c15feb0ea7fd2cdc03`: **48 passed, 35 failed,
+zero ignored** (83 selected tests, not the complete lowerer suite). Compilation
+succeeded. Most failures stop at the shared source-dependency consistency check,
+`scoped source dependency differs from its original formation`, before the
+intended emission, pending-owner or source-replay assertions. One negative
+fixture instead stops at `InvalidTypeOperation` for an aggregate during fixture
+admission. These failures earn no intended-negative coverage.
+
+The earlier ABI and temporary-view compilation failures no longer stop this
+run, but the integration is still failing. The source/tool inventories remained
+unchanged. Source snapshot SHA-256:
+`47922ae57b118994c8660ff2d9b3c44fa1bb632477456de943a206465b1daf40`.
+Log SHA-256:
+`e2e27cd3a57ffc551312f3e00d74416420f4ec667418d026868733b368249d5e`.
+No simulator, protected proof or GPU execution occurred. Milestone and strict
+end-to-end coverage counts are unchanged.
+
+## Scoped Consumer Validation
+
+These runs validate candidate components, not a production publication or
+safe-launch transaction. Before/after source and tool inventories were stable
+for every run below. All runs used the pinned nightly, locked offline inputs,
+one build job and serial tests; GPU access was disabled.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r204 | `e69e3a541338162fcb8c83652cecc668dce21760` | Complete Pliron library | 2393 passed, two failed, zero ignored |
+| r205 | `aee04ee3f04e4cba110106a8a3226a92c8be0e74` | Simulator all-targets check | Test compilation failed; no tests ran |
+| r206 | `eb1a969dd82abd03ca4f4bdf2acf1eb643032b30` | Simulator all-targets check | Passed; no tests executed |
+| r207 | `187d6effa1cd09ef85bcd2694e49107f6b6677b6` | Selected lowerer and SSA borrow tests | Lowerer: 65 passed, 21 failed; Pliron: 33 passed, zero failed; zero ignored |
+| r208 | `eb1a969dd82abd03ca4f4bdf2acf1eb643032b30` | Complete simulator library | 145 passed, zero failed or ignored |
+| r209 | `dbcc523fcc6f9de5701e06aca4ec29216de566ad` | Selected structural tests | 55 passed, zero failed or ignored; 2342 filtered out |
+
+r204 exposed two incorrect test expectations: a short-storage rejection has a
+nested canonical resource error, and an invalid geometry mutation is rejected
+by the mutation verifier before structural extraction. The corrected tests
+assert those actual boundaries, retain successful checked extraction, and check
+exact resource limits and restored account floors. r209 includes all twelve
+new structural controls but is not a rerun of the complete library.
+
+r205 used the nonexistent test constant `F32`; changing it to `F32Bits` allowed
+r206 and r208 to run. r208 includes four scoped simulator unit tests, but does
+not execute the separate canonical V23 integration tests. No ordinary Rust
+source-to-simulator result is established by this library pass.
+
+r207 includes exact receiver classification for the four scoped invocation
+intrinsics. It preserves the distinction between a borrowed receiver and a
+by-value consumed index, and passes all three new classifier controls. The
+earlier source-dependency formation failure no longer stops the selected tests.
+Eighteen lowerer failures now stop at `embedded pointer kernel arguments have
+no owned region binding`; three frontier assertions disagree about the exact
+statement gap where a scope ends. The affected emission and replay negatives
+have not reached their intended boundaries and earn no negative coverage.
+The revised selection contains 86 lowerer tests, not r203's 83; counts are not
+an unchanged-suite comparison. No live-rustc compiler-driver test ran in r207.
+
+Log SHA-256:
+
+- r204: `9746bbcab0d1aa0e09cb0bc9dcb72c7dd29206c030365ef948bf9f1f872a6dc1`
+- r205: `14128061fc60d7cc5559e9d6cfecb4addf6bd2edba26e841255e5af1c9faf5be`
+- r206: `571b653c1ed49e3bff5aab56a9150e0498b8113dd364a930915c2051cc64a7a2`
+- r207: `1ab8fd552eb2a018d85ec6674ae283375d046b08f13fd7966f04b6fb50c355b8`
+- r208: `46b9378e37d9f8ff1ca0a8c17dbbcb02b29bfa20fa33146111d8b0162115c734`
+- r209: `9fcc9680b59c61ae347d0f23fade6a0bb69f2d42df20eec38abb35095a0288a6`
+
+The compiler candidate remains separate from public main. Typed optimizer
+integration, actual-source presence/control flow, protected proof and GPU
+validation remain unfinished. M0 is complete, M1-M7 are incomplete, and strict
+production-to-required-proof-to-safe-GPU coverage remains **0/47**.
+
+## Shared Optimizer and Simulator Regression
+
+These later component runs retain the same pinned, offline, serial, GPU-disabled
+runner contract. Source and tool inventories were unchanged during every run.
+Counts overlap between runs and must not be summed as independent coverage.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r210 | `a31e0f524feabf25ea5892dc7a6d48c0ace5b316` | Complete analysis and Pliron libraries | Analysis: 717 passed; Pliron: 2404 passed; zero failed or ignored |
+| r211 | `4fb782dea318eca004638631c0b91e8b1696a03d` | Complete IR and simulator packages | 2494 passed, two failed, one pre-existing ignored |
+| r212 | `a31e0f524feabf25ea5892dc7a6d48c0ace5b316` | Analysis and Pliron documentation | 181 passed, zero failed or ignored |
+| r213 | `d6849f8a3d5c06d24de5e36ee1d47aef28b15011` | Complete simulator package | 494 passed, zero failed or ignored |
+| r214 | `b49bfe39da7fde320f6a3763c04637dd7ce41e17` | Selected integrated source and Rust-driver tests | Simulator CLI test compilation failed; no tests ran |
+| r215 | `884e7565db439cd7d6f465c5df7d0e790d202240` | Complete IR and simulator packages | 2501 passed, zero failed, one pre-existing ignored |
+| r216 | `59d6a8a48bd308a5f664fff06f747f2ecad7ea03` | Complete Pliron library | Ambiguous module import prevented compilation; no tests ran |
+| r217 | `a68557fe1db0025cdb302c3ec7d6dd3bff304ec3` | Complete Pliron library | 2423 passed, zero failed or ignored |
+| r218 | `77b271a5493d9b14417f8a568f60166cf5914d6a` | Selected integrated source and Rust-driver tests | Rust-driver test compilation failed; no tests ran |
+| r219 | `2ca8f6e13a8a6116af2343cfbefcc67d1f64c0bf` | Complete simulator CLI library | 92 passed, zero failed or ignored |
+| r220 | `a68557fe1db0025cdb302c3ec7d6dd3bff304ec3` | Complete Pliron documentation | 110 passed, zero failed or ignored |
+
+r210 and r212 exercise scoped canonical analysis factories, structural admission,
+and the shared occurrence transition checker alongside their legacy regressions.
+r217 and r220 additionally exercise actual scoped-owner execution of the existing
+fixed optimizer policies, including typed extraction and consuming adoption. The
+same shared optimizer machinery is used; these results do not cover the full
+production LICM, native, composed-CFG and source-final continuation.
+
+r211's two failures were capability-matrix test expectations that still counted
+nine profiles after V23 added a tenth. r213 checks the repaired matrix, including
+the explicit refusal of V23 on the older simulator entry, without weakening the
+other profile expectations. r215 also checks original presence values transported
+through one authenticated zero-extension into an integer switch, with paired
+producer identity, dominance, live capability state and false-path reachability
+controls. Its ignored test is the existing
+`control_flow_bounds::sparse_wire_maximum_block_count_is_bounded_and_admitted`.
+
+r214 and r218 both stopped before any selected test executed. The former exposed
+missing new diagnostic variants in simulator CLI matches, repaired and tested in
+r219. The latter exposed the same two missing variants in an older Rust-driver
+CPU-capture reporting helper. Neither failed build establishes genuine Rust
+source materialization, simulator execution, or the intended source negatives.
+r216's module import ambiguity was qualified explicitly before r217 and r220.
+
+Log SHA-256:
+
+- r210: `0bfb9b3bab088a9b5281355fc4c14bffd25fa7c8bb5feb61d0e4b9a5267e7589`
+- r211: `c9443015dd2ed10239e50fbac0ea7315fdad7a92f7ac32e251b555831ea548f5`
+- r212: `ce355bf8fbef75165245194dabe9f17cd6fa60f5c13b8e41217c31742147218d`
+- r213: `19fc434cb2861693c6a45694c6702fba958443f3ff0bdf1b6accb8e18caeaf00`
+- r214: `ed2b2fcf3799bc7b20a33ed4746078e5a548f4d1cb62fe17c27304d3e8245604`
+- r215: `84e987411e6fcfc585f45154fddb0aa7c6554bb2b4657a9603b619ae1e359dea`
+- r216: `3638197f7b22492963e158aa9dc1b6860762625714f073f4b919738a26af1331`
+- r217: `87c43d7e2d111d938300c49d41f69f86476c147d2048236e9616159a61979cf3`
+- r218: `9fc05a560ef71c34afdd3bf15d097b4187ec1d27bda4080ba5f3d4e19b9d8cfe`
+- r219: `8cd9c3729613524e8ee98ca239f555ecb02efd907169c6ba4dc80e5112209f21`
+- r220: `4bfa4f146746ce5fcadb52020507664e2f43da996961c90f19bb7bec74fd29af`
+
+No protected proof or GPU execution occurred. These candidate component results
+do not activate the production path or advance the milestone acceptance count:
+M0 is complete, M1-M7 remain incomplete, and strict end-to-end coverage is **0/47**.
+
+## Original Source and Adopter Custody
+
+The following candidate runs retained stable source/tool inventories and the
+pinned offline, serial, GPU-disabled runner contract. Counts overlap earlier
+runs; they are not additional independent kernel coverage.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r221 | `42688e2bf2108fd4704b984c8896db4df59fd37d` | Selected source, lowerer, Pliron and Rust-driver tests | Compilation succeeded; CLI 2 passed; lowerer 69 passed and 19 failed; Pliron 33 passed; driver run timed out |
+| r222 | `e4bda9fcb2e2a6043bf0c01f217f6a3ff9834f45` | Complete Pliron library | 2436 passed, two failed, zero ignored |
+| r224 | `d26bb4e9602f300628e5b3a5232f6fee560a3db0` | Complete Pliron library | 2436 passed, two failed, zero ignored |
+| r226 | `b6e1db3433f171ab736000276ee1d27b8c5e1af6` | Complete Pliron library | 2438 passed, zero failed or ignored |
+
+r221 repaired the Rust-driver diagnostic compilation gap. Its lowerer failures
+identified an owned disjoint-slice fixture still using a by-value ABI descriptor;
+the production admission correctly rejected that mismatch. The driver completed
+one implicit-capability control, then stopped during the first actual-source
+frontend parent. No genuine scoped Rust-source positive or intended source
+negative is credited by this run. The later fixture correction preserves the
+production contract and requires its own rerun.
+
+r222 and r224 exposed two setup errors in new late-history refusal tests. The
+first used an over-limit module name. After fixing that, the second exhausted
+storage at the transfer wrapper instead of the intended history allocation.
+The corrected tests prepay the concrete wrapper headers and retain the exact
+late-history failure equation. r226 reaches and passes those controls for both
+legacy and scoped owners, including selected-error preservation through hostile
+destruction. No production limit or rejection boundary was weakened.
+
+Separate provisioning preparation built a script-side static readback helper.
+r223 (`e74951a17260e173728adc26063efa1974fa8493`) failed direct linking because
+host proc-macro dependencies were absent from the rustc search path. After that
+and an explicit numeric conversion were corrected, r225
+(`b7d3ef205ba23e2b2dc61089f8410142e74bd16c`) built successfully and passed the
+standalone static ELF checks. Helper SHA-256:
+`afc9123fa5e425fa7d04d23ee07d9a0f0a143ee083786da016b04f92747b4d70`.
+This is not container qualification, native provisioning, service activation,
+protected proof execution or administrator approval of the helper.
+
+The r221 and r225 reported wall-clock intervals exceed the configured deadline:
+r221 records
+21:18:08-23:04:42 UTC and exits 124; r225 records 21:33:49-23:05:31 UTC and exits
+zero. The configured timeout was 1200 seconds with a 30-second kill grace; these
+observations do not establish a 1200-second wall-clock completion guarantee.
+The cause of that discrepancy has not been verified.
+
+Log SHA-256:
+
+- r221: `afc33f933d6169924fa567b3d39a90f7ef26c405b10a9bf29c9bd9969fc8dcdd`
+- r222: `ae3613566a54c3a76be642a76973b6b8bb2e3a7f7875b5e4f24891afa81342ac`
+- r223: `11eb003bfda8f7fcf5ceb646b831cb3c0d467b1dcf9d3643ac6e2d9a3238f9c1`
+- r224: `0c6cd34efe4f4e1ffbc30a2ca5b61d1a12bd1484ffb73338c675cacefe170e2f`
+- r225: `0367215aff77b3d30385bc958c572af646cd9f5b5513810a0cbfe70061452968`
+- r226: `ff11b296f3e9e8630b56d2ac8a6f8be877d879263c2efb2e93b5c89e488bb16f`
+
+M0 remains complete; M1-M7 and strict end-to-end **0/47** remain unchanged.
+
+## Helper Transport and Native Analysis
+
+The following local runs used the pinned offline toolchain, one build worker,
+serial tests and disabled GPU runtimes. These are candidate component results,
+not required-proof execution or production launch evidence.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r227 | `24a1d84d494efc52f61823ac62b27e4c47621d33` | Selected lowerer source/optimizer tests | 35 passed, 27 failed, zero ignored |
+| r228 | `e82baa5fc1d41fe2a0e1f2a17197c92d05e9536d` | Analysis and optimizer libraries | Test compilation failed; no tests executed |
+| r229 | `31d21aad2d4f39609a231adcc835fcd253b7c7e5` | Complete analysis and optimizer libraries | Analysis 720 passed; optimizer 445 passed, three existing child helpers ignored; zero failures |
+| r230 | Unmerged working tree, not a sealed candidate | IR and analysis attempt | Invalid integration attempt; compilation stopped at conflict markers |
+| r231 | `522c36642619aab8539c3d91b875fa94349022fa` | IR and analysis libraries | Test compilation failed; no tests executed |
+| r232 | `d76e21409f1a395da533f5e0da160656fafc9d3b` | Complete IR and analysis libraries | IR 1429 and analysis 726 passed; zero failures or ignored tests |
+
+r227 passed the corrected owned-slice fixture gate, but all 27 failures stopped
+at the internal helper's `Option<&mut u32>` ABI check. The optional reference is
+tracked by the scoped source plan; it still falls through to the general enum
+argument refusal. This does not validate the intended downstream optimizer
+consumer controls. The ordinary Rust fill/vector-add parents were not selected
+by this lowerer-only run.
+
+r228 exposed an empty-layout fixture using a nonexistent `Default` constructor.
+The correction supplies explicit zero limits for its empty table. r229 exercises
+the shared legacy/scoped LICM engine and its analysis consumers. r231 exposed two
+overlapping mutable test-view queries; copying each observation before the next
+query corrected the test. r232 exercises the initial scoped ranked/private and
+conditional memory views. Neither run proves their integration with all nine
+native stages, source-bound refinement requests, or actual Rust kernel launches.
+
+r230 was started before a dependency cherry-pick conflict was noticed. Its
+recorded HEAD is not the source that compiled: the file snapshot contains
+conflict markers. It receives neither positive nor intended-negative credit.
+The owned failed cherry-pick was aborted, the missing dependency was applied,
+and subsequent candidates were sealed before testing. The local runner now
+rejects an unmerged index before creating a test snapshot.
+
+Runner provenance also has a historical limitation: r227 began before that
+runner edit but read the runner file's hash at completion. Its reported
+`fd0434853cc28c56d795a956cdbef34d8f72167b85b2b5664e4ec1ef471fe0a2`
+therefore does not authenticate the script loaded at startup. Its stable source
+and tool snapshots and test log remain component observations; the raw report
+has not been rewritten. Subsequent runs capture the runner hash at startup.
+
+Log SHA-256:
+
+- r227: `3e1780d07916d4eeb328e0f5d8151921a0e2996988fc2430a765fdcec2ac53e8`
+- r228: `23aa173fc9cf122e8acea19c32b694a0fb9df5f1e3192dfe551dcadc93459768`
+- r229: `948c3b29e90b2fa5a31c4b576f7d1a672b37f16d8820464784e4bab4d5f136ea`
+- r230: `aa6746ae8b9af4d410f929f0f7e302abe54307b32b3cf1ff15d51cd658926bb7`
+- r231: `cc1f48d5448603c54e1d549cb54548c7a0f717745ee682263490975cf84dc4b7`
+- r232: `646be830fe148fbac02c5db5a85a35bc185351c67d4778d575292e40245bf51c`
+
+M0 remains complete; M1-M7 are incomplete and strict end-to-end coverage remains
+**0/47**. These runs did not execute a protected proof runtime or a GPU kernel.
+
+### Indexed Receiver Follow-Up
+
+Candidate `5ff1ce616250ee639d3dc1f84439efdaa4b3daca` replaces repeated V23
+definition scans with one existing byte-indexed context per function/pass. It
+uses the existing all-predecessor provenance engine to retain both the actual
+slice receiver and its unique, exactly typed parameter root. Mixed roots,
+ungrounded cycles, unsupported transports and foreign function/account queries
+remain refusals. Legacy V18 passes do not construct the additional context.
+
+- r234: complete analysis **726 passed** and IR **1437 passed**, zero failures or
+  ignored tests. The eight new controls cover sparse IDs, bounded lookup work,
+  receiver joins, identity, exact/short resources and cleanup.
+- r236: complete documentation tests **79 analysis, 76 IR and 92 optimizer
+  passed**, zero failures or ignored tests. This includes compile-fail controls.
+- r235 was an invalid command naming the nonexistent package `fe2o3-opt`; it
+  executed no tests. r236 used the correct `fe2o3-kernel-opt` package.
+
+Both successful runs retained source/tool snapshots unchanged. Their runner
+hash, captured at startup, is
+`54c2508cc8d70abc613241482bbfd6179e542de532a0c9a5bddf2891345edd37`.
+Log SHA-256: r234
+`ede4a27dc8735cb466ffaa9c487432aa96493d6833c0566892dbb98b7a3f9a5c`;
+r236 `218f80392aec4b52f6b06c63a93ee294cd11e2c3f72116f6928bd35d2fd344e6`.
+These tests do not supply actual-source native completion or launch evidence;
+milestone and strict qualification counts are unchanged.
+
+### Original Rust and Shared Option Analysis
+
+r233 ran the actual Rust fill and vector-add optimizer parents against frozen
+candidate `24a1d84d494efc52f61823ac62b27e4c47621d33`. The compiler test binary
+built in 12 minutes 24 seconds. The fill parent failed; the vector-add parent
+was interrupted during its dependency build when the enclosing run reached its
+deadline. The runner recorded exit 124, unchanged source/tool snapshots, and
+the interval 2026-09-30 23:55:09 to 2026-10-01 00:15:26 UTC. Log SHA-256:
+`12a4cd9151ebf6edb9316925f5bccff13c3161b5e1b4d2dc100de01326ce4b3c`.
+
+While the fill parent was active, its gfx942 child responses reported
+`projected reference assignment requires exact cell state` for the unoptimized
+profile and `scoped source dependency differs from its original formation` for
+the optimized profile. These were interim child observations, not completed
+positive or intended-negative tests. Neither kernel receives source-completion,
+proof, or launch credit. The terminal parent's remaining dependency cache had
+no open files or live parent processes; `cargo clean` removed 259.4 MiB and the
+empty owned scratch directory was removed.
+
+r237 tested the shared Option producer classifier on candidate
+`217357028c4550272a56e1654fb63a66a1224c0c`: the complete MIR-model library passed
+**411 tests**, with no failures, ignored tests, or source/tool changes. The
+classifier now recognizes the exact `InvocationSliceGetMut` operation through
+the same producer/dominance analysis as existing checked slice operations.
+Its six new tests cover operation selection, destination refusal, Some-only
+dominance, bypass rejection, equivalent collector accounting, and exact/short
+resource limits. This does not establish helper transport or actual Rust
+lowering. Log SHA-256:
+`8af2eb2f49afc3abc208a34e1911f8197445195761eef4017459d5d9c4d93337`.
+
+The previously running MI350 deployment-bundle attempt 4 is terminal. It exited
+101 at 2026-10-01 00:04:21 UTC on a signed/unsigned libc `statfs.f_type`
+comparison in `native_compiler_personality.rs`. The 00:05:18 UTC custody check
+confirmed the supervisor/build processes absent, their process group and
+session empty, and the attempt's private caches removed. No bundle completed;
+no protected runtime was provisioned or activated. The build and cleanup reports
+were recovered locally. A checked-conversion repair and its separate validation
+must precede another bundle attempt.
+
+That repair is now implemented in candidate
+`768b62d8a64ebc3d7d2d16248a81e42195e19a1f`: a checked conversion normalizes
+libc's signed/unsigned filesystem type without accepting negative, overflowing,
+or truncated aliases of the procfs magic. A private `#[path]` harness compiled
+the actual source module and its adjacent tests, unchanged, against the pinned
+libc dependency. All **five module tests passed on GNU and musl**, including the
+two new exact-match/alias controls. This is module-level portability coverage,
+not full-package or deployment qualification. The reviewed rerun log SHA-256 is
+`1f4b372cba11a0334b3b25f3b683e6c5f1e5b81aa7e78b517822a1ccf94ca5af`.
+The subsequent MI350 build began at 2026-10-01 00:28:09 UTC under its own
+2700-second deadline plus 30-second kill grace; no outcome is credited here.
+
+M0 is complete; M1-M7 remain incomplete and strict end-to-end coverage is
+**0/47**. None of these observations supplies protected proof or GPU execution.
+
+### Scoped Helper Integration
+
+r238 tested frozen candidate `af14ff85bf09db5c088b49a5dc01630105431b78` with
+unchanged source/tool snapshots. The selected lowerer tests completed with
+**360 passed, 28 failed, zero ignored**. Both new external-store regressions
+passed: storing through a checked reference preserves the holder and its scoped
+lifetime dependencies. The remaining failures stopped at
+`scoped source dependency differs from its original formation`, including the
+optional helper ABI tests; downstream optimizer and replay controls that stopped
+there receive no positive or intended-negative credit. The verifier filter in
+this run selected zero tests, so it supplies no verifier coverage.
+
+r239 used the correct `scoped_cfg_v41_` filter against the same frozen candidate.
+All **five selected verifier tests passed**, with zero failures or ignored tests
+and unchanged source/tool snapshots. These cover source-bound CFG request
+preparation/replay, exact and short resource limits, operand mutations, subject
+identity changes, and preservation of the legacy request schedule. They do not
+execute the protected proof runtime or establish complete semantic refinement.
+
+Both runs used the same pinned offline toolchain and runner recorded above,
+one build worker, serial tests, disabled GPU runtimes, and a 16 GiB virtual-memory
+build limit. r238 completed with exit 101 at 2026-10-01 00:37:51 UTC; r239 completed
+with exit zero at 00:38:57 UTC. Log SHA-256:
+
+- r238: `8b6d5587236315d0931aed37625218568f4d7e7a998844a9c614e1c79f6495df`
+- r239: `3d998e8ab6bc2a6123e657a5ccc430bb84824065925dd2e71244d34b36ae7dc1`
+
+r240 integrated the exact storage-origin check and optional helper transport on
+candidate `67b7ec8712d1004a59d54495870cda49b350bc66`. Production library
+compilation completed, but test compilation failed because two new fixture
+branches called an unavailable `edge` helper. No tests executed. The run ended
+with exit 101 at 2026-10-01 00:53:30 UTC and unchanged source/tool snapshots.
+Log SHA-256:
+`d0db2138325c0727875def74b7c909816a742bff58580808a9e46983aa03cf8b`.
+The fixture correction uses the existing explicit control-flow-edge constructor;
+it requires a new run, not reinterpretation of this failed result.
+
+r241 tested that correction, exact optional storage origins, helper transport,
+and formation diagnostics on candidate
+`31543a624a969646e1903ac46d5f0038ec15d762`. With unchanged source/tool snapshots,
+the selected lowerer tests completed with **374 passed, 28 failed, zero ignored**;
+the five selected verifier tests passed. Both optional helper ABI tests, the
+13-axis storage-origin mutation control, external-store regressions, and all four
+new diagnostic tests passed. Seven of nine helper-transport tests passed.
+Twenty-seven failures now stop at helper-return availability; the remaining
+negative fixture encounters source initialization rejection before its expected
+enum-projection boundary. Downstream tests stopping at these earlier boundaries
+do not receive their intended coverage. The run ended with exit 101 at
+2026-10-01 01:09:41 UTC. Log SHA-256:
+`f7afd829136a14317011eaa5cc7d4a92dc56b4a8197db94878a2528632cec1a4`.
+
+The helper-return defect concerns implicit MIR operands: `Return` has no
+explicit place object, whereas the checker requires object identity for explicit
+operands. A subsequent candidate authenticates the implicit declared return
+local, exact type, return terminator, and already-claimed original SSA use.
+Explicit operand object identity remains required. Its new positive, mutation,
+accounting, and regression tests require a separate result; r241 does not
+validate this repair.
+
+The MI350 build started at 00:28:09 UTC is terminal: exit **124** at
+2026-10-01 01:13:17 UTC after its original timeout. Independent observation at
+01:14:03 UTC confirmed both recorded processes absent, the process group empty,
+and owned caches cleaned. Five component executables and their inspection
+reports were preserved; the provisioner build was interrupted. The deployment
+tools, package tests, manifest, and final bundle publication remain incomplete.
+No installation, provisioning, service activation, protected proof, or GPU
+execution occurred. Recovered reports archive SHA-256:
+`e07acba0108a9394937a9f35f7bf36cfba9d255af0ebd8c755703920916e4087`.
+Build log SHA-256:
+`66ee0b36292544679fe65782583bb61523672ec5cf4e0f81f5d06af5d620526f`.
+
+Separately, an inactive, owned local structural-test target cache was checked
+for open files and cleaned with Cargo: 1,511 files / 1.9 GiB removed. Source
+worktrees, evidence, and the active integration cache were preserved.
+
+Separately, the publication-tree tutorial-manifest suite exceeded its 180-second
+deadline and is incomplete. Two explicitly selected controls then passed:
+`test_original_47_source_feature_symbol_and_semantic_obligations_are_preserved`
+and `test_full_runtime_curriculum_snapshot_preserves_pending_obligations`.
+They ran against `76aec7187b64b3eb6a26534b4d0c0a66f46caa18` with only this
+evidence document changed. These are source-obligation/snapshot checks, not
+compiler, simulator, proof, or hardware coverage. The manifest's 61 known
+implementation identities are not a replacement qualification denominator for
+the original 47-kernel goal or evidence of completed kernel pairs.
+
+M0 remains complete; M1-M7 remain incomplete and strict end-to-end coverage
+remains **0/47**.
+
+### Original Rust and Deferred Pointer Definitions
+
+r242 tested frozen candidate `1720bf184f69fb3c76106318f5d4365bc8f57ffe` with
+unchanged source/tool snapshots: **380 lowerer tests passed, 30 failed**, and
+the five selected verifier tests passed. Twenty-eight failures advanced beyond
+implicit helper-return availability to the source pointer-definition census.
+Two new return tests failed in fixture setup: the first root call is an intrinsic,
+not the expected helper. Their correction selects an actual child call; it is
+not credited by this run. Log SHA-256:
+`264cc46c5251a59e4809388e3834a5b21292d863072a8f9cc7f8535edb7719e2`.
+
+A debugger stopped at the actual pointer-ordinal lookup: a checked invocation
+slice pointer is retained as a deferred lifecycle result before insertion, but
+the existing census counted only physical parameters and operation results.
+The candidate repair adds authenticated deferred definitions to the same
+preallocated, sorted, unique census through the existing source lifecycle
+visitor. It does not invent an access, skip missing-definition checks, or grant
+final source or launch authority. New tests cover original formation, changed
+type/source, omitted and duplicate values, and a physical-definition collision.
+These new tests still require a completed integration run.
+
+r243 built the backend's library-test executable with `--no-run` on the same
+frozen candidate. It completed at 2026-10-01 01:45:47 UTC with exit zero and
+unchanged snapshots. No tests executed. Log SHA-256:
+`0a953928376cd49856c639d72f67805a101596ba97f2d724dc6ce7f2ae831835`.
+
+r244 then ran the enabled actual-Rust fill optimizer parent on that candidate.
+It completed at 2026-10-01 01:51:05 UTC with exit 101: **zero passed, one failed**.
+Both gfx942 and gfx950, optimization/MIR settings `(0, 0)` and `(3, 2)`, and
+duplicate fresh source sessions were attempted. Unoptimized gfx942 input stopped
+at raw-address formation/history checking; unoptimized gfx950 input stopped at
+retained lifecycle replay. Optimized input stopped at the scoped invocation
+slice index type/move check. No session reached the expected checked
+optimizer consumer. The parent used its genuine source/import path, not a
+reconstructed graph; it produced no kernel artifact, protected proof or GPU run.
+Snapshots were unchanged. Log SHA-256:
+`96fbfb804fe81b2d9fcc84f5dad3b8842585c6346a8bc87bf8c3204b67420566`.
+
+### Completed Service Bundle, Pending Provisioning
+
+A separate bounded completion of the terminal MI350 build succeeded at
+2026-10-01 01:33:32 UTC. It reused the five preserved component binaries with
+byte-for-byte hash and ELF checks, built the missing provisioner and deployment
+tools from `768b62d8a64ebc3d7d2d16248a81e42195e19a1f`, and completed the original
+bundle assembly. **137 deployment tests passed, two were ignored, and all 15
+CTests passed.** The production V3 bundle verifier and independent post-cleanup
+verification passed. Manifest SHA-256:
+`9d49bc3863dd009edaaa6e7d79f0d9aeda806a064ef65726d964585fb67e3d42`.
+Build log SHA-256:
+`add9ebc730fe809efab9462898a712f4c0060ff3ac30665bc538706dbc82ce02`.
+The process group drained and owned build caches were cleaned; binaries and
+allowlisted evidence were preserved. This service bundle is not a complete
+approved compiler/proof-runtime release or an installed runtime.
+
+Genuine isolated provisioning was then attempted with root-owned protected
+staging and the existing pinned image. It stopped before container creation:
+Docker 29.1.3 rejects the runner's `--pid private` option. A separate create-only
+diagnostic reproduced that exact error; neither attempted container name existed
+in the final independent check. Both runner processes were absent. No install,
+provision, readback or reacquisition stage completed, and no client profile or
+seed was produced. The original incomplete report was preserved, not rewritten
+as success. A supported private-PID encoding and pre-start inspection must be
+validated before another attempt. Public evidence archive SHA-256:
+`108011cfef6b908c02001dbbe30a0d6ee7997100a8d843e836a4c4d436687c8e`.
+
+M0 remains complete; M1-M7 and strict production-to-required-proof-to-safe-GPU
+coverage remain **0/47**. Candidate compiler and launch-contract changes are
+separate from the published evidence checkpoint.
+
+### Combined Scoped Integration
+
+r245-r247 tested successive frozen integration candidates. All three stopped
+during compilation, with no test execution and unchanged source/tool snapshots:
+
+- r245 (`2a6d119b814b636f9db783fde696e9863cf3324b`) exposed a missing
+  owner lifetime bound in the shared Pliron mixed-memory adapter.
+- r246 (`97dbc7f5a3576c39ff8336387e967ac40867953b`) exposed profile visibility
+  narrower than the existing crate consumers.
+- r247 (`a58fc1220549a3ecbf003c050a2428fc13b60503`) reached lowerer compilation
+  and exposed the redundant analysis-scope GAT's lifetime requirement, stale
+  source-owner fields, incorrect transition-range fields, and a remaining
+  legacy-only selected-source adapter.
+
+The candidate repairs preserve the existing graph-typed analysis scope and
+generalize the existing selected-source traversal; they do not create another
+graph or grant final source/proof authority. Their complete integration still
+requires a successful new run. Log SHA-256, respectively:
+
+- r245: `fa4d81c7eac9d213672fb79644e88e20e557708a4ff926b0cc72ddb304be8d89`
+- r246: `e6476b8e752d0a8dd2c50bf802ccbc7daae01ce78a0e2465897928a6e1203e19`
+- r247: `6560c79e20d91cf8f826bd9a1b5f300aeeeb40cd1df83ac4843bd98e95dadb2a`
+
+r248 tested four component crates on frozen candidate
+`039f1a7c287ec758266a796e0a27370fd317b746`. Descriptor tests passed **22/22**,
+KFD tests **19/19**, runtime tests **11/11**, and Pliron tests **65/71**:
+**117 passed, six failed, zero ignored**. Scoped-analysis positive tests reject
+`gpu.execution_role_v23` at the structural-preservation encoding boundary.
+Several intended resource and mutation controls stop before their tested
+boundary and receive no intended-negative credit. The descriptor and runtime
+tests exercise contracts and scripted preparation, not GPU execution or complete
+safe launch. The run ended at 2026-10-01 02:04:22 UTC with exit 101 and unchanged
+snapshots. Log SHA-256:
+`76cbfb6b96c234eba0145386551dcd17fae366e1f22b9b29cfe88fb8666db273`.
+
+The provisioning-runner candidate `498ceae3084f927a01dae13cc356fb85735759c0`
+removes Docker's unsupported private-PID flag and requires the actual created
+container's inspected PID mode to be the default private mode before start.
+Cleanup remains available for a refused, terminal owned container. All **11**
+runner tests passed; these are local script/contract tests, not successful
+container provisioning, protected proof execution, or installation evidence.
+
+M0 remains complete, M1-M7 remain incomplete, and strict end-to-end coverage is
+still **0/47**. The service bundle, runner, compiler integration and published
+evidence checkpoint have distinct revisions; no cross-revision success is implied.
+
+### Source, Target and Formation Integration
+
+The next integration candidates combine original-source invocation recipes,
+exact-owner formal report extraction, typed target-coordinate/LLVM replay, and
+formation-aware host/runtime transport. The formal report factory keeps
+unsupported scoped semantics explicitly incomplete. Deterministic LLVM replay
+does not establish machine refinement. Numeric host checks cannot create source
+or proof authority, and the normal launch gate still refuses incomplete evidence.
+
+The formation-aware contract records surviving pointer formations separately
+from memory accesses. Each access references an actual formation; a formation
+with no remaining load/store still reaches live address-overflow/alignment checks.
+V26/V27 contract encodings remain unchanged. V28 has its own reserved framing
+and domains, recorded in #271 issuecomment-5923565594. These candidate changes
+and their new tests are not yet qualified by successful integrated execution.
+
+| Run | Frozen Candidate | Result |
+| --- | --- | --- |
+| r249 | `f6dfab8d9964eab6533278fb5de5856ef2d8bd43` | Five lowerer test-compilation errors; no tests ran |
+| r250 | `d486dce435aa2f2a0567c9c0760943a35cf7258a` | Proof-binding digest comparison type error; no tests ran |
+| r251 | `976394c8688ef756ceaa510fb9af657e8b0358a4` | Five temporary-identity borrow errors; no tests ran |
+| r252 | `8c2c00387cd219cb5a813768861cf9e3454ee44d` | One lowerer test match omitted `CopyIndex`; no tests ran |
+| r253 | `2abc332a16194fe6fbfd7d4c831e91ce251686f9` | Compiler/test-target check stopped on eight expansions of a missing codec-error import |
+| r254 | `ad9b422a134cb1cf0ed5e98e598edfa7d4259feb` | Compiler/test-target check stopped on three private-field accesses in a Pliron test helper |
+| r255 | `024e660d6d68c22c0757642b338aed973b1f2ca0` | Compiler/test-target check stopped on one temporary-array lifetime error in the KFD formation test |
+
+All seven runs retained unchanged source/tool inventories. The candidate repairs
+use the actual current owner APIs, own receipt digest bytes, retain exhaustive
+test mutation classification, import the existing shared codec error, use the
+sealed graph interface in the mutation test, and retain borrowed test rows. No
+acceptance rule, proof requirement, or resource assertion was removed.
+Log SHA-256, respectively:
+
+- r249: `48af05fdc800315301543ccc8d7209b5aba9c689b60ce367d46830b4a5fe8d1a`
+- r250: `6f80ca61274709316a8ce63a0a7842e91969f201e294e3955fa93a30edd2ce49`
+- r251: `18c3efb693c2dc51701e0a5d624359ce66edb26afb02f47e53cfd64c408b1de1`
+- r252: `b4d9f94861d0f97344be704dcad6a50f45b2adeef180f48797365e73120ff114`
+- r253: `e8e16ec352f58a078a7236cd3b79c011fd62ee123fe1a3217ffa3ccc986f4b16`
+- r254: `7456378f6741103bcd2dada5cec3916a601222558f27796c5326eb8d1521faf6`
+- r255: `39eb74c478aa58bb72c0884430ff15d29e131e206ebab117981b51db5cd145bf`
+
+### Scoped Formal and Contract Tests
+
+The shared formal engine now analyzes actual scoped index reads, checked
+accesses, and unconditional pointer formations without inventing a scalar
+slice-length definition. Unused formations retain independent obligations.
+Global-X indexing is not treated as injective across multiple Y/Z invocations;
+unsupported ancestry, alignment, arithmetic, and legacy receipt encodings refuse.
+These reports describe required checks, not discharged runtime or proof premises.
+
+Run r256 on frozen candidate `28e06556cb488bced5f003dc726789a53ce31e09`
+passed **531 tests, zero failures, zero ignored**:
+
+| Component | Selected Tests Passed |
+| --- | ---: |
+| Kernel IR and formal memory | 465 |
+| Kernel analysis | 7 |
+| Target replay | 8 |
+| Descriptor contracts | 27 |
+| KFD contracts | 24 |
+
+The selection includes all new scoped formal/index controls, the exact-owner
+formal report tests, typed target-coordinate and LLVM replay, and V28 descriptor
+and KFD formation controls, alongside selected historical formal-memory tests.
+It is not the full workspace suite. The run ended at 2026-10-01 03:03:26 UTC
+with unchanged source/tool snapshots. Log SHA-256:
+`e22ae3517b37b6d799036fa92e287135a5261c62d4d0959fd45d3efd5790fb41`.
+
+Candidate operation-level source clauses and genuine-Rust harness probes are
+also authored. They remain unexecuted: generated content is not a signed source
+proof, and these tests do not validate the original-to-final compiler path.
+Source completion, host/runtime integration, protected proof execution, and GPU
+qualification remain outstanding. No milestone or kernel gains end-to-end credit.
+
+### Isolated Install Reached, Provisioning Incomplete
+
+The corrected runner `498ceae3084f927a01dae13cc356fb85735759c0` executed
+against the same accepted service bundle and pinned image. The isolated install
+container exited zero. The provision container exited 127: independent image
+layer inspection found neither `systemd-sysusers` nor `systemd-tmpfiles`, which
+the provision script checks before account or identity creation. Failed-stage
+output was not retained by the existing runner; this diagnosis does not invent
+an observed shell error message.
+
+The runner terminated at 2026-10-01 02:11:14 UTC. Independent checks at
+02:12:39 UTC confirmed both process IDs absent, the original process group empty,
+and both container IDs and all planned names absent. The owned public upload
+directory was removed; protected inputs, the installed service files, and reports
+were retained. No keys, records or client profile were created. Readback and
+revalidation did not complete; no host service, compiler, proof or GPU executed.
+Public evidence archive SHA-256:
+`2e7071dc34f1fb53cb5f582ccc1f40a72983cda78bda7730b915013c930a8c02`.
+
+Required next steps remain genuine scoped-source completion, full final-graph
+semantics, signed source/optimizer evidence composition, protected runtime
+provisioning, and target-matched end-to-end runs. M0 remains complete; M1-M7
+remain incomplete and strict coverage remains **0/47**.

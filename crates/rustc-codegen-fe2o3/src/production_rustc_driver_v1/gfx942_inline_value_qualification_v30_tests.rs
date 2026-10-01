@@ -999,3 +999,9 @@ fn composition_cli_streams_preserve_empty_bytes_without_weakening_artifact_publi
     }
     fs::remove_dir(&directory).unwrap();
 }
+
+#[path = "gfx942_retained_target_account_v1_tests.rs"]
+mod retained_target_account_v1_tests;
+
+#[path = "gfx942_paid_target_account_v1_tests.rs"]
+mod paid_target_account_v1_tests;

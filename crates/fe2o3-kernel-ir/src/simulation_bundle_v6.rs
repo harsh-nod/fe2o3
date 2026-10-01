@@ -461,6 +461,33 @@ pub struct VerifiedSimulationBundleV6 {
 }
 
 impl VerifiedSimulationBundleV6 {
+    /// Charges only this owner's actual retained heap, excluding its inline
+    /// header. All section views alias the one canonical Vec and are not
+    /// separately charged. Observation only; does not revalidate or grant authority.
+    pub fn charge_retained_heap_v6(
+        &self,
+        counter: &mut crate::LogicalStorageCounterV1,
+    ) -> Result<(), crate::LogicalStorageErrorV1> {
+        let Self {
+            canonical_bytes,
+            identity: _,
+            subject_identity: _,
+            source_lineage: _,
+            production_kir_identity: _,
+            canonical_kir_v11_digest: _,
+            canonical_kir_v11_length: _,
+            kernel_abi_identity: _,
+            kernel_count: _,
+            target_range: _,
+            kir_range: _,
+            source_map_range: _,
+            semantic_mir_range: _,
+            storage_map_range: _,
+            aggregate_storage_map_range: _,
+        } = self;
+        counter.charge(0, 1)?;
+        counter.vector(canonical_bytes)
+    }
     pub fn has_magic_prefix(bytes: &[u8]) -> bool {
         bytes.get(..MAGIC_V6.len()) == Some(MAGIC_V6)
     }

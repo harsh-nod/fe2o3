@@ -4752,3 +4752,6 @@ mod tests {
         assert!(!production.contains("authenticate_before_collection"));
     }
 }
+
+#[path = "collector/typed_argument_retained_storage_v1.rs"]
+mod typed_argument_retained_storage_v1;

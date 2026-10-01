@@ -158,6 +158,18 @@ impl DebugSourceMapKirIdentityV1 {
 }
 
 impl DebugSourceMapFileV1 {
+    pub(crate) fn charge_retained_heap_v1(
+        &self,
+        counter: &mut crate::LogicalStorageCounterV1,
+    ) -> Result<(), crate::LogicalStorageErrorV1> {
+        let Self {
+            identity: _,
+            byte_len: _,
+            display_path,
+        } = self;
+        counter.charge(0, 1)?;
+        counter.string(display_path)
+    }
     pub fn new(
         identity: [u8; 32],
         byte_len: u64,
@@ -312,6 +324,14 @@ impl DebugSourceMapSpanV1 {
 }
 
 impl DebugSourceMapSiteV1 {
+    pub(crate) fn charge_retained_heap_v1(
+        &self,
+        counter: &mut crate::LogicalStorageCounterV1,
+    ) -> Result<(), crate::LogicalStorageErrorV1> {
+        let Self { site: _, spans } = self;
+        counter.charge(0, 1)?;
+        counter.vector(spans)
+    }
     pub fn new(
         site: DebugSourceMapKirSiteV1,
         spans: Vec<DebugSourceMapSpanV1>,
@@ -626,3 +646,6 @@ mod tests {
         );
     }
 }
+
+#[path = "debug_source_file_retained_storage_v1.rs"]
+mod file_retained_storage_v1;

@@ -685,3 +685,9 @@ mod const_u32_helper;
 
 #[path = "multilevel_authoring_call_target_v1_tests.rs"]
 mod call_target;
+
+#[path = "multilevel_authoring_retained_storage_v1_tests.rs"]
+mod retained_storage;
+
+#[path = "multilevel_authoring_result_storage_v1_tests.rs"]
+mod result_storage;

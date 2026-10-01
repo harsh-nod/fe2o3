@@ -320,6 +320,19 @@ fe2o3-compiler-execution-deployment-install --v3 BUNDLE_ROOT MANIFEST_SHA256 GIT
 fe2o3-compiler-execution-deployment-install --v3 recover MANIFEST_SHA256 INSTALL_PARENT
 ```
 
+The bundle builder uses one finite build-worker limit: `CARGO_BUILD_JOBS`,
+defaulting to `1` only when unset. An explicitly empty value, zero, signs,
+leading zeroes, nondecimal values, and values above `16` refuse before path
+resolution, Git inspection or filesystem changes. The same validated value is
+exported to every child Cargo build and `CMAKE_BUILD_PARALLEL_LEVEL`, and passed
+explicitly as `cmake --build ... --parallel N`; an inherited CMake setting cannot
+widen it. For example, `CARGO_BUILD_JOBS=2` selects two workers for both tools.
+This bounds build scheduling, not compiler/linker internal threads, test-process
+threads, memory, disk or elapsed time; retain the external build resource limits.
+Bundle schema, inventory, independent pins and clean-revision requirements are
+unchanged. This is a shared-machine build prerequisite, not deployment,
+compiler/proof execution or GPU qualification.
+
 Installation requires the existing root-owned mode-0700 offline parent and
 publishes an offline root, not an atomic update to a running host's `/usr`.
 Within the prepared deployment, the dedicated native provision command accepts

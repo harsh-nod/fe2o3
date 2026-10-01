@@ -10,11 +10,15 @@ use crate::source_local_order_recipe_api_v1::{
     SourceLocalOrderRecipeRequestV1 as Request, finish_callback, validate_arguments,
 };
 
+use std::time::{Duration, Instant};
+
 struct RecipeCallbacks {
     request: Request,
     input: Option<RetainedInput>,
     calls: usize,
     compiler_entries: usize,
+    measure_callback_stage: bool,
+    callback_stage_elapsed: Option<Duration>,
     #[cfg(test)]
     injecting_reentry: bool,
     result: Option<Result<Output, Failure>>,
@@ -32,6 +36,8 @@ impl RecipeCallbacks {
             input: None,
             calls: 0,
             compiler_entries: 0,
+            measure_callback_stage: false,
+            callback_stage_elapsed: None,
             result: None,
             #[cfg(test)]
             injecting_reentry: false,
@@ -72,15 +78,20 @@ impl Callbacks for RecipeCallbacks {
             )));
             return Compilation::Stop;
         };
+        let measure_callback_stage = self.measure_callback_stage;
+        let mut callback_stage_elapsed = None;
         let operation = || {
-            transaction_in_active_session_v1(
+            let started = measure_callback_stage.then(Instant::now);
+            let result = transaction_in_active_session_v1(
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
             )
             .map_err(|message| Failure::new(Phase::Frontend, message))
             .and_then(|transaction| {
                 transaction.compile_source_local_order_recipe_v1(input, &self.request)
-            })
+            });
+            callback_stage_elapsed = started.map(|started| started.elapsed());
+            result
         };
         #[cfg(test)]
         let result = crate::source_local_order_recipe_api_v1::test_support::with_observer(
@@ -89,6 +100,7 @@ impl Callbacks for RecipeCallbacks {
         );
         #[cfg(not(test))]
         let result = operation();
+        self.callback_stage_elapsed = callback_stage_elapsed;
         self.result = Some(result);
         #[cfg(test)]
         {
@@ -115,6 +127,23 @@ impl Callbacks for RecipeCallbacks {
 /// the caller owns retaining/rechecking any file from which those bytes came.
 pub fn run_source_local_order_recipe_driver_v1(args: &[String], request: Request) -> Attempt {
     run(args, RecipeCallbacks::new(request))
+}
+
+/// Opt-in timing of the original callback transaction creation through recipe
+/// return. This still uses one fresh frontend and consumes the genuine current
+/// transaction/source owner once. It is NOT a warmed-session replay benchmark.
+/// Frontend analysis, retained-source opening before rustc, output publication,
+/// storage accounting and caller work are excluded. API-internal checks remain
+/// included. Refused stages may carry elapsed time; absence is never zero.
+/// Ordinary driver calls above do not read the clock. No owners are cloned,
+/// reconstructed or exported and no external callback/recipe schema is added.
+pub fn run_source_local_order_recipe_driver_measured_v1(
+    args: &[String],
+    request: Request,
+) -> Attempt {
+    let mut callbacks = RecipeCallbacks::new(request);
+    callbacks.measure_callback_stage = true;
+    run(args, callbacks)
 }
 
 fn run(args: &[String], mut callbacks: RecipeCallbacks) -> Attempt {
@@ -151,6 +180,7 @@ fn run(args: &[String], mut callbacks: RecipeCallbacks) -> Attempt {
         callbacks.calls,
         callbacks.compiler_entries,
     )
+    .with_callback_stage_elapsed_v1(callbacks.callback_stage_elapsed, fatal)
 }
 
 /// Compiler-test-only probe. The normal public driver has no callback parameter.
@@ -179,3 +209,7 @@ pub(crate) fn run_source_local_order_recipe_probe_v1(
     callbacks.fatal_after_first = fatal_after_first;
     run(args, callbacks)
 }
+
+#[cfg(test)]
+#[path = "source_local_order_recipe_warm_series_v1_tests.rs"]
+mod warm_series;

@@ -471,3 +471,9 @@ fn publisher_case_roster_keeps_fresh_metadata_and_source_stages_distinct() {
 
 #[path = "gfx942_ordered_composition_public_promotion_v1_tests.rs"]
 mod public_action;
+
+#[path = "gfx942_ordered_repeat_promotion_v1_tests.rs"]
+mod repeat_promotion;
+
+#[path = "gfx942_ordered_composition_publish_setup_v1_tests.rs"]
+mod external_setup;

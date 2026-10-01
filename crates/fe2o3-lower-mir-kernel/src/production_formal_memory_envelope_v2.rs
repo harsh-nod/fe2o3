@@ -56,9 +56,34 @@ impl ProductionFormalMemoryOwnerV1 {
         semantic_kir: ProductionSemanticKirOwnerV1,
         extents: &[[u64; 3]],
     ) -> Result<Self, ProductionFormalMemoryErrorV1> {
-        semantic_kir
-            .verify_equivalence()
-            .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
+        Self::try_admit_envelopes_with_semantic_replay_v2(
+            semantic_kir,
+            extents,
+            ProductionSemanticKirOwnerV1::verify_equivalence,
+        )
+    }
+
+    /// Preserves both envelope extraction and mandatory semantic replays while
+    /// charging native helper translation to the caller's existing budget.
+    /// Formal extraction retains its separate legacy resource contract.
+    pub fn try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(
+        semantic_kir: ProductionSemanticKirOwnerV1,
+        extents: &[[u64; 3]],
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Self, ProductionFormalMemoryErrorV1> {
+        Self::try_admit_envelopes_with_semantic_replay_v2(semantic_kir, extents, |owner| {
+            owner.verify_equivalence_with_bounded_translation_budget_v1(budget)
+        })
+    }
+
+    fn try_admit_envelopes_with_semantic_replay_v2(
+        semantic_kir: ProductionSemanticKirOwnerV1,
+        extents: &[[u64; 3]],
+        mut replay: impl FnMut(
+            &ProductionSemanticKirOwnerV1,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<Self, ProductionFormalMemoryErrorV1> {
+        replay(&semantic_kir).map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
         if extents.len() != semantic_kir.module().kernels.len() {
             return Err(ProductionFormalMemoryErrorV1::LaunchEnvelopeCount {
                 expected: semantic_kir.module().kernels.len(),
@@ -82,7 +107,7 @@ impl ProductionFormalMemoryOwnerV1 {
             kernels,
             launch_envelopes: Some(envelopes.into_boxed_slice()),
         };
-        owner.verify_equivalence()?;
+        owner.verify_equivalence_with_semantic_replay_v1(&mut replay)?;
         Ok(owner)
     }
 

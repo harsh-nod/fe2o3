@@ -22,6 +22,8 @@ use reserved_fe2o3_symbols::{
 #[path = "fe2o3-rustc-extract/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
 include!("fe2o3-rustc-extract/ordered_composition_v1.rs");
+include!("fe2o3-rustc-extract/bf16_tile_source_v1.rs");
+include!("fe2o3-rustc-extract/bf16_generated_source_v1.rs");
 include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
 include!("fe2o3-rustc-extract/normal_composition_v1.rs");
 
@@ -64,6 +66,30 @@ fn main() {
     let physical_global_copy_v21 = env::var_os(EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21);
     let physical_lds_exchange_v22 = env::var_os(EXTRACT_PHYSICAL_LDS_EXCHANGE_DIRECTORY_ENV_V22);
     let ordered_composition_v1 = env::var_os(EXTRACT_ORDERED_COMPOSITION_DIRECTORY_ENV_V1);
+    let bf16_tile_source_v1 = env::var_os(EXTRACT_BF16_TILE_SOURCE_DIRECTORY_ENV_V1);
+    let bf16_generated_source_v1 = env::var_os(EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1);
+    if let Err(error) = require_disjoint_bf16_source_modes_v1(
+        bf16_tile_source_v1.is_some(),
+        bf16_generated_source_v1.is_some(),
+    ) {
+        eprintln!("fe2o3 rustc extraction: {error}");
+        std::process::exit(1);
+    }
+    if let Err(error) = require_disjoint_bf16_tile_source_v1(
+        bf16_tile_source_v1.is_some() || bf16_generated_source_v1.is_some(),
+        [
+            diagnostic_kir_v16.is_some(),
+            diagnostic_kir_v17.is_some(),
+            diagnostic_kir_v19.is_some(),
+            physical_entry_v20.is_some(),
+            physical_global_copy_v21.is_some(),
+            physical_lds_exchange_v22.is_some(),
+            ordered_composition_v1.is_some(),
+        ],
+    ) {
+        eprintln!("fe2o3 rustc extraction: {error}");
+        std::process::exit(1);
+    }
     if let Err(error) = require_disjoint_ordered_composition_diagnostic_v1(
         ordered_composition_v1.is_some(),
         [
@@ -171,7 +197,9 @@ fn main() {
     })
     .and_then(|prepared| {
         select_ordered_composition_diagnostic_v1_mode(prepared, ordered_composition_v1)
-    });
+    })
+    .and_then(|prepared| select_bf16_tile_source_v1_mode(prepared, bf16_tile_source_v1))
+    .and_then(|prepared| select_bf16_generated_source_v1_mode(prepared, bf16_generated_source_v1));
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -234,6 +262,8 @@ enum ExtractionModeV1 {
     PhysicalGlobalCopyDiagnosticV21(OsString),
     PhysicalLdsExchangeDiagnosticV22(OsString),
     OrderedCompositionDiagnosticV1(OsString),
+    Bf16TileSourceV1(OsString),
+    Bf16GeneratedSourceV1(OsString),
 }
 
 fn require_disjoint_physical_entry_diagnostic_v20(
@@ -812,7 +842,10 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
         .env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
         .env_remove(ordered_origin_v1::OUTPUT_ENV)
         .env_remove(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1)
-        .env_remove(EXTRACT_COMPOSITION_NORMAL_ENV_V1);
+        .env_remove(EXTRACT_COMPOSITION_NORMAL_ENV_V1)
+        .env_remove(EXTRACT_BF16_TILE_SOURCE_DIRECTORY_ENV_V1)
+        .env_remove(EXTRACT_BF16_TILE_PROMOTION_REQUEST_ENV_V1)
+        .env_remove(EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1);
     command
 }
 
@@ -833,6 +866,10 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
     let promotion_request = selected_composition_promotion_request_v1(
         &selected.mode,
         env::var_os(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1),
+    )?;
+    let bf16_promotion_request = selected_bf16_tile_promotion_request_v1(
+        &selected.mode,
+        env::var_os(EXTRACT_BF16_TILE_PROMOTION_REQUEST_ENV_V1),
     )?;
     let origin_output = ordered_origin_v1::selected_output(
         &selected.mode,
@@ -920,6 +957,32 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 &selected.args,
                 std::path::Path::new(&output),
             )?;
+        }
+        ExtractionModeV1::Bf16GeneratedSourceV1(output) => {
+            #[cfg(target_os = "linux")]
+            rustc_codegen_fe2o3::run_bf16_generated_source_admission_driver_v1(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+            #[cfg(not(target_os = "linux"))]
+            return Err("generated BF16 source admission requires Linux".into());
+        }
+        ExtractionModeV1::Bf16TileSourceV1(output) => {
+            #[cfg(target_os = "linux")]
+            if let Some(request) = bf16_promotion_request {
+                rustc_codegen_fe2o3::run_bf16_tile_source_promotion_driver_v1(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                    &request,
+                )?;
+            } else {
+                rustc_codegen_fe2o3::run_bf16_tile_source_inspection_driver_v1(
+                    &selected.args,
+                    std::path::Path::new(&output),
+                )?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err("BF16 source action requires Linux".into());
         }
         ExtractionModeV1::OrderedCompositionDiagnosticV1(output) => {
             if let Some(request) = promotion_request {
@@ -1046,6 +1109,8 @@ mod tests {
     include!("fe2o3-rustc-extract/physical_global_copy_v21_tests.rs");
     include!("fe2o3-rustc-extract/physical_lds_exchange_v22_tests.rs");
     include!("fe2o3-rustc-extract/ordered_composition_v1_tests.rs");
+    include!("fe2o3-rustc-extract/bf16_tile_source_v1_tests.rs");
+    include!("fe2o3-rustc-extract/bf16_generated_source_v1_tests.rs");
     include!("fe2o3-rustc-extract/composition_promotion_v1_tests.rs");
     include!("fe2o3-rustc-extract/normal_composition_v1_tests.rs");
 

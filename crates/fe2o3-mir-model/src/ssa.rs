@@ -954,3 +954,5 @@ fn hash_usize(digest: &mut Sha256, value: usize) {
 #[cfg(test)]
 #[path = "ssa/terminal_failure_v1_tests.rs"]
 mod terminal_failure_v1_tests;
+
+mod retained_storage_v1;

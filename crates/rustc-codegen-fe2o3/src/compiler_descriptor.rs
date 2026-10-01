@@ -3254,3 +3254,6 @@ mod tests {
         );
     }
 }
+
+#[path = "compiler_descriptor_retained_storage_v1.rs"]
+mod retained_storage_v1;

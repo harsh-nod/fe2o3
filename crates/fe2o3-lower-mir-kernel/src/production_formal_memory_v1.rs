@@ -201,25 +201,61 @@ impl ProductionFormalMemoryOwnerV1 {
     pub fn try_admit(
         semantic_kir: ProductionSemanticKirOwnerV1,
     ) -> Result<Self, ProductionFormalMemoryErrorV1> {
-        semantic_kir
-            .verify_equivalence()
-            .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
+        Self::try_admit_with_semantic_replay_v1(
+            semantic_kir,
+            ProductionSemanticKirOwnerV1::verify_equivalence,
+        )
+    }
+
+    /// Runs the same admission and both mandatory semantic replays with only
+    /// their native helper translation scan/cache/expansion charged to `budget`.
+    /// Each replay retains its original local work/storage limits as well;
+    /// an allowance cannot reset per root or helper within that replay.
+    /// The caller owns its existing floor and retains the resulting owner.
+    /// Formal extraction, graph reconstruction, canonical/SSA checks and all
+    /// other legacy allocations/work are excluded; this is not whole-phase
+    /// resource admission. No source, effect or authority check is omitted.
+    pub fn try_admit_with_bounded_translation_budget_v1(
+        semantic_kir: ProductionSemanticKirOwnerV1,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Self, ProductionFormalMemoryErrorV1> {
+        Self::try_admit_with_semantic_replay_v1(semantic_kir, |owner| {
+            owner.verify_equivalence_with_bounded_translation_budget_v1(budget)
+        })
+    }
+
+    fn try_admit_with_semantic_replay_v1(
+        semantic_kir: ProductionSemanticKirOwnerV1,
+        mut replay: impl FnMut(
+            &ProductionSemanticKirOwnerV1,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<Self, ProductionFormalMemoryErrorV1> {
+        replay(&semantic_kir).map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
         let kernels = derive_admitted_obligations(&semantic_kir)?;
         let owner = Self {
             semantic_kir,
             kernels,
             launch_envelopes: None,
         };
-        owner.verify_equivalence()?;
+        owner.verify_equivalence_with_semantic_replay_v1(&mut replay)?;
         Ok(owner)
     }
 
     /// Re-verifies exact semantic KIR and deterministically re-derives the
     /// retained formal obligations.
     pub fn verify_equivalence(&self) -> Result<(), ProductionFormalMemoryErrorV1> {
-        self.semantic_kir
-            .verify_equivalence()
-            .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
+        self.verify_equivalence_with_semantic_replay_v1(
+            ProductionSemanticKirOwnerV1::verify_equivalence,
+        )
+    }
+
+    fn verify_equivalence_with_semantic_replay_v1(
+        &self,
+        mut replay: impl FnMut(
+            &ProductionSemanticKirOwnerV1,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<(), ProductionFormalMemoryErrorV1> {
+        replay(&self.semantic_kir).map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
         if let Some(envelopes) = &self.launch_envelopes {
             envelope_v2::verify_envelopes(&self.semantic_kir, envelopes)?;
         }

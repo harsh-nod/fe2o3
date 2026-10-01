@@ -437,7 +437,7 @@ class FixtureDisplayTests(unittest.TestCase):
             ('#[path = "left.rs"] mod renamed;', "selection attribute"),
             ('mod left { #[kernel] fn same() {} }', "nested fixture kernel"),
             ('mod r#left;', "unsupported fixture item"),
-            ('include!("left.rs");', "unsupported fixture item"),
+            ('include!("left.rs");', "included fixture source must contain only inert macro definitions or literal includes"),
             ('#[cfg_attr(feature = "left", path = "left.rs")] mod left;', "selection attribute"),
             ('#[unknown_attribute] mod left;', "selection attribute"),
             ('#[cfg(all(feature = "left", unknown))] mod left;', "cfg predicate"),
@@ -576,7 +576,7 @@ class FixtureDisplayTests(unittest.TestCase):
             with self.subTest(attributes=attributes), self.assertRaises(IDENTITIES.KernelInventoryError):
                 self.selected_attributes(attributes)
         for source in (
-            "#[cfg_attr(not(test), allow(unused))] macro_rules! m { () => {} }",
+            "#[cfg_attr(not(test), allow(unused))] m! { () => {} }",
             "#[cfg_attr(not(test), allow(unused))] include!(\"other.rs\");",
         ):
             with self.subTest(source=source), self.assertRaisesRegex(

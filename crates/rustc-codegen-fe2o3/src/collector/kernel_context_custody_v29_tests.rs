@@ -913,3 +913,6 @@ fn completed_context_rechecks_typed_call_boundaries_before_retention() {
         );
     }
 }
+
+#[path = "kernel_context_custody_v29_tests/retained_storage_tests.rs"]
+mod retained_storage_tests;

@@ -37,3 +37,5 @@ pub mod extraction {
 
 #[cfg(test)]
 mod tests;
+
+pub mod retained_storage_v1;

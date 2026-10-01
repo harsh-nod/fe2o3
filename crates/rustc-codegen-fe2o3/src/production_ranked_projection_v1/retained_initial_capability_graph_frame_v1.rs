@@ -6,7 +6,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 type Facts = CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>;
 pub(super) fn bytes() -> BResult<usize> {
-    const ROWS: usize = 17;
+    const ROWS: usize = 18;
     let rows = [
         // Component header, initial transfers and terminal/completion carriers.
         size_of::<(
@@ -232,6 +232,16 @@ pub(super) fn bytes() -> BResult<usize> {
             &RetainedBeforeArgumentWritersV1,
             &RootEntryPrefixV1,
             &Prep<'static, 'static>,
+            BResult<()>,
+        )>(),
+        // Phase-free predecessor factoring adds this call carrier; prior
+        // completion checks and source-loan accounting remain unchanged.
+        size_of::<(
+            &PendingWholeRootBeforeArgumentWritersV1<'static>,
+            &ProductionPreRankedKirOwnerV1,
+            SemanticFunctionIdV1,
+            &mut Facts,
+            &mut usize,
             BResult<()>,
         )>(),
         retained_custody_snapshot_frame_v1(),

@@ -291,3 +291,6 @@ pub fn optimize_native_neutral_kernel_ir_policy3_v1<'input>(
     }
     result
 }
+
+#[path = "neutral_policy3_retained_storage_v1.rs"]
+mod retained_storage_v1;

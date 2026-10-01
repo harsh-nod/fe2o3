@@ -1,9 +1,43 @@
 # Assembly authoring implementation status
 
 The [consolidated M0/V0/U0 contract proposal](authoring-contract-closure-20260924/README.md)
-refreshes the current supported/pending matrix and identifies the missing owner
-and measured-budget decisions. It is proposed, not accepted; broad exits remain
-**M1/V1/V2/U1/U2/U3 (6/18)**.
+refreshes the supported/pending matrix and identifies the missing owner and
+measured-budget decisions. That proposal remains unaccepted. Following the
+bounded M2 integration decision on 2026-10-01, accepted exits are
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+Older dated sections and handoff tables below retain their historical counts
+and implementation assessments, including their 6/18 statements. The dated
+acceptance record below supersedes those counts and the bounded M2 assessment;
+it does not retroactively change their evidence or accept pending owner contracts.
+
+## Basic assembly M2 acceptance 20261001
+
+The primary integrator accepted the literal M2 exit for the existing bounded
+gfx942 V17 mixed-region and checked V20 whole-entry profiles, together with the
+existing typed Rust materialization and fresh-frontend re-entry path. The
+[acceptance record](evidence/basic-assembly-m2-acceptance-20261001.md) and its
+[clause and identity crosswalk](evidence/basic-assembly-m2-acceptance-20261001.json)
+bind the separately retained source, CPU, machine-code inspection and refusal
+evidence. This is an explicit bounded integration decision, not a new execution
+campaign or an assertion of peer-owner consensus.
+
+M0/V0/U0 are among the eleven exits that remain unaccepted. This decision closes
+none of the three umbrella issues and does not admit arbitrary assembly,
+normal BF16 ranked lowering, protected hardware execution, physical debugger
+capture or whole-action memory and performance guarantees. Historical machine
+inspection is not GPU execution; the checked V20 runtime premises remain required.
+
+## Generated BF16 source and imported bindings — 2026-10-01
+
+The [generated-source and bindings qualification](generated-bf16-source-and-bindings-qualification-20261001.md)
+passed four genuine generated-source sessions, two helper publications, two fresh
+candidates, 72 positive CPU requests and 64 expected refusals. All nine legacy
+source sessions passed. A separate four-session import checkpoint preserved all
+1,502 exposed ordinary-result bytes while observing 5,804 logical retained bytes
+for its named bindings owner. Normal BF16 ranked lowering still typed-refuses;
+public tooling, whole-action memory, native/debugger and GPU acceptance remain
+separate. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
 
 ## Disabled loaded-maintenance debugger source — 2026-09-27
 

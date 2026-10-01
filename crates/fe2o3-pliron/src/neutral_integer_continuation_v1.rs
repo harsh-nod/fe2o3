@@ -302,3 +302,6 @@ pub fn optimize_native_neutral_kernel_ir_integer_continuation_v1<'input>(
     }
     result
 }
+
+#[path = "neutral_integer_retained_storage_v1.rs"]
+mod retained_storage_v1;

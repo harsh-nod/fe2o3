@@ -546,3 +546,11 @@ pub(in crate::production_ranked_projection_v1) fn observe_initial_reads(
 #[path = "whole_root_initial_graph_genuine_v1_tests.rs"]
 mod graph_observer;
 pub(in crate::production_ranked_projection_v1) use graph_observer::observe as observe_initial_graph;
+
+#[path = "whole_root_invocation_seed_genuine_v1_tests.rs"]
+mod seed_observer;
+pub(in crate::production_ranked_projection_v1) use seed_observer::observe as observe_invocation_seeds;
+
+#[path = "whole_root_initial_nonempty_read_genuine_v1_tests.rs"]
+mod nonempty_observer;
+pub(in crate::production_ranked_projection_v1) use nonempty_observer::observe as observe_initial_nonempty;

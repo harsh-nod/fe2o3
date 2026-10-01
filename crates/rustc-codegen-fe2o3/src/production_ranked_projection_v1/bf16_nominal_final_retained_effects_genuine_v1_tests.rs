@@ -102,7 +102,7 @@ pub(in crate::production_ranked_projection_v1) fn observe(
 ) -> Result<()> {
     let before = Checkpoint::take(budget);
     let entered = Cell::new(0usize);
-    let counts = with_nominal_final_retained_effects_v1(
+    let counts = super::composed::with_nominal_prepared_tensor_effects_v1(
         owner,
         inventory,
         source.root(),
@@ -112,7 +112,9 @@ pub(in crate::production_ranked_projection_v1) fn observe(
         |view, budget| {
             entered.set(entered.get() + 1);
             assert!(budget.work_ledger_identity_v1() == before.ledger);
-            observe_view(view, owner, source, inventory, budget)
+            let counts = observe_view(view.original(), owner, source, inventory, budget)?;
+            observe_prepared_tensor_effects(view, source, budget)?;
+            Ok(counts)
         },
     )?;
     assert_eq!(entered.get(), 1);
@@ -127,6 +129,7 @@ pub(in crate::production_ranked_projection_v1) fn observe(
         counts[2],
         counts[3],
     );
+    prepared_control_flow::observe(owner, source, inventory, budget)?;
     Ok(())
 }
 fn with_headers<'w>(
@@ -267,7 +270,8 @@ pub(in crate::production_ranked_projection_v1) fn controls(
             }
             Ok(())
         })
-    })
+    })?;
+    prepared_control_flow::controls(owner, source, inventory, inventory_storage, original)
 }
 #[test]
 fn retained_genuine_control_frames_fit_the_prepaid_header() {
@@ -281,3 +285,64 @@ fn retained_genuine_control_frames_fit_the_prepaid_header() {
             <= HEADERS
     );
 }
+
+// Existing genuine Identity/Swap01 callback, not a second source owner or a
+// fabricated proof. Compare every row against the retained original table.
+fn observe_prepared_tensor_effects(
+    view: &super::composed::NominalPreparedTensorEffectsV1<'_, '_>,
+    source: &CheckedBf16CallInstanceV1<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    budget.charge_work(add(128, times(view.effects().len(), 64)?)?)?;
+    let original = view.original();
+    assert_eq!(view.source_block(), source.call_block());
+    assert_eq!(view.effects().len(), original.effects().len());
+    assert_ne!(view.effects().as_ptr(), original.effects().as_ptr());
+    let selected = source.call_block().index() as usize;
+    let mut counts = [0usize; 4];
+    for (index, (actual, input)) in view.effects().iter().zip(original.effects()).enumerate() {
+        if index == selected {
+            assert_eq!(*input, ProjectedCapabilityTerminatorEffectsV1::default());
+            assert_eq!(
+                actual.layout.as_ref(),
+                Some(original.candidate().operation())
+            );
+            assert!(actual.global_read.is_none());
+            assert!(actual.transpose_workgroup.is_none());
+            assert!(actual.read_view.is_none());
+        } else {
+            assert_eq!(actual, input);
+        }
+        for (count, present) in counts.iter_mut().zip([
+            actual.layout.is_some(),
+            actual.global_read.is_some(),
+            actual.transpose_workgroup.is_some(),
+            actual.read_view.is_some(),
+        ]) {
+            *count = count
+                .checked_add(usize::from(present))
+                .ok_or(Resource::Arithmetic)?;
+        }
+    }
+    assert_eq!(counts, [1, 2, 0, 0]);
+    // No ordinary matrix intrinsic exists at this root call. The inserted
+    // TensorLayout remains the helper obligation with the exact Return binding.
+    assert_eq!(
+        original.candidate().permutation(),
+        source.return_permutation()
+    );
+    eprintln!(
+        "fe2o3-prepared-nominal-tensor-effects-v1 root={} source_call_block={} permutation={:?} layouts={} global_reads={} transpose_workgroups={} read_views={} normal_admission=false",
+        source.root().index(),
+        source.call_block().index(),
+        source.return_permutation(),
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+    );
+    Ok(())
+}
+
+#[path = "bf16_nominal_prepared_control_flow_genuine_v1_tests.rs"]
+mod prepared_control_flow;

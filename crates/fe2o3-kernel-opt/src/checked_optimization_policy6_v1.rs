@@ -290,3 +290,7 @@ pub fn continue_checked_canonical_kernel_ir_policy6_v1(
 #[cfg(test)]
 #[path = "checked_optimization_policy6_v1_tests.rs"]
 mod tests;
+
+#[path = "checked_optimization_policy6_retained_storage_v1.rs"]
+mod retained_storage_v1;
+pub use retained_storage_v1::Policy6RetainedLogicalStorageV1;

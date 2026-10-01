@@ -577,6 +577,28 @@ fn verify_prepared_ranked_root_recipe_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    verify_prepared_ranked_root_recipe_with_compile_v1(
+        recipe,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+    )
+}
+
+// Shared ordinary continuation. Paid selection changes only the compile call;
+// it does not admit the nominal driver or bypass source/structural checks.
+fn verify_prepared_ranked_root_recipe_with_compile_v1(
+    recipe: PreparedRankedRootRecipeV1<'_>,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
     let PreparedRankedRootRecipeV1 {
@@ -600,16 +622,12 @@ fn verify_prepared_ranked_root_recipe_v1(
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-        let lowering = compile_ranked_kernel_for_gfx942_lowering_v1(
+        let lowering = compiler.compile(
             construction,
-            ProductionSessionLimitsV1::default(),
             system_coherent_allocations,
-        )
-        .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error: Box::new(error),
             ranked_ir,
-            access_sources: sources,
-        })?;
+            sources,
+        )?;
         crate::production_reference_effect_join_v2::conditional::ReferenceRootV1::Ordinary {
             lowering,
             receipts: Vec::new(),
