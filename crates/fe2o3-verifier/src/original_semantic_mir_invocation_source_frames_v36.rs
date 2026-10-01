@@ -2,10 +2,12 @@
 //! independent physical target allocation frame.
 
 use super::super::{LocalRole, ScalarV30, Shape, Terminator, invocations::InvocationPlan};
+use super::source_bytes::Access;
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1 as Callable, SemanticEdgeRoleV1 as EdgeRole,
-    SemanticPointerMetadataV1 as Metadata, SemanticUnwindActionV1 as Unwind,
+    SemanticPointerMetadataV1 as Metadata, SemanticTypeIdV1 as TypeId,
+    SemanticUnwindActionV1 as Unwind,
 };
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
@@ -15,6 +17,15 @@ enum ReturnClass {
     Scalar(u32),
     Pointer,
     Slice(u32),
+    Aggregate(u32),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DestinationComponent {
+    root_type: TypeId,
+    result_type: TypeId,
+    first_leaf: usize,
+    depth: usize,
 }
 
 pub(super) struct SourceFrameReturn<'slots, 'view, 'source> {
@@ -26,6 +37,8 @@ pub(super) struct SourceFrameReturn<'slots, 'view, 'source> {
     locals: Range<usize>,
     returned: Option<usize>,
     destination: Option<usize>,
+    destination_component: Option<DestinationComponent>,
+    destination_memory: Option<(Access, usize)>,
     continuation: Option<usize>,
     class: ReturnClass,
     required: usize,
@@ -83,7 +96,20 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             },
             _ => match slots.descriptor_slice_bits(ty, out)? {
                 Some(bits) => ReturnClass::Slice(bits),
-                None => ReturnClass::Scalar(ScalarV30::from_source(semantic.types(), ty)?.width()),
+                None => {
+                    if matches!(
+                        semantic
+                            .types()
+                            .get(ty.index() as usize)
+                            .map(|ty| ty.shape()),
+                        Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
+                    ) && slots.aggregate_leaf_count(ty, out)?.is_some()
+                    {
+                        ReturnClass::Aggregate(ty.index())
+                    } else {
+                        ReturnClass::Scalar(ScalarV30::from_source(semantic.types(), ty)?.width())
+                    }
+                }
             },
         };
         let mut returned = None;
@@ -92,6 +118,12 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             if declaration.role() == LocalRole::Return {
                 if returned.is_some()
                     || declaration.ty() != ty
+                    || slots.has_original_object(
+                        root,
+                        instance,
+                        u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                        out,
+                    )?
                     || slots
                         .legacy_descriptor_by_source(
                             root,
@@ -136,6 +168,8 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         if returns.len() != count {
             return Err(mismatch());
         }
+        let mut destination_component = None;
+        let mut destination_memory = None;
         let (destination, continuation) = if let Some((parent, block)) = row.incoming {
             if parent >= instance {
                 return Err(mismatch());
@@ -160,17 +194,48 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 || !matches!(semantic.callables().get(call.callee().index() as usize), Some(Callable::Defined { function }) if *function == row.function)
                 || call.unwind() != Unwind::Unreachable
                 || destination.edge().role() != EdgeRole::CallReturn
-                || !destination.place().projections().is_empty()
                 || destination.place().ty() != ty
-                || caller
-                    .locals()
-                    .get(local as usize)
-                    .is_none_or(|local| local.ty() != ty)
                 || slots
                     .legacy_descriptor_by_source(root, parent, local, out)?
                     .is_some()
             {
                 return Err(mismatch());
+            }
+            let root_type = caller
+                .locals()
+                .get(local as usize)
+                .ok_or_else(mismatch)?
+                .ty();
+            if let Some(access) = super::source_bytes::object_call_destination_v42(
+                plan,
+                slots,
+                root,
+                parent,
+                block.index() as usize,
+                ty,
+                out,
+            )? {
+                if !matches!(class, ReturnClass::Scalar(_)) {
+                    return Err(mismatch());
+                }
+                destination_memory = Some((access, parent));
+            } else if destination.place().projections().is_empty() {
+                if root_type != ty {
+                    return Err(mismatch());
+                }
+            } else {
+                let (range, result_type) = slots
+                    .aggregate_component_range(root_type, destination.place().projections(), out)?
+                    .ok_or_else(mismatch)?;
+                if result_type != ty || range.is_empty() {
+                    return Err(mismatch());
+                }
+                destination_component = Some(DestinationComponent {
+                    root_type,
+                    result_type,
+                    first_leaf: range.start,
+                    depth: destination.place().projections().len(),
+                });
             }
             let target = parent_row
                 .blocks
@@ -239,6 +304,8 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             locals: row.locals.clone(),
             returned,
             destination,
+            destination_component,
+            destination_memory,
             continuation,
             class,
             required: out.budget.storage(),
@@ -252,7 +319,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 .retain_query_resource_error_v18(Resource::Accounting)
                 .into());
         }
-        write!(out, "open spec fn invocation_source_return_{}_{}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceByteReturnV36 {{\n if !source.machine.valid || !byte_frame_runtime_well_formed_v30(source.machine.frames) || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.owners.len()).map_err(|_| out.error())?;
+        write!(out, "open spec fn invocation_source_return_{}_{}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceByteReturnV36 {{\n if !source.machine.valid || !byte_frame_runtime_well_formed_v30(source.machine.frames) || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.owners.len()).map_err(|_| out.error())?;
         for (at, owner) in self.owners.iter().enumerate() {
             out.budget.charge_work(1)?;
             write!(
@@ -267,7 +334,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             write!(out, " || source.machine.pc == {block}").map_err(|_| out.error())?;
         }
         write!(out, ")").map_err(|_| out.error())?;
-        if self.class != ReturnClass::Unit {
+        if self.class != ReturnClass::Unit && !matches!(self.class, ReturnClass::Aggregate(_)) {
             let local = self.returned.ok_or_else(mismatch)?;
             write!(out, " || source.machine.values.len() <= {local} || !(")
                 .map_err(|_| out.error())?;
@@ -276,6 +343,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 ReturnClass::Pointer => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Pointer(_) => true, _ => false }}"),
                 ReturnClass::Slice(bits) => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 ReturnClass::Unit => unreachable!(),
+                ReturnClass::Aggregate(_) => unreachable!(),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -285,11 +353,17 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         )
         .map_err(|_| out.error())?;
         if self.class == ReturnClass::Unit {
-            write!(out, "MemoryValueV30::Unit").map_err(|_| out.error())?;
+            write!(
+                out,
+                "InvocationSourceValueV42::Carrier(MemoryValueV30::Unit)"
+            )
+            .map_err(|_| out.error())?;
+        } else if let ReturnClass::Aggregate(ty) = self.class {
+            write!(out, "match invocation_source_aggregate_snapshot_v42(source, {}, {ty}, seq![], {ty}) {{ Some(value) => InvocationSourceValueV42::Aggregate(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
         } else {
             write!(
                 out,
-                "source.machine.values[{}]",
+                "InvocationSourceValueV42::Carrier(source.machine.values[{}])",
                 self.returned.ok_or_else(mismatch)?
             )
             .map_err(|_| out.error())?;
@@ -301,13 +375,57 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         )
         .map_err(|_| out.error())?;
         match self.destination {
-            Some(local) => write!(out, "Some({local}int)"),
-            None => write!(out, "None"),
+            Some(local) => {
+                write!(
+                    out,
+                    "Some(InvocationSourceReturnDestinationV42 {{ local: {local}, component: "
+                )
+                .map_err(|_| out.error())?;
+                match self.destination_component {
+                    Some(component) => {
+                        write!(
+                            out,
+                            "Some(({}int, {}int, seq![",
+                            component.root_type.index(),
+                            component.result_type.index()
+                        )
+                        .map_err(|_| out.error())?;
+                        let leaf = self.slots.aggregate_leaf(
+                            component.root_type,
+                            component.first_leaf,
+                            out,
+                        )?;
+                        let path = leaf.path(out)?;
+                        if component.depth > path.len() {
+                            return Err(mismatch());
+                        }
+                        for field in &path[..component.depth] {
+                            out.budget.charge_work(1)?;
+                            write!(out, "{field}int,").map_err(|_| out.error())?;
+                        }
+                        write!(out, "]))").map_err(|_| out.error())?;
+                    }
+                    None => write!(out, "None").map_err(|_| out.error())?,
+                }
+                write!(out, ", memory: ").map_err(|_| out.error())?;
+                if let Some((access, parent)) = self.destination_memory {
+                    let ReturnClass::Scalar(bits) = self.class else {
+                        return Err(mismatch());
+                    };
+                    write!(out, "Some((").map_err(|_| out.error())?;
+                    access.emit(out)?;
+                    write!(out, ", {}int, {parent}int, {bits}int))", self.root)
+                        .map_err(|_| out.error())?;
+                } else {
+                    write!(out, "None").map_err(|_| out.error())?;
+                }
+                write!(out, " }})").map_err(|_| out.error())?;
+            }
+            None => write!(out, "None").map_err(|_| out.error())?,
         }
-        .map_err(|_| out.error())?;
         match self.continuation {
-            Some(block) => write!(out, ", {block}int)\n }}\n}}\n"),
-            None => write!(out, ", -1int)\n }}\n}}\n"),
+            Some(block) => write!(out, ", {block}int, little_endian)\n }}\n}}\n"),
+            None => write!(out, ", -1int, little_endian)\n }}\n}}\n"),
         }
         .map_err(|_| out.error())
     }
@@ -322,6 +440,8 @@ fn headers() -> usize {
         + h::<Vec<usize>>()
         + h::<Range<usize>>()
         + h::<ReturnClass>()
+        + h::<Option<DestinationComponent>>()
+        + h::<Option<(Access, usize)>>()
         + h::<Option<usize>>()
         + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
@@ -330,14 +450,79 @@ fn headers() -> usize {
 pub(super) const SOURCE_FRAMES_V36: &str = r#"
 struct InvocationSourceByteReturnV36 {
     source: InvocationSourceByteStateV36,
-    returned: MemoryValueV30,
+    returned: InvocationSourceValueV42,
+}
+
+struct InvocationSourceReturnDestinationV42 {
+    local: int,
+    component: Option<(int, int, Seq<int>)>,
+    memory: Option<(InvocationSourceByteAccessV36, int, int, int)>,
 }
 
 open spec fn invocation_source_return_refused_v36(source: InvocationSourceByteStateV36)
     -> InvocationSourceByteReturnV36
 {
     InvocationSourceByteReturnV36 { source: invocation_source_byte_refused_v36(source),
-        returned: MemoryValueV30::Undefined }
+        returned: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+}
+
+open spec fn invocation_source_return_value_defined_v42(value: InvocationSourceValueV42) -> bool {
+    match value {
+        InvocationSourceValueV42::Carrier(value) => match value {
+            MemoryValueV30::Undefined => false, _ => true },
+        InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_complete_v42(value),
+    }
+}
+
+open spec fn invocation_source_return_install_v42(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceReturnDestinationV42,
+    value: InvocationSourceValueV42, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if let Some((access, root, instance, bits)) = destination.memory {
+        if destination.component.is_some()
+            || access.base != InvocationSourceByteBaseV36::ObjectLocal(destination.local)
+            || bits <= 0 || !(bits == 1 && access.width == 1 || bits == access.width * 8) {
+            invocation_source_byte_refused_v36(source)
+        } else { match (value, invocation_source_byte_address_v36(source, access, root, instance)) {
+            (InvocationSourceValueV42::Carrier(value), Some(pointer)) => {
+                if !invocation_source_byte_value_typed_v36(value, bits)
+                    || !invocation_private_allocation_v36(pointer.allocation) {
+                    invocation_source_byte_refused_v36(source)
+                } else { InvocationSourceByteStateV36 {
+                    machine: invocation_source_store_v36(source.machine, pointer,
+                        access.width, access.alignment, value, little_endian), ..source } }
+            },
+            _ => invocation_source_byte_refused_v36(source),
+        } }
+    } else { match destination.component {
+        Some((root_type, result_type, path)) => {
+            let aggregate = match value {
+                InvocationSourceValueV42::Carrier(value) => InvocationSourceAggregateV42 {
+                    source_type: result_type, leaves: Map::empty().insert(seq![], value) },
+                InvocationSourceValueV42::Aggregate(value) => value,
+            };
+            if aggregate.source_type != result_type {
+                invocation_source_byte_refused_v36(source)
+            } else { invocation_source_aggregate_replace_v42(source, destination.local,
+                root_type, path, aggregate) }
+        },
+        None => match value {
+            InvocationSourceValueV42::Carrier(value) =>
+                invocation_source_byte_put_local_v36(source, destination.local, value),
+            InvocationSourceValueV42::Aggregate(value) =>
+                invocation_source_aggregate_install_v42(source, destination.local, value),
+        },
+    } }
+}
+
+open spec fn invocation_source_snapshot_escapes_frame_v42(
+    value: InvocationSourceValueV42, frame: MemoryDynamicFrameV30,
+) -> bool {
+    match value {
+        InvocationSourceValueV42::Carrier(value) => invocation_source_value_escapes_frame_v36(value, frame),
+        InvocationSourceValueV42::Aggregate(value) => exists|path: Seq<int>|
+            value.leaves.contains_key(path) && invocation_source_value_escapes_frame_v36(value.leaves[path], frame),
+    }
 }
 
 open spec fn invocation_source_value_escapes_frame_v36(
@@ -373,15 +558,16 @@ open spec fn invocation_source_memory_escapes_frame_v37(
 // dispatcher still admits each stored-pointer operation separately.
 open spec fn invocation_source_return_v36(
     source: InvocationSourceByteStateV36, begin: int, end: int,
-    returned: MemoryValueV30, destination: Option<int>, continuation: int,
+    returned: InvocationSourceValueV42, destination: Option<InvocationSourceReturnDestinationV42>, continuation: int,
+    little_endian: bool,
 ) -> InvocationSourceByteReturnV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
         || source.machine.frames.active.len() == 0
         || begin < 0 || end < begin || source.machine.values.len() < end
-        || match returned { MemoryValueV30::Undefined => true, _ => false }
+        || !invocation_source_return_value_defined_v42(returned)
         || match destination {
-            Some(local) => local < 0 || source.machine.values.len() <= local
-                || (begin <= local < end) || source.machine.frames.active.len() < 2
+            Some(destination) => destination.local < 0 || source.machine.values.len() <= destination.local
+                || (begin <= destination.local < end) || source.machine.frames.active.len() < 2
                 || continuation < 0,
             None => source.machine.frames.active.len() != 1 || continuation != -1,
         }
@@ -389,29 +575,24 @@ open spec fn invocation_source_return_v36(
         invocation_source_return_refused_v36(source)
     } else {
         let frame = source.machine.frames.active.last();
-        // Capture first, install the returned value in the caller, then clear
-        // only callee locals. One immutable source snapshot supplies all RHSs.
-        let copied = match destination {
-            Some(local) => source.machine.values.update(local, returned),
-            None => source.machine.values,
-        };
-        let values = Seq::new(copied.len(), |i: int|
-            if begin <= i < end { MemoryValueV30::Undefined } else { copied[i] });
-        let logical = invocation_source_logical_clear_v38(match destination {
-            Some(local) => invocation_source_logical_write_v38(source.logical, local),
-            None => source.logical,
-        }, begin, end);
-        let escapes = invocation_source_value_escapes_frame_v36(returned, frame)
+        // The wrapper captured the complete value before teardown. Return
+        // installation runs only after the caller becomes the active frame.
+        let values = Seq::new(source.machine.values.len(), |i: int|
+            if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] });
+        let logical = invocation_source_logical_clear_v38(source.logical, begin, end);
+        let escapes = invocation_source_snapshot_escapes_frame_v42(returned, frame)
             || (exists|i: int| 0 <= i < values.len()
                 && invocation_source_value_escapes_frame_v36(values[i], frame))
+            || (exists|local: int, path: Seq<int>| logical.aggregates.contains_key(local)
+                && logical.aggregates[local].leaves.contains_key(path)
+                && invocation_source_value_escapes_frame_v36(logical.aggregates[local].leaves[path], frame))
             || invocation_source_memory_escapes_frame_v37(source.machine.memory, frame)
             || (exists|i: int| logical.references.contains_key(i)
                 && logical.references[i].frame == frame);
         if escapes {
             invocation_source_return_refused_v36(source)
         } else {
-            InvocationSourceByteReturnV36 {
-                source: InvocationSourceByteStateV36 {
+            let cleaned = InvocationSourceByteStateV36 {
                     machine: MemoryStateV30 { pc: continuation, values,
                         memory: byte_end_frame_v30(source.machine.memory, frame),
                         generations: source.machine.generations,
@@ -427,8 +608,16 @@ open spec fn invocation_source_return_v36(
                         |local: int| source.objects[local],
                     ),
                     logical,
-                }, returned,
-            }
+                };
+            let installed = match destination {
+                Some(destination) => invocation_source_return_install_v42(cleaned, destination, returned, little_endian),
+                None => cleaned,
+            };
+            if !installed.machine.valid || !invocation_source_byte_state_well_formed_v36(installed)
+                || installed.machine.frames != cleaned.machine.frames
+                || installed.machine.generations != cleaned.machine.generations {
+                invocation_source_return_refused_v36(installed)
+            } else { InvocationSourceByteReturnV36 { source: installed, returned } }
         }
     }
 }
@@ -547,13 +736,23 @@ mod tests {
     #[test]
     fn original_mir_byte_return_prelude_keeps_complete_escape_census_and_source_only_lifetime() {
         let text = SOURCE_FRAMES_V36;
-        let copied = text.find("let copied = match destination").unwrap();
         let cleared = text
-            .find("if begin <= i < end { MemoryValueV30::Undefined } else { copied[i] }")
+            .find("if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] }")
             .unwrap();
         let checked = text.find("let escapes =").unwrap();
-        assert!(copied < cleared && cleared < checked);
-        assert!(text.contains("invocation_source_value_escapes_frame_v36(returned, frame)"));
+        let cleaned = text
+            .find("let cleaned = InvocationSourceByteStateV36")
+            .unwrap();
+        let installed = text.find("let installed = match destination").unwrap();
+        assert!(cleared < checked && checked < cleaned && cleaned < installed);
+        assert!(text.contains(
+            "invocation_source_return_install_v42(cleaned, destination, returned, little_endian)"
+        ));
+        assert!(text.contains("invocation_source_return_refused_v36(installed)"));
+        assert!(text.contains("source: installed, returned"));
+        assert!(text.contains("installed.machine.frames != cleaned.machine.frames"));
+        assert!(text.contains("installed.machine.generations != cleaned.machine.generations"));
+        assert!(text.contains("invocation_source_snapshot_escapes_frame_v42(returned, frame)"));
         assert!(text.contains("exists|i: int| 0 <= i < values.len()"));
         assert!(
             text.contains(
@@ -618,6 +817,8 @@ mod tests {
             Range<usize>,
             Option<usize>,
             Option<usize>,
+            Option<DestinationComponent>,
+            Option<(Access, usize)>,
             Option<usize>,
             ReturnClass,
             usize,
@@ -637,6 +838,8 @@ mod tests {
                 + h::<Vec<usize>>()
                 + h::<Range<usize>>()
                 + h::<ReturnClass>()
+                + h::<Option<DestinationComponent>>()
+                + h::<Option<(Access, usize)>>()
                 + h::<Option<usize>>()
                 + 24 * size_of::<usize>()
                 + 24 * size_of::<&()>()

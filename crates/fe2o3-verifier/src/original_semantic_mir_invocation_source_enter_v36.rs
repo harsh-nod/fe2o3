@@ -10,6 +10,7 @@ enum Class {
     Scalar(u32),
     Pointer,
     Slice(u32),
+    Aggregate(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,7 +138,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 return Err(mismatch());
             }
             let object = slot.source_generation().is_some();
-            // Entry recipes catalogue identities; explicit storage markers
+            // Entry recipes catalogue identities; explicit StorageLive markers
             // still determine when the original storage becomes active.
             let implicit = if object {
                 !*explicit.get(local).ok_or_else(mismatch)?
@@ -190,9 +191,19 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 }
                 _ => match slots.descriptor_slice_bits(declaration.ty(), out)? {
                     Some(bits) => Class::Slice(bits),
-                    None => Class::Scalar(
-                        ScalarV30::from_source(semantic.types(), declaration.ty())?.width(),
-                    ),
+                    None => {
+                        if matches!(
+                            ty.shape(),
+                            Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
+                        ) && slots.aggregate_leaf_count(declaration.ty(), out)?.is_some()
+                        {
+                            Class::Aggregate(declaration.ty().index())
+                        } else {
+                            Class::Scalar(
+                                ScalarV30::from_source(semantic.types(), declaration.ty())?.width(),
+                            )
+                        }
+                    }
                 },
             };
             let slot = slots.legacy_descriptor_by_source(
@@ -201,6 +212,14 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
                 out,
             )?;
+            if slots.has_original_object(
+                root,
+                instance,
+                u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                out,
+            )? {
+                return Err(unsupported());
+            }
             let (descriptor, bytes, alignment) = if let Some((descriptor, slot)) = slot {
                 let Class::Scalar(bits) = class else {
                     return Err(unsupported());
@@ -309,7 +328,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         } else {
             self.owners.len() - 1
         };
-        write!(out, "open spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<MemoryValueV30>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        write!(out, "open spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
         write!(
             out,
             " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",
@@ -340,9 +359,10 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             out.budget.charge_work(1)?;
             write!(out, " || !(").map_err(|_| out.error())?;
             match argument.ok_or_else(mismatch)?.class {
-                Class::Scalar(bits) => write!(out, "invocation_source_byte_value_typed_v36(arguments[{i}], {bits})"),
-                Class::Pointer => write!(out, "match arguments[{i}] {{ MemoryValueV30::Pointer(_) => true, _ => false }}"),
-                Class::Slice(bits) => write!(out, "match arguments[{i}] {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
+                Class::Scalar(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(value) => invocation_source_byte_value_typed_v36(value, {bits}), _ => false }}"),
+                Class::Pointer => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Pointer(_)) => true, _ => false }}"),
+                Class::Slice(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Slice(slice)) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
+                Class::Aggregate(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => value.source_type == {ty} && invocation_source_aggregate_complete_v42(value), _ => false }}"),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -371,10 +391,15 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             let argument = argument.ok_or_else(mismatch)?;
+            if matches!(argument.class, Class::Aggregate(_)) {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_install_v42(entered, {}, value), _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
+                continue;
+            }
+            write!(out, " let argument_{i} = match arguments[{i}] {{ InvocationSourceValueV42::Carrier(value) => value, _ => MemoryValueV30::Undefined }};\n").map_err(|_| out.error())?;
             if let Some(descriptor) = argument.descriptor {
-                write!(out, " let entered = match invocation_source_byte_slot_v36(entered, {descriptor}, invocation_source_slot_{descriptor}_v36(), {}, {}) {{ Some(pointer) => InvocationSourceByteStateV36 {{ machine: invocation_source_store_v36(entered.machine, pointer, {}, {}, arguments[{i}], little_endian), ..entered }}, None => invocation_source_byte_refused_v36(entered) }};\n", self.root, self.instance, argument.bytes, argument.alignment).map_err(|_| out.error())?;
+                write!(out, " let entered = match invocation_source_byte_slot_v36(entered, {descriptor}, invocation_source_slot_{descriptor}_v36(), {}, {}) {{ Some(pointer) => InvocationSourceByteStateV36 {{ machine: invocation_source_store_v36(entered.machine, pointer, {}, {}, argument_{i}, little_endian), ..entered }}, None => invocation_source_byte_refused_v36(entered) }};\n", self.root, self.instance, argument.bytes, argument.alignment).map_err(|_| out.error())?;
             } else {
-                write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, arguments[{i}]);\n", argument.local).map_err(|_| out.error())?;
+                write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
         }
         write!(out, " entered\n }}\n}}\n").map_err(|_| out.error())

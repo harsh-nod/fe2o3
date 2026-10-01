@@ -24,10 +24,23 @@ mod generate;
 mod logical;
 use logical::LogicalBinding;
 
+#[path = "original_semantic_mir_source_component_demands_v42.rs"]
+mod component_demands;
+
+#[path = "original_semantic_mir_aggregate_bindings_v42.rs"]
+mod aggregate_bindings;
+use aggregate_bindings::AggregateBindingV42;
+use component_demands::ComponentDemandsV42;
+#[path = "original_semantic_mir_object_returns_v42.rs"]
+mod object_returns;
+use object_returns::ObjectReturnsV42;
+
 #[derive(Clone, Copy, Debug)]
 enum SourceValue {
     Local(usize),
     Slot { descriptor: usize, bits: u32 },
+    Aggregate(usize),
+    ReturnSnapshot,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -36,6 +49,21 @@ struct Binding {
     logical: LogicalBinding,
     definition: Option<usize>,
     frame: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ComponentCut {
+    block: usize,
+    overwritten: Option<(usize, usize)>,
+}
+
+impl ComponentCut {
+    fn at(block: usize) -> Self {
+        Self {
+            block,
+            overwritten: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -82,6 +110,9 @@ pub(super) struct PairedInvocations<'slots, 'view, 'source> {
     locals: usize,
     width: FormalIndexWidth,
     census: [usize; 6],
+    aggregates: Vec<AggregateBindingV42>,
+    component_demands: Vec<Option<ComponentDemandsV42<'slots, 'view, 'source>>>,
+    object_returns: ObjectReturnsV42<'slots, 'view, 'source>,
     required: usize,
 }
 
@@ -126,6 +157,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             out.budget.charge_work(1)?;
             total = add(total, plan.root(root, out)?.instances.len())?;
         }
+        let mut component_demands = vector(semantic.functions().len(), out)?;
+        out.budget.charge_work(semantic.functions().len())?;
+        component_demands.resize_with(semantic.functions().len(), || None);
         let mut result = Self {
             slots,
             roots: vector(count, out)?,
@@ -141,6 +175,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 inventory.operations().len(),
                 inventory.definitions().len(),
             ],
+            aggregates: vector(0, out)?,
+            component_demands,
+            object_returns: ObjectReturnsV42::derive(slots, width, out)?,
             required: 0,
         };
         let mut seen = vector(count, out)?;
@@ -266,6 +303,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                             entries[at].value(),
                             frame,
                             &physical.definitions,
+                            None,
                             out,
                         )?;
                         if instance == 0 {
@@ -322,38 +360,67 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                             .checked_add(2)
                             .ok_or(Resource::Arithmetic)?,
                     )?;
-                    match definitions {
-                        [definition]
-                            if definition.variable().get()
-                                == destination.place().local().index() =>
-                        {
-                            Some(result.binding(
-                                plan,
-                                root,
-                                parent,
-                                definition.variable().get() as usize,
-                                definition.value(),
-                                frame - 1,
-                                &physical.definitions,
-                                out,
-                            )?)
+                    if slots.has_original_object(
+                        root,
+                        parent,
+                        destination.place().local().index(),
+                        out,
+                    )? {
+                        if !definitions.is_empty() {
+                            return Err(mismatch());
                         }
-                        [] if ScalarV30::from_source(
-                            semantic.types(),
+                        let definition = result.object_returns.definition(
+                            root,
+                            parent,
+                            site.index(),
+                            destination.place().local().index(),
                             destination.place().ty(),
-                        )? == ScalarV30::Unit =>
-                        {
-                            Some(Binding {
-                                source: SourceValue::Local(add(
-                                    parent_row.locals.start,
-                                    destination.place().local().index() as usize,
-                                )?),
-                                definition: None,
-                                logical: LogicalBinding::Plain,
-                                frame: frame - 1,
-                            })
+                            out,
+                        )?;
+                        if !physical.definitions.contains(&definition) {
+                            return Err(mismatch());
                         }
-                        _ => return Err(mismatch()),
+                        Some(Binding {
+                            source: SourceValue::ReturnSnapshot,
+                            logical: LogicalBinding::Plain,
+                            definition: Some(definition),
+                            frame: frame - 1,
+                        })
+                    } else {
+                        match definitions {
+                            [definition]
+                                if definition.variable().get()
+                                    == destination.place().local().index() =>
+                            {
+                                Some(result.returned_binding(
+                                    plan,
+                                    root,
+                                    parent,
+                                    definition.variable().get() as usize,
+                                    definition.value(),
+                                    frame - 1,
+                                    &physical.definitions,
+                                    destination.place(),
+                                    out,
+                                )?)
+                            }
+                            [] if ScalarV30::from_source(
+                                semantic.types(),
+                                destination.place().ty(),
+                            )? == ScalarV30::Unit =>
+                            {
+                                Some(Binding {
+                                    source: SourceValue::Local(add(
+                                        parent_row.locals.start,
+                                        destination.place().local().index() as usize,
+                                    )?),
+                                    definition: None,
+                                    logical: LogicalBinding::Plain,
+                                    frame: frame - 1,
+                                })
+                            }
+                            _ => return Err(mismatch()),
+                        }
                     }
                 } else {
                     None
@@ -392,6 +459,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                             boundaries.value(id, variable, out)?,
                             frame,
                             &physical.definitions,
+                            Some(ComponentCut::at(ordinal)),
                             out,
                         )?);
                     }
@@ -472,6 +540,11 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             parameter_seen.resize(physical.function.signature.parameters.len(), false);
             for (argument, binding) in entry.arguments.iter().enumerate() {
                 out.budget.charge_work(3)?;
+                if matches!(binding.source, SourceValue::Aggregate(_)) {
+                    return Err(Error::Statement(
+                        "native aggregate argument requires original ABI component reconstruction",
+                    ));
+                }
                 // A Unit source argument has no physical carrier. All other
                 // bindings name an exact parameter, never an ordinal zip.
                 let Some(index) = binding.definition else {
@@ -524,7 +597,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
     }
 
     fn binding(
-        &self,
+        &mut self,
         plan: &InvocationPlan<'_, '_>,
         root: usize,
         instance: usize,
@@ -532,9 +605,11 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         value: Value,
         frame: usize,
         physical: &Range<usize>,
+        demanded_at: Option<ComponentCut>,
         out: &mut Writer<'_, '_>,
     ) -> Result<Binding> {
-        let relation = self.slots.correspondence(out)?;
+        let slots = self.slots;
+        let relation = slots.correspondence(out)?;
         let source = relation.source(out.budget)?;
         let row = plan.instance(root, instance, out)?;
         let semantic = source.source_semantic(out.budget)?;
@@ -550,6 +625,21 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             || endpoint.source_type(out.budget)? != declaration.ty()
         {
             return Err(mismatch());
+        }
+        if self.is_aggregate_binding(declaration.ty(), &endpoint, out)? {
+            return self.aggregate_binding(
+                root,
+                instance,
+                local,
+                row.function,
+                declaration.ty(),
+                &endpoint,
+                row.locals.start,
+                frame,
+                physical,
+                demanded_at,
+                out,
+            );
         }
         let definition = endpoint.original_definition(out.budget)?;
         let logical = LogicalBinding::derive(self.slots, plan, root, &endpoint, out)?;
@@ -628,7 +718,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
 
     #[allow(clippy::too_many_arguments)]
     fn caller_carry(
-        &self,
+        &mut self,
         plan: &InvocationPlan<'_, '_>,
         root: usize,
         parent: usize,
@@ -639,7 +729,8 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         out: &mut Writer<'_, '_>,
     ) -> Result<Vec<Binding>> {
         let caller = plan.instance(root, parent, out)?;
-        let relation = self.slots.correspondence(out)?;
+        let slots = self.slots;
+        let relation = slots.correspondence(out)?;
         let source = relation.source(out.budget)?;
         let semantic = source.source_semantic(out.budget)?;
         let function = &semantic.functions()[caller.function.index() as usize];
@@ -658,6 +749,24 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         };
         let destination = call.destination().ok_or_else(mismatch)?;
         let next = Block::new(destination.edge().target().index());
+        let overwritten = if destination.place().projections().is_empty()
+            || slots.has_original_object(root, parent, destination.place().local().index(), out)?
+        {
+            None
+        } else {
+            let ty = function
+                .locals()
+                .get(destination.place().local().index() as usize)
+                .ok_or_else(mismatch)?
+                .ty();
+            let (range, result_type) = slots
+                .aggregate_component_range(ty, destination.place().projections(), out)?
+                .ok_or_else(mismatch)?;
+            if result_type != destination.place().ty() {
+                return Err(mismatch());
+            }
+            Some(range)
+        };
         let live = ssa.live_in(next).ok_or_else(mismatch)?;
         let mut result = vector(live.len(), out)?;
         // Reconstruct the caller's exact post-statement SSA environment once.
@@ -693,15 +802,52 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         }
         for &variable in live {
             out.budget.charge_work(2)?;
-            if variable.get() == destination.place().local().index() {
-                continue;
+            let is_destination = variable.get() == destination.place().local().index();
+            if is_destination {
+                let Some(overwritten) = &overwritten else {
+                    continue;
+                };
+                let index = caller.function.index() as usize;
+                if self
+                    .component_demands
+                    .get(index)
+                    .ok_or_else(mismatch)?
+                    .is_none()
+                {
+                    self.component_demands[index] =
+                        Some(ComponentDemandsV42::derive(slots, caller.function, out)?);
+                }
+                let demands = self.component_demands[index]
+                    .as_ref()
+                    .ok_or_else(mismatch)?;
+                let count = slots
+                    .aggregate_leaf_count(function.locals()[variable.get() as usize].ty(), out)?
+                    .ok_or_else(mismatch)?;
+                let mut needed = false;
+                for leaf in 0..count {
+                    out.budget.charge_work(1)?;
+                    if !overwritten.contains(&leaf)
+                        && demands.leaf_required(
+                            caller.function,
+                            next.get() as usize,
+                            variable.get() as usize,
+                            leaf,
+                            out,
+                        )?
+                    {
+                        needed = true;
+                    }
+                }
+                if !needed {
+                    continue;
+                }
             }
             let value = values
                 .get(variable.get() as usize)
                 .copied()
                 .flatten()
                 .ok_or_else(mismatch)?;
-            result.push(self.binding(
+            let binding = self.binding(
                 plan,
                 root,
                 parent,
@@ -709,8 +855,31 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 value,
                 frame,
                 physical,
+                Some(ComponentCut {
+                    block: next.get() as usize,
+                    overwritten: if is_destination {
+                        overwritten.as_ref().map(|range| (range.start, range.end))
+                    } else {
+                        None
+                    },
+                }),
                 out,
-            )?);
+            )?;
+            if is_destination {
+                let SourceValue::Aggregate(index) = binding.source else {
+                    return Err(mismatch());
+                };
+                if self
+                    .aggregates
+                    .get(index)
+                    .ok_or_else(mismatch)?
+                    .components
+                    .is_empty()
+                {
+                    return Err(mismatch());
+                }
+            }
+            result.push(binding);
         }
         Ok(result)
     }
@@ -745,6 +914,12 @@ fn headers() -> usize {
         + h::<Instance>()
         + h::<Cut>()
         + h::<Binding>()
+        + h::<ComponentCut>()
+        + h::<AggregateBindingV42>()
+        + h::<Vec<AggregateBindingV42>>()
+        + h::<Vec<Option<ComponentDemandsV42<'_, '_, '_>>>>()
+        + aggregate_bindings::headers()
+        + object_returns::headers()
         + logical::headers()
         + h::<SourceValue>()
         + h::<End>()
@@ -773,3 +948,7 @@ fn headers() -> usize {
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_paired_v36_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_aggregate_bindings_v42_tests.rs"]
+pub(super) mod aggregate_tests;

@@ -97,6 +97,9 @@ fn binding(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.charge_work(1)?;
+    if let SourceValue::Aggregate(index) = row.source {
+        return aggregate_binding(model, index, out);
+    }
     emit!(out, " && ({{ ");
     match row.source {
         SourceValue::Local(local) => emit!(out, "let original = source.machine.values[{local}]; "),
@@ -108,6 +111,7 @@ fn binding(
                 "source.slots.contains_key({descriptor}) && {frame} < source.machine.frames.active.len() && ({{ let slot = invocation_source_slot_{descriptor}_v36(); let pointer = source.slots[{descriptor}];\n match pointer.allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, .. }} => owner == source.machine.frames.active[{frame}].owner && invocation == source.machine.frames.active[{frame}].invocation && owner == slot.owner && site == slot.site, _ => false }}\n && invocation_source_read_enabled_v36(source.machine, pointer, {width}, slot.alignment) && ({{ let original = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, {width}, invocation_runtime_little_endian_v36())); invocation_source_byte_value_typed_v36(original, {bits}) && ({{ "
             );
         }
+        SourceValue::Aggregate(_) | SourceValue::ReturnSnapshot => return Err(mismatch()),
     }
     actual_value(model, row, out)?;
     if matches!(row.source, SourceValue::Slot { .. }) {
@@ -137,9 +141,99 @@ fn binding(
                 " && invocation_source_reference_current_v38(source, {local}, {source_type}) && ({{ let reference = source.logical.references[{local}]; reference.origin == {origin} && reference.origin_generation == {generation} && reference.borrow_instance == {instance} && reference.borrow_block == {block} && reference.borrow_statement == {statement} }})"
             );
         }
-        (SourceValue::Slot { .. }, _) => return Err(mismatch()),
+        (SourceValue::Slot { .. } | SourceValue::Aggregate(_) | SourceValue::ReturnSnapshot, _) => {
+            return Err(mismatch());
+        }
     }
     emit!(out, " }})");
+    Ok(())
+}
+
+fn aggregate_binding(
+    model: &PairedInvocations<'_, '_, '_>,
+    index: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    let aggregate = model.aggregates.get(index).ok_or_else(mismatch)?;
+    for component in &aggregate.components {
+        out.budget.charge_work(1)?;
+        let leaf = model
+            .slots
+            .aggregate_leaf(aggregate.source_type, component.leaf, out)?;
+        let path = leaf.path(out)?;
+        emit!(
+            out,
+            " && (match invocation_source_aggregate_leaf_v42(source, {}, {}, seq![",
+            aggregate.local,
+            aggregate.source_type.index()
+        );
+        for field in path {
+            out.budget.charge_work(1)?;
+            emit!(out, "{field}int,");
+        }
+        emit!(out, "]) {{ Some(original) => {{ ");
+        actual_value(
+            model,
+            &Binding {
+                source: SourceValue::Local(aggregate.local),
+                logical: LogicalBinding::Plain,
+                definition: component.definition,
+                frame: 0,
+            },
+            out,
+        )?;
+        emit!(out, " }}, None => false }})");
+    }
+    Ok(())
+}
+
+fn snapshot_binding(
+    model: &PairedInvocations<'_, '_, '_>,
+    row: &Binding,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    if let SourceValue::Aggregate(index) = row.source {
+        let aggregate = model.aggregates.get(index).ok_or_else(mismatch)?;
+        emit!(
+            out,
+            "match original {{ InvocationSourceValueV42::Aggregate(snapshot) => snapshot.source_type == {} && invocation_source_aggregate_complete_v42(snapshot)",
+            aggregate.source_type.index()
+        );
+        for component in &aggregate.components {
+            out.budget.charge_work(1)?;
+            let leaf = model
+                .slots
+                .aggregate_leaf(aggregate.source_type, component.leaf, out)?;
+            emit!(out, " && ({{ let path = seq![");
+            for field in leaf.path(out)? {
+                out.budget.charge_work(1)?;
+                emit!(out, "{field}int,");
+            }
+            emit!(
+                out,
+                "]; snapshot.leaves.contains_key(path) && ({{ let original = snapshot.leaves[path]; "
+            );
+            actual_value(
+                model,
+                &Binding {
+                    source: SourceValue::Local(aggregate.local),
+                    logical: LogicalBinding::Plain,
+                    definition: component.definition,
+                    frame: row.frame,
+                },
+                out,
+            )?;
+            emit!(out, " }}) }})");
+        }
+        emit!(out, ", _ => false }}");
+    } else {
+        emit!(
+            out,
+            "match original {{ InvocationSourceValueV42::Carrier(original) => {{ "
+        );
+        actual_value(model, row, out)?;
+        emit!(out, " }}, _ => false }}");
+    }
     Ok(())
 }
 
@@ -229,7 +323,7 @@ fn observed(
                         out,
                         " && ({{ let original = source_result.operands[{argument}].value; "
                     );
-                    actual_value(model, row, out)?;
+                    snapshot_binding(model, row, out)?;
                     emit!(out, " }})");
                 }
             }
@@ -240,12 +334,12 @@ fn observed(
                 );
                 if let Some(returned) = &instance.returned {
                     emit!(out, " target_result.returned.len() == 0 && ({{ ");
-                    actual_value(model, returned, out)?;
+                    snapshot_binding(model, returned, out)?;
                     emit!(out, " }})");
                 } else {
                     emit!(
                         out,
-                        " if original == MemoryValueV30::Unit {{ target_result.returned.len() == 0 }} else {{ target_result.returned.len() == 1 && invocation_value_related_v36(original, target_result.returned[0], map, source.machine.memory, target.memory) }}"
+                        " match original {{ InvocationSourceValueV42::Carrier(original) => if original == MemoryValueV30::Unit {{ target_result.returned.len() == 0 }} else {{ target_result.returned.len() == 1 && invocation_value_related_v36(original, target_result.returned[0], map, source.machine.memory, target.memory) }}, _ => false }}"
                     );
                 }
                 emit!(out, " }}, None => false }}");
