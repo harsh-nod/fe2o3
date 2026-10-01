@@ -1,0 +1,4027 @@
+{
+  "candidate/crates/fe2o3-runtime-model/src/distributed_publication_contract.rs": {
+    "bytes": 11643,
+    "mode": 420,
+    "sha256": "aef31c4cea5c0cef621fc2eb908feddf7a1c023e207941cdc3aec1e82d07f4e5"
+  },
+  "candidate/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives.rs": {
+    "bytes": 1775,
+    "mode": 420,
+    "sha256": "9ebad52b69fc5d19040bc9c31be6ef178a9c2f616e96b23caeb9de63d40058a9"
+  },
+  "candidate/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "candidate/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_tests.rs": {
+    "bytes": 11726,
+    "mode": 420,
+    "sha256": "a06077617456fcde961837d38406562b6207a20cf8d694e5eb1aaedb7247966c"
+  },
+  "candidate/crates/fe2o3-runtime-model/verus/check-distributed-codec-primitives.py": {
+    "bytes": 27212,
+    "mode": 420,
+    "sha256": "ed73fc66709e575f000d33d19463b84faac089df5f5c731f126eae5199703792"
+  },
+  "candidate/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "candidate/crates/fe2o3-runtime-model/verus/fixtures/distributed_codec_primitives_v1_diagnostics.json": {
+    "bytes": 123076,
+    "mode": 420,
+    "sha256": "76b5f83c062142a5e5f4f887dc1dd188dad5bc88b2ec11acfefb2bd49de5bf40"
+  },
+  "candidate/crates/fe2o3-runtime-model/verus/test-distributed-codec-primitives.py": {
+    "bytes": 21287,
+    "mode": 420,
+    "sha256": "d222143fbf6ee68ef7aca52f6a46f75d44046a7249dff080740285a3810febfd"
+  },
+  "candidate/docs/runtime-distributed-codec-primitives-v1.md": {
+    "bytes": 8524,
+    "mode": 420,
+    "sha256": "710abdb1d6775d98c829329a50cf3c778596c696881587177cdc115c33761460"
+  },
+  "controllers/audit_signed_primitive_attempt3.py": {
+    "bytes": 9314,
+    "mode": 420,
+    "sha256": "daf258a53ea8cb499537ca91bba40fd2f096f6f786dfde38c8cc5991086d2122"
+  },
+  "controllers/integration-guard-audit-1.json": {
+    "bytes": 10389,
+    "mode": 420,
+    "sha256": "f5e053721692790b408f2baa71733780dee2b6f2db94d5d1c7043ccd6166b2fb"
+  },
+  "controllers/signed-primitive-post-audit-3.json": {
+    "bytes": 23176,
+    "mode": 420,
+    "sha256": "ba066fac656b875ef7138db35b8832f655dd755e03e2f4eafdca545dc6b46e31"
+  },
+  "controllers/signed-primitive-prepared-2.json": {
+    "bytes": 2986614,
+    "mode": 420,
+    "sha256": "84f1ae95a2fc999faf50e202890fca5ea1875d7e3be24dac4f390fc08530a99c"
+  },
+  "controllers/signed_primitive_campaign_v2.py": {
+    "bytes": 14525,
+    "mode": 420,
+    "sha256": "e9b5c76261602fb189207eb410c0b1107f11fed021fd7210f62cbf4e546a4435"
+  },
+  "controllers/test_signed_primitive_campaign_v2.py": {
+    "bytes": 5501,
+    "mode": 420,
+    "sha256": "500486d02d321d384da44f13c66c1e0a79d9eb18801a4a044767a737756ee7b7"
+  },
+  "integration/fe2o3-codec-integration-audit-20261001.json": {
+    "bytes": 9606,
+    "mode": 420,
+    "sha256": "cb8e9a180d89f4b535b4ad969d79a4ee3bf2d29f7d3d4efeeb4a946a9b61f4b8"
+  },
+  "integration/fe2o3-codec-integration-audit-20261001.py": {
+    "bytes": 5329,
+    "mode": 420,
+    "sha256": "a68f0b95e85ecfa44506f8672cef9e7fcd0b49e0a612e238ccdd7fa406d319e8"
+  },
+  "integration/fe2o3-codec-integration-ci-20261001.py": {
+    "bytes": 2289,
+    "mode": 420,
+    "sha256": "e38fc7bd4cc92968befb739a0bd08fe5dfbd7136b88800977a93d21cebaf4219"
+  },
+  "integration/fe2o3-codec-primitives-root-readback-20261001.json": {
+    "bytes": 23176,
+    "mode": 420,
+    "sha256": "ba066fac656b875ef7138db35b8832f655dd755e03e2f4eafdca545dc6b46e31"
+  },
+  "integration/fe2o3-codec-primitives-root-readback-20261001.py": {
+    "bytes": 1370,
+    "mode": 420,
+    "sha256": "2da27a6e854c6c5f640b699e2f9d5bcf63fa6fc55688eec96071cf8f62f59bfe"
+  },
+  "local-ci/01-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/01-stdout": {
+    "bytes": 118,
+    "mode": 420,
+    "sha256": "ad993148752580aa0ad61e34cbe51d6dc475b29bbd6160a1bc483ada7aa73bf0"
+  },
+  "local-ci/02-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/02-stdout": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "ebef29a5dbc4b9af4ae8adc78e69004374633eda379774c2c20c38a7bc6f783c"
+  },
+  "local-ci/03-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/03-stdout": {
+    "bytes": 140,
+    "mode": 420,
+    "sha256": "116ff5fa963b747c138eaaecb470650c34b480ee89e2e45a27aa08ca786a8acf"
+  },
+  "local-ci/04-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/04-stdout": {
+    "bytes": 90,
+    "mode": 420,
+    "sha256": "fee380c3b88d7c93feea1892772137a3630ba3eb88bc7898e67eb1539b8e9714"
+  },
+  "local-ci/05-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/05-stdout": {
+    "bytes": 90,
+    "mode": 420,
+    "sha256": "becb6237ece822d2b579c6c7021d4ba8e9983aad70e9c28c2a42a179ea5691aa"
+  },
+  "local-ci/06-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/06-stdout": {
+    "bytes": 98,
+    "mode": 420,
+    "sha256": "d6f31dd228c8241e9ee995ea66e04edb43d3d578538faf747fbec52870a7df68"
+  },
+  "local-ci/07-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/07-stdout": {
+    "bytes": 108,
+    "mode": 420,
+    "sha256": "10096b8270ce03a5f9cc3d551434e5b64c423e7792e1d8fa78f99d101604782d"
+  },
+  "local-ci/08-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/08-stdout": {
+    "bytes": 103,
+    "mode": 420,
+    "sha256": "b31376d4547f1a115b0ba15f5fe4773e79fe548effc89984e341ddf58a70e940"
+  },
+  "local-ci/09-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/09-stdout": {
+    "bytes": 93,
+    "mode": 420,
+    "sha256": "cd086451fe863ba42e4c5a1413161958f9a93a8228918623ff4cea7f1f7fe8cc"
+  },
+  "local-ci/10-stderr": {
+    "bytes": 115,
+    "mode": 420,
+    "sha256": "0ae0b61fed9aa4411f2773b57415acfb1e8f4f2ad6f302b95b8af17aee3e3782"
+  },
+  "local-ci/10-stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/11-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/11-stdout": {
+    "bytes": 113,
+    "mode": 420,
+    "sha256": "7e02a520d1051f591ed9327def796b5f1a15d99ba2750f6299d3315cb8df5aea"
+  },
+  "local-ci/12-stderr": {
+    "bytes": 103,
+    "mode": 420,
+    "sha256": "62d555db775318ee0f206f191864d57269818218bc2c5713da4bfcfbfa85f79f"
+  },
+  "local-ci/12-stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/13-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/13-stdout": {
+    "bytes": 102,
+    "mode": 420,
+    "sha256": "226940b23ea527db160173b39adb10d3b3546185ac1d7928e5756e72d4719ce1"
+  },
+  "local-ci/14-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/14-stdout": {
+    "bytes": 121,
+    "mode": 420,
+    "sha256": "c7ae5ffd635a946900c6d479217b2e433db1b46a0121083b1feb6a62ac6d21d9"
+  },
+  "local-ci/15-stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/15-stdout": {
+    "bytes": 118,
+    "mode": 420,
+    "sha256": "885aa093101e8274da8e4b2acbb4daa3ad601b82612eeb26b21e7deb515c3d82"
+  },
+  "local-ci/16-stderr": {
+    "bytes": 104,
+    "mode": 420,
+    "sha256": "3884f83255b63480b178b50a1cdd1576f7134f9a64ac130ceed6487a1c8b4e36"
+  },
+  "local-ci/16-stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/17-stderr": {
+    "bytes": 163,
+    "mode": 420,
+    "sha256": "b9d4ffa427a120ac11579bcee7ef6253b06930ad8fcc39f7e876e386871b21f0"
+  },
+  "local-ci/17-stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/18-stderr": {
+    "bytes": 139,
+    "mode": 420,
+    "sha256": "3af3eafb20893f99ab0e3bb0c3bf23dca362f2330bd477caa0a2ae275724dc93"
+  },
+  "local-ci/18-stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "local-ci/result.json": {
+    "bytes": 7355,
+    "mode": 420,
+    "sha256": "ea6f6d1c2507e83da61349de724502b0c0d00f9cd1e345a946e4b256efafe94c"
+  },
+  "signed-primitive-campaign-attempt-1/01-source-signature/command.json": {
+    "bytes": 1032,
+    "mode": 420,
+    "sha256": "5c5b38676423c039d9575642094e0bce43cf6e46861225a39b69d802c7d74791"
+  },
+  "signed-primitive-campaign-attempt-1/01-source-signature/owned/record.json": {
+    "bytes": 452,
+    "mode": 420,
+    "sha256": "775405bc85857446ca3c7fc5a18c7f5a2a24bc2cca515bcf99c55a4b7704ee3a"
+  },
+  "signed-primitive-campaign-attempt-1/01-source-signature/owned/stderr.log": {
+    "bytes": 110,
+    "mode": 420,
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "signed-primitive-campaign-attempt-1/01-source-signature/owned/stdout.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/01-source-signature/result.json": {
+    "bytes": 116,
+    "mode": 420,
+    "sha256": "45778770e40b258a436c4b08766a36f3af59761abe761af0933142352bb2f29a"
+  },
+  "signed-primitive-campaign-attempt-1/02-portable-source-controls/command.json": {
+    "bytes": 942,
+    "mode": 420,
+    "sha256": "0b7c32c8a7a4f5308c6077685fbd8e02efe64d315267676ab8b62f9a307660bf"
+  },
+  "signed-primitive-campaign-attempt-1/02-portable-source-controls/owned/record.json": {
+    "bytes": 361,
+    "mode": 420,
+    "sha256": "18a85b8a2761813a2ad3bc0907ce048c1a76c7b8f7324bf398b5117b05203754"
+  },
+  "signed-primitive-campaign-attempt-1/02-portable-source-controls/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/02-portable-source-controls/owned/stdout.log": {
+    "bytes": 139,
+    "mode": 420,
+    "sha256": "cba04faefef5ae8ad2fa9df697c64dfe02df26564e4771a852ae15eb1cf37fff"
+  },
+  "signed-primitive-campaign-attempt-1/02-portable-source-controls/result.json": {
+    "bytes": 124,
+    "mode": 420,
+    "sha256": "3341712baf2605c4f15f38fac08cbc92393f11ef21a9a81967946b08a843e8a2"
+  },
+  "signed-primitive-campaign-attempt-1/03-release-before/command.json": {
+    "bytes": 1087,
+    "mode": 420,
+    "sha256": "a9ceb30a4487926ea7bd1566a2999c3bb59c63896b1f49707fff733654c511b3"
+  },
+  "signed-primitive-campaign-attempt-1/03-release-before/owned/record.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "6fdde29b3aae5de98ac1f7fec00a755043a17f0da99cedc2d6bf16cfd8fab20e"
+  },
+  "signed-primitive-campaign-attempt-1/03-release-before/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/03-release-before/owned/stdout.log": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  },
+  "signed-primitive-campaign-attempt-1/03-release-before/result.json": {
+    "bytes": 114,
+    "mode": 420,
+    "sha256": "c8c5244a23ec3cc78e26616d1a91494acad0fb64706aa0c438f9f8c14927396a"
+  },
+  "signed-primitive-campaign-attempt-1/04-positive-before/command.json": {
+    "bytes": 1287,
+    "mode": 420,
+    "sha256": "e66e1d3a70a788921575527cecd6bb643d0ff05031f67af7c06c22f45e43ac1c"
+  },
+  "signed-primitive-campaign-attempt-1/04-positive-before/owned/record.json": {
+    "bytes": 706,
+    "mode": 420,
+    "sha256": "2de281a1ee61e6ed97f1924c26f3803486295f6b411dbc9cd508e22a0c5e4beb"
+  },
+  "signed-primitive-campaign-attempt-1/04-positive-before/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/04-positive-before/owned/stdout.log": {
+    "bytes": 34657,
+    "mode": 420,
+    "sha256": "9a7a91cf257565f55cd299886d934799561ef4984d68241bec5c990868e55f55"
+  },
+  "signed-primitive-campaign-attempt-1/04-positive-before/result.json": {
+    "bytes": 203,
+    "mode": 420,
+    "sha256": "f2e96aea959c34946627e16f635ccc597213f6cb78208b74bbaf3d231b27b372"
+  },
+  "signed-primitive-campaign-attempt-1/05-positive-relocated/command.json": {
+    "bytes": 1348,
+    "mode": 420,
+    "sha256": "b6681d35baf66cedd79a7085dc3a91717cd3f0f3021dd4f4ee417041943a5872"
+  },
+  "signed-primitive-campaign-attempt-1/05-positive-relocated/owned/record.json": {
+    "bytes": 767,
+    "mode": 420,
+    "sha256": "f34290cf9449899a3e240e35f0c66ebe325f2308fd37b72a1551420a3fdc577c"
+  },
+  "signed-primitive-campaign-attempt-1/05-positive-relocated/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/05-positive-relocated/owned/stdout.log": {
+    "bytes": 34657,
+    "mode": 420,
+    "sha256": "9360984bdbf485569bc3d6e471e07b4e64dd8c7b5843db4507e852aa0bb326a5"
+  },
+  "signed-primitive-campaign-attempt-1/05-positive-relocated/result.json": {
+    "bytes": 206,
+    "mode": 420,
+    "sha256": "e291cf2228beba415acfed0dbe25b2395482f897b18ef7c4d5b0770da75f9b54"
+  },
+  "signed-primitive-campaign-attempt-1/06-take-cursor-omitted/command.json": {
+    "bytes": 1417,
+    "mode": 420,
+    "sha256": "f23967a008c19516970a893bb5cc4ee68f27df4764b24346eb08b559119ce450"
+  },
+  "signed-primitive-campaign-attempt-1/06-take-cursor-omitted/owned/record.json": {
+    "bytes": 836,
+    "mode": 420,
+    "sha256": "dbcbcaeef3b7418f2fbf8fd96d27ef90b41db7d8be233e75aecdd75e9e3905a8"
+  },
+  "signed-primitive-campaign-attempt-1/06-take-cursor-omitted/owned/stderr.log": {
+    "bytes": 4002,
+    "mode": 420,
+    "sha256": "62e183b6247d54f9f61fc30c88f62723537d4342d26f1eb14baa669a62c66bd4"
+  },
+  "signed-primitive-campaign-attempt-1/06-take-cursor-omitted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "05fb0153f97e6531fe80482ec26c38969a2158d118e55aae2286711d60d2b73d"
+  },
+  "signed-primitive-campaign-attempt-1/06-take-cursor-omitted/result.json": {
+    "bytes": 304,
+    "mode": 420,
+    "sha256": "bb6754f0a5671465af077b6019e5d6df174892fac90e83260ca8b3d49a1ad5dc"
+  },
+  "signed-primitive-campaign-attempt-1/07-take-full-range-refused/command.json": {
+    "bytes": 1421,
+    "mode": 420,
+    "sha256": "30808cf5405262527a1dbb13267fc2a820e50696632cb1228a3b35fe2b72929c"
+  },
+  "signed-primitive-campaign-attempt-1/07-take-full-range-refused/owned/record.json": {
+    "bytes": 840,
+    "mode": 420,
+    "sha256": "3bab3418c964598cc67ef755f5cb3af733e95db4046c3f65cb92e9a618f0f4c5"
+  },
+  "signed-primitive-campaign-attempt-1/07-take-full-range-refused/owned/stderr.log": {
+    "bytes": 5313,
+    "mode": 420,
+    "sha256": "7bb6fef0fb39e3e6cdc782451492b2062ecfb4e6cef083313e103314d9ac03bb"
+  },
+  "signed-primitive-campaign-attempt-1/07-take-full-range-refused/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "0649efccb4ed9e51726a8a4c742d31ecf51b72080945126b1a418a9fc0c4067d"
+  },
+  "signed-primitive-campaign-attempt-1/07-take-full-range-refused/result.json": {
+    "bytes": 308,
+    "mode": 420,
+    "sha256": "0203a50fb18d19a11ee78c0a06b8f7214ab36c3a3cb03f1a996efbff87f87625"
+  },
+  "signed-primitive-campaign-attempt-1/08-take-prefix-substituted/command.json": {
+    "bytes": 1421,
+    "mode": 420,
+    "sha256": "a5b38a29919d202d10e69d8bd7a0476052f9df4f628cf544f3113f33d7cf8ae2"
+  },
+  "signed-primitive-campaign-attempt-1/08-take-prefix-substituted/owned/record.json": {
+    "bytes": 840,
+    "mode": 420,
+    "sha256": "8aa600a0b213f42fe856d7c12f05bf43472d95639fd1ec4392da78070585f8ae"
+  },
+  "signed-primitive-campaign-attempt-1/08-take-prefix-substituted/owned/stderr.log": {
+    "bytes": 6395,
+    "mode": 420,
+    "sha256": "c79dd7e625000d10e12b65ed072c68a6f6bdb6e3f10f59a72ca653a9534e1fab"
+  },
+  "signed-primitive-campaign-attempt-1/08-take-prefix-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "0157475d59709b15d390bb2c5c590384bbab514dff5ad79af48292f02f023ae5"
+  },
+  "signed-primitive-campaign-attempt-1/08-take-prefix-substituted/result.json": {
+    "bytes": 308,
+    "mode": 420,
+    "sha256": "24a91317edcc9a7329ed0c9133480abf9a31bacae84de1c307bfe5e3252df2d5"
+  },
+  "signed-primitive-campaign-attempt-1/09-take-failure-cursor-reset/command.json": {
+    "bytes": 1423,
+    "mode": 420,
+    "sha256": "0ebd333e08402d617ded0bcce6265bd19e09e1ffebbe227c1862f679fa1d1d7e"
+  },
+  "signed-primitive-campaign-attempt-1/09-take-failure-cursor-reset/owned/record.json": {
+    "bytes": 842,
+    "mode": 420,
+    "sha256": "73133f04c3bd0be5e79077699c57a39d5b8e6210333a2c544b71768cf3322159"
+  },
+  "signed-primitive-campaign-attempt-1/09-take-failure-cursor-reset/owned/stderr.log": {
+    "bytes": 5264,
+    "mode": 420,
+    "sha256": "6308d15528d60a8172f12ca31fe558a77c75645b22e0b0e6b504d999314b9286"
+  },
+  "signed-primitive-campaign-attempt-1/09-take-failure-cursor-reset/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "95cdf67feb494108da98a3d3f4ab87918115c402a296c23635d4386137ee7db9"
+  },
+  "signed-primitive-campaign-attempt-1/09-take-failure-cursor-reset/result.json": {
+    "bytes": 310,
+    "mode": 420,
+    "sha256": "b243068b1a98ad1badb7685a85fbf767009c255061f93408f0c4f47d0dfa25bb"
+  },
+  "signed-primitive-campaign-attempt-1/10-take-overflow-cursor-reset/command.json": {
+    "bytes": 1424,
+    "mode": 420,
+    "sha256": "21081ab67a791adb24254f8905dbc50c429ee184553b2874e2de9ef9ee83bc07"
+  },
+  "signed-primitive-campaign-attempt-1/10-take-overflow-cursor-reset/owned/record.json": {
+    "bytes": 843,
+    "mode": 420,
+    "sha256": "b81fa1fc1862ecb251516ba321d57a78350ac8cf30f246a6f81d8cfdd5650136"
+  },
+  "signed-primitive-campaign-attempt-1/10-take-overflow-cursor-reset/owned/stderr.log": {
+    "bytes": 5349,
+    "mode": 420,
+    "sha256": "ec769b327ce1aacf1f23cbb261cc992d4b403320b19d069be394689ae4044bc2"
+  },
+  "signed-primitive-campaign-attempt-1/10-take-overflow-cursor-reset/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "0245b1f15d13da779ddbf67c663afc0aecafcd5650b18f484b4664a44ce5a53f"
+  },
+  "signed-primitive-campaign-attempt-1/10-take-overflow-cursor-reset/result.json": {
+    "bytes": 311,
+    "mode": 420,
+    "sha256": "6421f62676e03ebc37e59c52405b3588325e900375884e0639944711cbdfbbfb"
+  },
+  "signed-primitive-campaign-attempt-1/11-take-overflow-error-substituted/command.json": {
+    "bytes": 1429,
+    "mode": 420,
+    "sha256": "c8f984d1f5e1ee96c985dfcd260266491fd0dc59f7cc75b2f3c1a2d9158550a9"
+  },
+  "signed-primitive-campaign-attempt-1/11-take-overflow-error-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "6d373c72996293c5b725b112c3928a59bf1ac8cc9b9124ee021ac40d62c4df97"
+  },
+  "signed-primitive-campaign-attempt-1/11-take-overflow-error-substituted/owned/stderr.log": {
+    "bytes": 5333,
+    "mode": 420,
+    "sha256": "a48e9685f92f3b27d5b2ae81da3dcb7bb48ad5dd844cee66caa5ec3cd5614bb3"
+  },
+  "signed-primitive-campaign-attempt-1/11-take-overflow-error-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "f0d761fe4aa10ebe2fbb63a46b143f0a56fe7b749ccdcd6d8a3e0a3e35096b37"
+  },
+  "signed-primitive-campaign-attempt-1/11-take-overflow-error-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "3db01b19164097c11263f54c151e0af1850dc305a906ad52e573ecb78582677a"
+  },
+  "signed-primitive-campaign-attempt-1/12-fixed-payload-omitted/command.json": {
+    "bytes": 1420,
+    "mode": 420,
+    "sha256": "93418166bbffa72a113bd918e6525a3aaf12b36a7961117944601f533dbb7ead"
+  },
+  "signed-primitive-campaign-attempt-1/12-fixed-payload-omitted/owned/record.json": {
+    "bytes": 839,
+    "mode": 420,
+    "sha256": "8b366b40ec659232d4ab718d285fe040cd23d1d985f325be70be066016a80507"
+  },
+  "signed-primitive-campaign-attempt-1/12-fixed-payload-omitted/owned/stderr.log": {
+    "bytes": 3776,
+    "mode": 420,
+    "sha256": "348314369d3941e550134ec697e7fb05f079661af14d5fea178e6ee07e64c1db"
+  },
+  "signed-primitive-campaign-attempt-1/12-fixed-payload-omitted/owned/stdout.log": {
+    "bytes": 34507,
+    "mode": 420,
+    "sha256": "12cdb5f636deb222ff32b76c99a1be3b8dbaa35accd4a0b1e6b8f7609ceb89c5"
+  },
+  "signed-primitive-campaign-attempt-1/12-fixed-payload-omitted/result.json": {
+    "bytes": 307,
+    "mode": 420,
+    "sha256": "a27cf1c6b2068557243b606d7166f127bacc0090d709459246f4bd4654716165"
+  },
+  "signed-primitive-campaign-attempt-1/13-put-cursor-omitted/command.json": {
+    "bytes": 1415,
+    "mode": 420,
+    "sha256": "983401be4bdfd3001ac97f3be50f5b64d03390d829ef65e5f2c938015a7f58b7"
+  },
+  "signed-primitive-campaign-attempt-1/13-put-cursor-omitted/owned/record.json": {
+    "bytes": 834,
+    "mode": 420,
+    "sha256": "afeb200d16ede04f2bd4f4fd06a825519fab3cba186b47b82b8baab6d31e0de7"
+  },
+  "signed-primitive-campaign-attempt-1/13-put-cursor-omitted/owned/stderr.log": {
+    "bytes": 3747,
+    "mode": 420,
+    "sha256": "a11bc6ee556e2502c1aa3346c26ee2ed96e32dc0243b0897f7b36b5e965b5b91"
+  },
+  "signed-primitive-campaign-attempt-1/13-put-cursor-omitted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "851b08a9295acad298e9b3e0f5142ff888655f34275d01cd848c6f5b97b54818"
+  },
+  "signed-primitive-campaign-attempt-1/13-put-cursor-omitted/result.json": {
+    "bytes": 302,
+    "mode": 420,
+    "sha256": "2796d499b6322d8ac1320fd1cfb6445455a80327d20f9fac2ab1153dcedac622"
+  },
+  "signed-primitive-campaign-attempt-1/14-put-frame-prefix-substituted/command.json": {
+    "bytes": 1425,
+    "mode": 420,
+    "sha256": "bda379476fcb27ae7832ef5fb25af430f875f9cc7a7ea37c5d6ca682a806a12f"
+  },
+  "signed-primitive-campaign-attempt-1/14-put-frame-prefix-substituted/owned/record.json": {
+    "bytes": 844,
+    "mode": 420,
+    "sha256": "668d846eafa6c63fc1efaca97f2a720c206da6eec61ed0cc929acf5b81b3e3ba"
+  },
+  "signed-primitive-campaign-attempt-1/14-put-frame-prefix-substituted/owned/stderr.log": {
+    "bytes": 3848,
+    "mode": 420,
+    "sha256": "84695bd92f61d202b34c561b207b724563f4eb060ef53a074a810fd7d86f0757"
+  },
+  "signed-primitive-campaign-attempt-1/14-put-frame-prefix-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "d1ea3d80ee3751063b18df8bd53e61f6d425886ba49f50dea284858e8e175f39"
+  },
+  "signed-primitive-campaign-attempt-1/14-put-frame-prefix-substituted/result.json": {
+    "bytes": 312,
+    "mode": 420,
+    "sha256": "5262fa735498afefce9b3f494fb2bc79ba1a8b0d7cbade0630d29f764006564c"
+  },
+  "signed-primitive-campaign-attempt-1/15-finish-prefix-accepted/command.json": {
+    "bytes": 1422,
+    "mode": 420,
+    "sha256": "d391c55ae7573c06a99bf0d9c92da7c1e62d25bb0b4370316fbe62cd7d4c0a6a"
+  },
+  "signed-primitive-campaign-attempt-1/15-finish-prefix-accepted/owned/record.json": {
+    "bytes": 841,
+    "mode": 420,
+    "sha256": "5a89f62812ac6d340481e2052e6d5efa76b7e399fae8d9322db42cf95099bbba"
+  },
+  "signed-primitive-campaign-attempt-1/15-finish-prefix-accepted/owned/stderr.log": {
+    "bytes": 5788,
+    "mode": 420,
+    "sha256": "493b7c09ef0e8e2fe74820a05515582f3bfb732bc1be9d96e1a3d807e3941611"
+  },
+  "signed-primitive-campaign-attempt-1/15-finish-prefix-accepted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "145e0b039d360ce16d2cfc77826fa5f890f3c8355b7e9b446f1bc31c04550a8e"
+  },
+  "signed-primitive-campaign-attempt-1/15-finish-prefix-accepted/result.json": {
+    "bytes": 309,
+    "mode": 420,
+    "sha256": "aeec56d1e714d615b90e8a6dba22a5346f86243928a0f7de04595ecd4c75f6c4"
+  },
+  "signed-primitive-campaign-attempt-1/16-finish-end-refused/command.json": {
+    "bytes": 1418,
+    "mode": 420,
+    "sha256": "1cd631a87647381387f8a50987b5498127ca8e10a9d2b714f582f42b4acde7c9"
+  },
+  "signed-primitive-campaign-attempt-1/16-finish-end-refused/owned/record.json": {
+    "bytes": 837,
+    "mode": 420,
+    "sha256": "a391340f85aa7e33a2d3ccd2e75263f263dd70f1639bc965623a813f05de9a5f"
+  },
+  "signed-primitive-campaign-attempt-1/16-finish-end-refused/owned/stderr.log": {
+    "bytes": 5754,
+    "mode": 420,
+    "sha256": "63d06739f5df353e1ed59305fe5339a51a0e428124452fc32125b9d21fb5a90d"
+  },
+  "signed-primitive-campaign-attempt-1/16-finish-end-refused/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "5b4e3f5810403252be54277c754f43888ce9441835678e2a1ea30bcce5e9fee0"
+  },
+  "signed-primitive-campaign-attempt-1/16-finish-end-refused/result.json": {
+    "bytes": 305,
+    "mode": 420,
+    "sha256": "61fd2e4d854d73ea46183a5d89ed9400e0504c721ee0e8677ded5aeabe6511a7"
+  },
+  "signed-primitive-campaign-attempt-1/17-u16-encode-low-substituted/command.json": {
+    "bytes": 1426,
+    "mode": 420,
+    "sha256": "17af0d97ef613bcabfc43edbda3ab0ecb5c0caddad817366c650114f5dfe7e7f"
+  },
+  "signed-primitive-campaign-attempt-1/17-u16-encode-low-substituted/owned/record.json": {
+    "bytes": 845,
+    "mode": 420,
+    "sha256": "e26083ae665e6ef38a9ee2bd905276a54c675020b4d45c60b57d8531267820bb"
+  },
+  "signed-primitive-campaign-attempt-1/17-u16-encode-low-substituted/owned/stderr.log": {
+    "bytes": 11388,
+    "mode": 420,
+    "sha256": "87680c4f1399332e140fc2e91ec71a43227cbf29536225e41fc580013ba02a54"
+  },
+  "signed-primitive-campaign-attempt-1/17-u16-encode-low-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "02ea087689297882d7836e36bd6089bb4f342aff2356931268f12dd37e2d88fd"
+  },
+  "signed-primitive-campaign-attempt-1/17-u16-encode-low-substituted/result.json": {
+    "bytes": 313,
+    "mode": 420,
+    "sha256": "5997264c7d544d2e8b57e33a3e07f2daac4194593a2e8dc96072f8c2fe284789"
+  },
+  "signed-primitive-campaign-attempt-1/18-u16-encode-high-substituted/command.json": {
+    "bytes": 1427,
+    "mode": 420,
+    "sha256": "f397c713c56089f63be2f4c6ecaca3693ec2e2b9061e311ca1f3a58ba8e767fa"
+  },
+  "signed-primitive-campaign-attempt-1/18-u16-encode-high-substituted/owned/record.json": {
+    "bytes": 846,
+    "mode": 420,
+    "sha256": "0636cb718de66cf489f4e6e546d86bdde29ceec7951f44dc820b90e754396e4b"
+  },
+  "signed-primitive-campaign-attempt-1/18-u16-encode-high-substituted/owned/stderr.log": {
+    "bytes": 9549,
+    "mode": 420,
+    "sha256": "852a6d08aa1fff5344fd5b6e1e366c666f24c33272d2305693e264d68858d506"
+  },
+  "signed-primitive-campaign-attempt-1/18-u16-encode-high-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "2a564f52f552cba2da9829e4ac73669edf02dc9794740e302e215310e449874f"
+  },
+  "signed-primitive-campaign-attempt-1/18-u16-encode-high-substituted/result.json": {
+    "bytes": 102,
+    "mode": 420,
+    "sha256": "b8f977e31f8a4e3ca8c4e634a2ab71308ce4d268b1ce8c4f5c5aaf0c212ce070"
+  },
+  "signed-primitive-campaign-attempt-1/38-release-after/command.json": {
+    "bytes": 1087,
+    "mode": 420,
+    "sha256": "a9ceb30a4487926ea7bd1566a2999c3bb59c63896b1f49707fff733654c511b3"
+  },
+  "signed-primitive-campaign-attempt-1/38-release-after/owned/record.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "29f210f2ad8e8e9f4666c886b0b34e7eccc2259889bc1e4be201aee7b1ca90a0"
+  },
+  "signed-primitive-campaign-attempt-1/38-release-after/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-1/38-release-after/owned/stdout.log": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  },
+  "signed-primitive-campaign-attempt-1/38-release-after/result.json": {
+    "bytes": 113,
+    "mode": 420,
+    "sha256": "878eedf2828d6a96d49ed1fdff0ba974e22ce06ba063124297a950e79b2fb2ab"
+  },
+  "signed-primitive-campaign-attempt-1/closing-inputs.json": {
+    "bytes": 2839731,
+    "mode": 420,
+    "sha256": "1c24dcf098d193900a853682cea32c9fcad652ca17829b624dddf3adf2bc71a3"
+  },
+  "signed-primitive-campaign-attempt-1/controller-loader.py": {
+    "bytes": 1288,
+    "mode": 420,
+    "sha256": "c6c507a9829b929e1c268bcd887aa74d35951593f85ce6bea36d21c828f9f61a"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-mutation.json": {
+    "bytes": 1366,
+    "mode": 420,
+    "sha256": "ff811558aeaa572ee499de4b71bc93e126f197c9a6385d7a8fe438bae066ec72"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3171,
+    "mode": 420,
+    "sha256": "a6875bba367dde84cd35b01631fca7bca82b6cb89a69adf3210acea4cec71ea9"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-mutation.json": {
+    "bytes": 1370,
+    "mode": 420,
+    "sha256": "d79f889519d5efd0e7f162b5327cb32b5c44986379d73443843a8a4845e5a436"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "a2b089112b848f2beeeef6419060eb4dd24446e54cdd8e5dceac67a475c6f6e2"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-mutation.json": {
+    "bytes": 1368,
+    "mode": 420,
+    "sha256": "1bb3fe17b59700070d471860d2d1f514d86a6483383a693743ccf915276eb8bb"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3152,
+    "mode": 420,
+    "sha256": "b9e773cf466c579dc0d22113907f1e643280080faf04f114aec454aacee390e1"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/fresh-census-inputs.json": {
+    "bytes": 923,
+    "mode": 420,
+    "sha256": "533dc3d1f60babc9072bce476f215b2ae3daf7bf822bcdc46abdcbcf972b2928"
+  },
+  "signed-primitive-campaign-attempt-1/fresh-process-closure.json": {
+    "bytes": 698,
+    "mode": 420,
+    "sha256": "21e86880b3e5d143b4cceaf2c6ce4707c1fce72f84c1aed2dfa10167ab0b5cfb"
+  },
+  "signed-primitive-campaign-attempt-1/inputs.json": {
+    "bytes": 2915613,
+    "mode": 420,
+    "sha256": "ea4c9f5480cefe6ee3043ba61c44f82cbe14521148ca6d1b8fe78dc2d3da21e3"
+  },
+  "signed-primitive-campaign-attempt-1/process-controller.py": {
+    "bytes": 27475,
+    "mode": 420,
+    "sha256": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-mutation.json": {
+    "bytes": 1363,
+    "mode": 420,
+    "sha256": "d29d2f0c69754eb57b614bc3860ccd37fe87eb3f52e1df52bff6b028531b13fd"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3169,
+    "mode": 420,
+    "sha256": "41163b1afc89e000d39b44e1467f92652b8826a616790f1cb8a456b4dd2ec0e1"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-mutation.json": {
+    "bytes": 1373,
+    "mode": 420,
+    "sha256": "808c6ab2cfba6743400f63c46ae5a92ada55b778360300eae99085309fe51658"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3168,
+    "mode": 420,
+    "sha256": "fc42995895a564b44ae5bd9dcb3887079a938c51035724f19faf3943bd7e8572"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/raw-archive-index.json": {
+    "bytes": 8920,
+    "mode": 420,
+    "sha256": "7a76ea072147db91c820a10183002fdeffb885b75cad697f32227f0b4ad4aa8d"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/before-bounded-negative-1/check-distributed-codec-primitives.py.source": {
+    "bytes": 11929,
+    "mode": 420,
+    "sha256": "24131e562632c2d393c16fd9307b464d462e20ad3962ac7c017f3f9f7f0f906a"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/before-bounded-negative-1/runtime-distributed-codec-primitives-v1.md.source": {
+    "bytes": 5949,
+    "mode": 420,
+    "sha256": "fe726aef9ebb619e0fb9bb76aca4c90ac69c43a84bf475a545f12883e20ca17e"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/before-bounded-negative-1/test-distributed-codec-primitives.py.source": {
+    "bytes": 5676,
+    "mode": 420,
+    "sha256": "ac514cf50f21856c10eb9101cb43b6a42a3c873b9a41c65878dae06f0b8525e9"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bind_bounded_candidate.py.source": {
+    "bytes": 14166,
+    "mode": 420,
+    "sha256": "6f3a8031332fd096773079dc1168ff9a8fd7cf547f936abdbd6f0c7e321bf60e"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-binding-1.json.source": {
+    "bytes": 70547,
+    "mode": 420,
+    "sha256": "615e222776d1d4b8c252810b8a3558654e76990bcc8ff03e253046756dddbe8b"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1.json.source": {
+    "bytes": 1279437,
+    "mode": 420,
+    "sha256": "2d78128536229125c0096b87252788ae21db71d4a7e4ad1976d4ecd75729c3f0"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract.rs.source": {
+    "bytes": 11643,
+    "mode": 420,
+    "sha256": "aef31c4cea5c0cef621fc2eb908feddf7a1c023e207941cdc3aec1e82d07f4e5"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives.rs.source": {
+    "bytes": 1775,
+    "mode": 420,
+    "sha256": "9ebad52b69fc5d19040bc9c31be6ef178a9c2f616e96b23caeb9de63d40058a9"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs.source": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_tests.rs.source": {
+    "bytes": 11726,
+    "mode": 420,
+    "sha256": "a06077617456fcde961837d38406562b6207a20cf8d694e5eb1aaedb7247966c"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/verus/check-distributed-codec-primitives.py.source": {
+    "bytes": 26709,
+    "mode": 420,
+    "sha256": "9d6c464c2d8b8ab3d8f713b7ad801d87aa759255029e52fbb42a7ac27592d6d1"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs.source": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/verus/fixtures/distributed_codec_primitives_v1_diagnostics.json.source": {
+    "bytes": 77575,
+    "mode": 420,
+    "sha256": "26e2667bf66d55a8606b431278acd9f5cd309249eecef5b942886a83cd54fb84"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/crates/fe2o3-runtime-model/verus/test-distributed-codec-primitives.py.source": {
+    "bytes": 17845,
+    "mode": 420,
+    "sha256": "49c2186461027a44ff0f32c568656d35b5aa45fb11ffda560a152603b0387c8d"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bounded-candidate-source-1/docs/runtime-distributed-codec-primitives-v1.md.source": {
+    "bytes": 7235,
+    "mode": 420,
+    "sha256": "7a463f260513e1f3fba4e8a2942c09f2a81070c8c0e3300d441938f7b44cccf0"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/integration-guard-audit-1.json.source": {
+    "bytes": 10389,
+    "mode": 420,
+    "sha256": "f5e053721692790b408f2baa71733780dee2b6f2db94d5d1c7043ccd6166b2fb"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/integration_guard_audit.py.source": {
+    "bytes": 4413,
+    "mode": 420,
+    "sha256": "8ef8ab8063e3ecd2ba94b94e1fbf63653c1a4f0cecbc30da2db267b3d43a9a4b"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed-primitive-prepared-1.json.source": {
+    "bytes": 2914640,
+    "mode": 420,
+    "sha256": "828e825d67bac89f65f60a5778b5a734434005bc54309051bd0751e80179bdde"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed_primitive_campaign.py.source": {
+    "bytes": 17059,
+    "mode": 420,
+    "sha256": "f8ec6ab47cb2b75cce76a1e8beb13ebaafec655523c8b1d0c1d1861ecb97b401"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_bind_bounded_candidate.py.source": {
+    "bytes": 3362,
+    "mode": 420,
+    "sha256": "42fa31cc00a598e18fc5157676df5c07b5aec78f864b82cf914ea030422d14c4"
+  },
+  "signed-primitive-campaign-attempt-1/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_signed_primitive_campaign.py.source": {
+    "bytes": 5308,
+    "mode": 420,
+    "sha256": "91ffc381626db6fe96b68a2c0876058c83a4b34174710fcede62af336cf38239"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-inputs.json": {
+    "bytes": 1067,
+    "mode": 420,
+    "sha256": "353ad65bffab14432ddfed12eb0e502bf4bc630c1df543d24fff1ff51ae7b92e"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/relocated-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/results.json": {
+    "bytes": 8862,
+    "mode": 420,
+    "sha256": "ebd3b582cea1a13d5b9fdd808522b8ceda23710b2a4905db9889c3f1b2fa0344"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-mutation.json": {
+    "bytes": 1365,
+    "mode": 420,
+    "sha256": "c53b285aca33e87e439070d91a20ea65843ddfb46da5d981f1cdc6621d9bf53a"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3169,
+    "mode": 420,
+    "sha256": "70c2f86d52c155d554a30c0413814986609a7221d63cf08d71ba9bbce5e2cc95"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-mutation.json": {
+    "bytes": 1371,
+    "mode": 420,
+    "sha256": "d38c7828ec3513f95623cfcbfb58506b5d938acd0ccd0b00b2fa0fe3d99ebd61"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3202,
+    "mode": 420,
+    "sha256": "505adce3962f4a8be4f0906887db61c9406978cc706f3d08038c2df686680849"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-mutation.json": {
+    "bytes": 1369,
+    "mode": 420,
+    "sha256": "0dd2dec744011d72b44bf8fa683731e4cc1f5f562934b29e7a12380a20b5c3a7"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3173,
+    "mode": 420,
+    "sha256": "d099985e10accbc5a86d2a8dca11f3dd0d7ac474c792c3b28efbafc5fd0ac790"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-mutation.json": {
+    "bytes": 1372,
+    "mode": 420,
+    "sha256": "dd9226b45f4f27408972676d63d0d0f2f785392b78ca15b23f1807e41d9f4930"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3191,
+    "mode": 420,
+    "sha256": "44047b4149d4c738fe311995c7f57d3ece02572f45e072ea7fa4b46e9128dcc8"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "17a971fa940053cea051dde16849ebb0709957b8ae096556c178bc35fd111451"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "b54ef6b53b2f0c2b52143193a688bb2bdaa782d44ddc0c8a494476c7efbdae90"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-mutation.json": {
+    "bytes": 1369,
+    "mode": 420,
+    "sha256": "190d67a6b5f270926fc2d9e5c2a5c4e75568a8a6bc2c1795b77c71865a6ccc77"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3171,
+    "mode": 420,
+    "sha256": "d744ec36777c4287088b1b1982e7e324ebc187408895d272609f7b8f7651ce5d"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-mutation.json": {
+    "bytes": 1375,
+    "mode": 420,
+    "sha256": "053ee83aaad1748377de1853455a46f25d262ba063d17ef2950c08f86f0550aa"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "0fa649be3f10e1002054582500c3e31ecdd7b1f559992dde1c628e13ae48156e"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-mutation.json": {
+    "bytes": 1374,
+    "mode": 420,
+    "sha256": "99aefc9c3ee82a6b143d8b14839bd093886b574e3e7985207e3b507028f0f081"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3179,
+    "mode": 420,
+    "sha256": "5798d69605a9597cd985c64240f1314733de475136b12c3d700eb1202c26c8f6"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-1/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-2/01-source-signature/command.json": {
+    "bytes": 1034,
+    "mode": 420,
+    "sha256": "994290e38b7bfbfa59b68953fcde9f7be6cbcd77453f08f8df6ff627cc89336b"
+  },
+  "signed-primitive-campaign-attempt-2/01-source-signature/owned/record.json": {
+    "bytes": 452,
+    "mode": 420,
+    "sha256": "927551d177a83fe80b1bb990bd26c633c5627d75e4f7453cdbaf58a6ead6e41c"
+  },
+  "signed-primitive-campaign-attempt-2/01-source-signature/owned/stderr.log": {
+    "bytes": 110,
+    "mode": 420,
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "signed-primitive-campaign-attempt-2/01-source-signature/owned/stdout.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-2/01-source-signature/result.json": {
+    "bytes": 116,
+    "mode": 420,
+    "sha256": "45778770e40b258a436c4b08766a36f3af59761abe761af0933142352bb2f29a"
+  },
+  "signed-primitive-campaign-attempt-2/02-portable-source-controls/command.json": {
+    "bytes": 946,
+    "mode": 420,
+    "sha256": "bbdcc0ecd8f47ac49a7d70161d58fd02c09cb4a1d3b58c1816e4da9ec0c2d5dc"
+  },
+  "signed-primitive-campaign-attempt-2/02-portable-source-controls/owned/record.json": {
+    "bytes": 363,
+    "mode": 420,
+    "sha256": "91f8d734761bebd5ef11db3349b19d3f158a26af95c3946624269df1081e678d"
+  },
+  "signed-primitive-campaign-attempt-2/02-portable-source-controls/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-2/02-portable-source-controls/owned/stdout.log": {
+    "bytes": 140,
+    "mode": 420,
+    "sha256": "116ff5fa963b747c138eaaecb470650c34b480ee89e2e45a27aa08ca786a8acf"
+  },
+  "signed-primitive-campaign-attempt-2/02-portable-source-controls/result.json": {
+    "bytes": 124,
+    "mode": 420,
+    "sha256": "3341712baf2605c4f15f38fac08cbc92393f11ef21a9a81967946b08a843e8a2"
+  },
+  "signed-primitive-campaign-attempt-2/03-release-before/command.json": {
+    "bytes": 1089,
+    "mode": 420,
+    "sha256": "bbea276621927c2cb7ece0e1834c24494b500269fb2948f0a482096d7981e0ce"
+  },
+  "signed-primitive-campaign-attempt-2/03-release-before/owned/record.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "b1bcde7c8ecb0e36744329653670c8a88620c92fea8891cb46578ba566201f76"
+  },
+  "signed-primitive-campaign-attempt-2/03-release-before/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-2/03-release-before/owned/stdout.log": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  },
+  "signed-primitive-campaign-attempt-2/03-release-before/result.json": {
+    "bytes": 114,
+    "mode": 420,
+    "sha256": "c8c5244a23ec3cc78e26616d1a91494acad0fb64706aa0c438f9f8c14927396a"
+  },
+  "signed-primitive-campaign-attempt-2/38-release-after/command.json": {
+    "bytes": 1089,
+    "mode": 420,
+    "sha256": "bbea276621927c2cb7ece0e1834c24494b500269fb2948f0a482096d7981e0ce"
+  },
+  "signed-primitive-campaign-attempt-2/closing-inputs.json": {
+    "bytes": 2839732,
+    "mode": 420,
+    "sha256": "6e11ba58d549692f034fda7946d6ed22c2740eef7a2f99d85406240fa49fdec0"
+  },
+  "signed-primitive-campaign-attempt-2/controller-loader.py": {
+    "bytes": 1288,
+    "mode": 420,
+    "sha256": "c6c507a9829b929e1c268bcd887aa74d35951593f85ce6bea36d21c828f9f61a"
+  },
+  "signed-primitive-campaign-attempt-2/fresh-census-inputs.json": {
+    "bytes": 138,
+    "mode": 420,
+    "sha256": "a9730d7061b84df63c44bb2b4d660de8a8f6db62318d6e099614dcec9f6ccd82"
+  },
+  "signed-primitive-campaign-attempt-2/fresh-process-closure.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "b5da79cff7d4f5d2457479be7160895d7bf8911c24c849fc24798539faf133c8"
+  },
+  "signed-primitive-campaign-attempt-2/inputs.json": {
+    "bytes": 2987587,
+    "mode": 420,
+    "sha256": "cb28f0d9cd8758d0cbe4eeccc6951d9e92c5d8dec88047471836fbc5514ab4e2"
+  },
+  "signed-primitive-campaign-attempt-2/process-controller.py": {
+    "bytes": 27475,
+    "mode": 420,
+    "sha256": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480"
+  },
+  "signed-primitive-campaign-attempt-2/raw-archive-index.json": {
+    "bytes": 7334,
+    "mode": 420,
+    "sha256": "26539c904b981ce96993e7e0c584cbdb24e28c730e08409d6d7bdb3ba6fb72b3"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-binding-1.json.source": {
+    "bytes": 144289,
+    "mode": 420,
+    "sha256": "970baf9fa1ff4954daa177e70ff079b1c973e8d29641e787ca14fe3e37e479e8"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1.json.source": {
+    "bytes": 1279438,
+    "mode": 420,
+    "sha256": "3b3703e23920000784de73cbd2e8f59fbadb8847e9fdda823acd84ffc3cbeaa3"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract.rs.source": {
+    "bytes": 11643,
+    "mode": 420,
+    "sha256": "aef31c4cea5c0cef621fc2eb908feddf7a1c023e207941cdc3aec1e82d07f4e5"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives.rs.source": {
+    "bytes": 1775,
+    "mode": 420,
+    "sha256": "9ebad52b69fc5d19040bc9c31be6ef178a9c2f616e96b23caeb9de63d40058a9"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs.source": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_tests.rs.source": {
+    "bytes": 11726,
+    "mode": 420,
+    "sha256": "a06077617456fcde961837d38406562b6207a20cf8d694e5eb1aaedb7247966c"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/check-distributed-codec-primitives.py.source": {
+    "bytes": 27212,
+    "mode": 420,
+    "sha256": "ed73fc66709e575f000d33d19463b84faac089df5f5c731f126eae5199703792"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs.source": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/fixtures/distributed_codec_primitives_v1_diagnostics.json.source": {
+    "bytes": 123076,
+    "mode": 420,
+    "sha256": "76b5f83c062142a5e5f4f887dc1dd188dad5bc88b2ec11acfefb2bd49de5bf40"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/test-distributed-codec-primitives.py.source": {
+    "bytes": 21287,
+    "mode": 420,
+    "sha256": "d222143fbf6ee68ef7aca52f6a46f75d44046a7249dff080740285a3810febfd"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/docs/runtime-distributed-codec-primitives-v1.md.source": {
+    "bytes": 8524,
+    "mode": 420,
+    "sha256": "710abdb1d6775d98c829329a50cf3c778596c696881587177cdc115c33761460"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bind_argument_candidate.py.source": {
+    "bytes": 18283,
+    "mode": 420,
+    "sha256": "d56501af6ef7c81052d387182a79b5fab6c9bca6c057f83a18db5ea09d9710dc"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/extend_argument_fixtures.py.source": {
+    "bytes": 6909,
+    "mode": 420,
+    "sha256": "51cd61f35b7b2fd62365892770665b330240b84fd17fda01fb95399894b37e6b"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed-primitive-prepared-2.json.source": {
+    "bytes": 2986614,
+    "mode": 420,
+    "sha256": "84f1ae95a2fc999faf50e202890fca5ea1875d7e3be24dac4f390fc08530a99c"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed_primitive_campaign_v2.py.source": {
+    "bytes": 14525,
+    "mode": 420,
+    "sha256": "e9b5c76261602fb189207eb410c0b1107f11fed021fd7210f62cbf4e546a4435"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_bind_argument_candidate.py.source": {
+    "bytes": 4905,
+    "mode": 420,
+    "sha256": "aef6b75bae3f41628783e2b7a5e0f93da4b9942bb00f250983a9c9ce59de3215"
+  },
+  "signed-primitive-campaign-attempt-2/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_signed_primitive_campaign_v2.py.source": {
+    "bytes": 5501,
+    "mode": 420,
+    "sha256": "500486d02d321d384da44f13c66c1e0a79d9eb18801a4a044767a737756ee7b7"
+  },
+  "signed-primitive-campaign-attempt-2/results.json": {
+    "bytes": 1192,
+    "mode": 420,
+    "sha256": "c8c9d67b6351fda0c39ecac7ae3e8ea81d005baf12260c72aa01cf914206be3f"
+  },
+  "signed-primitive-campaign-attempt-3/01-source-signature/command.json": {
+    "bytes": 1034,
+    "mode": 420,
+    "sha256": "f532ff2b4301c6e5bafb2ca22520c3e0ef71b14fa2657035ec1e8f827c9caa54"
+  },
+  "signed-primitive-campaign-attempt-3/01-source-signature/owned/record.json": {
+    "bytes": 452,
+    "mode": 420,
+    "sha256": "ace9b056ab01de66f30d186584ddc3e3b1faeb1c06e4514ae169e4e0d4cbc095"
+  },
+  "signed-primitive-campaign-attempt-3/01-source-signature/owned/stderr.log": {
+    "bytes": 110,
+    "mode": 420,
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "signed-primitive-campaign-attempt-3/01-source-signature/owned/stdout.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/01-source-signature/result.json": {
+    "bytes": 116,
+    "mode": 420,
+    "sha256": "45778770e40b258a436c4b08766a36f3af59761abe761af0933142352bb2f29a"
+  },
+  "signed-primitive-campaign-attempt-3/02-portable-source-controls/command.json": {
+    "bytes": 946,
+    "mode": 420,
+    "sha256": "ef44ff8531a9787514f489f595be35d89eb9503e4e299be287a72791715d7c7a"
+  },
+  "signed-primitive-campaign-attempt-3/02-portable-source-controls/owned/record.json": {
+    "bytes": 363,
+    "mode": 420,
+    "sha256": "5a8f0a90dbf11bef1d6a7dba044ad74db3e92b5d3ebbc1c333338d804952c14f"
+  },
+  "signed-primitive-campaign-attempt-3/02-portable-source-controls/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/02-portable-source-controls/owned/stdout.log": {
+    "bytes": 140,
+    "mode": 420,
+    "sha256": "116ff5fa963b747c138eaaecb470650c34b480ee89e2e45a27aa08ca786a8acf"
+  },
+  "signed-primitive-campaign-attempt-3/02-portable-source-controls/result.json": {
+    "bytes": 124,
+    "mode": 420,
+    "sha256": "3341712baf2605c4f15f38fac08cbc92393f11ef21a9a81967946b08a843e8a2"
+  },
+  "signed-primitive-campaign-attempt-3/03-release-before/command.json": {
+    "bytes": 1089,
+    "mode": 420,
+    "sha256": "2aa856717797b736abdfba1ccd04936a3595da7b56a183c034f7517373b0513c"
+  },
+  "signed-primitive-campaign-attempt-3/03-release-before/owned/record.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "6e57ddb558d6f4726d025a5820f68d1e2bab8726f1c3de20bc08892d72344992"
+  },
+  "signed-primitive-campaign-attempt-3/03-release-before/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/03-release-before/owned/stdout.log": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  },
+  "signed-primitive-campaign-attempt-3/03-release-before/result.json": {
+    "bytes": 114,
+    "mode": 420,
+    "sha256": "c8c5244a23ec3cc78e26616d1a91494acad0fb64706aa0c438f9f8c14927396a"
+  },
+  "signed-primitive-campaign-attempt-3/04-positive-before/command.json": {
+    "bytes": 1291,
+    "mode": 420,
+    "sha256": "17e9bff47461c48c835ce8165a7b0472e1bcf0679aedff082b30cde7e7cdd626"
+  },
+  "signed-primitive-campaign-attempt-3/04-positive-before/owned/record.json": {
+    "bytes": 708,
+    "mode": 420,
+    "sha256": "f1218f85294ef8522df2c2b8e592310c15f6daa0be90bab53bddc898f05594f2"
+  },
+  "signed-primitive-campaign-attempt-3/04-positive-before/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/04-positive-before/owned/stdout.log": {
+    "bytes": 34657,
+    "mode": 420,
+    "sha256": "0eff5d1a564df4415c7d8425576759e9c5f66a2cf86fa7e3583e6698103277f3"
+  },
+  "signed-primitive-campaign-attempt-3/04-positive-before/result.json": {
+    "bytes": 203,
+    "mode": 420,
+    "sha256": "f2e96aea959c34946627e16f635ccc597213f6cb78208b74bbaf3d231b27b372"
+  },
+  "signed-primitive-campaign-attempt-3/05-positive-relocated/command.json": {
+    "bytes": 1350,
+    "mode": 420,
+    "sha256": "c4fc4e31ab9a97d9b7d80a574cddbe766e78c4c831147f7b5842dd05fafe947d"
+  },
+  "signed-primitive-campaign-attempt-3/05-positive-relocated/owned/record.json": {
+    "bytes": 767,
+    "mode": 420,
+    "sha256": "09f696f2a249de41f907ee95b6b59dcad87a5c0bf0e569c78e540af4b961e576"
+  },
+  "signed-primitive-campaign-attempt-3/05-positive-relocated/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/05-positive-relocated/owned/stdout.log": {
+    "bytes": 34657,
+    "mode": 420,
+    "sha256": "51ab203b5fc22f5ce9093c577c709565a991840d49265879d2b1e48f047bee9a"
+  },
+  "signed-primitive-campaign-attempt-3/05-positive-relocated/result.json": {
+    "bytes": 206,
+    "mode": 420,
+    "sha256": "e291cf2228beba415acfed0dbe25b2395482f897b18ef7c4d5b0770da75f9b54"
+  },
+  "signed-primitive-campaign-attempt-3/06-take-cursor-omitted/command.json": {
+    "bytes": 1419,
+    "mode": 420,
+    "sha256": "8929d2879dea11207936f51e5660b95bf39d24ccbf582d3f70ea715430c18589"
+  },
+  "signed-primitive-campaign-attempt-3/06-take-cursor-omitted/owned/record.json": {
+    "bytes": 836,
+    "mode": 420,
+    "sha256": "07ce17839f522abdcad041f16e9879bdff812ac40321b5305e9a49a73a4637a2"
+  },
+  "signed-primitive-campaign-attempt-3/06-take-cursor-omitted/owned/stderr.log": {
+    "bytes": 4002,
+    "mode": 420,
+    "sha256": "27d9be3a057cd76e4fe16ddcfe52f0d255d33fb3b788f6ea1f722b7e619a854c"
+  },
+  "signed-primitive-campaign-attempt-3/06-take-cursor-omitted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "ce51f56cc9e8587da662bb3866fdc290c3cdf3971c937a906e9860cdd839c424"
+  },
+  "signed-primitive-campaign-attempt-3/06-take-cursor-omitted/result.json": {
+    "bytes": 304,
+    "mode": 420,
+    "sha256": "bb6754f0a5671465af077b6019e5d6df174892fac90e83260ca8b3d49a1ad5dc"
+  },
+  "signed-primitive-campaign-attempt-3/07-take-full-range-refused/command.json": {
+    "bytes": 1423,
+    "mode": 420,
+    "sha256": "db8964ab0c8539ba9c37b3b182bac889058de83ec4b55d57ee2b70fc7c2d23aa"
+  },
+  "signed-primitive-campaign-attempt-3/07-take-full-range-refused/owned/record.json": {
+    "bytes": 840,
+    "mode": 420,
+    "sha256": "d28730828c23caf857db153b36fc250e65c9327c1b4c8fa3f90e9e72128e2ee6"
+  },
+  "signed-primitive-campaign-attempt-3/07-take-full-range-refused/owned/stderr.log": {
+    "bytes": 5313,
+    "mode": 420,
+    "sha256": "9ef9a8a7bcf0339032bdd9d7581a6b4e30ff497b376b5d18f5aaa449699aa472"
+  },
+  "signed-primitive-campaign-attempt-3/07-take-full-range-refused/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "129bd4730277b9f1c56c9f0550063d603bd400cde598fb93f7c4b27c1796613d"
+  },
+  "signed-primitive-campaign-attempt-3/07-take-full-range-refused/result.json": {
+    "bytes": 308,
+    "mode": 420,
+    "sha256": "0203a50fb18d19a11ee78c0a06b8f7214ab36c3a3cb03f1a996efbff87f87625"
+  },
+  "signed-primitive-campaign-attempt-3/08-take-prefix-substituted/command.json": {
+    "bytes": 1423,
+    "mode": 420,
+    "sha256": "162f276f22e55b92f44f945ac8eb3cbdffa9bdc6c027ec973527e2a0e17a4f07"
+  },
+  "signed-primitive-campaign-attempt-3/08-take-prefix-substituted/owned/record.json": {
+    "bytes": 840,
+    "mode": 420,
+    "sha256": "5b9e360b0b665eadade934770460b2d82bbf2d97cf553fc076ed7b2ba00f5f23"
+  },
+  "signed-primitive-campaign-attempt-3/08-take-prefix-substituted/owned/stderr.log": {
+    "bytes": 6395,
+    "mode": 420,
+    "sha256": "16481564c8adcf4bb999ea8b773254e55024e402bbcc3832c69fd8411996e26d"
+  },
+  "signed-primitive-campaign-attempt-3/08-take-prefix-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "15b83267a354566c1820885a21ea75ac46e85ebb56e1aac5b5a9d24d5adc74bd"
+  },
+  "signed-primitive-campaign-attempt-3/08-take-prefix-substituted/result.json": {
+    "bytes": 308,
+    "mode": 420,
+    "sha256": "24a91317edcc9a7329ed0c9133480abf9a31bacae84de1c307bfe5e3252df2d5"
+  },
+  "signed-primitive-campaign-attempt-3/09-take-failure-cursor-reset/command.json": {
+    "bytes": 1425,
+    "mode": 420,
+    "sha256": "fbd989b56f718128f47ff58d9eb88bb978ea18b0c505f7be45e3518d6d703d48"
+  },
+  "signed-primitive-campaign-attempt-3/09-take-failure-cursor-reset/owned/record.json": {
+    "bytes": 842,
+    "mode": 420,
+    "sha256": "2a24c622188ddf90955797cf52387ed0c81b9c994c4b19eaa7f9de8f0e5027d0"
+  },
+  "signed-primitive-campaign-attempt-3/09-take-failure-cursor-reset/owned/stderr.log": {
+    "bytes": 5264,
+    "mode": 420,
+    "sha256": "99f95630b962923b024c3754d116b3a899f23340a85da5039343b0aab7fec70e"
+  },
+  "signed-primitive-campaign-attempt-3/09-take-failure-cursor-reset/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "167d782e369df1dea5891b5fd01557be381bd5ea427aa4b048d1e33107405f0a"
+  },
+  "signed-primitive-campaign-attempt-3/09-take-failure-cursor-reset/result.json": {
+    "bytes": 310,
+    "mode": 420,
+    "sha256": "b243068b1a98ad1badb7685a85fbf767009c255061f93408f0c4f47d0dfa25bb"
+  },
+  "signed-primitive-campaign-attempt-3/10-take-overflow-cursor-reset/command.json": {
+    "bytes": 1426,
+    "mode": 420,
+    "sha256": "808429c44ec9e1d48451be8c06ff455dd3dc4c27d44e5b5302627d5e00816a1b"
+  },
+  "signed-primitive-campaign-attempt-3/10-take-overflow-cursor-reset/owned/record.json": {
+    "bytes": 843,
+    "mode": 420,
+    "sha256": "2c82b6beba08f5cd92c4db279119a183e5f6ba809c4a53500cc2068f1b9a5165"
+  },
+  "signed-primitive-campaign-attempt-3/10-take-overflow-cursor-reset/owned/stderr.log": {
+    "bytes": 5349,
+    "mode": 420,
+    "sha256": "cb0a07b950f12936ca9e98b6720fb490f071566bced140eb2df046eb3bde4398"
+  },
+  "signed-primitive-campaign-attempt-3/10-take-overflow-cursor-reset/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "3c6579fcd4aef595a21a776e793b57075365e95dbb135b8067c33ef5fc26b750"
+  },
+  "signed-primitive-campaign-attempt-3/10-take-overflow-cursor-reset/result.json": {
+    "bytes": 311,
+    "mode": 420,
+    "sha256": "6421f62676e03ebc37e59c52405b3588325e900375884e0639944711cbdfbbfb"
+  },
+  "signed-primitive-campaign-attempt-3/11-take-overflow-error-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "396e11a18d84e626e964e629f21c0c7b2db0f24c58c262a3e1bdcb35fc521a76"
+  },
+  "signed-primitive-campaign-attempt-3/11-take-overflow-error-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "77a47d0bde6c96285fd85bf12663c8845b6fe66f3aaa957defce8cb65bd7b950"
+  },
+  "signed-primitive-campaign-attempt-3/11-take-overflow-error-substituted/owned/stderr.log": {
+    "bytes": 5333,
+    "mode": 420,
+    "sha256": "feee84831b24e895730f158436aebcf7f62df284a1f42370dd0f95bc4f92722f"
+  },
+  "signed-primitive-campaign-attempt-3/11-take-overflow-error-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "0b2d688da6d80f4c89f26aeea125314f9f003545ff5c917587b9eb9055cef1c0"
+  },
+  "signed-primitive-campaign-attempt-3/11-take-overflow-error-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "3db01b19164097c11263f54c151e0af1850dc305a906ad52e573ecb78582677a"
+  },
+  "signed-primitive-campaign-attempt-3/12-fixed-payload-omitted/command.json": {
+    "bytes": 1422,
+    "mode": 420,
+    "sha256": "2f73ce5ff268b2d72a921e3c917b7034bbf152687fc395a1970b61113127a2b5"
+  },
+  "signed-primitive-campaign-attempt-3/12-fixed-payload-omitted/owned/record.json": {
+    "bytes": 839,
+    "mode": 420,
+    "sha256": "65d0d26dedf740a57110f63bd473254f8511b46f42ed662d7f4862b6676e1eb6"
+  },
+  "signed-primitive-campaign-attempt-3/12-fixed-payload-omitted/owned/stderr.log": {
+    "bytes": 3776,
+    "mode": 420,
+    "sha256": "24dc9c78cac769a8f128b19e4f263badfe6e16ec5cfe197d401102a027d7fafc"
+  },
+  "signed-primitive-campaign-attempt-3/12-fixed-payload-omitted/owned/stdout.log": {
+    "bytes": 34507,
+    "mode": 420,
+    "sha256": "3cef094cd7348b892ff9aa0c72d99f86be947b6908b63a2167e1283b9b5e240d"
+  },
+  "signed-primitive-campaign-attempt-3/12-fixed-payload-omitted/result.json": {
+    "bytes": 307,
+    "mode": 420,
+    "sha256": "a27cf1c6b2068557243b606d7166f127bacc0090d709459246f4bd4654716165"
+  },
+  "signed-primitive-campaign-attempt-3/13-put-cursor-omitted/command.json": {
+    "bytes": 1417,
+    "mode": 420,
+    "sha256": "bbd60eda8640d6779a4a1bd3b01235750ee10418d3cb64acce4ebac59ee339d5"
+  },
+  "signed-primitive-campaign-attempt-3/13-put-cursor-omitted/owned/record.json": {
+    "bytes": 834,
+    "mode": 420,
+    "sha256": "a02f5085315b81debb3abd5f88808d191eb31cc56d7167415533cc3064192e8a"
+  },
+  "signed-primitive-campaign-attempt-3/13-put-cursor-omitted/owned/stderr.log": {
+    "bytes": 3747,
+    "mode": 420,
+    "sha256": "965719fb8a33d1061770c66c15cbbe3a4b284324038df86e6e1786784a36a182"
+  },
+  "signed-primitive-campaign-attempt-3/13-put-cursor-omitted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "471796e888547ca248032003ebb85c73eae4792a90720db278045cc68a66be90"
+  },
+  "signed-primitive-campaign-attempt-3/13-put-cursor-omitted/result.json": {
+    "bytes": 302,
+    "mode": 420,
+    "sha256": "2796d499b6322d8ac1320fd1cfb6445455a80327d20f9fac2ab1153dcedac622"
+  },
+  "signed-primitive-campaign-attempt-3/14-put-frame-prefix-substituted/command.json": {
+    "bytes": 1427,
+    "mode": 420,
+    "sha256": "87669a324eef3fedf0465beeca57c81fc16398c8d0dee43a465c0c6ed6e741ac"
+  },
+  "signed-primitive-campaign-attempt-3/14-put-frame-prefix-substituted/owned/record.json": {
+    "bytes": 844,
+    "mode": 420,
+    "sha256": "8f560c6a0fefd94057f85741727ada932d5e8fc944ee9558e2514218f9b46ae3"
+  },
+  "signed-primitive-campaign-attempt-3/14-put-frame-prefix-substituted/owned/stderr.log": {
+    "bytes": 3848,
+    "mode": 420,
+    "sha256": "21c074edd249c100a1d14b4982190f01d5f09953ac52f0dc255900de2dc1bcf6"
+  },
+  "signed-primitive-campaign-attempt-3/14-put-frame-prefix-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "829fa9ebf2822484e3ba466707702bb971e204240a1303d65c0cf2cdc4db3c4a"
+  },
+  "signed-primitive-campaign-attempt-3/14-put-frame-prefix-substituted/result.json": {
+    "bytes": 312,
+    "mode": 420,
+    "sha256": "5262fa735498afefce9b3f494fb2bc79ba1a8b0d7cbade0630d29f764006564c"
+  },
+  "signed-primitive-campaign-attempt-3/15-finish-prefix-accepted/command.json": {
+    "bytes": 1424,
+    "mode": 420,
+    "sha256": "2e90e6eb5f03ad7a9c2b5e7185c60cf809ff40dbdc320a8529bbdb7270096902"
+  },
+  "signed-primitive-campaign-attempt-3/15-finish-prefix-accepted/owned/record.json": {
+    "bytes": 841,
+    "mode": 420,
+    "sha256": "a8fee89ec9e688ee17d349f1bbb5ffa89bec0cef4becf187009c6408dfa1e750"
+  },
+  "signed-primitive-campaign-attempt-3/15-finish-prefix-accepted/owned/stderr.log": {
+    "bytes": 5788,
+    "mode": 420,
+    "sha256": "ee7d9ba530add3a8f23cb58401396d053f24e5f7569ad397f3842c1ca2ca9e1e"
+  },
+  "signed-primitive-campaign-attempt-3/15-finish-prefix-accepted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "0295c0a5a5585706bb408cfba6ff9c5f4aa7bf6b4c3d490fb0423fbc001cdc8c"
+  },
+  "signed-primitive-campaign-attempt-3/15-finish-prefix-accepted/result.json": {
+    "bytes": 309,
+    "mode": 420,
+    "sha256": "aeec56d1e714d615b90e8a6dba22a5346f86243928a0f7de04595ecd4c75f6c4"
+  },
+  "signed-primitive-campaign-attempt-3/16-finish-end-refused/command.json": {
+    "bytes": 1420,
+    "mode": 420,
+    "sha256": "01a7e9ceb9a93f50ac963e4cf56dd1aa106c3155931b35c342e5047d7f9a41d7"
+  },
+  "signed-primitive-campaign-attempt-3/16-finish-end-refused/owned/record.json": {
+    "bytes": 837,
+    "mode": 420,
+    "sha256": "a6741d7caa7c0f64de9e9a548605c15e0a1fbdafe9ba05dbeb866a214c8be8d0"
+  },
+  "signed-primitive-campaign-attempt-3/16-finish-end-refused/owned/stderr.log": {
+    "bytes": 5754,
+    "mode": 420,
+    "sha256": "a628da9127c8c8647434492dce566680d7a489759de9cd971b1485c97d267b9b"
+  },
+  "signed-primitive-campaign-attempt-3/16-finish-end-refused/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "5c9caa2ecda752a1e5e265d25c9220682d6abe620f3ef1358ba511de7e6aab4c"
+  },
+  "signed-primitive-campaign-attempt-3/16-finish-end-refused/result.json": {
+    "bytes": 305,
+    "mode": 420,
+    "sha256": "61fd2e4d854d73ea46183a5d89ed9400e0504c721ee0e8677ded5aeabe6511a7"
+  },
+  "signed-primitive-campaign-attempt-3/17-u16-encode-low-substituted/command.json": {
+    "bytes": 1428,
+    "mode": 420,
+    "sha256": "a41a47a5fb1bc496b573894f473187dbbe48212832949979285cebf64c58aa3f"
+  },
+  "signed-primitive-campaign-attempt-3/17-u16-encode-low-substituted/owned/record.json": {
+    "bytes": 845,
+    "mode": 420,
+    "sha256": "ee0315fa7161b3d6310f5062296bdf1eafa1010bacef8353df98c9f0bfcfbca5"
+  },
+  "signed-primitive-campaign-attempt-3/17-u16-encode-low-substituted/owned/stderr.log": {
+    "bytes": 11388,
+    "mode": 420,
+    "sha256": "423627e02104e2c49f134004dbf26c1b2ee03f2aec5343f6e88fa50071c0886c"
+  },
+  "signed-primitive-campaign-attempt-3/17-u16-encode-low-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "7e3855230b40f3c01a734907169b103595357525feec8ae93d6c32379d50b025"
+  },
+  "signed-primitive-campaign-attempt-3/17-u16-encode-low-substituted/result.json": {
+    "bytes": 313,
+    "mode": 420,
+    "sha256": "5997264c7d544d2e8b57e33a3e07f2daac4194593a2e8dc96072f8c2fe284789"
+  },
+  "signed-primitive-campaign-attempt-3/18-u16-encode-high-substituted/command.json": {
+    "bytes": 1429,
+    "mode": 420,
+    "sha256": "266dc8fa8f6a4846c93cc92165d5b2f1337bd6b2b977c481b684aafe014435c0"
+  },
+  "signed-primitive-campaign-attempt-3/18-u16-encode-high-substituted/owned/record.json": {
+    "bytes": 846,
+    "mode": 420,
+    "sha256": "9cd4c6647b0cec189b3b54ecbc3a8498712d617edbd4ce088fd3e8dc25f847a8"
+  },
+  "signed-primitive-campaign-attempt-3/18-u16-encode-high-substituted/owned/stderr.log": {
+    "bytes": 9549,
+    "mode": 420,
+    "sha256": "acc9942a75abd1497fc7a35c9f5af1a00dafe73cb8fa7688723888b6a0f47a37"
+  },
+  "signed-primitive-campaign-attempt-3/18-u16-encode-high-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "1c69637070d0477f762ddc63853290fe58fce5c5a8dcb0a22a093b533f8cc4a9"
+  },
+  "signed-primitive-campaign-attempt-3/18-u16-encode-high-substituted/result.json": {
+    "bytes": 314,
+    "mode": 420,
+    "sha256": "66bc30e6e1cbed6b2249ff13cf4c165c2cbf34e6a2a205aa64170e37af5ba9bf"
+  },
+  "signed-primitive-campaign-attempt-3/19-u16-decode-byte-0-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "a9552b03971c76b5656dd420cdb9f0d16d0a87cb95164922e92f27c9522fdcc0"
+  },
+  "signed-primitive-campaign-attempt-3/19-u16-decode-byte-0-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "390870999c3ece184ed7d29fceae352a66c5b6971b3bbabca68eb5efba48d208"
+  },
+  "signed-primitive-campaign-attempt-3/19-u16-decode-byte-0-substituted/owned/stderr.log": {
+    "bytes": 5155,
+    "mode": 420,
+    "sha256": "c8091c8a96e6a382acedca9388c62bdcba44a9059c5b96b46fb4fe988b74a392"
+  },
+  "signed-primitive-campaign-attempt-3/19-u16-decode-byte-0-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "fd1d34dec42928dac33c4560132ddf008a2a769ec0923110f07585681ac2c921"
+  },
+  "signed-primitive-campaign-attempt-3/19-u16-decode-byte-0-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "6ead8eec9d2de46a7f35f1ec8af28173a2b44098ec2961fcd8178cd986ddf544"
+  },
+  "signed-primitive-campaign-attempt-3/20-u16-decode-byte-1-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "0bde401eea5d45021d6abbe484ee448ad1967ef55e2f8d36339df6cc866f76a2"
+  },
+  "signed-primitive-campaign-attempt-3/20-u16-decode-byte-1-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "5f16fb5d9ace5f8b63629c1917831cfb059db14948edb893094fa9d55e7c8f58"
+  },
+  "signed-primitive-campaign-attempt-3/20-u16-decode-byte-1-substituted/owned/stderr.log": {
+    "bytes": 5155,
+    "mode": 420,
+    "sha256": "2453d44827cff1c790c07200ce24eeb52e00312ad70e53015d774d2f6dddcb96"
+  },
+  "signed-primitive-campaign-attempt-3/20-u16-decode-byte-1-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "6c1f819b047443eeabbd379c51fa341cd12b7a5292b498991657631b6dde9c27"
+  },
+  "signed-primitive-campaign-attempt-3/20-u16-decode-byte-1-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "ffb977a1bb5a3cd641270d9105bcf89e995f23287907f1db8b9606ca6ef684ea"
+  },
+  "signed-primitive-campaign-attempt-3/21-u64-encode-byte-0-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "47cfac1d97acb6295316d3d977e06ea4a7af6118e0e706e26802b5a5b9b2c266"
+  },
+  "signed-primitive-campaign-attempt-3/21-u64-encode-byte-0-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "653f0cd280b4cfc9903f85438a225ee0c925230b650fc4b8496b19ddebefc449"
+  },
+  "signed-primitive-campaign-attempt-3/21-u64-encode-byte-0-substituted/owned/stderr.log": {
+    "bytes": 12419,
+    "mode": 420,
+    "sha256": "59e10c7dc22b300de1c81e8175b06d7c4fd6bfb6ab8118a5d38e0596e4ed8e45"
+  },
+  "signed-primitive-campaign-attempt-3/21-u64-encode-byte-0-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "44d033779a13e8d725fbf604afcaefddcd263c076fb6893a584274ed9f696782"
+  },
+  "signed-primitive-campaign-attempt-3/21-u64-encode-byte-0-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "63c04d212ca250b66c35cb9c030d19249767d623914c95c5ee37cccaf70bd117"
+  },
+  "signed-primitive-campaign-attempt-3/22-u64-decode-byte-0-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "77244fd6395f4c95fbc33e975dbdaa27cc60808c7644acd98b3d76d45afb3840"
+  },
+  "signed-primitive-campaign-attempt-3/22-u64-decode-byte-0-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "633b1eaf887ff5edca7011a90d1d4d8f42e726f3338fea6b5175d6fbf0e8a12e"
+  },
+  "signed-primitive-campaign-attempt-3/22-u64-decode-byte-0-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "8bddcb8d5ae040f309f66fcb8abcd3cd08952a718c2f4ee368bd5d06a6bbf135"
+  },
+  "signed-primitive-campaign-attempt-3/22-u64-decode-byte-0-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "b0872943021a48333b9876257bc03dc3858813285a4e2fd574ba91c18cecb1dc"
+  },
+  "signed-primitive-campaign-attempt-3/22-u64-decode-byte-0-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "d3569340637e5442679ec1be1f900230df95017a0d66be2fffa9bd3764ca38ba"
+  },
+  "signed-primitive-campaign-attempt-3/23-u64-encode-byte-1-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "245033f287b59330eac1dee0e2c86773631f647ad20a677044fdad935ba2331e"
+  },
+  "signed-primitive-campaign-attempt-3/23-u64-encode-byte-1-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "e944c969a202ddb116399d602ca4a4346aff83bb73bf0a6cf16e1f955e5b72a3"
+  },
+  "signed-primitive-campaign-attempt-3/23-u64-encode-byte-1-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "9adc4380131000fcaaf978d10f92c41758fac60f0d9fe158a5f59c78a02a2b73"
+  },
+  "signed-primitive-campaign-attempt-3/23-u64-encode-byte-1-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "c701843de68ccff253da7a9bf7641f30cfcc98df8ae7efa4bd4b77a2eeb57614"
+  },
+  "signed-primitive-campaign-attempt-3/23-u64-encode-byte-1-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "8b09afecdde9e76eb5d27e0ad1f5c92751c887b852b61fbf53107a7d533b2c9f"
+  },
+  "signed-primitive-campaign-attempt-3/24-u64-decode-byte-1-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "c5c4cb9ffb8274e4d9c7a64c6e9667a65dd2ad6afd71c6e6f858246b46a4a72d"
+  },
+  "signed-primitive-campaign-attempt-3/24-u64-decode-byte-1-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "2155fc665c7e9eea294b5d5c25a7855c19c582e429f97d7aa5ee67b63b075655"
+  },
+  "signed-primitive-campaign-attempt-3/24-u64-decode-byte-1-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "9a4ab93fb830939c3667fbae72aa0e6e90c8baffe4c1c96cfb26868408c815c9"
+  },
+  "signed-primitive-campaign-attempt-3/24-u64-decode-byte-1-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "3a149ff81395561cbde6bdfc8577ad708839af65cd2f973bddb0d78d4dc61371"
+  },
+  "signed-primitive-campaign-attempt-3/24-u64-decode-byte-1-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "b0035fc61de17053aabf999f7decf5cbea210bec61dbba669f85388317f9310f"
+  },
+  "signed-primitive-campaign-attempt-3/25-u64-encode-byte-2-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "f45df020f16dd8f37654da338e51df7a6745da54c8d44eec8f21c5b3f7d5a059"
+  },
+  "signed-primitive-campaign-attempt-3/25-u64-encode-byte-2-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "7a5d3a11c175617392f1c0ce7c368e1260051fb13c7d23a146f673cefe6c1807"
+  },
+  "signed-primitive-campaign-attempt-3/25-u64-encode-byte-2-substituted/owned/stderr.log": {
+    "bytes": 10594,
+    "mode": 420,
+    "sha256": "38f039993fa4acf2a75642e6ee2a92cf7da0dc72ae5cb009e4cd36e61ad77100"
+  },
+  "signed-primitive-campaign-attempt-3/25-u64-encode-byte-2-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "d1d07517296ca081236890eeccb11e503d3bfef9f0953816bf8182420393a466"
+  },
+  "signed-primitive-campaign-attempt-3/25-u64-encode-byte-2-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "7474b24229752c0246765410499dd0f9f4ac5e3d2cb18779ad9225fb69ff542c"
+  },
+  "signed-primitive-campaign-attempt-3/26-u64-decode-byte-2-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "095c97ae2b5123ccb78c647453e3affe6e5f51fdd0a63152ac8feec44247952f"
+  },
+  "signed-primitive-campaign-attempt-3/26-u64-decode-byte-2-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "552c2563742a762938a2b3258614359ff305d7957e0121c6d83946370f961912"
+  },
+  "signed-primitive-campaign-attempt-3/26-u64-decode-byte-2-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "1ada2f294d7c4ed45535d5336c0e2ef1ff34488827c9b390b49849d671b230f7"
+  },
+  "signed-primitive-campaign-attempt-3/26-u64-decode-byte-2-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "cbc2dd3d0dc11859a8b01974e14a134d10e7171e4e6322c4585110efc6f48abe"
+  },
+  "signed-primitive-campaign-attempt-3/26-u64-decode-byte-2-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "a8f378d29f7c758ed354cab9deefc678bd6bf59f8b36d38417910f3380a06130"
+  },
+  "signed-primitive-campaign-attempt-3/27-u64-encode-byte-3-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "a0e5eadf1131e0e9e63c25b0e23d81f45b20b52ba332132c4fa29ab71443662a"
+  },
+  "signed-primitive-campaign-attempt-3/27-u64-encode-byte-3-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "910dd53dafad8df177c028c0359380436c84be315a1f4f65344adb2ba3841a39"
+  },
+  "signed-primitive-campaign-attempt-3/27-u64-encode-byte-3-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "26706b3eabac8cff13eab56d4de95fa5d54634f7ccf02ff3f908cfa653d93612"
+  },
+  "signed-primitive-campaign-attempt-3/27-u64-encode-byte-3-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "9a5fe7d9f02e435f390a9fc9d9e71d34307ae159e8b6a776f168b2b9c53811d2"
+  },
+  "signed-primitive-campaign-attempt-3/27-u64-encode-byte-3-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "83c779f288322568f253992930cdd2c6fa927afb78be557e967e36500c3cb0d1"
+  },
+  "signed-primitive-campaign-attempt-3/28-u64-decode-byte-3-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "16611c917c4c50d0bfe3feeedf2221225dfa84d5070eab6e1ae9cfd4b24126fc"
+  },
+  "signed-primitive-campaign-attempt-3/28-u64-decode-byte-3-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "8994d5b262e5773ab04f4f67cc84acb503b7ff3e5d047afe3346bccbe0cea292"
+  },
+  "signed-primitive-campaign-attempt-3/28-u64-decode-byte-3-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "6930d7b83c34d36e5b41df7ce10d6ff213f83a2c694518387c4b4e138be566e5"
+  },
+  "signed-primitive-campaign-attempt-3/28-u64-decode-byte-3-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "82343102026d4908d8c797d0d26fbc29630e358e933a393d0d3981f116fbd628"
+  },
+  "signed-primitive-campaign-attempt-3/28-u64-decode-byte-3-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "ec1d6762ea256b76eb7bdac46d3af6d864b3b8e62d017e60eb1cf2f214fb65d5"
+  },
+  "signed-primitive-campaign-attempt-3/29-u64-encode-byte-4-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "90e17fb6575aedc811469423f063eba1dfd33f6422975a8d94c05fafffc269ef"
+  },
+  "signed-primitive-campaign-attempt-3/29-u64-encode-byte-4-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "a908c46ba3ba3af19bdc42927d22794479aee6771e8ad48f6d1216f51c47e3a6"
+  },
+  "signed-primitive-campaign-attempt-3/29-u64-encode-byte-4-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "f53d98ad3c45e6b32b9a5d71526c514613226c07070137f3b5c029ba7170a329"
+  },
+  "signed-primitive-campaign-attempt-3/29-u64-encode-byte-4-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "f0270e4fd72398389a258562513d3d099ed2136df947908a5d1ec90ee2b0afc6"
+  },
+  "signed-primitive-campaign-attempt-3/29-u64-encode-byte-4-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "111426026c30ef4b710c253e1f9be8036d9a26f5fb55ae6eab5d17d1dbe641ff"
+  },
+  "signed-primitive-campaign-attempt-3/30-u64-decode-byte-4-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "021714a6c388a346641a44efef60d2d8d03dd92678a3679403da729a1ba90619"
+  },
+  "signed-primitive-campaign-attempt-3/30-u64-decode-byte-4-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "964630ee6341e1e173da782c1062ca4ec49aeaaf822353278602d5bcdf398a6b"
+  },
+  "signed-primitive-campaign-attempt-3/30-u64-decode-byte-4-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "84eb40e3718e8977d8161ddb6eaad130fdc04f63a682d63369744aa741dfcde0"
+  },
+  "signed-primitive-campaign-attempt-3/30-u64-decode-byte-4-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "9b2b44e098223d2bb438696aef494f8395c7ca619efe774b86c24e736505b09e"
+  },
+  "signed-primitive-campaign-attempt-3/30-u64-decode-byte-4-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "af40b6546100814a6ac7f818c89a026e7e74d6dfaf7a7aa64388cca358a9e166"
+  },
+  "signed-primitive-campaign-attempt-3/31-u64-encode-byte-5-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "dca4c9d738af2245e068bf334c67b65dcf9fec3c6aa3863ef6ae65d30cdf20d4"
+  },
+  "signed-primitive-campaign-attempt-3/31-u64-encode-byte-5-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "c7f000ea4faa045dc37f3e64ebae8e4e38eaa695e2a61456ef3257a093a30372"
+  },
+  "signed-primitive-campaign-attempt-3/31-u64-encode-byte-5-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "59df40158520c6b63c97247895bd5a59c2be466c6fe6136f29093f3888f81bd9"
+  },
+  "signed-primitive-campaign-attempt-3/31-u64-encode-byte-5-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "a2f94dea4be5605bfe7a32680f68cff9f22ebcd0b2cabedb1731bc1086e105bb"
+  },
+  "signed-primitive-campaign-attempt-3/31-u64-encode-byte-5-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "fe981b5552dc9fed0f0733247353013b67fe6a7af1ba3f71bf62d716b483c45c"
+  },
+  "signed-primitive-campaign-attempt-3/32-u64-decode-byte-5-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "f792d096846d1e3a029e399643495c43f4f9e20d924e26b098efdda37bdadc55"
+  },
+  "signed-primitive-campaign-attempt-3/32-u64-decode-byte-5-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "48f5a80d293dd14d55c311080d2d52ef530dd51f5fa117e7a0635acf74dc4e8c"
+  },
+  "signed-primitive-campaign-attempt-3/32-u64-decode-byte-5-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "73dc7d4d7663567b542cae64d1524e44c25f5e4844fa72371537440bd780e580"
+  },
+  "signed-primitive-campaign-attempt-3/32-u64-decode-byte-5-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "6df8c9def283bdda0cf250cea649dec59bc30d26966d39882cc469cedb43b9ab"
+  },
+  "signed-primitive-campaign-attempt-3/32-u64-decode-byte-5-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "6a5886955a7bd3bb317c6c8f9f7b859b43edd6038ec07cc48389bec8eeefe515"
+  },
+  "signed-primitive-campaign-attempt-3/33-u64-encode-byte-6-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "92721428bdb1cb0e96ea9064ba692a6f2f76d8ded5a5c2e4ad7d02c8ca5d6d87"
+  },
+  "signed-primitive-campaign-attempt-3/33-u64-encode-byte-6-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "7c56af7965e7d00000690cea4a512f45acba63a3027d432cbcf51c1b48fe6a50"
+  },
+  "signed-primitive-campaign-attempt-3/33-u64-encode-byte-6-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "75fce810bec8bcba754bd5730922d2f8cf5f4b5cd771fae59bf32d20edb1a886"
+  },
+  "signed-primitive-campaign-attempt-3/33-u64-encode-byte-6-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "c3184b1c8bed4f3cc19ae1d636533a9473e3bb090f0a83e69ad99686fc1ccb79"
+  },
+  "signed-primitive-campaign-attempt-3/33-u64-encode-byte-6-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "624560035cffb14908162b7fd041f48ce9465b00460a94f92ef82e4ea72aac22"
+  },
+  "signed-primitive-campaign-attempt-3/34-u64-decode-byte-6-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "4a2dbe8aedc77a6cd52b995caf1b7365d18e94227742029324179d7fd544d810"
+  },
+  "signed-primitive-campaign-attempt-3/34-u64-decode-byte-6-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "8d566adb07bc636519e1ccf2f3ee1a325d580f710bd6e199f121caac0d4680fe"
+  },
+  "signed-primitive-campaign-attempt-3/34-u64-decode-byte-6-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "80e4fdd58769ed0a11e76f5e3951ab19dd3fe54c25051531e3656ff8f870a0f7"
+  },
+  "signed-primitive-campaign-attempt-3/34-u64-decode-byte-6-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "a158436b6583f3e3871ba1cbe4b4ac72b5d486db64854f990fd5da77e11ba42d"
+  },
+  "signed-primitive-campaign-attempt-3/34-u64-decode-byte-6-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "1ca3b311dcf46b98c89aef5ea6b26d33c8d087f9920aba26be4ba5cf39b1831c"
+  },
+  "signed-primitive-campaign-attempt-3/35-u64-encode-byte-7-substituted/command.json": {
+    "bytes": 1431,
+    "mode": 420,
+    "sha256": "414d696d5004183cb45ac04a9529a73f874d5ee86b4a297cd49ca52e61614af3"
+  },
+  "signed-primitive-campaign-attempt-3/35-u64-encode-byte-7-substituted/owned/record.json": {
+    "bytes": 848,
+    "mode": 420,
+    "sha256": "538256ad24947874ad7437c9e4f15e3f1e291c7059d7637383b272d72c910a99"
+  },
+  "signed-primitive-campaign-attempt-3/35-u64-encode-byte-7-substituted/owned/stderr.log": {
+    "bytes": 10595,
+    "mode": 420,
+    "sha256": "b88a6ad100b1d9f2ee880b372bbc2e457aa90158413770f5820c20b030226438"
+  },
+  "signed-primitive-campaign-attempt-3/35-u64-encode-byte-7-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "00d9f288d5e52cbfdf319ffcfe5669e17efc216ea30b10b1bb0231fe596ba13c"
+  },
+  "signed-primitive-campaign-attempt-3/35-u64-encode-byte-7-substituted/result.json": {
+    "bytes": 316,
+    "mode": 420,
+    "sha256": "9004ae020f98860c056189cc1515bb58ae6cd4d306fc0f521bdbf75a6498471c"
+  },
+  "signed-primitive-campaign-attempt-3/36-u64-decode-byte-7-substituted/command.json": {
+    "bytes": 1436,
+    "mode": 420,
+    "sha256": "0fbb76cae313f697d90784ab4b73590a29a74bf4289380590eb0f6d4b95b1b68"
+  },
+  "signed-primitive-campaign-attempt-3/36-u64-decode-byte-7-substituted/owned/record.json": {
+    "bytes": 853,
+    "mode": 420,
+    "sha256": "f4c63423ff469efad685d14b1e452863f3d855934292f262db748b1f1cc419ad"
+  },
+  "signed-primitive-campaign-attempt-3/36-u64-decode-byte-7-substituted/owned/stderr.log": {
+    "bytes": 6091,
+    "mode": 420,
+    "sha256": "1906affe359450d8667c49e1436e092d49f4e18af83bfba894c109c3e6f9baa8"
+  },
+  "signed-primitive-campaign-attempt-3/36-u64-decode-byte-7-substituted/owned/stdout.log": {
+    "bytes": 34635,
+    "mode": 420,
+    "sha256": "66904a036f11236ab13443c762a72a54230bde734f52866c4ad120c3ee361d4d"
+  },
+  "signed-primitive-campaign-attempt-3/36-u64-decode-byte-7-substituted/result.json": {
+    "bytes": 321,
+    "mode": 420,
+    "sha256": "0b706d5f587e5fd4e13031d65e3ab2781f1e511ae10b01ba0aee76bc06c94d64"
+  },
+  "signed-primitive-campaign-attempt-3/37-positive-after/command.json": {
+    "bytes": 1291,
+    "mode": 420,
+    "sha256": "17e9bff47461c48c835ce8165a7b0472e1bcf0679aedff082b30cde7e7cdd626"
+  },
+  "signed-primitive-campaign-attempt-3/37-positive-after/owned/record.json": {
+    "bytes": 708,
+    "mode": 420,
+    "sha256": "592d3eed0f48041b58618636c91c98b9333461cee8a51dedd152af8d89ab1855"
+  },
+  "signed-primitive-campaign-attempt-3/37-positive-after/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/37-positive-after/owned/stdout.log": {
+    "bytes": 34657,
+    "mode": 420,
+    "sha256": "511d2c20b69f52468066020fa9d063e228e4a07d9ed4ce9a877dbd71ecc8fdd7"
+  },
+  "signed-primitive-campaign-attempt-3/37-positive-after/result.json": {
+    "bytes": 202,
+    "mode": 420,
+    "sha256": "5924204ddaea0c9855b9f4c240798f53023e13ed167c4e3fafbea5d7cfc2363e"
+  },
+  "signed-primitive-campaign-attempt-3/38-release-after/command.json": {
+    "bytes": 1089,
+    "mode": 420,
+    "sha256": "2aa856717797b736abdfba1ccd04936a3595da7b56a183c034f7517373b0513c"
+  },
+  "signed-primitive-campaign-attempt-3/38-release-after/owned/record.json": {
+    "bytes": 506,
+    "mode": 420,
+    "sha256": "9f4195f16849af3421f35fda87f8c2b7eb9355c06cc0e5055e1e19f63b3af7fd"
+  },
+  "signed-primitive-campaign-attempt-3/38-release-after/owned/stderr.log": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signed-primitive-campaign-attempt-3/38-release-after/owned/stdout.log": {
+    "bytes": 92,
+    "mode": 420,
+    "sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+  },
+  "signed-primitive-campaign-attempt-3/38-release-after/result.json": {
+    "bytes": 113,
+    "mode": 420,
+    "sha256": "878eedf2828d6a96d49ed1fdff0ba974e22ce06ba063124297a950e79b2fb2ab"
+  },
+  "signed-primitive-campaign-attempt-3/closing-inputs.json": {
+    "bytes": 2839732,
+    "mode": 420,
+    "sha256": "16f80533e4c28b2c2676d17c0dc617729fb80341ad1a4a34c8b95769170da0fd"
+  },
+  "signed-primitive-campaign-attempt-3/controller-loader.py": {
+    "bytes": 1288,
+    "mode": 420,
+    "sha256": "c6c507a9829b929e1c268bcd887aa74d35951593f85ce6bea36d21c828f9f61a"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-mutation.json": {
+    "bytes": 1366,
+    "mode": 420,
+    "sha256": "1fe6c06798690cc12258b6e080f2aaaa0ad45b6fe1e6ef08405a828fc6488cd3"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3171,
+    "mode": 420,
+    "sha256": "a6875bba367dde84cd35b01631fca7bca82b6cb89a69adf3210acea4cec71ea9"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/finish-end-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-mutation.json": {
+    "bytes": 1370,
+    "mode": 420,
+    "sha256": "5e069d5fcfac92eadf34faf417c7ed7b355d87143dd02e0a7197f6b28d9e031d"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "a2b089112b848f2beeeef6419060eb4dd24446e54cdd8e5dceac67a475c6f6e2"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/finish-prefix-accepted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-mutation.json": {
+    "bytes": 1368,
+    "mode": 420,
+    "sha256": "cb50ffd1e6fee2d92552475772f9357941bec6ffc0f469a94792238f316a7e5a"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3152,
+    "mode": 420,
+    "sha256": "b9e773cf466c579dc0d22113907f1e643280080faf04f114aec454aacee390e1"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/fixed-payload-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/fresh-census-inputs.json": {
+    "bytes": 1972,
+    "mode": 420,
+    "sha256": "f9f4d80f0e4d1c234aa9cf0a0d1295e88d9286d185551a14156892b19027e448"
+  },
+  "signed-primitive-campaign-attempt-3/fresh-process-closure.json": {
+    "bytes": 926,
+    "mode": 420,
+    "sha256": "6d6c8ac9d2808c04acf65f8ebbff4b7ba433a72889d37d790a3d14676f87b795"
+  },
+  "signed-primitive-campaign-attempt-3/inputs.json": {
+    "bytes": 2987587,
+    "mode": 420,
+    "sha256": "72e9992322e3a71453427ffad40b8f7587e0c04b33648bd5d9723499e0a87756"
+  },
+  "signed-primitive-campaign-attempt-3/process-controller.py": {
+    "bytes": 27475,
+    "mode": 420,
+    "sha256": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-mutation.json": {
+    "bytes": 1363,
+    "mode": 420,
+    "sha256": "aa7ed0e2ac2c3f3ddabb36dee966e0e2b5d3cd7226aa17f2bbddc8c24d8cff1d"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3169,
+    "mode": 420,
+    "sha256": "41163b1afc89e000d39b44e1467f92652b8826a616790f1cb8a456b4dd2ec0e1"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/put-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-mutation.json": {
+    "bytes": 1373,
+    "mode": 420,
+    "sha256": "30aa42ced4d887c06f0a062d9a910ee1f28ae6cd6ec2c4c526d7221674566b4d"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3168,
+    "mode": 420,
+    "sha256": "fc42995895a564b44ae5bd9dcb3887079a938c51035724f19faf3943bd7e8572"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/put-frame-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/raw-archive-index.json": {
+    "bytes": 7334,
+    "mode": 420,
+    "sha256": "26539c904b981ce96993e7e0c584cbdb24e28c730e08409d6d7bdb3ba6fb72b3"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-binding-1.json.source": {
+    "bytes": 144289,
+    "mode": 420,
+    "sha256": "970baf9fa1ff4954daa177e70ff079b1c973e8d29641e787ca14fe3e37e479e8"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1.json.source": {
+    "bytes": 1279438,
+    "mode": 420,
+    "sha256": "3b3703e23920000784de73cbd2e8f59fbadb8847e9fdda823acd84ffc3cbeaa3"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract.rs.source": {
+    "bytes": 11643,
+    "mode": 420,
+    "sha256": "aef31c4cea5c0cef621fc2eb908feddf7a1c023e207941cdc3aec1e82d07f4e5"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives.rs.source": {
+    "bytes": 1775,
+    "mode": 420,
+    "sha256": "9ebad52b69fc5d19040bc9c31be6ef178a9c2f616e96b23caeb9de63d40058a9"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs.source": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_tests.rs.source": {
+    "bytes": 11726,
+    "mode": 420,
+    "sha256": "a06077617456fcde961837d38406562b6207a20cf8d694e5eb1aaedb7247966c"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/check-distributed-codec-primitives.py.source": {
+    "bytes": 27212,
+    "mode": 420,
+    "sha256": "ed73fc66709e575f000d33d19463b84faac089df5f5c731f126eae5199703792"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs.source": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/fixtures/distributed_codec_primitives_v1_diagnostics.json.source": {
+    "bytes": 123076,
+    "mode": 420,
+    "sha256": "76b5f83c062142a5e5f4f887dc1dd188dad5bc88b2ec11acfefb2bd49de5bf40"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/crates/fe2o3-runtime-model/verus/test-distributed-codec-primitives.py.source": {
+    "bytes": 21287,
+    "mode": 420,
+    "sha256": "d222143fbf6ee68ef7aca52f6a46f75d44046a7249dff080740285a3810febfd"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/argument-candidate-source-1/docs/runtime-distributed-codec-primitives-v1.md.source": {
+    "bytes": 8524,
+    "mode": 420,
+    "sha256": "710abdb1d6775d98c829329a50cf3c778596c696881587177cdc115c33761460"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/bind_argument_candidate.py.source": {
+    "bytes": 18283,
+    "mode": 420,
+    "sha256": "d56501af6ef7c81052d387182a79b5fab6c9bca6c057f83a18db5ea09d9710dc"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/extend_argument_fixtures.py.source": {
+    "bytes": 6909,
+    "mode": 420,
+    "sha256": "51cd61f35b7b2fd62365892770665b330240b84fd17fda01fb95399894b37e6b"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed-primitive-prepared-2.json.source": {
+    "bytes": 2986614,
+    "mode": 420,
+    "sha256": "84f1ae95a2fc999faf50e202890fca5ea1875d7e3be24dac4f390fc08530a99c"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/signed_primitive_campaign_v2.py.source": {
+    "bytes": 14525,
+    "mode": 420,
+    "sha256": "e9b5c76261602fb189207eb410c0b1107f11fed021fd7210f62cbf4e546a4435"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_bind_argument_candidate.py.source": {
+    "bytes": 4905,
+    "mode": 420,
+    "sha256": "aef6b75bae3f41628783e2b7a5e0f93da4b9942bb00f250983a9c9ce59de3215"
+  },
+  "signed-primitive-campaign-attempt-3/raw-helpers/home/harsh/.codex-tmp/fe2o3-distributed-codec-primitives-records-20260930-cursor/test_signed_primitive_campaign_v2.py.source": {
+    "bytes": 5501,
+    "mode": 420,
+    "sha256": "500486d02d321d384da44f13c66c1e0a79d9eb18801a4a044767a737756ee7b7"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-inputs.json": {
+    "bytes": 1067,
+    "mode": 420,
+    "sha256": "353ad65bffab14432ddfed12eb0e502bf4bc630c1df543d24fff1ff51ae7b92e"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/relocated-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/results.json": {
+    "bytes": 20584,
+    "mode": 420,
+    "sha256": "824bad0cd6bea42190b7dda9235b770702225f2a5a070c29a8092d49d2928338"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-mutation.json": {
+    "bytes": 1365,
+    "mode": 420,
+    "sha256": "8ec195864aca9916491d0e3dbd620186d939cd2e433d15122a25905b5b02972a"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3169,
+    "mode": 420,
+    "sha256": "70c2f86d52c155d554a30c0413814986609a7221d63cf08d71ba9bbce5e2cc95"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-cursor-omitted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-mutation.json": {
+    "bytes": 1371,
+    "mode": 420,
+    "sha256": "16881c8735bc6078b0d8e381100d782fff67b2bdc7abb31e41e23687ff7809f2"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3202,
+    "mode": 420,
+    "sha256": "505adce3962f4a8be4f0906887db61c9406978cc706f3d08038c2df686680849"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-failure-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-mutation.json": {
+    "bytes": 1369,
+    "mode": 420,
+    "sha256": "181167bed979d8226d93deb31117e2fe68c4712623d2e1da402d21e8b59408f9"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3173,
+    "mode": 420,
+    "sha256": "d099985e10accbc5a86d2a8dca11f3dd0d7ac474c792c3b28efbafc5fd0ac790"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-full-range-refused-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-mutation.json": {
+    "bytes": 1372,
+    "mode": 420,
+    "sha256": "9ed5966b12904899a703914b2b166079f30138e03054e21698b8ee661643eca8"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3191,
+    "mode": 420,
+    "sha256": "44047b4149d4c738fe311995c7f57d3ece02572f45e072ea7fa4b46e9128dcc8"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-cursor-reset-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "f22ec3b85ab40fc0d3a3b06f0975656b9ff219a84bbabbf92dfaf8c27f02e8df"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "b54ef6b53b2f0c2b52143193a688bb2bdaa782d44ddc0c8a494476c7efbdae90"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-overflow-error-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-mutation.json": {
+    "bytes": 1369,
+    "mode": 420,
+    "sha256": "99e00aff925f8da247eb9862f0e7be42235905a098529a81be6e614c88cccce5"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3171,
+    "mode": 420,
+    "sha256": "d744ec36777c4287088b1b1982e7e324ebc187408895d272609f7b8f7651ce5d"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/take-prefix-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "2ca851fb87fe361743414fc00179f9f811aaa7242a745663da78481f72689ead"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "9b3e3da10d5bbdab09071d702b4a25157cf1609752addc0121ce55461e300af0"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "21b5b4f56d284de249b4c71ac983b0164f4eb37d6f7ebf3e1df27897f1dbf60d"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "306f9f83f09528a99b0b208a84dbe386095992c092580a8fa046275efaccaf9c"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u16-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-mutation.json": {
+    "bytes": 1375,
+    "mode": 420,
+    "sha256": "ec7c34e528003e2b76a66e2e0acec3694b0abf8d70cf6dbce0f54cc34e309dfa"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "0fa649be3f10e1002054582500c3e31ecdd7b1f559992dde1c628e13ae48156e"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-high-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-mutation.json": {
+    "bytes": 1374,
+    "mode": 420,
+    "sha256": "f7d594aa7d1c9e6224e1e64e6836c982ca4700bd41c511f36049f83ba648d255"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3179,
+    "mode": 420,
+    "sha256": "5798d69605a9597cd985c64240f1314733de475136b12c3d700eb1202c26c8f6"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u16-encode-low-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "4c6ef6fc65f24370b0f7ca4cc791f1b44d8a7bb25adafaa36de8746e74f3f926"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "9cebe9e6da2f488b2bd30856ff1a70937a73a8f5ce31f995f4c9e142d0f0e64f"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "69bff0869977b85f75bcde80f331a02cad881af4e4bffd048f45db9bb43901c0"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "02c3776aa10d881e8c34deb8ca4bdeced52e706a836ec5c83857ea5450651a72"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "a05317fc5a12b8035ee1c73bf1f12ac1c1476b0cb40c310b4e977384bf8b0e6a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "8c255cd455352d613fea798f98c69527cd204aeac517007f80f1ede66338a89c"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "168fdb7b1855d53c45d0495b690040a65e417f888b98c1767d65574bdbbf31de"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "0038eb1a07620d2bc2ef64d90a8745ac15f7eb2efbe31f22fde8a759e1aa237b"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "c80b606be765500ff9da9832b6000f3b78a1e799c3187078b46e7f5811953b01"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "aea2ceccb6b9316468b05439b45476f118b64e2f58cf722147286b75b4002a88"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "aa7a185836afa825b1070709a54848e5d75ab970bf35ef9a3d476ec4484ef446"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "611e57c04df75c14a9b4f34b7ee61f47a3cda46ef5839ce03cc89445aea3d366"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "369c86e3565396bfb65ab183f4bd0a484a5ac606713911dea6666b697ecb3ebe"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "0056672bc6738a82ad58c9a195ca191a54dc0c5a90da10d8defa4be3a46cb790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-mutation.json": {
+    "bytes": 1382,
+    "mode": 420,
+    "sha256": "8cbc23a695f2ea6aa3bf7a72338524df33f72989c5db715b736460bf8ca02af6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "8b9636eae48a0b49178df11ebe327c3ede235c564b34f5274537cdb203d57a78"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-decode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "9932a7033dc9f89053d44d7acdff75e84ec452f7d847b9a860474eb6fef4fb6f"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3179,
+    "mode": 420,
+    "sha256": "569cfd775f81b3651e0af9a32667212b6e490effd9996ec022ba62722815bf32"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-0-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "a74e6277badfd410cc7a3c05d2b207a60dcb28f5ac68e6c3cbe6352d4c2e3c3c"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "22d3a82f38bbf654465e132c0a299dec2e94b787e17031a467b6e73958334399"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-1-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "0021c98475bfbae8ec7a5553c03d986292903a2fc5e555320934e98d73973d0f"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3171,
+    "mode": 420,
+    "sha256": "baa6a79548f32d0ea574cc514ed81badbd6992650c1d8b4813164dc49117d4dc"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-2-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "dd8de768ea6b0fe88a679a3623b46adde4f09254844144c45c019a52fc8f9b75"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "b84f4c2d1ff78ffe59466148d53b85e42367c927eb479ce821ec682c5f7ff8cf"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-3-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "8421f2e71ed029cecc406734a01c7b44aae142db5cf634366a79dc9c3b01a2ea"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "5d48651d267b972a298f2a29b3364a3071797e7dfb859d0018502d947484ddd2"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-4-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "9fd59b7e954363c5f1bd01018fc65f7071f3bfa11a6532c1db2216b9a877d44f"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "8977b843c4b0070b53e08cad573ce483fe6d3087b531fe58957aa934cb004d6c"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-5-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "2eadc7ce1c68360288bef9b30bc6decad9961fa9fbf5efc040eccf408cf4486a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "388eaa3a79865edb910760bef4e2a42ee222d76080234acf1e096f543d55af4e"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-6-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-mutation.json": {
+    "bytes": 1377,
+    "mode": 420,
+    "sha256": "99ea5bad872c8d838f05009ee8cd82f70a73b745300ecffb2a467e700276d2cc"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": {
+    "bytes": 2537,
+    "mode": 420,
+    "sha256": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": {
+    "bytes": 3172,
+    "mode": 420,
+    "sha256": "8a327e6df17f34e43381aad41c3fd4353ba33697108ca6404be57c3c30a47b1d"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": {
+    "bytes": 2499,
+    "mode": 420,
+    "sha256": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": {
+    "bytes": 3527,
+    "mode": 420,
+    "sha256": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": {
+    "bytes": 6548,
+    "mode": 420,
+    "sha256": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": {
+    "bytes": 4147,
+    "mode": 420,
+    "sha256": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790"
+  },
+  "signed-primitive-campaign-attempt-3/u64-encode-byte-7-substituted-source/crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": {
+    "bytes": 6915,
+    "mode": 420,
+    "sha256": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  }
+}

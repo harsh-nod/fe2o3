@@ -60,6 +60,7 @@ jobs:
         run: |
           python3 -I -B crates/fe2o3-runtime-model/verus/test-distributed-publication-contract.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-distributed-publication-construction.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-distributed-codec-primitives.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-queued-query.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-request-charge.py
 

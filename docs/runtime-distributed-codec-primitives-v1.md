@@ -1,20 +1,29 @@
 # Distributed Codec Primitives V1
 
-## Candidate Scope
+## Qualified Component Scope
 
-This development candidate covers the private byte/cursor layer of the
+This development component covers the private byte/cursor layer of the
 model-only distributed publication description. The current Writer body passed
 a fresh full debug model run (1118 passed, 19 existing ignored, zero failed or
 filtered) and a fresh release-profile invalid-Writer differential. Complete
 unfiltered proof discovery accepted 54 obligations with zero errors and empty
 stderr, including generic fixed arrays and inherited construction/classifier
-units. This is not yet signed mutation qualification or a milestone exit.
+units. Signed candidate `e02b7229ab6b85c2c1697d239d6f82e96ff04d45`
+now passes the complete 38-stage qualification: three fresh unfiltered 54/0
+positives, including relocation, 31 actual-body logical negatives and both
+release brackets. All 38 owned process groups close. Independent agent and root
+readbacks agree. These counts include inherited obligations, not 54 independent
+runtime properties or a milestone exit. The
+[raw development packet](evidence/dev-distributed-codec-primitives-2026-10-01/README.md)
+preserves all three signed attempts and the original signed source.
 
 The first signed mutation campaign was rejected when a high-byte encoding
 mutation produced a range recommendation at the exact proof macro argument
 instead of in the shared macro body. Its real postcondition failure did not
 override the stricter diagnostic-source policy. The rejected packet remains
 unchanged; an argument-location replay fixture does not retroactively qualify it.
+The second attempt was interrupted after three accepted stages; it also remains
+incomplete. Only the fresh third attempt supplies the complete qualification.
 
 Earlier frontend and 51/3 logical failures remain preserved. A later discovery
 reported aggregate 54/0 but was rejected for five unexpected failure-worded
@@ -65,7 +74,7 @@ bytes later; a consumed nonzero reserved field leaves it another two bytes later
 Failed reads retain the most recent successful cursor. CPU tests bind these
 checkpoints and compound-error precedence; header refinement itself remains open.
 
-## Qualification Plan
+## Qualification Evidence
 
 The new CPU tests cover all small input ranges, invalid and maximal cursors,
 sequential reads, zero/fixed-size arrays, exact Writer frames and canaries,
@@ -74,13 +83,15 @@ nonuniform patterns, and actual Reader/Writer header/digest wrappers. The entire
 model test suite and scoped formatting have passed for the current native bytes.
 Strict all-feature/all-target Clippy and no-default library compilation also
 passed for these same native bytes. Those CPU/static results are explicitly reused
-across diagnostic-policy metadata changes; final signed qualification remains open.
+across diagnostic-policy metadata changes; the final signed proof campaign does
+not rerun CPU tests or static compilation.
 
 The source guard binds all model Rust files and the exact seven-file proof
 closure. Light controls construct 31 distinct, focused actual-body mutations
-across all eight primitive functions. These are not mutation kills until a
-fresh solver campaign records genuine logical failures with the exact selected
-function diagnostics. Parse, borrow-check, unsupported-feature, resource or
+across all eight primitive functions. The accepted signed campaign records a
+fresh genuine logical failure for each of these 31 mutations, with the exact
+selected function diagnostics. Constructing cases alone is not qualification.
+Parse, borrow-check, unsupported-feature, resource or
 controller failures cannot substitute for logical failures. The complete count
 is pinned to 54 and the error-enumeration threshold to one. A separate fresh
 selector observation measured all eight families between two full 54/0 positives.
@@ -110,10 +121,19 @@ observation-only status and the signed campaign rejection remain unchanged.
 Source-only controls replay those
 fixtures and reject malformed results, wrong families, coordinates, expansions
 and multiplicities. Replay is classifier calibration, not fresh verifier
-evidence. Signed qualification still requires three new unfiltered 54/0 positives
+evidence. Signed qualification requires three new unfiltered 54/0 positives
 (original, relocated seven-file closure, original again), 31 fresh actual-body
 logical negatives, pinned release brackets and owned-process closure. No mutation
 kill is claimed by constructing the cases or replaying the fixtures.
+
+Integration at `a8a908878` and `8fd3b7ddb` preserves all nine original candidate
+paths. The queued-query, publication-classifier and construction source guards
+are explicitly rebound from 299 to 302 model Rust files, with their complete
+36-, three- and five-file executable proof closures unchanged. The primitive
+and construction helper pins follow that metadata-only classifier guard update.
+No extra theorem follows from refreshing these guards. The eighteen-command
+local component CI replay, including the new primitive source controls, passes;
+it does not execute a new solver or Rust suite, or establish a hosted CI result.
 
 ## Remaining Boundary
 

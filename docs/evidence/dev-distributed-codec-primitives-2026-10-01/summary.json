@@ -1,0 +1,29 @@
+{
+  "archive_bytes": 2206120,
+  "archive_files": 805,
+  "archive_index_sha256": "5703201fc30b94733d2605b98aec71233d8b45bf030915b69d20cd4ee9e42562",
+  "archive_logical_bytes": 38280091,
+  "archive_sha256": "084c719ff8f8f9825ecf546c644858045e7bceb40aa8bf762cc5318cdd4125c6",
+  "bundle_bytes": 35656,
+  "bundle_prerequisite": "0c38a20c65452ee34cd97f2015b1f70da8211b18",
+  "bundle_sha256": "56c8f0e341bedf6c27cab517c637c4a3f858a27fc0f173173573d1230d37027c",
+  "bundle_verification_stderr": "/home/harsh/.codex-tmp/fe2o3-codec-publication-20261001/signed-candidate.bundle is okay\n",
+  "bundle_verification_stdout": "The bundle contains this ref:\ne02b7229ab6b85c2c1697d239d6f82e96ff04d45 HEAD\nThe bundle requires this ref:\n0c38a20c65452ee34cd97f2015b1f70da8211b18 \nThe bundle uses this hash algorithm: sha1\n",
+  "earlier_attempts_preserved": [
+    1,
+    2
+  ],
+  "local_ci_commands_passed": 18,
+  "qualification": {
+    "accepted_attempt": 3,
+    "closed_groups": 38,
+    "full_proofs": 3,
+    "logical_negatives": 31,
+    "stages": 38,
+    "verified_each": 54
+  },
+  "scope": "Exact raw publication and signed source custody, not new qualification. CPU/static evidence is explicitly reused. Prior discovery, tool binaries, original/retained CPU executables and external helper history remain local dependencies. No whole codec, authentication, Context, GPU, performance, parity or milestone closure.",
+  "self_contained_evidence": false,
+  "signed_commit": "e02b7229ab6b85c2c1697d239d6f82e96ff04d45",
+  "source_inputs": 6500
+}

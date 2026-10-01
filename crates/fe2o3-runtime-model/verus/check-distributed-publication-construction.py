@@ -19,10 +19,10 @@ PROOF = V / 'distributed_publication_construction_v1.rs'
 OLD_PROOF = V / 'distributed_publication_contract_v1.rs'
 IDENTITY = SRC / 'identity.rs'
 BRIDGE = V / 'check-distributed-publication-contract.py'
-BRIDGE_SHA = '952a9a340b57d19c313cafd9ca1b87757f4e7925649daf21be34e5228ecfd94b'
+BRIDGE_SHA = 'ea17c6a3791026233ad177a403ce7cdc89a49c71a497d9ae7b440bbdf7fdab54'
 FILES = [PROOF, OLD_PROOF, DECLARATIONS, OLD_BODY, BODY]
-SOURCE_FILES = 299
-SOURCE_TREE_SHA = '38d8499e6aed5d061932bbc3fae3b7fdc5d7d6afa1e9170e6d2b46c1bbe7a77a'
+SOURCE_FILES = 302
+SOURCE_TREE_SHA = 'e49f3ace340708e3dc33d72d73efc308062cf50c881c8ead2fde2a71ef0717f3'
 PROOF_SHA = 'b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790'
 UNCHANGED = {
     OLD_PROOF: '57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853',
