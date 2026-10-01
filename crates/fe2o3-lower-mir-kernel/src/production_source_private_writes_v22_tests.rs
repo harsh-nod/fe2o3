@@ -6,6 +6,9 @@ mod wrapping_value_v23;
 #[path = "production_source_unary_expression_v39_tests.rs"]
 mod unary_expression_v39;
 
+#[path = "production_source_float_expressions_v54_tests.rs"]
+mod float_expressions_v54;
+
 fn with_private_expression_result_v24(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     consume: impl for<'scope, 'work> FnOnce(
