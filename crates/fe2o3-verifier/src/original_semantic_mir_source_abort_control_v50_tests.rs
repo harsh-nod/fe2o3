@@ -4,7 +4,10 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
-fn transform(_: &mut Vec<SemanticTypeDeclV1>, functions: &mut Vec<SemanticFunctionDeclV1>) {
+pub(super) fn transform(
+    _: &mut Vec<SemanticTypeDeclV1>,
+    functions: &mut Vec<SemanticFunctionDeclV1>,
+) {
     let helper = functions.last_mut().unwrap();
     assert_eq!(helper.locals().len(), 4);
     assert_eq!(helper.blocks().len(), 1);
