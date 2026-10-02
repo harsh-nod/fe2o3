@@ -36,6 +36,46 @@ fn admit_r57_n3_v2() -> Result<KfdRuntimeLaunchGateV1, KfdRuntimeBackendErrorV1>
         })
 }
 
+fn admit_indexed_qualification_devices_v1(
+    unique_ids: &[u64],
+    round: usize,
+    mut admit: impl FnMut(
+        usize,
+        usize,
+        usize,
+    ) -> Result<KfdRuntimeLaunchGateV1, KfdRuntimeBackendErrorV1>,
+) -> Result<Vec<(u64, KfdRuntimeLaunchGateV1)>, KfdRuntimeBackendErrorV1> {
+    validate_qualification_devices_v1(unique_ids)?;
+    let mut gates = Vec::new();
+    gates.try_reserve_exact(unique_ids.len()).map_err(|_| {
+        KfdRuntimeBackendErrorV1::new(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "indexed qualification gate roster allocation failed",
+        )
+    })?;
+    for (index, unique_id) in unique_ids.iter().enumerate() {
+        gates.push((*unique_id, admit(unique_ids.len(), index, round)?));
+    }
+    Ok(gates)
+}
+
+fn admit_sharded_vecadd_v1(
+    count: usize,
+    index: usize,
+    round: usize,
+) -> Result<KfdRuntimeLaunchGateV1, KfdRuntimeBackendErrorV1> {
+    crate::qualification_gfx942_sharded_vecadd_v1::admit_gfx942_sharded_vecadd_qualification_v1(
+        count, index, round,
+    )
+    .map(KfdRuntimeLaunchGateV1::ExactGfx942ShardedVecadd)
+    .map_err(|error| {
+        KfdRuntimeBackendErrorV1::new(
+            KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+            error.to_string(),
+        )
+    })
+}
+
 pub(super) fn validate_qualification_devices_v1(
     unique_ids: &[u64],
 ) -> Result<(), KfdRuntimeBackendErrorV1> {
@@ -57,6 +97,27 @@ pub(super) fn validate_qualification_devices_v1(
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    /// Opens independent one-shot shards of the finite vecadd qualification workload.
+    ///
+    /// The ordered two-to-eight-device UID roster and every indexed recipe for
+    /// `round` (zero or one) are admitted before any native device is opened.
+    /// Each child retains its own exact gate; no authority state is shared.
+    /// This grants no general kernel authority and changes no existing fixture.
+    ///
+    /// DeviceLocal storage and eligible copies use the existing native-peer
+    /// opt-in policy. Compute must be joined and its owners restored before
+    /// selecting a native peer copy; this constructor does not defer that route
+    /// selection. Each round requires a fresh process because native VM admission
+    /// retains process-lifetime device history even after successful shutdown.
+    pub fn open_gfx942_sharded_vecadd_peer_qualification_v1(
+        unique_ids: &[u64],
+        round: usize,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let gates =
+            admit_indexed_qualification_devices_v1(unique_ids, round, admit_sharded_vecadd_v1)?;
+        Self::open_default_with_gate_policy_v1(gates, true)
+    }
+
     /// Opens two to eight devices for the exact repository-owned vecadd fixture.
     ///
     /// Every UID and fixture is validated before native device admission. The
@@ -121,3 +182,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sharded_tests;

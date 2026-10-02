@@ -504,6 +504,69 @@ executable and authenticated archive identity. It is not a fresh KFD suite.
 Nine source-control files change only 18 SHA literals and seven roster counts;
 all 76 associated proof files remain unchanged, with no new solver qualification.
 
+## Finite Sharded Compute
+
+The hardware-qualification-only
+`open_gfx942_sharded_vecadd_peer_qualification_v1` constructor installs an
+independent one-shot authority for every device in an ordered two-to-eight-UID
+roster. All recipes and UIDs are checked before native admission. It does not
+change the existing vecadd, repeat, or R57 authorities, nor grant general kernel
+authority through the production constructors.
+
+The new policy has exactly 70 recipes: each shard of 2 through 8 devices, in
+round 0 or 1. Every workload contains 65,537 `f32` elements, independent of the
+device count. Uneven logical shards use full page-padded DeviceLocal allocations
+and bindings; the 48-byte ABI carries the logical lengths and the grid rounds up
+to a 256-thread workgroup. The existing full-extent readiness requirement remains
+unchanged. Exact source, policy, object, ABI, geometry, allocation identities and
+initial contents are authenticated before an atomic one-shot acceptance.
+
+`gfx942-runtime-sharded-vecadd-capture-smoke` checks independently constructed
+HostVisible A/B/C inputs before upload, then joins every exact H2D completion.
+It preserves the authenticated H2dReady owners through launch authorization;
+precompute native readback would normalize those owners and clear required
+digests. All compute launches are admitted before explicit progress, although
+ordinary admission may eagerly publish them. The witness joins exact compute
+success and owner restoration before admitting the native peer ring, then
+queues event-bound D2H reads and closes admission with one group capture.
+
+No expected output is installed from the host after launch. Every logical output
+and padding byte is checked, with a global digest of the 262,148 meaningful bytes.
+The incoming destination sentinel is checked before peer admission. Individual
+compute and transfer completion receipts, quiescent drain, explicit native
+shutdown and capture-credit disposal are required before PASS.
+
+```sh
+cargo +nightly-2026-04-03 run --locked --offline -p fe2o3-runtime \
+  --all-features --profile test \
+  --example gfx942-runtime-sharded-vecadd-capture-smoke -- \
+  --round 0 "$GPU0_UID" "$GPU1_UID"
+```
+
+Use only freshly available devices. Each round is a separate process, not a
+reopened Context. This workload does not establish a fully prequeued compute-to-
+peer graph, arbitrary kernel authority, output-dependent recurrence, native
+partial-failure isolation, physical overlap, performance parity or machine-code
+refinement. The post-cutoff native counter and post-copy source preservation
+remain unobserved.
+
+The [sharded-compute campaign](evidence/dev-multigpu-compute-shards-2026-10-02/README.md)
+passes ten MI300X cases: both changed input rounds on 2/3/5/7 GPUs and reversed
+seven-device ordering. Every run checks complete logical output and padding,
+exact compute/transfer receipts and explicit shutdown. The local/uploaded/final
+witness SHA-256 is
+`b1c83337877a6a235c8219dbc5aaef65a39cc5b02b26202d4e8411618af86cf4`.
+All owned remote resources are removed and selected GPU/process baselines
+restored; GPU 0's foreign work is untouched. Eight-device coverage is CPU-only.
+
+Final-source qualification passes 2,048 runtime tests with 32 existing hardware
+ignores, all 31 example tests, strict Clippy/feature checks and all 32 source
+controls. Twelve runtime tests are new, and the previous 1,925-test KFD result is
+reused only through exact executable/source/roster and authenticated archive
+identity. Ten source-control files update 17 hashes and seven inventory counts;
+all 76 proof files remain unchanged. The pinned ROCm 7.2.4 compiler reproduces
+the unchanged kernel object byte-for-byte, without proving compiler correctness.
+
 ## Next Dependencies
 
 The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
@@ -518,9 +581,15 @@ host, not performance or exclusive-reservation evidence.
 The public-authority opt-in and 65-packet witness are implemented as described
 above. Fixed-total transfer sharding and pending peer/readback group drain now
 pass on seven selected GPUs. Additional pairs, eight-GPU hardware coverage,
-compute sharding, same-process device reopen, complete native fault coverage,
-and peer mappings retained across separate logical copies remain open.
+broader compute sharding, reusable live-Context batches, complete native fault
+coverage, and peer mappings retained across separate logical copies remain open.
 The current route does not qualify a general native runtime pipeline.
+
+Prioritize exact compute-producer-to-native-peer deferred admission and repeated
+work in one live Context. Same-process device reopen remains unsupported, but is
+a separate device/VM ownership redesign rather than a prerequisite for useful
+iterative workloads. General application kernels still require an appropriate
+compiler/effects authority; the finite sharded policy does not supply it.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed

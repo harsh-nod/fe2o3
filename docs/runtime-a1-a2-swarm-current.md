@@ -7,9 +7,9 @@ The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 2026-10-01: the issue remained Open. Published baseline `bafbfe739` includes
 public native-peer opt-in, cold copy-only admission, repeated ring reuse
 and completed deferred-result custody. The sharded checkpoints below add
-fixed-total native transfer rings and pending peer/readback group capture
-qualified through seven GPUs. Earlier matched wait-cadence measurements
-remain scoped to their recorded sources, not this whole integration tree.
+fixed-total native transfer rings, pending peer/readback group capture and
+finite sharded compute qualified through seven GPUs. Earlier matched wait-cadence
+measurements remain scoped to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
 has recovered. Primary-session SSH reaches MI300X as of 2026-10-02 03:47 UTC;
@@ -25,7 +25,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Fixed-total peer rings and pending peer/readback group drain qualified on 2/3/5/7 GPUs; incomplete | Compute sharding, same-process device reopen, eight-GPU hardware coverage, broader kernel authority and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite sharded compute, native peer rings and pending readback/group capture qualified on 2/3/5/7 GPUs; incomplete | Fully prequeued compute/peer execution, repeated live-Context batches, broader kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -125,25 +125,42 @@ The unchanged KFD executable/source qualification is reused for 1,925 tests,
 not reported as a fresh KFD suite. The 25 new runtime tests cover backend pending
 readback, Context producer custody and bounded group-capture behavior.
 
+The [sharded-compute checkpoint](evidence/dev-multigpu-compute-shards-2026-10-02/README.md)
+adds genuine GPU-produced results to that pipeline. Ten MI300X runs cover both
+changed-content rounds on 2/3/5/7 GPUs and reversed seven-GPU ordering. Each run
+partitions the same 65,537 vecadd elements, joins every exact compute result,
+then admits native peer copies and pending event-bound D2H before group capture.
+Every logical output and padding byte, global digest and individual completion
+receipt passes. No expected computed output is installed from the host.
+
+The separate one-shot policy admits only 70 finite recipes and preserves old
+authorities/artifacts. The pinned MI300X compiler rebuilds the unchanged object
+byte-for-byte. All 2,048 runtime tests pass with 32 unchanged hardware ignores;
+31 example tests, strict Clippy/feature checks and all 32 source controls pass.
+The 1,925-test KFD qualification is reused by exact source/ELF/roster identity,
+not rerun. Owned remote resources are removed and baselines restored.
+This remains a joined-compute, trusted-artifact correctness checkpoint, not
+physical-overlap, performance, general application authority or formal refinement.
+
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Add genuine compute sharding under a new finite kernel policy, keeping old
-   exact authorities unchanged. Partition 65,537 vecadd elements across devices,
-   retain page-aligned full-buffer bindings, and check every output and padding
-   byte. Join compute before admitting native peer/readback/capture; the current
-   route does not defer native selection behind a pending compute producer.
-2. Define and qualify reusable device/VM ownership and same-process reopen
-   without resetting process-lifetime admission history. Until then, changed
-   cutoff rounds require separate processes, not merely fresh Contexts.
-3. Extend fully prequeued compute-to-native-peer composition and run isolated
-   native partial-failure campaigns. CPU terminal/unwind tests are not a native
-   fault campaign, and existing R57 fixtures are not broad production authority.
-4. Add eight-GPU hardware coverage when every device is available and matched
-   HIP/HSA scaling after complete-output compute sharding passes. A1/A2 remain
-   parked and incomplete.
+1. Remove the host join with exact compute-producer-to-native-peer admission.
+   Retain authenticated metadata until producer success and owner restoration;
+   compose real journal reconciliation through the pending D2H/capture chain.
+2. Qualify changed compute/transfer batches inside one live Context, reusing
+   allocations and streams before its final cutoff. Same-process reopen is a
+   separate device/VM ownership redesign, not a prerequisite for iterative work;
+   never reset process-lifetime admission history to make it appear supported.
+3. Add application kernel authority and native partial-failure qualification.
+   Existing production peer constructors already accept caller authorities;
+   finite fixtures do not supply general compiler/effects evidence. CPU scripted
+   failures are not a native fault campaign.
+4. Add eight-GPU coverage when every device is free, then matched HIP/HSA scaling
+   and overlap measurements. Complete-output sharding now passes, but no timing
+   speedup follows. A1/A2 remain parked and incomplete.
 
 ## Earlier Multi-GPU Checkpoints
 
