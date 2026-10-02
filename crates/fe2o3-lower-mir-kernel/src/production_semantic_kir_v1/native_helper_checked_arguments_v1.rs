@@ -88,3 +88,48 @@ pub(super) fn check_test_call(
         Err(_) => Ok(false),
     }
 }
+
+#[cfg(test)]
+pub(super) fn with_first_owner_call_for_test<R>(
+    owner: &ProductionPreRankedKirOwnerV1,
+    use_query: impl for<'q> FnOnce(NativeHelperCallQuery<'q>) -> R,
+) -> R {
+    let module = owner.executable.module();
+    let root = owner.semantic_ssa.source_semantic().roots()[0];
+    let block = owner
+        .correspondence
+        .call_returns
+        .iter()
+        .find(|row| {
+            row.correspondence_owner == root
+                && row.semantic_function == root
+                && matches!(row.kind, SemanticKirCallReturnKindV1::Call { .. })
+        })
+        .unwrap()
+        .semantic_block;
+    // Setup borrows an already checked source/native call. The subject meter
+    // below still rechecks it, on a separate budget with the limits under test.
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 512 << 20);
+    owner
+        .with_checked_call_v1(root, root, block, &mut budget, |view| {
+            let target_id = &view.callee().association().kernel_ir_function;
+            let target = module
+                .functions
+                .iter()
+                .find(|function| &function.id == target_id)
+                .unwrap();
+            Ok(use_query(NativeHelperCallQuery {
+                owner: &owner.semantic_ssa,
+                module,
+                correspondence: &owner.correspondence,
+                root,
+                caller: root,
+                block,
+                source: view.source(),
+                operation: view.operation(),
+                target,
+            }))
+        })
+        .unwrap()
+}

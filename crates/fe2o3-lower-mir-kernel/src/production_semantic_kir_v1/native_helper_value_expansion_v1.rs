@@ -610,3 +610,7 @@ mod checked_allowance_tests;
 #[cfg(test)]
 #[path = "native_helper_resource_error_v1_tests.rs"]
 mod resource_error_tests;
+
+#[cfg(test)]
+#[path = "native_helper_checked_caps_v1_tests.rs"]
+mod checked_caps_tests;
