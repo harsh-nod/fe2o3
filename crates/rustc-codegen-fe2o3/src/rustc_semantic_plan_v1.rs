@@ -279,6 +279,7 @@ pub(crate) struct RawMirPreflightCountsV1 {
     call_arguments: u64,
     switch_targets: u64,
     validation_work: u64,
+    constant_bytes: u64,
 }
 
 impl RawMirPreflightCountsV1 {
@@ -295,12 +296,12 @@ impl RawMirPreflightCountsV1 {
             SemanticMirResourceV1::CallArguments => Some(&mut self.call_arguments),
             SemanticMirResourceV1::SwitchTargets => Some(&mut self.switch_targets),
             SemanticMirResourceV1::ValidationWork => Some(&mut self.validation_work),
+            SemanticMirResourceV1::ConstantBytes => Some(&mut self.constant_bytes),
             SemanticMirResourceV1::Callables
             | SemanticMirResourceV1::Allocations
             | SemanticMirResourceV1::Statics
             | SemanticMirResourceV1::VTables
             | SemanticMirResourceV1::Relocations
-            | SemanticMirResourceV1::ConstantBytes
             | SemanticMirResourceV1::LinkSymbolBytes
             | SemanticMirResourceV1::CanonicalBytes => None,
         }
@@ -335,6 +336,9 @@ impl RawMirPreflightCountsV1 {
     }
 
     fn digest_fields(self) -> [u64; 11] {
+        // Preserve V5's fixed header. Borrowed normalization literals are not
+        // emitted constants; their exact bytes and this private quota's total
+        // are checked together in the normalized-intrinsics child below.
         [
             self.types,
             self.functions,
@@ -3850,6 +3854,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,
         "normalized-intrinsics child",
     );
+    let mut committed_literal_bytes = 0_u64;
     for recipe in normalized_intrinsics {
         section.field(&recipe.caller.index().to_le_bytes())?;
         section.field(&recipe.block.to_le_bytes())?;
@@ -3880,6 +3885,12 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
                 section.field(&rustc_fn_abi_sha256_v1(tcx, checked.abi()))?;
             }
             NormalizedCallV1::CorePanic(checked) => {
+                committed_literal_bytes =
+                    committed_literal_bytes
+                        .checked_add(u64::try_from(checked.bytes().len()).map_err(|_| {
+                            ProductionSemanticPreflightErrorV1::IdentityTableMismatch
+                        })?)
+                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
                 section.field(b"fe2o3/core-panic-literal/recipe/v50")?;
                 section.field(rustc_type_identity_v1(tcx, checked.message_type()).as_bytes())?;
                 section.field(checked.bytes())?;
@@ -3896,6 +3907,9 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(recipe.identities.generic_type_arguments().as_bytes())?;
         section.field(recipe.identities.const_generic_arguments().as_bytes())?;
         section.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe))?;
+    }
+    if committed_literal_bytes != counts.constant_bytes {
+        return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
     }
     digest.section(
         PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,

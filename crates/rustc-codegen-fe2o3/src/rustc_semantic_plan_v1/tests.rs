@@ -358,6 +358,76 @@
     }
 
     #[test]
+    fn raw_literal_byte_budget_accumulates_exact_and_one_short_limits() {
+        for maximum in [36, 35] {
+            let limits = SemanticMirLimitsV1::default()
+                .with_limit(SemanticMirResourceV1::ConstantBytes, maximum)
+                .unwrap();
+            let mut counts = RawMirPreflightCountsV1::default();
+            counts
+                .charge(SemanticMirResourceV1::ConstantBytes, 17, limits)
+                .unwrap();
+            let second = counts.charge(SemanticMirResourceV1::ConstantBytes, 19, limits);
+            if maximum == 36 {
+                second.unwrap();
+            } else {
+                assert!(matches!(
+                    second,
+                    Err(ProductionSemanticPreflightErrorV1::LimitExceeded {
+                        resource: SemanticMirResourceV1::ConstantBytes,
+                        actual: 36,
+                        maximum: 35,
+                    })
+                ));
+            }
+            assert_eq!(counts.constant_bytes, 36);
+            assert_eq!(counts.digest_fields(), [0; 11]);
+            assert_ne!(counts, RawMirPreflightCountsV1::default());
+        }
+    }
+
+    #[test]
+    fn raw_literal_byte_budget_rejects_arithmetic_overflow_without_wrapping() {
+        let limits = SemanticMirLimitsV1::default();
+        let mut counts = RawMirPreflightCountsV1 {
+            constant_bytes: u64::MAX,
+            ..RawMirPreflightCountsV1::default()
+        };
+        let before = counts;
+        assert!(matches!(
+            counts.charge(SemanticMirResourceV1::ConstantBytes, 1, limits),
+            Err(ProductionSemanticPreflightErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::ConstantBytes,
+                actual: u64::MAX,
+                maximum,
+            }) if maximum == limits.limit(SemanticMirResourceV1::ConstantBytes)
+        ));
+        assert_eq!(counts, before);
+    }
+
+    #[test]
+    fn raw_literal_byte_account_does_not_admit_other_resource_domains() {
+        for resource in [
+            SemanticMirResourceV1::Callables,
+            SemanticMirResourceV1::Allocations,
+            SemanticMirResourceV1::Statics,
+            SemanticMirResourceV1::VTables,
+            SemanticMirResourceV1::Relocations,
+            SemanticMirResourceV1::LinkSymbolBytes,
+            SemanticMirResourceV1::CanonicalBytes,
+        ] {
+            let mut counts = RawMirPreflightCountsV1::default();
+            assert!(matches!(
+                counts.charge(resource, 1, SemanticMirLimitsV1::default()),
+                Err(ProductionSemanticPreflightErrorV1::AccountingDomain {
+                    resource: rejected,
+                }) if rejected == resource
+            ));
+            assert_eq!(counts, RawMirPreflightCountsV1::default());
+        }
+    }
+
+    #[test]
     fn deterministic_call_path_uses_sorted_roots_and_edges() {
         let id = SemanticFunctionIdV1::from_index;
         let edges = BTreeSet::from([
