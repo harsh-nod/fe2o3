@@ -290,9 +290,8 @@ fn reduction_admission_with_borrow_occurrences(
             block(81, vec![borrow.clone()], reduction_call),
             block(
                 82,
-                // Existing nominal transparency authenticates one consumer per
-                // borrow occurrence. This is a real second source borrow, not
-                // a relabeled retained reference or a storage exemption.
+                // Exercise either a fresh source borrow or two independently
+                // authenticated consumers of the same shared source borrow.
                 if fresh_borrow { vec![borrow] } else { vec![] },
                 SemanticTerminatorKindV1::Call(
                     SemanticDirectCallV1::new_callable(
@@ -446,9 +445,9 @@ fn collective_receipt(
 }
 
 #[test]
-fn wave_reduction_census_reused_context_reference_remains_exact_retained_storage_refusal() {
-    // Preserve the former one-borrow/two-consumer source as a strict boundary
-    // control. General reusable nominal-reference support is not added here.
+fn wave_reduction_census_reused_context_reference_authenticates_both_shared_consumers() {
+    // Shared fanout is admitted only when every outgoing use closes at an
+    // authenticated intrinsic. Both original reduction occurrences must remain.
     let semantic = ProductionSemanticMirOwnerV1::try_new(
         reduction_admission_with_borrow_occurrences(
             64,
@@ -464,7 +463,7 @@ fn wave_reduction_census_reused_context_reference_remains_exact_retained_storage
             .unwrap();
     ssa.verify_replay().unwrap();
     assert!(
-        !ssa.plan_for_function(SemanticFunctionIdV1::from_index(0))
+        ssa.plan_for_function(SemanticFunctionIdV1::from_index(0))
             .unwrap()
             .plan()
             .promoted_variables()
@@ -483,17 +482,19 @@ fn wave_reduction_census_reused_context_reference_remains_exact_retained_storage
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();
-    let result = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+    let lowered = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
         ssa,
         launch,
         ProductionSemanticKirLimitsV1::default(),
         &mut budget,
+    )
+    .unwrap();
+    require_wave_roster(
+        lowered.executable().module(),
+        64,
+        SemanticSubgroupReductionKindV1::Sum,
     );
-    assert!(
-        matches!(result, Err(crate::ProductionPreRankedKirErrorV1::Lowering(
-        ProductionSemanticKirErrorV1::RetainedLocalStorage { function: 0, retained_locals, retained_count: 1 }
-    )) if retained_locals == vec![(1, 1, "retained storage")])
-    );
+    lowered.executable().revalidate().unwrap();
     assert_eq!(budget.storage(), FLOOR);
 }
 
