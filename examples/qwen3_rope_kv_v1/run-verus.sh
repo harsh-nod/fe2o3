@@ -7,6 +7,7 @@ shared_dir="$script_dir/../row_softmax_v1"
 closure_manifest="$shared_dir/verus/VERUS_CLOSURE_MANIFEST"
 closure_checker="$shared_dir/verify-verus-closure.sh"
 source_checker="$shared_dir/check-proof-source.sh"
+lexical_checker="$script_dir/../wave64_collectives_v1/check-proof-source.py"
 
 if [ "$#" -ne 0 ]; then
     printf 'usage: %s\n' "$0" >&2
@@ -50,7 +51,7 @@ check_digest() {
 }
 
 check_digest "$expected_model" "$proof"
-"$source_checker" --forbid-uninterp "$proof"
+python3 -I -B "$lexical_checker" "$proof"
 check_digest d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019 "$closure_manifest"
 
 verus_bin=${VERUS:-verus}
