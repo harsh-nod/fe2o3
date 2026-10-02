@@ -26,6 +26,10 @@ macro_rules! emit {
 #[path = "mixed_optimizer_byte_control_v30.rs"]
 mod control;
 
+#[path = "mixed_optimizer_emitted_byte_functions_v55.rs"]
+mod emitted;
+pub(super) use emitted::EmittedByteFunctionsV55;
+
 #[path = "mixed_optimizer_private_byte_obligations_v38.rs"]
 mod physical;
 

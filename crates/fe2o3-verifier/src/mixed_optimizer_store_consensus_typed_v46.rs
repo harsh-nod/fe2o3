@@ -591,7 +591,9 @@ pub(super) fn generate<'a, 'owner, R: ByteAllocationResolverV30>(
         let plan = MemoryPlan::build(input, output, pair, out)?;
         let allocations = Allocations::derive(input, output, pair, allocation_origins, out)?;
         emit!(out, "mod forwarding_v46 {{\nuse super::*;\n");
-        emit_classifiers(input, &plan, &allocations, out)?;
+        emit_classifiers(input, &plan, &allocations, out).map_err(|error| {
+            out.source_section_error(error, "typed forwarding memory classifiers")
+        })?;
         let functions = emit_models(
             input,
             output,
@@ -601,6 +603,7 @@ pub(super) fn generate<'a, 'owner, R: ByteAllocationResolverV30>(
             output_context,
             &plan,
             &allocations,
+            None,
             width,
             registry_namespace,
             out,
@@ -628,6 +631,7 @@ fn emit_models<R: ByteAllocationResolverV30>(
     output_context: byte_function_v30::ByteInterpretationContextV39<'_, '_>,
     plan: &MemoryPlan,
     allocations: &Allocations<'_, '_, R>,
+    emitted_input: Option<&byte_function_v30::EmittedByteFunctionsV55<'_, '_, R>>,
     width: fe2o3_kernel_ir::FormalIndexWidth,
     registry_namespace: usize,
     out: &mut Writer<'_, '_>,
@@ -657,16 +661,33 @@ fn emit_models<R: ByteAllocationResolverV30>(
             allocations,
             out,
         )?;
-        before.emit(input_namespace, out)?;
-        after.emit(output_namespace, out)?;
+        match emitted_input {
+            Some(index) => index.emit_parent_aliases(&before, input_namespace, out),
+            None => before.emit(input_namespace, out),
+        }
+        .map_err(|error| {
+            out.source_section_error(error, "typed forwarding input byte functions")
+        })?;
+        after.emit(output_namespace, out).map_err(|error| {
+            out.source_section_error(error, "typed forwarding output byte functions")
+        })?;
         for ordinal in row.operations.clone() {
-            emit_operation_law(input, plan, ordinal, input_namespace, output_namespace, out)?;
+            emit_operation_law(input, plan, ordinal, input_namespace, output_namespace, out)
+                .map_err(|error| {
+                    out.source_section_error(error, "typed forwarding operation obligations")
+                })?;
         }
         for block in row.blocks.clone() {
-            emit_block_law(input, block, input_namespace, output_namespace, out)?;
+            emit_block_law(input, block, input_namespace, output_namespace, out).map_err(
+                |error| out.source_section_error(error, "typed forwarding block obligations"),
+            )?;
         }
-        emit_function_laws(input, function, input_namespace, output_namespace, out)?;
-        emit_initial(input, plan, function, width, registry_namespace, out)?;
+        emit_function_laws(input, function, input_namespace, output_namespace, out).map_err(
+            |error| out.source_section_error(error, "typed forwarding trace obligations"),
+        )?;
+        emit_initial(input, plan, function, width, registry_namespace, out).map_err(|error| {
+            out.source_section_error(error, "typed forwarding native entry obligations")
+        })?;
         drop((before, after));
         out.budget.release_storage(
             out.budget
@@ -690,6 +711,7 @@ pub(super) fn generate_segmented<R: ByteAllocationResolverV30, S: ByteAllocation
     width: fe2o3_kernel_ir::FormalIndexWidth,
     registry_namespace: usize,
     allocation_origins: &R,
+    emitted_input: &byte_function_v30::EmittedByteFunctionsV55<'_, '_, R>,
     segments: &allocation_bridge_v48::PrefixSegmentsV49<'_, '_, '_, '_, S>,
     relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
     out: &mut Writer<'_, '_>,
@@ -704,7 +726,9 @@ pub(super) fn generate_segmented<R: ByteAllocationResolverV30, S: ByteAllocation
         let plan = MemoryPlan::build(input, output, pair, out)?;
         let allocations = Allocations::derive(input, output, pair, allocation_origins, out)?;
         emit!(out, "mod forwarding_v46 {{\nuse super::*;\n");
-        emit_classifiers(input, &plan, &allocations, out)?;
+        emit_classifiers(input, &plan, &allocations, out).map_err(|error| {
+            out.source_section_error(error, "typed forwarding memory classifiers")
+        })?;
         let functions = emit_models(
             input,
             output,
@@ -722,11 +746,16 @@ pub(super) fn generate_segmented<R: ByteAllocationResolverV30, S: ByteAllocation
             ),
             &plan,
             &allocations,
+            Some(emitted_input),
             width,
             registry_namespace,
             out,
         )?;
-        segments.emit_forwarding_composition(output, pair, &plan, relation, out)?;
+        segments
+            .emit_forwarding_composition(output, pair, &plan, relation, out)
+            .map_err(|error| {
+                out.source_section_error(error, "typed forwarding source composition obligations")
+            })?;
         allocations.check(out)?;
         emit!(out, "}}\n");
         drop((allocations, plan));

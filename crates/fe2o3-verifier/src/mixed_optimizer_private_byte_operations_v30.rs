@@ -19,6 +19,10 @@ pub(super) struct AllocaByteOperationV30 {
 }
 
 impl AllocaByteOperationV30 {
+    pub(super) fn allocation_site(&self) -> ByteAllocationSiteV30 {
+        self.site
+    }
+
     pub(super) fn derive(
         inventory: &Inventory<'_>,
         operation: usize,
