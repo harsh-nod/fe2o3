@@ -2,7 +2,7 @@
 
 use super::*;
 use fe2o3_kfd::{
-    Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiProgressV1,
+    Gfx942ComputeXgmiCopyWindowV1, Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiProgressV1,
     Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1,
     Gfx942DirectionalQueuePersistentAllocationV1,
 };
@@ -78,6 +78,7 @@ enum Progress {
 
 pub(super) struct Root {
     route: Route,
+    window: Gfx942ComputeXgmiCopyWindowV1,
     phase: Phase,
     creation: Gfx942ComputeXgmiQueueCreationRootV1,
     queue: Option<Gfx942ComputeXgmiQueueV1>,
@@ -101,6 +102,7 @@ impl fmt::Debug for Root {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComputeXgmiRoot")
             .field("route", &self.route)
+            .field("window", &self.window)
             .field("phase", &self.phase)
             .field("creation_vacant", &self.creation.is_vacant())
             .field("queue", &self.queue.is_some())
@@ -125,10 +127,7 @@ fn terminal(detail: impl Into<String>) -> Failure {
 }
 
 impl Root {
-    fn prepare(
-        route: Route,
-        _packet_plan: Gfx942ComputeXgmiPacketPlanV1,
-    ) -> Result<Box<Self>, Failure> {
+    fn prepare(route: Route, window: Gfx942ComputeXgmiCopyWindowV1) -> Result<Box<Self>, Failure> {
         let capacity = || KfdRuntimeBackendV1::capacity("compute-XGMI owner allocation failed");
         let root = try_uninit_box_v1().map_err(|()| capacity())?;
         let shells = [
@@ -146,7 +145,7 @@ impl Root {
             };
             let stages = samples
                 .checked_add(2)
-                .and_then(|per_packet| per_packet.checked_mul(_packet_plan.count()))
+                .and_then(|per_packet| per_packet.checked_mul(window.plan().count()))
                 .and_then(|stages| stages.checked_add(4))
                 .ok_or_else(capacity)?;
             trace.try_reserve_exact(stages).map_err(|_| capacity())?;
@@ -156,6 +155,7 @@ impl Root {
             root,
             Self {
                 route,
+                window,
                 phase: Phase::Prepared,
                 creation: Gfx942ComputeXgmiQueueCreationRootV1::new(),
                 queue: None,
@@ -173,7 +173,7 @@ impl Root {
                     Route::Native(_) => 0,
                 },
                 #[cfg(test)]
-                packet_plan: _packet_plan,
+                packet_plan: window.plan(),
                 #[cfg(test)]
                 packet_index: 0,
                 #[cfg(test)]
@@ -188,6 +188,23 @@ impl Root {
             return false;
         }
         self.creation.is_vacant() && self.queue.is_none() && self.owners.iter().all(Option::is_none)
+    }
+
+    fn matches_regions(
+        &self,
+        source: &AllocationRecordV1,
+        source_region: BackendMemoryRegionV1,
+        destination: &AllocationRecordV1,
+        destination_region: BackendMemoryRegionV1,
+    ) -> bool {
+        source_region.byte_len == destination_region.byte_len
+            && Gfx942ComputeXgmiCopyWindowV1::new(
+                source.bytes.len() as u64,
+                destination.bytes.len() as u64,
+                source_region.byte_offset,
+                destination_region.byte_offset,
+                source_region.byte_len,
+            ) == Some(self.window)
     }
 
     fn accepts(&self, owner: &DirectionalSdmaDeviceOwnerV1) -> bool {
@@ -261,7 +278,6 @@ impl Root {
         &mut self,
         source: &mut KfdRuntimeBackendV1,
         destination: &mut KfdRuntimeBackendV1,
-        _byte_len: usize,
     ) -> Result<Progress, Failure> {
         #[cfg(not(test))]
         let Route::Native(route) = self.route;
@@ -304,9 +320,14 @@ impl Root {
                     Phase::Ready => {
                         self.script_step(Stage::Finish)?;
                         let [source, destination] = &mut self.scripted_owners;
-                        destination.as_mut().unwrap().scripted_bytes_mut().unwrap()[.._byte_len]
+                        let source_offset = self.window.source_offset() as usize;
+                        let destination_offset = self.window.destination_offset() as usize;
+                        let bytes = self.window.bytes() as usize;
+                        destination.as_mut().unwrap().scripted_bytes_mut().unwrap()
+                            [destination_offset..destination_offset + bytes]
                             .copy_from_slice(
-                                &source.as_ref().unwrap().scripted_bytes().unwrap()[.._byte_len],
+                                &source.as_ref().unwrap().scripted_bytes().unwrap()
+                                    [source_offset..source_offset + bytes],
                             );
                         self.script_step(Stage::Retire)?;
                         self.script_step(Stage::Restore)?;
@@ -340,11 +361,12 @@ impl Root {
                 self.queue
                     .as_mut()
                     .unwrap_or_else(|| std::process::abort())
-                    .begin_persistent_data_full_extent_with_peer_v1(
+                    .begin_persistent_data_range_with_peer_v1(
                         source,
                         destination,
                         source_owner,
                         destination_owner,
+                        self.window,
                     )
                     .map_err(|error| terminal(format!("compute-XGMI publication: {error}")))?;
                 self.phase = Phase::Published;
@@ -410,6 +432,18 @@ pub(super) fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegi
         && record.native_dirty.is_empty()
 }
 
+fn checked_region(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+    record.kind == RuntimeMemoryKindV1::DeviceLocal
+        && record.sdma_backed
+        && region.byte_len != 0
+        && Gfx942ComputeXgmiPacketPlanV1::new(region.byte_len).is_some()
+        && region
+            .byte_offset
+            .checked_add(region.byte_len)
+            .is_some_and(|end| end <= record.bytes.len() as u64)
+        && record.native_dirty.is_empty()
+}
+
 impl KfdMultiDeviceRuntimeBackendV1 {
     pub(super) fn prepare_compute_xgmi_plan_v1(
         &self,
@@ -427,10 +461,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     "pending compute peer has no native route",
                 )
             })?;
-        let plan = Gfx942ComputeXgmiPacketPlanV1::new(bytes).ok_or_else(|| {
-            KfdRuntimeBackendV1::capacity("pending compute peer extent exceeds its packet plan")
-        })?;
-        Root::prepare(route, plan)
+        let window =
+            Gfx942ComputeXgmiCopyWindowV1::new(bytes, bytes, 0, 0, bytes).ok_or_else(|| {
+                KfdRuntimeBackendV1::capacity("pending compute peer extent exceeds its packet plan")
+            })?;
+        Root::prepare(route, window)
     }
 
     pub(super) fn compute_xgmi_child_occupied_v1(&self, child: usize) -> bool {
@@ -519,7 +554,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Ok(None);
             };
             if !child.peer_visible_device_allocations
-                || !full_extent(record, region)
+                || !checked_region(record, region)
                 || !record.sdma_initialized
             {
                 return Ok(None);
@@ -540,10 +575,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 _ => return Ok(None),
             }
         }
-        let Some(plan) = Gfx942ComputeXgmiPacketPlanV1::new(source_region.byte_len) else {
+        if source_region.byte_len != destination_region.byte_len {
+            return Ok(None);
+        }
+        let Some(window) = Gfx942ComputeXgmiCopyWindowV1::new(
+            self.children[source.child].allocations[&source.local]
+                .bytes
+                .len() as u64,
+            self.children[destination.child].allocations[&destination.local]
+                .bytes
+                .len() as u64,
+            source_region.byte_offset,
+            destination_region.byte_offset,
+            source_region.byte_len,
+        ) else {
             return Ok(None);
         };
-        Root::prepare(route, plan).map(Some)
+        Root::prepare(route, window).map(Some)
     }
 
     fn require_retained_directed_compute_xgmi_endpoint_v1(
@@ -603,6 +651,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             ),
             _ => unreachable!("compute-XGMI submission remains indexed"),
         };
+        let window_intact = matches!(&self.submissions[&submission],
+        RoutedSubmissionV1::CooperativeCopy(copy) if copy.compute_xgmi.as_ref().is_some_and(|root| {
+            root.matches_regions(
+                &self.children[source.child].allocations[&source.local], regions[0],
+                &self.children[destination.child].allocations[&destination.local], regions[1],
+            )
+        }));
+        if !window_intact {
+            return Err(terminal("compute-XGMI retained copy window changed"));
+        }
         let fresh = match &self.submissions[&submission] {
             RoutedSubmissionV1::CooperativeCopy(copy) => {
                 copy.compute_xgmi.as_ref().unwrap().is_quiescent()
@@ -644,7 +702,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 if record.persistent_storage_restore.is_some() {
                     return Ok(BackendPollV1::Pending);
                 }
-                if !full_extent(record, region) || !record.sdma_initialized {
+                if !checked_region(record, region) || !record.sdma_initialized {
                     return Ok(self.fail_cooperative_copy(submission));
                 }
             }
@@ -692,7 +750,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 let record = &child.allocations[&endpoint.local];
                 let accepted = matches!(&record.sdma_storage,
                     KfdRuntimeSdmaStorageV1::Device(owner) if root.accepts(owner));
-                full_extent(record, region) && record.sdma_initialized && accepted
+                checked_region(record, region) && record.sdma_initialized && accepted
             });
             if !slots_ready {
                 return Ok(self.fail_cooperative_copy(submission));
@@ -741,11 +799,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Err(terminal("compute-XGMI retained allocation slot changed"));
             }
         }
-        match root.progress(
-            source_child,
-            destination_child,
-            regions[0].byte_len as usize,
-        )? {
+        match root.progress(source_child, destination_child)? {
             Progress::Pending => return Ok(BackendPollV1::Pending),
             Progress::Changed => {
                 self.note_cooperative_progress();

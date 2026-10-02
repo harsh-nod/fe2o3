@@ -3,7 +3,8 @@
 use super::*;
 use crate::queue::dispatch_binding::{DispatchDataInputStorageV1, DispatchDataStorageRefV1};
 use crate::sdma::{
-    ComputeXgmiCopyCustodyV1, Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiPacketV1,
+    ComputeXgmiCopyCustodyV1, Gfx942ComputeXgmiCopyPacketV1, Gfx942ComputeXgmiCopyWindowV1,
+    Gfx942ComputeXgmiPacketPlanV1,
 };
 use crate::shared_memory::{ComputeXgmiBufferV1, Gfx942XgmiMappedDeviceMemoryV1};
 use fe2o3_runtime_model::{OrderedPeerCopyActionV1 as CopyAction, OrderedPeerCopyCursorV1};
@@ -47,8 +48,8 @@ pub(super) struct TransferCore {
     pub(super) rosters: [Option<Box<[u32]>>; 2],
     copy: ComputeXgmiCopyCustodyV1,
     progress: Progress,
-    plan: Gfx942ComputeXgmiPacketPlanV1,
-    packet: Gfx942ComputeXgmiPacketV1,
+    window: Gfx942ComputeXgmiCopyWindowV1,
+    packet: Gfx942ComputeXgmiCopyPacketV1,
     cursor: OrderedPeerCopyCursorV1,
 }
 
@@ -73,7 +74,7 @@ pub(super) trait TransferIo {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        packet: Gfx942ComputeXgmiPacketV1,
+        packet: Gfx942ComputeXgmiCopyPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
     fn poll(
@@ -142,7 +143,7 @@ impl TransferIo for NativeTransferIo<'_> {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        packet: Gfx942ComputeXgmiPacketV1,
+        packet: Gfx942ComputeXgmiCopyPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.queue.submit_compute_xgmi_rooted_v1(
@@ -150,8 +151,7 @@ impl TransferIo for NativeTransferIo<'_> {
             self.destination,
             source,
             destination,
-            packet.offset,
-            packet.bytes,
+            packet,
             custody,
         )?;
         Ok(())
@@ -270,6 +270,15 @@ impl TransferCore {
     }
 
     pub(super) fn with_plan(roster: [u32; 2], plan: Gfx942ComputeXgmiPacketPlanV1) -> Self {
+        let bytes = plan.total_bytes();
+        Self::with_window(
+            roster,
+            Gfx942ComputeXgmiCopyWindowV1::new(bytes, bytes, 0, 0, bytes)
+                .unwrap_or_else(|| std::process::abort()),
+        )
+    }
+
+    pub(super) fn with_window(roster: [u32; 2], window: Gfx942ComputeXgmiCopyWindowV1) -> Self {
         Self {
             buffers: [None, None],
             rosters: [
@@ -278,10 +287,10 @@ impl TransferCore {
             ],
             copy: Default::default(),
             progress: Default::default(),
-            packet: plan.packet(0).unwrap_or_else(|| std::process::abort()),
-            cursor: OrderedPeerCopyCursorV1::new(plan.count())
+            packet: window.packet(0).unwrap_or_else(|| std::process::abort()),
+            cursor: OrderedPeerCopyCursorV1::new(window.plan().count())
                 .unwrap_or_else(|| std::process::abort()),
-            plan,
+            window,
         }
     }
 
@@ -417,7 +426,7 @@ impl TransferCore {
                 "compute-XGMI next packet phase",
             ));
         }
-        let next = self.plan.packet(self.cursor.completed() as usize).ok_or(
+        let next = self.window.packet(self.cursor.completed() as usize).ok_or(
             ComputeAqlQueueSessionErrorV1::Contract("compute-XGMI next packet extent"),
         )?;
         let [source, destination] = &mut self.buffers;

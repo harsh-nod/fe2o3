@@ -8,7 +8,7 @@ import types
 ROOT = Path(__file__).resolve().parents[3]
 V = Path("crates/fe2o3-runtime-model/verus")
 GUARD = V / "check-producer-journal-composition.py"
-GUARD_SHA = "9c5887c58e29583ab4f0fc7bb0e4e6bcd7aabf8b50f0d2db2c8db1006f036c12"
+GUARD_SHA = "8cc5d1a9b6ef478d6396dbce521858d8d7a7b583f300a3d3eaf3f6db0e841cb9"
 COUNTS = {"leaf": 38, "conditional": 21, "concrete": 30}
 ROOT_COUNTS = {"leaf": 42, "conditional": 64, "concrete": 214}
 ADAPTER_NAMES = (

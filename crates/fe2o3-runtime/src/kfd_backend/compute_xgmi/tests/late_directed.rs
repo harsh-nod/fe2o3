@@ -256,7 +256,7 @@ fn late_directed_unordered_destination_reads_reject_without_touching_published_p
 }
 
 #[test]
-fn late_directed_partial_absent_route_and_ordinary_profiles_preserve_staging() {
+fn late_directed_checked_ranges_preserve_absent_route_and_ordinary_fallback() {
     for mode in 0..3 {
         let mut f = Late::new(None, false);
         let first_route = f.route(0, 1);
@@ -283,10 +283,14 @@ fn late_directed_partial_absent_route_and_ordinary_profiles_preserve_staging() {
         } else {
             f.submit(next_route, &[event])
         };
-        assert!(f.fixture.copy(next).compute_xgmi.is_none());
+        assert_eq!(f.fixture.copy(next).compute_xgmi.is_none(), mode != 0);
         assert_eq!(
             f.fixture.copy(next).staging.len() as u64,
-            next_route.source.byte_len
+            if mode == 0 {
+                0
+            } else {
+                next_route.source.byte_len
+            }
         );
         assert_eq!(
             f.fixture.backend.cancel_v1(next).unwrap(),

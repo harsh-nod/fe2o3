@@ -103,7 +103,7 @@ fn packetized_native_route_admits_bounded_full_extents_without_staging() {
 }
 
 #[test]
-fn packetized_native_route_keeps_partial_and_private_allocations_staged() {
+fn packetized_native_route_admits_checked_ranges_but_keeps_private_allocations_staged() {
     for private in [false, true] {
         let mut f = fixture(None, false, 0);
         if private {
@@ -113,8 +113,11 @@ fn packetized_native_route_keeps_partial_and_private_allocations_staged() {
             f.destination.byte_len -= 1;
         }
         let copy = f.submit(&[]);
-        assert!(f.copy(copy).compute_xgmi.is_none());
-        assert_eq!(f.copy(copy).staging.len() as u64, f.source.byte_len);
+        assert_eq!(f.copy(copy).compute_xgmi.is_none(), private);
+        assert_eq!(
+            f.copy(copy).staging.len() as u64,
+            if private { f.source.byte_len } else { 0 }
+        );
         assert_eq!(
             f.backend.cancel_v1(copy).unwrap(),
             crate::BackendCancellationV1::Cancelled

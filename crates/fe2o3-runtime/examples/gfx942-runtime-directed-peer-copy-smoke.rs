@@ -21,7 +21,7 @@ type ResultV1<T> = Result<T, String>;
 const BYTES: u64 = 2 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 37;
 const ROUNDS: usize = 2;
 const WAIT: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--fanout] [--readback [--late-peer]] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--subranges] [--fanout] [--readback [--late-peer]] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
 
 #[derive(Debug)]
 struct NoCompute;
@@ -39,10 +39,12 @@ struct Options {
     fanout: bool,
     readback: bool,
     late_peer: bool,
+    subranges: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
     let (mut fanout, mut readback, mut late_peer, mut flags) = (false, false, false, 0);
+    let mut subranges = false;
     for argument in arguments
         .iter()
         .take_while(|argument| argument.starts_with("--"))
@@ -51,6 +53,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
             "--fanout" if !fanout => fanout = true,
             "--readback" if !readback => readback = true,
             "--late-peer" if !late_peer => late_peer = true,
+            "--subranges" if !subranges => subranges = true,
             _ => return Err(USAGE.into()),
         }
         flags += 1;
@@ -75,6 +78,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         fanout,
         readback,
         late_peer,
+        subranges,
     })
 }
 
@@ -114,13 +118,85 @@ fn check_bytes(observed: &[u8], expected: &[u8]) -> ResultV1<()> {
     }
 }
 
-fn region(allocation: RuntimeAllocationIdV1, access: RuntimeAccessV1) -> RuntimeMemoryRegionV1 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Layout {
+    lengths: [u64; 3],
+    offsets: [u64; 3],
+    readback_offset: u64,
+}
+
+impl Layout {
+    const fn new(subranges: bool) -> Self {
+        if subranges {
+            Self {
+                lengths: [BYTES + 257, BYTES + 769, BYTES + 1153],
+                offsets: [17, 131, 509],
+                readback_offset: 97,
+            }
+        } else {
+            Self {
+                lengths: [BYTES; 3],
+                offsets: [0; 3],
+                readback_offset: 0,
+            }
+        }
+    }
+}
+
+fn region(
+    allocation: RuntimeAllocationIdV1,
+    access: RuntimeAccessV1,
+    byte_offset: u64,
+    byte_len: u64,
+) -> RuntimeMemoryRegionV1 {
     RuntimeMemoryRegionV1 {
         allocation,
         access,
-        byte_offset: 0,
-        byte_len: BYTES,
+        byte_offset,
+        byte_len,
     }
+}
+
+fn copy_oracle(source: &[u8], destination: &mut [u8], offsets: [u64; 2], bytes: u64) {
+    let [source_offset, destination_offset] =
+        offsets.map(|offset| usize::try_from(offset).unwrap());
+    let bytes = usize::try_from(bytes).unwrap();
+    destination[destination_offset..destination_offset + bytes]
+        .copy_from_slice(&source[source_offset..source_offset + bytes]);
+}
+
+fn expected_devices(inputs: &[Vec<u8>; 3], layout: Layout, fanout: bool) -> [Vec<u8>; 3] {
+    let mut expected = inputs.clone();
+    let [source, middle, destination] = &mut expected;
+    copy_oracle(
+        source,
+        middle,
+        [layout.offsets[0], layout.offsets[1]],
+        BYTES,
+    );
+    let source_index = usize::from(!fanout);
+    copy_oracle(
+        if fanout { source } else { middle },
+        destination,
+        [layout.offsets[source_index], layout.offsets[2]],
+        BYTES,
+    );
+    expected
+}
+
+fn subrange_digest(devices: &[Vec<u8>; 3], readback: Option<&[u8]>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3.native-peer-subranges.v1\0");
+    for contents in devices {
+        digest.update((contents.len() as u64).to_le_bytes());
+        digest.update(contents);
+    }
+    digest.update([u8::from(readback.is_some())]);
+    if let Some(contents) = readback {
+        digest.update((contents.len() as u64).to_le_bytes());
+        digest.update(contents);
+    }
+    hex_digest(digest.finalize().into())
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +204,7 @@ struct Device {
     stream: RuntimeStreamIdV1,
     host: RuntimeAllocationIdV1,
     data: RuntimeAllocationIdV1,
+    bytes: u64,
 }
 
 #[derive(Default)]
@@ -177,8 +254,8 @@ fn upload(context: &mut Context, device: Device, contents: &[u8]) -> ResultV1<()
     let mut copy = context
         .copy_async(
             device.stream,
-            region(device.host, RuntimeAccessV1::Read),
-            region(device.data, RuntimeAccessV1::Write),
+            region(device.host, RuntimeAccessV1::Read, 0, device.bytes),
+            region(device.data, RuntimeAccessV1::Write, 0, device.bytes),
             &[],
         )
         .map_err(|error| failure("upload-admission", error))?;
@@ -360,18 +437,24 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         ));
     }
     let ids: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
+    let layout = Layout::new(settings.subranges);
     let mut devices = Vec::with_capacity(3);
-    for id in &ids {
+    for (id, bytes) in ids.iter().zip(layout.lengths) {
         let stream = context
             .create_stream(*id)
             .map_err(|error| failure("stream-create", error))?;
         let host = context
-            .allocate(*id, RuntimeMemoryKindV1::HostVisible, BYTES, 4096)
+            .allocate(*id, RuntimeMemoryKindV1::HostVisible, bytes, 4096)
             .map_err(|error| failure("host-allocation", error))?;
         let data = context
-            .allocate(*id, RuntimeMemoryKindV1::DeviceLocal, BYTES, 4096)
+            .allocate(*id, RuntimeMemoryKindV1::DeviceLocal, bytes, 4096)
             .map_err(|error| failure("device-allocation", error))?;
-        devices.push(Device { stream, host, data });
+        devices.push(Device {
+            stream,
+            host,
+            data,
+            bytes,
+        });
     }
     let readback_stream = if settings.readback {
         Some(
@@ -386,26 +469,49 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
     let receipts = Arc::new(Mutex::new(Receipts::default()));
     let mut hashes: [String; ROUNDS] = std::array::from_fn(|_| String::new());
     for (round, hash) in hashes.iter_mut().enumerate() {
-        let source: Vec<_> = (0..BYTES).map(|index| pattern(index, round)).collect();
-        let sentinel_b: Vec<_> = source.iter().map(|byte| byte ^ 0xa5).collect();
-        let sentinel_c: Vec<_> = source.iter().map(|byte| byte ^ 0x5a).collect();
-        for (device, contents) in devices.iter().zip([&source, &sentinel_b, &sentinel_c]) {
+        let inputs: [Vec<u8>; 3] = std::array::from_fn(|device| {
+            (0..layout.lengths[device])
+                .map(|index| pattern(index, round) ^ [0, 0xa5, 0x5a][device])
+                .collect()
+        });
+        let expected = expected_devices(&inputs, layout, settings.fanout);
+        let readback_sentinel: Vec<_> = (0..layout.lengths[2])
+            .map(|index| pattern(index, round) ^ 0xa5)
+            .collect();
+        let mut expected_readback = readback_sentinel.clone();
+        copy_oracle(
+            &expected[2],
+            &mut expected_readback,
+            [layout.offsets[2], layout.readback_offset],
+            BYTES,
+        );
+        for (device, contents) in devices.iter().zip(&inputs) {
             upload(context, *device, contents)?;
             verify(context, device.data, contents)?;
         }
         if settings.readback {
             context
-                .write_allocation(devices[2].host, 0, &sentinel_b)
+                .write_allocation(devices[2].host, 0, &readback_sentinel)
                 .map_err(|error| failure("readback-sentinel-write", error))?;
-            verify(context, devices[2].host, &sentinel_b)?;
+            verify(context, devices[2].host, &readback_sentinel)?;
         }
         let before = (round * 2) as u64;
         require_counter(context, before)?;
         let mut first = context
             .directed_peer_copy_v1(
                 devices[1].stream,
-                region(devices[0].data, RuntimeAccessV1::Read),
-                region(devices[1].data, RuntimeAccessV1::Write),
+                region(
+                    devices[0].data,
+                    RuntimeAccessV1::Read,
+                    layout.offsets[0],
+                    BYTES,
+                ),
+                region(
+                    devices[1].data,
+                    RuntimeAccessV1::Write,
+                    layout.offsets[1],
+                    BYTES,
+                ),
                 &[],
             )
             .map_err(|error| failure("first-peer-admission", error))?;
@@ -422,8 +528,15 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                 region(
                     devices[usize::from(!settings.fanout)].data,
                     RuntimeAccessV1::Read,
+                    layout.offsets[usize::from(!settings.fanout)],
+                    BYTES,
                 ),
-                region(devices[2].data, RuntimeAccessV1::Write),
+                region(
+                    devices[2].data,
+                    RuntimeAccessV1::Write,
+                    layout.offsets[2],
+                    BYTES,
+                ),
                 if settings.fanout {
                     &[]
                 } else {
@@ -466,8 +579,18 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
             let mut copy = context
                 .copy_async(
                     stream,
-                    region(devices[2].data, RuntimeAccessV1::Read),
-                    region(devices[2].host, RuntimeAccessV1::Write),
+                    region(
+                        devices[2].data,
+                        RuntimeAccessV1::Read,
+                        layout.offsets[2],
+                        BYTES,
+                    ),
+                    region(
+                        devices[2].host,
+                        RuntimeAccessV1::Write,
+                        layout.readback_offset,
+                        BYTES,
+                    ),
                     &[second_event],
                 )
                 .map_err(|error| failure("readback-admission", error))?;
@@ -558,7 +681,7 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                     "original result is not successful",
                 ));
             }
-            verify(context, devices[2].host, &source)?;
+            verify(context, devices[2].host, &expected_readback)?;
             context
                 .release_submission(copy)
                 .map_err(|error| failure("readback-release", error))?;
@@ -569,10 +692,17 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         context
             .release_submission(first)
             .map_err(|error| failure("first-peer-release", error))?;
-        for device in &devices {
-            verify(context, device.data, &source)?;
+        for (device, expected) in devices.iter().zip(&expected) {
+            verify(context, device.data, expected)?;
         }
-        *hash = hex_digest(Sha256::digest(&source).into());
+        *hash = if settings.subranges {
+            subrange_digest(
+                &expected,
+                settings.readback.then_some(expected_readback.as_slice()),
+            )
+        } else {
+            hex_digest(Sha256::digest(&inputs[0]).into())
+        };
     }
     if hashes[0] == hashes[1] {
         return Err(failure("round-digests", "payload did not change"));
@@ -636,6 +766,43 @@ fn run(settings: Options) -> ResultV1<()> {
         .shutdown_native_v1()
         .map_err(|error| failure("native-shutdown", error))?;
     drop(ManuallyDrop::into_inner(backend));
+    if settings.subranges {
+        let layout = Layout::new(true);
+        println!(
+            "PASS schema=fe2o3.native-peer-subranges.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} logical_extents={},{},{} peer_offsets={},{},{} readback_offset={} readback={} late_peer={} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams={} launches=0 modules=0 completion_receipts={} readbacks={} d2h_copies={} progress={} first_publication_observed={} public_events=released-before-tail-drive observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass outside_destination_ranges=full-byte-pass output=full-byte-pass readback_guards={} digest=length-prefixed-devices-and-optional-readback round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+            if settings.fanout { "fanout" } else { "chain" },
+            settings.ids[0],
+            settings.ids[1],
+            settings.ids[2],
+            layout.lengths[0],
+            layout.lengths[1],
+            layout.lengths[2],
+            layout.offsets[0],
+            layout.offsets[1],
+            layout.offsets[2],
+            layout.readback_offset,
+            settings.readback,
+            settings.late_peer,
+            3 + usize::from(settings.readback),
+            4 + 2 * usize::from(settings.readback),
+            12 + 4 * usize::from(settings.readback),
+            2 * usize::from(settings.readback),
+            if settings.readback {
+                "readback-only-after-seed"
+            } else {
+                "final-directed-peer-only-after-seed"
+            },
+            settings.late_peer,
+            if settings.readback {
+                "full-byte-pass"
+            } else {
+                "not-requested"
+            },
+            hashes[0],
+            hashes[1],
+        );
+        return Ok(());
+    }
     if settings.readback {
         let readback_admission = if settings.late_peer {
             "before-tail-progress,after-bounded-seed"
@@ -731,6 +898,7 @@ mod tests {
                 fanout: false,
                 readback: false,
                 late_peer: false,
+                subranges: false,
             }
         );
         assert_eq!(
@@ -740,6 +908,7 @@ mod tests {
                 fanout: true,
                 readback: false,
                 late_peer: false,
+                subranges: false,
             }
         );
         for arguments in [
@@ -777,6 +946,7 @@ mod tests {
                     fanout: flags.contains(&"--fanout"),
                     readback: true,
                     late_peer: false,
+                    subranges: false,
                 }
             );
         }
@@ -809,6 +979,7 @@ mod tests {
                     fanout: flags.contains(&"--fanout"),
                     readback: true,
                     late_peer: true,
+                    subranges: false,
                 }
             );
         }
@@ -826,6 +997,124 @@ mod tests {
         ] {
             assert!(parse(&arguments).is_err(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn subrange_cli_composes_modes_without_changing_defaults() {
+        for flags in [
+            vec!["--subranges"],
+            vec!["--fanout", "--subranges"],
+            vec!["--readback", "--subranges"],
+            vec!["--subranges", "--fanout", "--readback", "--late-peer"],
+        ] {
+            let mut arguments = flags.clone();
+            arguments.extend(["0x3", "0x2", "0x1"]);
+            assert_eq!(
+                parse(&arguments).unwrap(),
+                Options {
+                    ids: [3, 2, 1],
+                    fanout: flags.contains(&"--fanout"),
+                    readback: flags.contains(&"--readback"),
+                    late_peer: flags.contains(&"--late-peer"),
+                    subranges: true,
+                }
+            );
+        }
+        for arguments in [
+            vec!["--subranges", "--subranges", "0x1", "0x2", "0x3"],
+            vec!["0x1", "--subranges", "0x2", "0x3"],
+            vec!["--subranges", "--late-peer", "0x1", "0x2", "0x3"],
+        ] {
+            assert!(parse(&arguments).is_err(), "{arguments:?}");
+        }
+        assert_eq!(
+            Layout::new(false),
+            Layout {
+                lengths: [BYTES; 3],
+                offsets: [0; 3],
+                readback_offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn subrange_oracle_preserves_both_guards_and_detects_corruption() {
+        let layout = Layout::new(true);
+        assert_eq!(layout.lengths, [8_388_838, 8_389_350, 8_389_734]);
+        let inputs: [Vec<u8>; 3] = std::array::from_fn(|device| {
+            (0..layout.lengths[device])
+                .map(|index| pattern(index, 0) ^ [0, 0xa5, 0x5a][device])
+                .collect()
+        });
+        let expected = expected_devices(&inputs, layout, false);
+        assert_eq!(expected, expected_devices(&inputs, layout, true));
+        assert_eq!(expected[0], inputs[0]);
+        for device in 1..3 {
+            let start = layout.offsets[device];
+            let end = start + BYTES;
+            assert!(start > 0 && end < layout.lengths[device]);
+            for (index, &observed) in expected[device].iter().enumerate() {
+                let index = index as u64;
+                let byte = if (start..end).contains(&index) {
+                    pattern(layout.offsets[0] + index - start, 0)
+                } else {
+                    pattern(index, 0) ^ [0, 0xa5, 0x5a][device]
+                };
+                assert_eq!(observed, byte);
+            }
+            let mut changed = expected[device].clone();
+            for index in [
+                0,
+                start - 1,
+                start,
+                end - 1,
+                end,
+                layout.lengths[device] - 1,
+            ] {
+                changed[index as usize] ^= 1;
+                assert!(check_bytes(&changed, &expected[device]).is_err());
+                changed[index as usize] ^= 1;
+            }
+        }
+        let mut host: Vec<_> = (0..layout.lengths[2])
+            .map(|index| pattern(index, 0) ^ 0xa5)
+            .collect();
+        copy_oracle(
+            &expected[2],
+            &mut host,
+            [layout.offsets[2], layout.readback_offset],
+            BYTES,
+        );
+        for (index, &observed) in host.iter().enumerate() {
+            let index = index as u64;
+            let byte = if (layout.readback_offset..layout.readback_offset + BYTES).contains(&index)
+            {
+                pattern(layout.offsets[0] + index - layout.readback_offset, 0)
+            } else {
+                pattern(index, 0) ^ 0xa5
+            };
+            assert_eq!(observed, byte);
+        }
+    }
+
+    #[test]
+    fn subrange_digest_binds_lengths_all_devices_and_optional_readback() {
+        let original = [vec![1, 2], vec![3], vec![4, 5]];
+        let first = subrange_digest(&original, None);
+        assert_ne!(
+            first,
+            subrange_digest(&[vec![1], vec![2, 3], vec![4, 5]], None)
+        );
+        assert_ne!(first, subrange_digest(&original, Some(&[])));
+        for device in 0..3 {
+            let mut changed = original.clone();
+            changed[device][0] ^= 1;
+            assert_ne!(first, subrange_digest(&changed, None));
+        }
+        assert_ne!(
+            subrange_digest(&original, Some(&[7])),
+            subrange_digest(&original, Some(&[8]))
+        );
     }
 
     #[test]

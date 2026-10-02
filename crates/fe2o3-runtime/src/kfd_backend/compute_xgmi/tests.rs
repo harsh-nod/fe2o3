@@ -15,6 +15,7 @@ mod packetized;
 mod peer_readback;
 mod queued_consumer;
 mod sharded;
+mod subranges;
 
 const BYTES: usize = 64;
 const STAGES: [Stage; 6] = [
@@ -83,9 +84,21 @@ impl Fixture {
         unwind: bool,
         pending_samples: usize,
         byte_len: usize,
+        child_steps: Vec<Vec<ScriptedSdmaStepV1>>,
+    ) -> Self {
+        let sizes = vec![byte_len; child_steps.len()];
+        Self::with_child_sizes(failure, unwind, pending_samples, &sizes, child_steps)
+    }
+
+    fn with_child_sizes(
+        failure: Option<Stage>,
+        unwind: bool,
+        pending_samples: usize,
+        sizes: &[usize],
         mut child_steps: Vec<Vec<ScriptedSdmaStepV1>>,
     ) -> Self {
         let child_count = child_steps.len();
+        assert_eq!(sizes.len(), child_count);
         let children = (0..child_count)
             .map(|index| {
                 let mut child = KfdRuntimeBackendV1::mock();
@@ -93,20 +106,21 @@ impl Fixture {
                 child
             })
             .collect();
-        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(children).unwrap();
+        let mut backend =
+            ManuallyDrop::new(KfdMultiDeviceRuntimeBackendV1::from_backends(children).unwrap());
         let stream = backend.create_stream_v1(8).unwrap();
         let source = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, byte_len as u64, 8)
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, sizes[0] as u64, 8)
             .unwrap();
         let destination = backend
-            .allocate_v1(8, RuntimeMemoryKindV1::DeviceLocal, byte_len as u64, 8)
+            .allocate_v1(8, RuntimeMemoryKindV1::DeviceLocal, sizes[1] as u64, 8)
             .unwrap();
-        for index in 2..child_count {
+        for (index, size) in sizes.iter().enumerate().skip(2) {
             backend
                 .allocate_v1(
                     7 + index as u64,
                     RuntimeMemoryKindV1::DeviceLocal,
-                    byte_len as u64,
+                    *size as u64,
                     8,
                 )
                 .unwrap();
@@ -124,7 +138,7 @@ impl Fixture {
                 ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
             ]);
             let driver = ScriptedSdmaDriverV1::new(steps);
-            let mut owner = driver.test_device_owner(byte_len);
+            let mut owner = driver.test_device_owner(sizes[route.child]);
             owner.scripted_bytes_mut().unwrap().fill(fill);
             let child = &mut backend.children[route.child];
             let record = child.allocations.get_mut(&route.local).unwrap();
@@ -149,19 +163,19 @@ impl Fixture {
             );
         }
         Self {
-            backend: ManuallyDrop::new(backend),
+            backend,
             stream,
             source: BackendMemoryRegionV1 {
                 allocation: source,
                 access: RuntimeAccessV1::Read,
                 byte_offset: 0,
-                byte_len: byte_len as u64,
+                byte_len: sizes[0] as u64,
             },
             destination: BackendMemoryRegionV1 {
                 allocation: destination,
                 access: RuntimeAccessV1::Write,
                 byte_offset: 0,
-                byte_len: byte_len as u64,
+                byte_len: sizes[1] as u64,
             },
         }
     }
@@ -351,7 +365,7 @@ fn native_route_observers_do_not_progress_and_success_restores_exact_owners() {
 }
 
 #[test]
-fn native_route_selection_keeps_unqualified_and_partial_copies_staged() {
+fn native_route_selection_admits_checked_ranges_but_keeps_unqualified_copies_staged() {
     for variant in 0..9 {
         let mut f = Fixture::new(None, false);
         match variant {
@@ -406,8 +420,12 @@ fn native_route_selection_keeps_unqualified_and_partial_copies_staged() {
             _ => unreachable!(),
         }
         let copy = f.submit(&[]);
-        assert!(f.copy(copy).compute_xgmi.is_none());
-        assert_eq!(f.copy(copy).staging.len() as u64, f.source.byte_len);
+        let native = matches!(variant, 2 | 3);
+        assert_eq!(f.copy(copy).compute_xgmi.is_some(), native);
+        assert_eq!(
+            f.copy(copy).staging.len() as u64,
+            if native { 0 } else { f.source.byte_len }
+        );
         assert_eq!(
             f.backend.cancel_v1(copy).unwrap(),
             crate::BackendCancellationV1::Cancelled

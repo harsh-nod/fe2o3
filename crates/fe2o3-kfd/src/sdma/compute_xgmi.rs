@@ -101,15 +101,13 @@ impl ComputeXgmiCopyCustodyV1 {
 }
 
 impl Gfx942NativeXgmiSdmaQueueV1 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn submit_compute_xgmi_rooted_v1(
         &mut self,
         source_session: &mut SharedGttMemorySessionV1,
         destination_session: &mut SharedGttMemorySessionV1,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        offset: u64,
-        copy_bytes: u32,
+        packet: Gfx942ComputeXgmiCopyPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
         self.require_live_queue_state_v1()?;
@@ -137,11 +135,11 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         }
         let source_address = source_session
             .mapped_xgmi_device_memory_facts(source_mapping)?
-            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(packet.source_offset, u64::from(packet.bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract("compute-XGMI source extent"))?;
         let destination_address = destination_session
             .mapped_xgmi_device_memory_facts(destination_mapping)?
-            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(packet.destination_offset, u64::from(packet.bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract(
                 "compute-XGMI destination extent",
             ))?;
@@ -154,7 +152,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             source_address,
             destination,
             destination_address,
-            copy_bytes,
+            packet.bytes,
         ) {
             Ok(ticket) => custody.ticket = Some(ticket),
             Err(error) => {

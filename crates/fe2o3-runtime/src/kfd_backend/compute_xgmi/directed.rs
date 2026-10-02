@@ -37,11 +37,19 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             .allocations
                             .get(&endpoint.local)
                             .is_some_and(|record| {
-                                full_extent(record, region) && record.sdma_initialized
+                                checked_region(record, region) && record.sdma_initialized
                             })
                 })
             })
         {
+            return false;
+        }
+        if !root.matches_regions(
+            &self.children[copy.source.child].allocations[&copy.source.local],
+            copy.source_region,
+            &self.children[copy.destination.child].allocations[&copy.destination.local],
+            copy.destination_region,
+        ) {
             return false;
         }
         match (copy.phase, root.phase) {

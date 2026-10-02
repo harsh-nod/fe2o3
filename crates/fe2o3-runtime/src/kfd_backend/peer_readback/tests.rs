@@ -1,6 +1,8 @@
 use super::*;
 #[path = "directed_tests.rs"]
 mod directed_tests;
+#[path = "subrange_tests.rs"]
+mod subrange_tests;
 use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedExecutionOutcomeV1;
 use crate::{
     RuntimeAllocationIdV1, RuntimeCancellationV1, RuntimeContextV1, RuntimeCopyV1,
@@ -22,14 +24,18 @@ fn region(allocation: RuntimeAllocationIdV1, access: RuntimeAccessV1) -> Runtime
 }
 
 fn allocation_steps() -> [ScriptedSdmaStepV1; 2] {
+    allocation_steps_for(BYTES)
+}
+
+fn allocation_steps_for(bytes: usize) -> [ScriptedSdmaStepV1; 2] {
     [
         ScriptedSdmaStepV1::Allocate {
             kind: ScriptedBufferKindV1::Host,
-            byte_len: BYTES,
+            byte_len: bytes,
         },
         ScriptedSdmaStepV1::Write {
             offset: 0,
-            byte_len: BYTES,
+            byte_len: bytes,
         },
     ]
 }
@@ -57,13 +63,21 @@ fn release_device_steps() -> Vec<ScriptedSdmaStepV1> {
 }
 
 fn readback_steps() -> Vec<ScriptedSdmaStepV1> {
-    let mut steps: Vec<_> = allocation_steps().into_iter().collect();
+    readback_range_steps(0, 0, BYTES)
+}
+
+fn readback_range_steps(
+    source_offset: u64,
+    destination_offset: u64,
+    bytes: usize,
+) -> Vec<ScriptedSdmaStepV1> {
+    let mut steps: Vec<_> = allocation_steps_for(bytes).into_iter().collect();
     steps.extend([
         ScriptedSdmaStepV1::Submit {
             direction: Gfx942PersistentSdmaDirectionV1::DeviceToHost,
             host_offset: 0,
-            device_offset: 0,
-            copy_bytes: BYTES as u32,
+            device_offset: source_offset,
+            copy_bytes: bytes as u32,
             outcome: ScriptedFailureModeV1::Success,
         },
         ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Pending),
@@ -74,15 +88,15 @@ fn readback_steps() -> Vec<ScriptedSdmaStepV1> {
         ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
         ScriptedSdmaStepV1::Read {
             offset: 0,
-            byte_len: BYTES as u64,
+            byte_len: bytes as u64,
         },
         ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
     ]);
-    steps.extend(allocation_steps());
+    steps.extend(allocation_steps_for(bytes));
     steps.extend([
         ScriptedSdmaStepV1::Write {
-            offset: 0,
-            byte_len: BYTES,
+            offset: destination_offset,
+            byte_len: bytes,
         },
         ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
         ScriptedSdmaStepV1::Read {
@@ -105,6 +119,24 @@ struct ReadbackFixture {
 
 impl ReadbackFixture {
     fn new(readback: bool, journal: bool, failure: Option<Stage>, unwind: bool) -> Self {
+        Self::with_readback_steps(
+            if readback {
+                readback_steps()
+            } else {
+                Vec::new()
+            },
+            journal,
+            failure,
+            unwind,
+        )
+    }
+
+    fn with_readback_steps(
+        mut readback: Vec<ScriptedSdmaStepV1>,
+        journal: bool,
+        failure: Option<Stage>,
+        unwind: bool,
+    ) -> Self {
         let children = (0..2)
             .map(|index| {
                 let mut child = KfdRuntimeBackendV1::mock();
@@ -153,8 +185,8 @@ impl ReadbackFixture {
         let backend = context.backend_mut_for_test_v1();
         let backend_readback_stream = *backend.streams.keys().max().unwrap();
         for (index, child) in backend.children.iter_mut().enumerate() {
-            let mut steps = if index == 1 && readback {
-                readback_steps()
+            let mut steps = if index == 1 {
+                core::mem::take(&mut readback)
             } else {
                 Vec::new()
             };

@@ -14,7 +14,9 @@ inside one live Context. Published `e8cd1388b` also qualifies pending deferred
 compute feeding a downstream native peer on two GPUs in both orders. Subsequent
 checkpoints add native directed chains and fanout with dependent D2H on three
 GPUs, and late directed-peer/compute admission after an exact native producer's
-observed publication. Earlier matched wait-cadence measurements remain scoped
+observed publication. Checked native peer subranges now also pass three-GPU
+chain/fanout/readback qualification with independent offsets and unequal logical
+owner lengths. Earlier matched wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -31,7 +33,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Live compute/native-peer/readback batches on 2/3/5/7 GPUs, deferred continuation on two, native directed chains/fanout/D2H on three and bounded late peer/compute admission; incomplete | Broader mixed-graph admission, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs, directed and native-subrange chains/fanout/D2H on three, deferred continuation and bounded late admission; incomplete | Pending compute-output subranges, ordered gather, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -254,15 +256,32 @@ campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Enable native peer subranges for already initialized PUBLIC allocations.
-   The public API carries checked ranges, but the native route still requires
-   equal, whole-allocation extents and stages partial views through the host.
-   Independent source/destination offsets with unchanged whole-owner custody
-   will support tensor slices and halo exchange. Keep pending compute outputs
-   full-extent until their separate coverage contract is extended. Require
-   offset/overflow/ownership rejection tests and full-buffer sentinel checks
-   in both native directions before accepting this route.
-2. Integrate one evidence-backed application kernel. Existing production peer
+The [native-subrange checkpoint](evidence/dev-native-peer-subranges-2026-10-02/README.md)
+qualifies checked peer windows over already initialized PUBLIC allocations with
+unchanged whole-owner custody. All 28 current-source MI300X cases pass, including
+12 new chain/fanout/readback/late-admission cases in both device orders. Every
+logical source, destination and applicable host guard byte is checked over two
+changed-content rounds. Owned remote files are removed and memory/process
+observations return to baseline. CPU qualification passes 1,934 KFD, 2,145 runtime
+and 22 example tests, with 32 unchanged hardware ignores; strict Clippy, feature
+checks and all 32 source controls pass. Three shared-body arithmetic functions
+are verified with eleven rejected logical mutants and seven runner controls.
+This is not whole-adapter/DMA refinement, physical overlap or performance parity.
+
+The remaining practical multi-GPU priority order is:
+
+1. Extend pending compute-output peer copies to checked subranges. Preserve the
+   exact producer's existing full-allocation Write coverage, but permit a contained
+   source window and independently checked initialized destination window. Retain
+   the immutable window through completion and whole-owner restoration. Qualify
+   existing R57 compute -> native slice -> D2H with final-stream-only progress,
+   wrong-producer/coverage/overflow negatives and complete guard checks. Pending
+   compute-output peer copies remain full-extent until this separate change lands.
+2. Admit explicitly ordered gather copies into one destination allocation. Reuse
+   queued-writer accounting without admitting concurrent writers or inferring
+   union coverage from the last partial writer. Require a three-GPU, preadmitted
+   two-source gather with a settled whole-destination readback and guard oracle.
+3. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
@@ -270,11 +289,11 @@ router's first native qualification.
    adds shared-body unsigned-add arithmetic and a conditional MIR/KIR/machine
    obligation. Retained local-to-SSA and SSA-to-register correspondence,
    LLVM/CFG/ABI/effect composition and application authority remain open.
-3. Qualify native partial failures and isolation before broadening execution
+4. Qualify native partial failures and isolation before broadening execution
    claims. CPU scripted failures are not a native fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's
    metadata does not authorize continued execution in that Context.
-4. Defer same-process reopen, eight-GPU coverage and matched performance until
+5. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2

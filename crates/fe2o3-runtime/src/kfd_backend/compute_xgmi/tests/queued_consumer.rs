@@ -219,14 +219,24 @@ impl Fixture {
     }
 
     fn submit_copy(&mut self) -> (Copy, u64) {
+        self.submit_copy_range(0, 0, BYTES as u64)
+    }
+
+    fn submit_copy_range(
+        &mut self,
+        source_offset: u64,
+        destination_offset: u64,
+        bytes: u64,
+    ) -> (Copy, u64) {
+        let mut source = region(self.source, RuntimeAccessV1::Read);
+        source.byte_offset = source_offset;
+        source.byte_len = bytes;
+        let mut destination = region(self.destination, RuntimeAccessV1::Write);
+        destination.byte_offset = destination_offset;
+        destination.byte_len = bytes;
         let copy = self
             .context
-            .peer_copy(
-                self.copy_stream,
-                region(self.source, RuntimeAccessV1::Read),
-                region(self.destination, RuntimeAccessV1::Write),
-                &[],
-            )
+            .peer_copy(self.copy_stream, source, destination, &[])
             .unwrap();
         let id = self.context.backend_submission_for_test_v1(&copy).unwrap();
         self.events.push(self.context.record_event(&copy).unwrap());
@@ -336,14 +346,12 @@ impl Fixture {
             let KfdRuntimeSdmaStorageV1::Device(owner) = &record.sdma_storage else {
                 panic!("restored exact device owner expected")
             };
-            assert_eq!(
-                owner.scripted_bytes().unwrap(),
-                &[if index == 0 || copy.status() == BackendPollV1::Succeeded {
-                    0x53
-                } else {
-                    0x17
-                }; BYTES]
-            );
+            let mut expected = [if index == 0 { 0x53 } else { 0x17 }; BYTES];
+            if index == 1 && copy.status() == BackendPollV1::Succeeded {
+                let start = copy.destination_region.byte_offset as usize;
+                expected[start..start + copy.destination_region.byte_len as usize].fill(0x53);
+            }
+            assert_eq!(owner.scripted_bytes().unwrap(), expected);
             identities[index] = owner.scripted_owner_id();
         }
         identities
@@ -813,6 +821,53 @@ fn queued_native_consumer_preserves_contained_read_ranges_and_read_aliases() {
             pending.retained_allocations.as_ref(),
             &[f.copy(copy_id).destination.local]
         );
+        assert_eq!(
+            f.context.wait(&mut consumer, Duration::ZERO).unwrap(),
+            RuntimePollV1::Pending
+        );
+        f.clean(copy, consumer);
+    }
+}
+
+#[test]
+fn native_subrange_deferred_consumer_accepts_only_contained_reads_and_restores_whole_owners() {
+    for published in [false, true] {
+        let mut f = Fixture::new(None, false, 2);
+        let (copy, copy_id) = f.submit_copy_range(5, 17, 31);
+        let owners = f.restored(copy_id);
+        if published {
+            f.context.flush_stream(f.copy_stream).unwrap();
+            assert_eq!(f.root(copy_id).phase, Phase::Published);
+        }
+        let mut read = region(f.destination, RuntimeAccessV1::Read);
+        read.byte_offset = 16;
+        read.byte_len = 17;
+        let events = f.events.clone();
+        let before = f.context.backend().submissions.len();
+        let trace = f.root(copy_id).trace.clone();
+        assert!(f.launch(Arguments(vec![read]), &events).is_err());
+        assert_eq!(f.context.backend().submissions.len(), before);
+        assert_eq!(f.root(copy_id).trace, trace);
+        read.byte_offset = 22;
+        let mut consumer = f.launch(Arguments(vec![read]), &events).unwrap();
+        let id = f.context.backend_submission_for_test_v1(&consumer).unwrap();
+        f.assert_waiting(id, copy_id, published);
+        f.release_events();
+        assert_eq!(
+            f.context.poll(&mut consumer).unwrap(),
+            RuntimePollV1::Pending
+        );
+        assert_eq!(f.root(copy_id).trace, trace);
+        let route = drive_restored_handoff(&mut f, copy_id, id);
+        assert_eq!(f.restored(copy_id), owners);
+        let pending = &f.context.backend().children[route.child].pending_compute[&route.local];
+        assert_eq!(pending.launch.bindings[0].region.byte_offset, 22);
+        assert_eq!(pending.launch.bindings[0].region.byte_len, 17);
+        assert_eq!(
+            pending.retained_allocations.as_ref(),
+            &[f.copy(copy_id).destination.local]
+        );
+        // The real unflushed gate prevents native compute publication in this CPU fixture.
         assert_eq!(
             f.context.wait(&mut consumer, Duration::ZERO).unwrap(),
             RuntimePollV1::Pending

@@ -52,6 +52,8 @@ use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod compute_xgmi;
 mod compute_xgmi_plan;
 pub use compute_xgmi_plan::{Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiPacketV1};
+mod compute_xgmi_window;
+pub use compute_xgmi_window::{Gfx942ComputeXgmiCopyPacketV1, Gfx942ComputeXgmiCopyWindowV1};
 mod xgmi_creation;
 pub(crate) use compute_xgmi::ComputeXgmiCopyCustodyV1;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;

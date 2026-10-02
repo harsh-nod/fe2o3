@@ -7,13 +7,16 @@ use crate::persistent_directional_sdma::{
 };
 use crate::queue::QueueModelFoundationV1;
 use crate::sdma::{
-    ComputeXgmiCopyCustodyV1, ComputeXgmiQueueFixtureV1, Gfx942ComputeXgmiPacketV1,
+    ComputeXgmiCopyCustodyV1, ComputeXgmiQueueFixtureV1, Gfx942ComputeXgmiCopyPacketV1,
     SdmaSingleMemoryV1,
 };
 use crate::shared_memory::{
     Gfx942DeviceMemoryIdentityV1, Gfx942XgmiMappedDeviceMemoryV1, LiveQueueModelFoundationLoanV1,
     PreparationMemoryFixtureV1, PreparationMemoryObservationV1,
 };
+
+#[path = "persistent_subrange_tests.rs"]
+mod subrange_tests;
 
 const LOGICAL_BYTES: u32 = 2048;
 const PHYSICAL_BYTES: [usize; 2] = [4096, 8192];
@@ -28,7 +31,7 @@ struct Pair {
     retake_fault: Option<(usize, bool, bool)>,
     complete_on_submit: bool,
     waits: usize,
-    packets: Vec<Gfx942ComputeXgmiPacketV1>,
+    packets: Vec<Gfx942ComputeXgmiCopyPacketV1>,
 }
 
 struct Before {
@@ -37,7 +40,7 @@ struct Before {
     addresses: [u64; 2],
     memory: [PreparationMemoryObservationV1; 2],
     models: [(u64, Option<u64>, u64); 2],
-    logical_bytes: u64,
+    logical_bytes: [u64; 2],
     physical_bytes: [usize; 2],
 }
 
@@ -51,6 +54,25 @@ fn fixture_extent(
     physical_bytes: [usize; 2],
     packetized: bool,
 ) -> (Pair, TransferRoot, Before) {
+    fixture_window(
+        configured,
+        Gfx942ComputeXgmiCopyWindowV1::new(logical_bytes, logical_bytes, 0, 0, logical_bytes)
+            .unwrap(),
+        physical_bytes,
+        packetized,
+    )
+}
+
+fn fixture_window(
+    configured: bool,
+    window: Gfx942ComputeXgmiCopyWindowV1,
+    physical_bytes: [usize; 2],
+    packetized: bool,
+) -> (Pair, TransferRoot, Before) {
+    let logical_bytes = [
+        window.source_logical_bytes(),
+        window.destination_logical_bytes(),
+    ];
     let mut memory = if packetized {
         GPU_IDS.map(|id| PreparationMemoryFixtureV1::compute_xgmi_packetized_v1(id, configured))
     } else {
@@ -59,7 +81,6 @@ fn fixture_extent(
             PreparationMemoryFixtureV1::compute_xgmi_v1(GPU_IDS[1], 0x41_0000, configured),
         ]
     };
-    let plan = Gfx942ComputeXgmiPacketPlanV1::new(logical_bytes).unwrap();
     let keys = std::array::from_fn::<_, 2, _>(|index| QueueKeyV1 {
         vm: memory[index].primary_vm(),
         id: QueueInstanceIdV1(11 + index as u64),
@@ -77,8 +98,8 @@ fn fixture_extent(
             lease,
             keys[index],
             7,
-            logical_bytes,
-            logical_bytes,
+            logical_bytes[index],
+            logical_bytes[index],
         );
         promote_directional_persistent_sdma_custody_v1(
             buffer,
@@ -102,7 +123,7 @@ fn fixture_extent(
             memory[index]
                 .single_device_facts(allocations[index].owner.local_native_for_sdma().unwrap())
                 .unwrap()
-                .checked_gpu_subrange(0, logical_bytes, 1)
+                .checked_gpu_subrange(0, logical_bytes[index], 1)
                 .unwrap()
         }),
         memory: memory
@@ -114,7 +135,11 @@ fn fixture_extent(
         logical_bytes,
         physical_bytes,
     };
-    let mut root = TransferRoot::new(allocations.each_ref().map(|a| a.attachment), GPU_IDS, plan);
+    let mut root = TransferRoot::new(
+        allocations.each_ref().map(|a| a.attachment),
+        GPU_IDS,
+        window,
+    );
     root.allocations = allocations.map(Some);
     (
         Pair {
@@ -126,7 +151,7 @@ fn fixture_extent(
             retake_fault: None,
             complete_on_submit: false,
             waits: 0,
-            packets: Vec::with_capacity(plan.count()),
+            packets: Vec::with_capacity(window.plan().count()),
         },
         root,
         before,
@@ -204,7 +229,7 @@ impl transfer::TransferIo for Pair {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        packet: Gfx942ComputeXgmiPacketV1,
+        packet: Gfx942ComputeXgmiCopyPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let [source_memory, destination_memory] = &mut self.memory;
@@ -214,8 +239,7 @@ impl transfer::TransferIo for Pair {
             destination_memory,
             source,
             destination,
-            packet.offset,
-            packet.bytes,
+            packet,
             custody,
         )?;
         if self.complete_on_submit {
@@ -303,7 +327,7 @@ fn assert_original_owners(root: &TransferRoot, before: &Before, restored: bool) 
         let owner = allocation.owner.ownership_snapshot_for_test_v1();
         assert!(before.owners[index].same_allocation(&owner));
         assert_eq!(allocation.attachment, root.certificates[index]);
-        assert_eq!(allocation.byte_len(), before.logical_bytes);
+        assert_eq!(allocation.byte_len(), before.logical_bytes[index]);
         assert_eq!(allocation.physical_byte_len(), physical_bytes as u64);
         assert_eq!(allocation.attachment.pool_generation, 7);
         assert_eq!(owner.local_native().is_some(), restored);
@@ -397,7 +421,7 @@ fn compute_xgmi_composed_packetized_copy_keeps_one_pair_across_tail_wrap_and_obs
         let bytes = 2 * u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1) + 37;
         let (mut pair, mut root, before) =
             fixture_extent(configured, bytes, [0x802000, 0x804000], true);
-        let plan = Gfx942ComputeXgmiPacketPlanV1::new(before.logical_bytes).unwrap();
+        let plan = Gfx942ComputeXgmiCopyWindowV1::new(bytes, bytes, 0, 0, bytes).unwrap();
         pair.queue.start_at_ring_tail(&mut pair.memory[0]);
         begin(&mut pair, &mut root);
         let first_ticket = root.core.copy_custody_for_test().ticket.unwrap();
@@ -451,8 +475,8 @@ fn compute_xgmi_composed_packetized_copy_keeps_one_pair_across_tail_wrap_and_obs
         let fence = u64::from_le_bytes(snapshot.ring[32..40].try_into().unwrap());
         let tail = plan.packet(1).unwrap();
         let expected = crate::sdma::Gfx942SdmaCopySubmissionV1::new(
-            before.addresses[0] + tail.offset,
-            before.addresses[1] + tail.offset,
+            before.addresses[0] + tail.source_offset,
+            before.addresses[1] + tail.destination_offset,
             tail.bytes,
             fence,
             8,
@@ -494,8 +518,8 @@ fn compute_xgmi_composed_packetized_copy_keeps_one_pair_across_tail_wrap_and_obs
         let fence = u64::from_le_bytes(snapshot.ring[96..104].try_into().unwrap());
         let tail = plan.packet(2).unwrap();
         let expected = crate::sdma::Gfx942SdmaCopySubmissionV1::new(
-            before.addresses[0] + tail.offset,
-            before.addresses[1] + tail.offset,
+            before.addresses[0] + tail.source_offset,
+            before.addresses[1] + tail.destination_offset,
             tail.bytes,
             fence,
             snapshot.generations[1],

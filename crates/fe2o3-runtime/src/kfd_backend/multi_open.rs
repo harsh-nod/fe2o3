@@ -13,7 +13,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     ///
     /// DeviceLocal allocations use KFD PUBLIC backing, isolated from private
     /// cached buffers. HostVisible storage is unchanged. Eligible initialized,
-    /// equal full-buffer copies use the bounded native packet plan; other copies
+    /// equal-length checked regions use the bounded native packet plan; other copies
     /// retain host staging. This includes prequeued directed scalar chains and
     /// shared Read sources; shared native endpoints serialize without creating a
     /// success dependency between siblings. Flush/drain explicitly progress transfers, retain both

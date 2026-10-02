@@ -1,9 +1,9 @@
-//! Full logical copies retain the original directional persistent owners.
+//! Checked logical copies retain the original complete directional persistent owners.
 
 use super::*;
 use crate::persistent_allocation::{detach_sdma_buffer_pair_v1, restore_sdma_buffer_pair_v1};
 use crate::sdma::{
-    Gfx942ComputeXgmiPacketPlanV1, Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1,
+    Gfx942ComputeXgmiCopyWindowV1, Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1,
 };
 use crate::shared_memory::{
     ComputeXgmiBufferV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
@@ -37,7 +37,7 @@ impl TransferRoot {
     fn new(
         certificates: [Gfx942PersistentDirectionalSdmaAttachmentV1; 2],
         roster: [u32; 2],
-        plan: Gfx942ComputeXgmiPacketPlanV1,
+        window: Gfx942ComputeXgmiCopyWindowV1,
     ) -> Self {
         Self {
             phase: Phase::Admitted,
@@ -46,7 +46,7 @@ impl TransferRoot {
             sdma: [None, None],
             metadata: [None, None],
             locals: [None, None],
-            core: transfer::TransferCore::with_plan(roster, plan),
+            core: transfer::TransferCore::with_window(roster, window),
         }
     }
 
@@ -355,12 +355,43 @@ fn require_allocation(
         .owner
         .local_native_for_sdma()
         .unwrap_or_else(|| std::process::abort());
-    if memory.mapped_gfx942_device_memory_facts(lease)?.vm() != session.key.vm {
+    let facts = memory.mapped_gfx942_device_memory_facts(lease)?;
+    if facts.vm() != session.key.vm {
         return Err(ComputeAqlQueueSessionErrorV1::Contract(
             "persistent compute-XGMI data VM mismatch",
         ));
     }
+    if facts.checked_gpu_subrange(0, bytes, 1).is_none() {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "persistent compute-XGMI logical address extent",
+        ));
+    }
     Ok(bytes)
+}
+
+fn admit_window(
+    source_bytes: u64,
+    destination_bytes: u64,
+    window: Option<Gfx942ComputeXgmiCopyWindowV1>,
+) -> Result<Gfx942ComputeXgmiCopyWindowV1, ComputeAqlQueueSessionErrorV1> {
+    match window {
+        Some(window)
+            if window.source_logical_bytes() == source_bytes
+                && window.destination_logical_bytes() == destination_bytes =>
+        {
+            Ok(window)
+        }
+        Some(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute-XGMI window logical extents changed",
+        )),
+        None => {
+            Gfx942ComputeXgmiCopyWindowV1::new(source_bytes, destination_bytes, 0, 0, source_bytes)
+                .filter(|_| source_bytes == destination_bytes)
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "compute-XGMI requires equal complete bounded extents",
+                ))
+        }
+    }
 }
 
 fn poison(
@@ -441,6 +472,7 @@ impl Gfx942ComputeXgmiQueueV1 {
         destination: &ComputeAqlQueueSessionV1,
         source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
         destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        window: Option<Gfx942ComputeXgmiCopyWindowV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.persistent_transfer.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -462,18 +494,14 @@ impl Gfx942ComputeXgmiQueueV1 {
                 ))?;
         let source_bytes = require_allocation(source, source_allocation)?;
         let destination_bytes = require_allocation(destination, destination_allocation)?;
-        let plan = Gfx942ComputeXgmiPacketPlanV1::new(source_bytes)
-            .filter(|_| source_bytes == destination_bytes)
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "compute-XGMI requires equal complete bounded extents",
-            ))?;
+        let window = admit_window(source_bytes, destination_bytes, window)?;
         self.persistent_transfer = Some(Box::new(TransferRoot::new(
             [
                 source_allocation.attachment,
                 destination_allocation.attachment,
             ],
             self.attachment.route.canonical_mapping_gpu_ids(),
-            plan,
+            window,
         )));
         let root = self
             .persistent_transfer
@@ -498,7 +526,51 @@ impl Gfx942ComputeXgmiQueueV1 {
         destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.admit_persistent_transfer(source, destination, source_data, destination_data)?;
+        self.copy_persistent_data_with_peer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            None,
+            timeout,
+        )
+    }
+
+    /// Copies checked logical subranges while retaining both complete original owners.
+    ///
+    /// Both owners must be fully initialized PUBLIC storage with exact current
+    /// attachments. The admitted window must match their actual logical lengths,
+    /// not pool padding. Outside-destination bytes remain untouched. All full-copy
+    /// quiescence, model-loan, restoration, and terminal-custody rules also apply.
+    pub fn copy_persistent_data_range_with_peer_v1(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+        source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        window: Gfx942ComputeXgmiCopyWindowV1,
+        timeout: Duration,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.copy_persistent_data_with_peer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            Some(window),
+            timeout,
+        )
+    }
+
+    fn copy_persistent_data_with_peer(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+        source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        window: Option<Gfx942ComputeXgmiCopyWindowV1>,
+        timeout: Duration,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.admit_persistent_transfer(source, destination, source_data, destination_data, window)?;
         let root = self
             .persistent_transfer
             .as_mut()
@@ -539,7 +611,47 @@ impl Gfx942ComputeXgmiQueueV1 {
         source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
         destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.admit_persistent_transfer(source, destination, source_data, destination_data)?;
+        self.begin_persistent_data_with_peer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            None,
+        )
+    }
+
+    /// Publishes the first packet of a checked subrange and retains both complete owners.
+    ///
+    /// Use the existing poll/progress/finish methods to settle this transfer.
+    /// The window is checked against both original logical extents before either
+    /// owner is taken. There is no suballocation or same-child concurrency grant.
+    /// Every failure after admission retains terminal custody exactly as for a full copy.
+    pub fn begin_persistent_data_range_with_peer_v1(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+        source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        window: Gfx942ComputeXgmiCopyWindowV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.begin_persistent_data_with_peer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            Some(window),
+        )
+    }
+
+    fn begin_persistent_data_with_peer(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+        source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        window: Option<Gfx942ComputeXgmiCopyWindowV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.admit_persistent_transfer(source, destination, source_data, destination_data, window)?;
         let root = self
             .persistent_transfer
             .as_mut()
@@ -726,7 +838,7 @@ mod tests {
                 .each_ref()
                 .map(|allocation| allocation.attachment),
             [7, 9],
-            Gfx942ComputeXgmiPacketPlanV1::new(2048).unwrap(),
+            Gfx942ComputeXgmiCopyWindowV1::new(2048, 2048, 0, 0, 2048).unwrap(),
         );
         root.allocations = allocations.map(Some);
         root

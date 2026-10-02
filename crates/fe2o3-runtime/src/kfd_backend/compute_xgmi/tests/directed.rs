@@ -386,7 +386,7 @@ fn directed_native_cancel_is_too_late_after_ownership_but_refunds_unstarted_sibl
 }
 
 #[test]
-fn directed_native_partial_ranges_and_absent_routes_preserve_staged_fallback() {
+fn directed_native_checked_ranges_and_absent_routes_select_exact_transport() {
     for variant in 0..3 {
         let mut f = Three::new(None, false);
         let mut route = f.route(0, 1);
@@ -409,8 +409,15 @@ fn directed_native_partial_ranges_and_absent_routes_preserve_staged_fallback() {
         let id = f.submit(route, &[]);
         let copy = f.fixture.copy(id);
         assert!(copy.directed.is_some());
-        assert!(copy.compute_xgmi.is_none());
-        assert_eq!(copy.staging.len() as u64, route.source.byte_len);
+        assert_eq!(copy.compute_xgmi.is_none(), variant == 2);
+        assert_eq!(
+            copy.staging.len() as u64,
+            if variant == 2 {
+                route.source.byte_len
+            } else {
+                0
+            }
+        );
         assert!(f.fixture.backend.directed_identity_is_intact_v1(id));
         assert_eq!(
             f.fixture.backend.cancel_v1(id).unwrap(),
