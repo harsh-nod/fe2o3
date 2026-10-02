@@ -183,7 +183,9 @@ def build_and_check(repo, all_features):
         metadata = json.loads(metadata_path.read_bytes())
         selected = package_identity(metadata, repo)
         receipt = scratch / "artifacts.jsonl"
-        command = ["cargo", "build", "--locked", "-p", PACKAGE, "--lib", "--message-format=json-render-diagnostics"]
+        # Keep both binary targets in the package build, including all-features;
+        # only the metadata-bound library record is admitted as the backend.
+        command = ["cargo", "build", "--locked", "-p", PACKAGE, "--message-format=json-render-diagnostics"]
         if all_features:
             command.append("--all-features")
         with receipt.open("wb") as output:

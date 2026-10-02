@@ -2,8 +2,10 @@
 """Regression tests for the production backend build/load gate."""
 
 import copy
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -63,7 +65,8 @@ class BackendGateTests(unittest.TestCase):
         return gate.inspect_backend(self.backend, "rustc", self.root, dict(os.environ), self.root)
 
     def test_fresh_artifact_with_rlib_and_custom_target(self):
-        self.write_receipt([self.artifact, self.finished])
+        binary = {"reason": "compiler-artifact", "target": {"name": "fe2o3-export-sim"}}
+        self.write_receipt([binary, self.artifact, self.finished])
         self.assertEqual(self.select(), self.backend)
 
     def test_package_metadata_binding(self):
@@ -211,8 +214,11 @@ class BackendGateTests(unittest.TestCase):
         self.assertIsNotNone(rustc)
         subprocess.run([rustc, "--crate-type=cdylib", "-Cdebuginfo=0", str(source),
                         "-o", str(self.backend)], cwd=REPO, check=True, timeout=60)
-        with self.assertRaisesRegex(gate.CheckError, "load probe failed"):
-            gate.inspect_backend(self.backend, rustc, REPO, dict(os.environ), self.root)
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic):
+            with self.assertRaisesRegex(gate.CheckError, "load probe failed"):
+                gate.inspect_backend(self.backend, rustc, REPO, dict(os.environ), self.root)
+        self.assertIn("__rustc_codegen_backend", diagnostic.getvalue())
 
     def test_real_probe_timeout(self):
         compiler = self.root / "slow-rustc"
@@ -235,7 +241,7 @@ class BackendGateTests(unittest.TestCase):
                 kwargs["stdout"].write(json.dumps(self.metadata).encode())
             else:
                 self.assertEqual("--all-features" in command, self.all_features)
-                self.assertIn("--lib", command)
+                self.assertNotIn("--lib", command)
                 kwargs["stdout"].write((json.dumps(self.artifact) + "\n" +
                                         json.dumps(self.finished) + "\n").encode())
             return subprocess.CompletedProcess(command, 0)
@@ -249,10 +255,17 @@ class BackendGateTests(unittest.TestCase):
             self.assertEqual(inspect.call_count, 2)
 
     def test_failed_cargo_does_not_inspect_or_report_success(self):
-        with mock.patch.object(gate.subprocess, "run", side_effect=subprocess.CalledProcessError(37, "cargo")), \
+        def failed_build(command, **kwargs):
+            if command[1] == "metadata":
+                kwargs["stdout"].write(json.dumps(self.metadata).encode())
+                return subprocess.CompletedProcess(command, 0)
+            raise subprocess.CalledProcessError(37, command)
+
+        with mock.patch.object(gate.subprocess, "run", side_effect=failed_build) as run, \
                 mock.patch.object(gate, "inspect_backend") as inspect:
             with self.assertRaises(subprocess.CalledProcessError):
                 gate.build_and_check(self.root, False)
+            self.assertEqual(run.call_count, 2)
             inspect.assert_not_called()
 
 
