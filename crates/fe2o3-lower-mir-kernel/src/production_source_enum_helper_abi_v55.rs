@@ -3,7 +3,7 @@ fn source_node_contains_enum_v55(
     node: usize,
     nodes: &mut usize,
     depth: usize,
-    budget: &mut ArgumentBudgetV1<'_>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
     budget.source_reference_charge_v29(plan, 3)?;
     *nodes = argument_sum_v1(&[*nodes, 1])?;
@@ -33,6 +33,20 @@ fn source_node_contains_enum_v55(
         }
         _ => Ok(false),
     }
+}
+
+fn source_call_requires_captured_carrier_v55(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    node: usize,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
+    // Scalar-only enums still carry a tag and an exact source payload roster.
+    // They cannot use ordinary CFG reconstruction, which transports no payload.
+    Ok(source_reference_node_has_loan_v29(plan, node, budget)?
+        || source_reference_node_has_selected_pointer_v29(plan, node, budget)?
+        || source_descriptor_node_present_v29(plan, node, &mut 0, budget)?
+        || source_node_contains_enum_v55(plan, node, &mut 0, 0, budget)?)
 }
 
 fn check_source_enum_helper_parameter_v55(

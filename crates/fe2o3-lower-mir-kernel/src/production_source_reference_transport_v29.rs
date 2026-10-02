@@ -837,8 +837,8 @@ fn source_reference_call_shape_v29(
     Ok((leaves, exact_ids))
 }
 
-// The retained child instance, not the argument's pointer shape, selects this
-// route. Plain siblings still undergo their ordinary structural shape check.
+// The retained child instance selects captured enum and reference carriers.
+// Plain siblings still undergo their ordinary structural shape check.
 fn source_reference_call_argument_shape_v29(
     references: &SourceReferenceEmissionV29<'_, '_>,
     origin: &PreparedExecutionCallOriginV29<'_>,
@@ -890,7 +890,7 @@ fn source_reference_call_argument_shape_v29(
     {
         return Err(execution_call_error_v29());
     }
-    let mut has_reference = false;
+    let mut has_carrier = false;
     for (local, declaration) in row.declaration().locals().iter().enumerate() {
         budget.source_reference_charge_v29(plan, 1)?;
         let argument = match declaration.role() {
@@ -911,11 +911,9 @@ fn source_reference_call_argument_shape_v29(
             budget,
         )?
         .ok_or_else(execution_call_error_v29)?;
-        has_reference |= source_reference_node_has_loan_v29(plan, node, budget)?
-            || source_reference_node_has_selected_pointer_v29(plan, node, budget)?
-            || source_descriptor_node_present_v29(plan, node, &mut 0, budget)?;
+        has_carrier |= source_call_requires_captured_carrier_v55(plan, node, budget)?;
     }
-    if !has_reference {
+    if !has_carrier {
         return Ok(false);
     }
     if origin.projections.len() != origin.parameter_types.len() {

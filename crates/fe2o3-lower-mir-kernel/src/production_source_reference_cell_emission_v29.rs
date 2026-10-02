@@ -747,9 +747,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             let Some(node) = plan.returns.get(cursor.instance.index()).copied().flatten() else {
                 return Ok(None);
             };
-            if !source_reference_node_has_loan_v29(plan, node, budget)?
-                && !source_reference_node_has_selected_pointer_v29(plan, node, budget)?
-                && !source_descriptor_node_present_v29(plan, node, &mut 0, budget)?
+            if !source_call_requires_captured_carrier_v55(plan, node, budget)?
                 && execution_cfg_return_transport_count_v29(
                     plan.instances.owner().source_semantic().types(),
                     plan.nodes[node].ty,
@@ -822,9 +820,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             let Some(node) = plan.returns.get(child.index()).copied().flatten() else {
                 return Ok(None);
             };
-            if !source_reference_node_has_loan_v29(plan, node, budget)?
-                && !source_reference_node_has_selected_pointer_v29(plan, node, budget)?
-                && !source_descriptor_node_present_v29(plan, node, &mut 0, budget)?
+            if !source_call_requires_captured_carrier_v55(plan, node, budget)?
                 && execution_cfg_return_transport_count_v29(
                     plan.instances.owner().source_semantic().types(),
                     plan.nodes[node].ty,
