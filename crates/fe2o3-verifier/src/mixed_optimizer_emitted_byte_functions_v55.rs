@@ -10,6 +10,7 @@ pub(in super::super) struct EmittedByteFunctionsV55<'a, 'owner, R> {
     interpretation: ByteInterpretationContextV39<'a, 'owner>,
     namespaces: Vec<Option<usize>>,
     sites: Vec<Option<ByteAllocationSiteV30>>,
+    scalar_bodies: Vec<Option<CanonicalByteScalarBodyV55>>,
     last_namespace: Option<usize>,
     emitted_bytes: usize,
     buffer: usize,
@@ -40,6 +41,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         out.budget.reserve_storage(
             size_of::<Self>()
                 + size_of::<Result<Self>>()
+                + size_of::<CanonicalByteScalarBodyV55>()
+                + size_of::<Result<CanonicalByteScalarBodyV55>>()
                 + size_of::<([&(); 6], [usize; 4], [Result<()>; 2])>(),
         )?;
         let mut namespaces = vector(inventory.functions().len(), out)?;
@@ -48,6 +51,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         let mut sites = vector(inventory.operations().len(), out)?;
         out.budget.charge_work(inventory.operations().len())?;
         sites.resize(inventory.operations().len(), None);
+        let mut scalar_bodies = vector(inventory.operations().len(), out)?;
+        out.budget.charge_work(inventory.operations().len())?;
+        scalar_bodies.resize(inventory.operations().len(), None);
         Ok(Self {
             inventory,
             physical,
@@ -55,6 +61,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             interpretation,
             namespaces,
             sites,
+            scalar_bodies,
             last_namespace: None,
             emitted_bytes: out.text.len(),
             buffer: out.text.as_ptr() as usize,
@@ -130,7 +137,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             {
                 return Err(emitted_mismatch());
             }
-            model.emit(namespace, out)?;
+            model.emit_with_scalar_bodies(namespace, ScalarBodiesV55::Define, out)?;
             let row = &self.inventory.functions()[function];
             for (operation, plan) in row.operations.clone().zip(&model.operations) {
                 out.budget.charge_work(1)?;
@@ -138,11 +145,95 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                     ByteOperationV30::Alloca(alloca) => Some(alloca.allocation_site()),
                     _ => None,
                 };
+                self.scalar_bodies[operation] = match plan {
+                    ByteOperationV30::Scalar(scalar) => Some(scalar.body_descriptor_v55(out)?),
+                    _ => None,
+                };
             }
             self.namespaces[function] = Some(namespace);
             self.last_namespace = Some(namespace);
             self.emitted_bytes = out.text.len();
             self.check(out)
+        })();
+        self.retain(result)
+    }
+
+    // Reuse only the total scalar transition, never the input owner's registry
+    // predicate. The output keeps its own PC, input checks and refusal path.
+    pub(in super::super) fn emit_output_reusing_scalar_bodies<S: ByteAllocationResolverV30>(
+        &self,
+        model: &ByteFunctionV30<'_, '_, S>,
+        namespace: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        let result = (|| {
+            self.check(out)?;
+            model.check(out)?;
+            out.budget.charge_work(5)?;
+            if self.interpretation.width != model.interpretation.width {
+                return Err(emitted_mismatch());
+            }
+            let function = model.function.0 as usize;
+            let original = self
+                .inventory
+                .functions()
+                .get(function)
+                .ok_or_else(emitted_mismatch)?;
+            let current = &model.inventory.functions()[function];
+            let source = self
+                .namespaces
+                .get(function)
+                .copied()
+                .flatten()
+                .ok_or_else(emitted_mismatch)?;
+            if original.coordinate != current.coordinate
+                || original.operations != current.operations
+                || original.blocks != current.blocks
+            {
+                return Err(emitted_mismatch());
+            }
+            let floor = out.budget.storage();
+            out.budget.reserve_storage(
+                size_of::<Vec<bool>>()
+                    + size_of::<Result<Vec<bool>>>()
+                    + size_of::<CanonicalByteScalarBodyV55>(),
+            )?;
+            let mut reuse = vector(model.operations.len(), out)?;
+            for (operation, plan) in current.operations.clone().zip(&model.operations) {
+                out.budget.charge_work(5)?;
+                let left = &self.inventory.operations()[operation];
+                let right = &model.inventory.operations()[operation];
+                if left.coordinate != right.coordinate
+                    || block_index(self.inventory, left.coordinate.block)?
+                        != block_index(model.inventory, right.coordinate.block)?
+                {
+                    return Err(emitted_mismatch());
+                }
+                let shared = if let (Some(original), ByteOperationV30::Scalar(scalar)) =
+                    (self.scalar_bodies[operation], plan)
+                {
+                    original == scalar.body_descriptor_v55(out)?
+                } else {
+                    false
+                };
+                reuse.push(shared);
+                if shared {
+                    emit!(
+                        out,
+                        "use super::byte_scalar_body_{source}_{operation}_v55 as byte_scalar_body_{namespace}_{operation}_v55;\n"
+                    );
+                }
+            }
+            model.emit_with_scalar_bodies(namespace, ScalarBodiesV55::Reuse(&reuse), out)?;
+            drop(reuse);
+            out.budget.release_storage(
+                out.budget
+                    .storage()
+                    .checked_sub(floor)
+                    .ok_or(Resource::Accounting)?,
+            )?;
+            self.check(out)?;
+            model.check(out)
         })();
         self.retain(result)
     }

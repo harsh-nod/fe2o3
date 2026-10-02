@@ -17,7 +17,7 @@ mod canonical;
 
 #[path = "original_semantic_mir_canonical_byte_v36.rs"]
 mod canonical_byte;
-pub(crate) use canonical_byte::CanonicalByteScalarV30;
+pub(crate) use canonical_byte::{CanonicalByteScalarBodyV55, CanonicalByteScalarV30};
 
 #[path = "original_semantic_mir_relation_v30.rs"]
 mod relation;

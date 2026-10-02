@@ -17,6 +17,17 @@ const EMPTY: NodeV30 = NodeV30 {
     expression: ExpressionV30::Constant(0),
 };
 
+// Complete semantic inputs to the scalar transition, excluding its separately
+// checked model precondition and observation coordinate.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct CanonicalByteScalarBodyV55 {
+    definitions: usize,
+    inputs: [(usize, ScalarV30); 3],
+    arguments: usize,
+    nodes: [NodeV30; 4],
+    destination: usize,
+}
+
 /// This is an immutable arithmetic plan, not an owner or memory-admission token.
 /// The containing byte function retains and checks its allocation resolver.
 pub(crate) struct CanonicalByteScalarV30<'inventory, 'owner> {
@@ -166,6 +177,23 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
 
     pub(crate) fn emit_definition(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
         self.retain(self.emit_definition_current(namespace, out))
+    }
+
+    pub(crate) fn body_descriptor_v55(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<CanonicalByteScalarBodyV55> {
+        self.retain((|| {
+            self.check(out)?;
+            out.budget.charge_work(16)?;
+            Ok(CanonicalByteScalarBodyV55 {
+                definitions: self.inventory.definitions().len(),
+                inputs: self.inputs,
+                arguments: self.arguments,
+                nodes: self.nodes,
+                destination: self.destination,
+            })
+        })())
     }
 
     fn emit_definition_current(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
@@ -483,6 +511,36 @@ mod tests {
             assert!(text.contains("let ok1 = canonical_scalar_ok_"));
             assert!(!text.contains("op("));
             assert!(!text.contains("assume("));
+        });
+    }
+
+    #[test]
+    fn canonical_byte_scalar_body_descriptor_covers_every_transition_input() {
+        with_inventory(1, false, |inventory, floor| {
+            run(inventory, floor, LIMIT, LIMIT, |out| {
+                let scalar =
+                    CanonicalByteScalarV30::derive(inventory, 2, FormalIndexWidth::Bits64, out)?;
+                let body = scalar.body_descriptor_v55(out)?;
+                let mutations: [fn(&mut CanonicalByteScalarBodyV55); 7] = [
+                    |body| body.definitions += 1,
+                    |body| body.destination += 1,
+                    |body| body.inputs.swap(0, 1),
+                    |body| body.inputs[0].1 = ScalarV30::Bool,
+                    |body| body.arguments -= 1,
+                    |body| body.nodes[2].scalar = ScalarV30::Bool,
+                    |body| body.nodes[2].expression = ExpressionV30::Constant(7),
+                ];
+                for mutate in mutations {
+                    let mut different = body;
+                    mutate(&mut different);
+                    assert!(different != body);
+                }
+                assert!(scalar.body_descriptor_v55(out)? == body);
+                assert!(out.text.is_empty());
+                Ok(())
+            })
+            .0
+            .unwrap();
         });
     }
 
