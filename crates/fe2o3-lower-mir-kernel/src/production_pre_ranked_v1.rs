@@ -554,7 +554,7 @@ impl ProductionSemanticKirOwnerV1 {
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
             let translation_validation = validate_mir_pliron_translation_with_allowance_v1(
-                Some(semantic),
+                Some(&semantic_ssa),
                 executable.module(),
                 &correspondence,
                 &function_name,

@@ -529,7 +529,7 @@ mod wrapping_ranked_correspondence_v1_tests {
                         RankedMutation::None,
                     );
                     let report = validate_mir_pliron_translation_with_semantic_v1(
-                        Some(source.semantic_ssa().source_semantic()),
+                        Some(source.semantic_ssa()),
                         source.executable().module(),
                         &source.correspondence,
                         NAME,

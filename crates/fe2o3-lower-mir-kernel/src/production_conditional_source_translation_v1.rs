@@ -274,7 +274,7 @@ impl ProductionPreRankedKirOwnerV1 {
             return Err(E::SourceRows);
         }
         let validation = validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
-            Some(semantic),
+            Some(&self.semantic_ssa),
             module,
             &self.correspondence,
             kernel.id.as_str(),

@@ -3,7 +3,7 @@
 /// production routes use the additive caller-budgeted entry below instead.
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_semantic_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
@@ -31,7 +31,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_semantic_and_budget_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
@@ -56,7 +56,7 @@ fn validate_mir_pliron_translation_with_semantic_and_budget_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
@@ -82,7 +82,7 @@ fn validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_recipe_translation_with_allowance_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
@@ -102,7 +102,7 @@ fn validate_mir_pliron_recipe_translation_with_allowance_v1(
         allowance,
         |expansion| {
             validate_mir_pliron_translation_inner_v1(
-                semantic,
+                semantic.map(ProductionSemanticSsaOwnerV1::source_semantic),
                 module,
                 correspondence,
                 kernel_id,
@@ -118,7 +118,7 @@ fn validate_mir_pliron_recipe_translation_with_allowance_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_allowance_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,

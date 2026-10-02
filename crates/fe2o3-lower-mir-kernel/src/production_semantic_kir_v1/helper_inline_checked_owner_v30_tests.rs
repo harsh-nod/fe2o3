@@ -273,7 +273,7 @@ fn helper_explicit_replay_rejects_distinct_equal_valued_ssa_operand_after_byte_i
     owner.canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone()).unwrap();
     let checks = &owner.generic_checks[0];
     let values = validate_mir_pliron_translation_with_semantic_v1(
-        Some(owner.semantic_ssa.source_semantic()),
+        Some(&owner.semantic_ssa),
         owner.module(),
         &owner.correspondence,
         &checks.function_name,

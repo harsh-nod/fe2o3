@@ -366,7 +366,7 @@ fn genuine_nested_helper_result_is_limited_before_emit_with_exact_ledger_boundar
         budget.reserve_storage(floor).unwrap();
         let mut reached_preflight = false;
         let result = with_native_value_expansion_v1(
-            Some(owner.semantic_ssa().source_semantic()),
+            Some(owner.semantic_ssa()),
             module,
             &owner.correspondence,
             module.kernels[0].id.as_str(),

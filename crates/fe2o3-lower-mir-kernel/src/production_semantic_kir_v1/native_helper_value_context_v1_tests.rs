@@ -12,6 +12,9 @@ mod ledger_tests;
 #[path = "native_helper_inline_source_v30_tests.rs"]
 mod inline_source_tests;
 
+#[path = "native_helper_checked_arguments_v1_tests.rs"]
+mod checked_argument_tests;
+
 struct TestMeter<'a, 'w> {
     first: Budget<'w>,
     second: Budget<'w>,
@@ -25,6 +28,14 @@ impl<'w> TestMeter<'_, 'w> {
         } else {
             &mut self.first
         }
+    }
+}
+impl NativeHelperMeter for TestMeter<'_, '_> {
+    fn check_call(&mut self, query: NativeHelperCallQuery<'_>) -> Result<bool, Error> {
+        check_test_call(query, self.current()).map_err(|_| {
+            self.failed = true;
+            "checked call resource"
+        })
     }
 }
 impl Meter for TestMeter<'_, '_> {
@@ -160,7 +171,7 @@ fn actual_verified_native_helper_is_derived_and_bound_to_exact_call() {
     let (location, operation) = call(entry);
     let (result, storage, _, _, _) = run(1_000_000, 16 * 1024 * 1024, |meter, _| {
         with_native_helper_values(
-            owner.semantic_ssa.source_semantic(),
+            &owner.semantic_ssa,
             module,
             &owner.correspondence,
             SemanticFunctionIdV1::from_index(0),
@@ -239,7 +250,7 @@ fn native_exact_and_one_short_cache_limits_are_shared_and_restore_floor() {
     let (location, operation) = call(entry);
     let probe = |meter: &mut TestMeter<'_, '_>, _: &Cell<bool>| {
         with_native_helper_values(
-            owner.semantic_ssa.source_semantic(),
+            &owner.semantic_ssa,
             module,
             &owner.correspondence,
             SemanticFunctionIdV1::from_index(0),
@@ -271,7 +282,7 @@ fn native_scope_rejects_replaced_work_and_success_floor_loss() {
     let entry = entry(module);
     let (result, _, _, _, foreign) = run(1_000_000, 16 * 1024 * 1024, |meter, replaced| {
         with_native_helper_values(
-            owner.semantic_ssa.source_semantic(),
+            &owner.semantic_ssa,
             module,
             &owner.correspondence,
             SemanticFunctionIdV1::from_index(0),
@@ -287,7 +298,7 @@ fn native_scope_rejects_replaced_work_and_success_floor_loss() {
     assert_eq!(foreign, 31);
     let (result, storage, _, _, _) = run(1_000_000, 16 * 1024 * 1024, |meter, _| {
         with_native_helper_values(
-            owner.semantic_ssa.source_semantic(),
+            &owner.semantic_ssa,
             module,
             &owner.correspondence,
             SemanticFunctionIdV1::from_index(0),

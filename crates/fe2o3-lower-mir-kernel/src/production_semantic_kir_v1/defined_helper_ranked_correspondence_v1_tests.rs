@@ -299,7 +299,7 @@ mod defined_helper_ranked_correspondence_v1_tests {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
             let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
             let result = validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                Some(source.semantic_ssa().source_semantic()),
+                Some(source.semantic_ssa()),
                 source.executable().module(),
                 &source.correspondence,
                 NAME,
@@ -369,7 +369,7 @@ mod defined_helper_ranked_correspondence_v1_tests {
             let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
             assert!(
                 validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                    Some(source.semantic_ssa().source_semantic()),
+                    Some(source.semantic_ssa()),
                     &module,
                     &source.correspondence,
                     NAME,

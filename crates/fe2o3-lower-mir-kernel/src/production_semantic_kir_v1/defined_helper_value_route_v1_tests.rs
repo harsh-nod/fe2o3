@@ -7,6 +7,17 @@ mod helper_value_route_negatives {
         budget: &'a mut ArgumentBudgetV1<'w>,
         failed: bool,
     }
+    impl native_helper_value_context_v1::NativeHelperMeter for RouteMeter<'_, '_> {
+        fn check_call(
+            &mut self,
+            query: native_helper_value_context_v1::NativeHelperCallQuery<'_>,
+        ) -> Result<bool, &'static str> {
+            native_helper_value_context_v1::check_test_call(query, self.budget).map_err(|_| {
+                self.failed = true;
+                "checked call resource"
+            })
+        }
+    }
     impl Meter for RouteMeter<'_, '_> {
         fn work(&mut self, n: usize) -> Result<(), &'static str> {
             self.budget.charge_work(n).map_err(|_| {
@@ -107,7 +118,7 @@ mod helper_value_route_negatives {
             })
             .unwrap();
         native_helper_value_context_v1::with_native_helper_values(
-            source.semantic_ssa().source_semantic(),
+            source.semantic_ssa(),
             module,
             &source.correspondence,
             SemanticFunctionIdV1::from_index(0),
@@ -134,7 +145,7 @@ mod helper_value_route_negatives {
         }).unwrap();
         assert_eq!(
             validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                Some(source.semantic_ssa().source_semantic()),
+                Some(source.semantic_ssa()),
                 module,
                 &source.correspondence,
                 NAME,

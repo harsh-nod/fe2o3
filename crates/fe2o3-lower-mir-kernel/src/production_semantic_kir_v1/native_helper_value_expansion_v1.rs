@@ -1,5 +1,7 @@
 //! Caller-ledger bridge for native scalar helper-value correspondence.
-use super::native_helper_value_context_v1::{NativeHelperValues, with_native_helper_values};
+use super::native_helper_value_context_v1::{
+    NativeHelperCallQuery, NativeHelperMeter, NativeHelperValues, with_native_helper_values,
+};
 use super::native_helper_value_template_v1::{Ledger, Meter};
 use super::*;
 
@@ -93,6 +95,67 @@ struct NativeValueMeter<'a, 'w> {
     budget: &'a mut ArgumentBudgetV1<'w>,
     allowance: Option<&'a mut TranslationAllowanceV1>,
     failed: bool,
+}
+
+impl NativeHelperMeter for NativeValueMeter<'_, '_> {
+    fn check_call(&mut self, query: NativeHelperCallQuery<'_>) -> Result<bool, &'static str> {
+        let ledger = self.identity()?;
+        let floor = self.budget.storage();
+        let start = self.budget.work();
+        let (work, storage) = if let Some(allowance) = &mut self.allowance {
+            let live = allowance.live(self.budget)?;
+            (
+                allowance.work_limit.checked_sub(allowance.work),
+                allowance.storage_limit.checked_sub(live),
+            )
+        } else {
+            (
+                usize::MAX.checked_sub(start),
+                self.budget.storage_limit().checked_sub(floor),
+            )
+        };
+        let (Some(work), Some(storage)) = (work, storage) else {
+            self.failed = true;
+            return Err("native helper checked-call allowance accounting");
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.budget
+                .with_bounded_scratch_v1(work, storage, |budget| query.check(budget))
+        }));
+        let consumed = self.budget.work().checked_sub(start);
+        let intact = self.identity()? == ledger && self.budget.storage() == floor;
+        let accounted = if let (Some(allowance), Some(consumed)) = (&mut self.allowance, consumed) {
+            match allowance.work.checked_add(consumed) {
+                Some(next) if next <= allowance.work_limit => {
+                    allowance.work = next;
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            consumed.is_some()
+        };
+        if !intact || !accounted {
+            self.failed = true;
+            if let Some(allowance) = &mut self.allowance {
+                allowance.failed = true;
+            }
+        }
+        let result = match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        if self.exhausted() {
+            return Err("native helper checked-call ledger changed");
+        }
+        match result {
+            Ok(()) => Ok(true),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(resource)) => {
+                self.resource(Err(resource))
+            }
+            Err(_) => Ok(false),
+        }
+    }
 }
 
 impl NativeValueMeter<'_, '_> {
@@ -335,7 +398,7 @@ fn run<'a>(
 /// effect checks remain outside this expression-only scope and unchanged.
 #[allow(dead_code)] // Preserve the existing private compatibility entry.
 pub(super) fn with_native_value_expansion_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel: &str,
@@ -360,7 +423,7 @@ pub(super) fn with_native_value_expansion_v1(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn with_native_value_expansion_and_allowance_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel: &str,
