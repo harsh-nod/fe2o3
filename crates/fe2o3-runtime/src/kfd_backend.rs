@@ -11657,6 +11657,13 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn capture_coherent_host_range_v1(
+        &mut self,
+        request: crate::BackendHostCaptureV1<'_>,
+    ) -> Result<(), RuntimeBackendFailureV1<crate::RuntimeHostCaptureErrorV1>> {
+        self.capture_coherent_host_range_impl_v1(request)
+    }
+
     fn allocation_admission_profile_v1(
         &self,
     ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>

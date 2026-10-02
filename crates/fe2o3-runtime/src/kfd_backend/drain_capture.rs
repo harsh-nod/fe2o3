@@ -3,6 +3,8 @@ use super::*;
 use crate::{BackendHostCaptureV1, RuntimeHostCaptureErrorV1};
 use fe2o3_kfd::Gfx942SdmaHostReadIntoErrorV1;
 
+mod multi;
+
 fn capture_record_v1(
     record: &AllocationRecordV1,
     device: u64,

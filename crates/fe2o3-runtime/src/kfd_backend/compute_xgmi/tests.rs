@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 mod lifecycle;
 mod packetized;
 mod queued_consumer;
+mod sharded;
 
 const BYTES: usize = 64;
 const STAGES: [Stage; 6] = [

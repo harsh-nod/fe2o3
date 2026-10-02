@@ -4,10 +4,11 @@
 
 Local qualification snapshot: 2026-10-02 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
-2026-10-01: the issue remained Open. Published baseline `7256bcfaf` includes
-packetized native compute-XGMI transfers. The production-peer checkpoint below
-adds public native-peer opt-in, cold copy-only admission, repeated ring reuse
-and completed deferred-result custody. Earlier matched wait-cadence measurements
+2026-10-01: the issue remained Open. Published baseline `bafbfe739` includes
+public native-peer opt-in, cold copy-only admission, repeated ring reuse
+and completed deferred-result custody. The sharded checkpoint below adds
+fixed-total native transfer rings qualified through seven GPUs and CPU-tested
+multi-device host-capture forwarding. Earlier matched wait-cadence measurements
 remain scoped to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -24,7 +25,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Public two-GPU peer path and ring reuse qualified; incomplete | All-admitted-GPU sharding, outstanding group drain, broader kernel authority and partial-failure qualification remain |
+| A3: local multi-GPU | Fixed-total peer-transfer rings qualified on 2/3/5/7 GPUs; incomplete | Compute sharding, eight-GPU hardware coverage, outstanding group drain, broader kernel authority and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -85,19 +86,34 @@ Owned remote files were removed and GPU/process baselines restored. No physical
 overlap, all-device scaling, exclusive reservation or performance acceptance is
 claimed.
 
+The [fixed-total shard checkpoint](evidence/dev-multigpu-shards-2026-10-02/README.md)
+passes native rings on 2/3/5/7 GPUs and the reversed seven-GPU ring. Each case
+partitions the same 67,108,901-byte payload, queues all edges before owner drive,
+and runs two changed-content rounds on the same allocations. Every source and
+destination byte, independent global digest and native logical count is checked.
+This is transfer sharding, not compute sharding or physical-overlap qualification.
+GPU 0 has foreign work, so eight-device coverage is CPU-only. All owned remote
+resources are removed and GPU/process baselines restored.
+
+The final runtime suite passes 2,011 tests with 32 existing hardware ignores;
+all 19 example tests, strict Clippy/no-default checks and all 32 source controls
+pass. Prior 1,925-test KFD qualification is reused through exact executable,
+source and authenticated archive identity, not described as a fresh test run.
+Multi-device single-range host capture now forwards to the existing native
+reader after all-child quiescence checks; that addition is CPU-tested only.
+
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Partition a fixed global payload across 2..8 explicitly admitted GPUs, with
-   distinct contiguous shards and full global coverage. Enqueue all ring edges
-   through the existing current-thread owned async engine before driving them.
-   Neighboring routes may serialize on child custody; do not infer overlap.
-2. Qualify outstanding multi-device group drain and shutdown, including pending,
-   failed and uncertain outcomes. The current single-range host capture is not
-   forwarded by the multi-device backend. Post-drain multi-shard verification
-   needs a bounded capture extension because drain closes command admission.
+1. Admit readback continuations before the pending-peer drain cutoff. Reuse the
+   existing cooperative copy owner for an exact-event-bound staged D2H profile;
+   preserve journal-aware producer custody instead of weakening reader guards.
+2. Add bounded multi-range capture, then qualify outstanding multi-device group
+   drain and shutdown, including pending, failed and uncertain outcomes. The
+   current single-range host capture is forwarded, but its 64 MiB cap cannot hold
+   the full shard payload. Drain must not enqueue new work after admission closes.
 3. Add genuine compute sharding under a new finite kernel policy, keeping old
    exact authorities unchanged. Current R57 per-device fixtures replicate work;
    completed-result CPU tests do not establish arbitrary producer chains.

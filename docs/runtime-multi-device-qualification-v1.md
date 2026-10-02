@@ -405,6 +405,33 @@ The [lifecycle CPU packet](evidence/dev-multigpu-async-lifecycle-cpu-2026-10-02/
 retains complete commands and scope limits. None of these checks qualifies
 hardware, a full KFD suite, physical overlap or performance.
 
+## Fixed-Total Transfer Shards
+
+The production-default `gfx942-runtime-sharded-peer-copy-smoke` example accepts
+2..8 explicit distinct GPU unique IDs. It partitions one 64 MiB + 37-byte global
+payload into balanced contiguous shards and copies each shard to a separate
+incoming allocation on the next GPU in the ring. All edges are enqueued through
+one current-thread owned engine before driving progress. Two changed rounds
+reuse the allocations; full-byte readbacks and global digests distinguish actual
+sharding from replicated per-device work. Neighboring edges may serialize.
+
+The [sharded evidence packet](evidence/dev-multigpu-shards-2026-10-02/README.md)
+qualifies 2/3/5/7-device rings and the reversed seven-device ring on MI300X. GPU 0
+is occupied by foreign work, so eight-device coverage remains CPU-only. Each
+case checks exact native logical counts, full contents and explicit cleanup.
+All 2,011 runtime tests pass with 32 existing hardware ignores; all 19 example
+tests, strict lint/build checks and all 32 source controls pass. The unchanged
+KFD test executable reuses the authenticated prior 1,925-pass campaign.
+
+Single-range Context-authorized host capture is now forwarded by the multi-device
+router after terminal and live-custody checks across every child. Exact handle
+translation delegates to the native host-buffer reader, with no shadow fallback
+or implicit progress. Completed result/event handles may remain retained. Six
+new CPU tests qualify that routing boundary; no native capture run is added.
+
+These changes do not qualify compute sharding, pending-peer group drain,
+physical overlap, performance scaling or whole-adapter formal refinement.
+
 ## Next Dependencies
 
 The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
@@ -417,9 +444,10 @@ scratch directory are removed. These are correctness observations on a shared
 host, not performance or exclusive-reservation evidence.
 
 The public-authority opt-in and 65-packet witness are implemented as described
-above. Additional pairs, all-admitted-device workload sharding, complete native
-fault coverage, and peer mappings retained across separate logical copies remain
-open. The current route does not qualify a general native runtime pipeline.
+above. Fixed-total transfer sharding now passes on seven selected GPUs. Additional
+pairs, eight-GPU hardware coverage, compute sharding, pending-peer group drain,
+complete native fault coverage, and peer mappings retained across separate logical
+copies remain open. The current route does not qualify a general native runtime pipeline.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed
