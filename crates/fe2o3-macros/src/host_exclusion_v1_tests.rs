@@ -7,7 +7,7 @@ fn host_guard(module: &syn::ItemMod) -> bool {
         .iter()
         .filter(|a| a.path().is_ident("cfg"))
         .collect();
-    if guards.len() != 1 {
+    if guards.len() != 1 || !matches!(guards[0].style, syn::AttrStyle::Outer) {
         return false;
     }
     let Ok(syn::Meta::List(not)) = guards[0].parse_args::<syn::Meta>() else {
@@ -163,6 +163,7 @@ fn host_boundary_regression_control_rejects_removed_changed_and_relocated_guards
     ));
     for replacement in [
         vec![],
+        vec![parse_quote!(#![cfg(not(target_arch = "amdgpu"))])],
         vec![parse_quote!(#[cfg(target_arch = "amdgpu")])],
         vec![parse_quote!(#[cfg(not(target_arch = "x86_64"))])],
         vec![
