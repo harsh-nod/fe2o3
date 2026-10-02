@@ -456,7 +456,13 @@ fn compare(
         + retained_carrier_frame_v1().unwrap()
         + (2 + carrier_queue) * retained_origin_worklist_frame_v1::<u32>().unwrap()
         + retained_origin_worklist_frame_v1::<LocalAllocationProvenanceV1>().unwrap();
-    assert_eq!(p.storage, FLOOR + storage + frames);
+    // Both paths now separately fund the exact-reborrow callee. The retained
+    // frame roster contains that same callee once, not a second live invocation.
+    assert_eq!(
+        p.storage,
+        FLOOR + storage + frames
+            - bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1()
+    );
     p
 }
 #[test]
@@ -565,6 +571,7 @@ fn scalar_shape_error_precedes_actual_carrier_and_later_tables() {
         assert_eq!(
             p.storage,
             FLOOR + storage + retained_provenance_frame_v1().unwrap()
+                - bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1()
         );
     }
 }

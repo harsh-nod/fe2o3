@@ -475,7 +475,7 @@ fn call_frame_v1<T>(locals: usize) -> Result<usize, Error> {
         size_of::<Result<T, Error>>(),
     ])
 }
-const EXTENT_FRAME_ROWS_V1: usize = 22;
+const EXTENT_FRAME_ROWS_V1: usize = 23;
 fn extent_frame_roster_v1() -> Result<[usize; EXTENT_FRAME_ROWS_V1], Error> {
     Ok([
         // 0: persistent physical destination owner (not spare call-frame space).
@@ -710,6 +710,8 @@ fn extent_frame_roster_v1() -> Result<[usize; EXTENT_FRAME_ROWS_V1], Error> {
             bool,
             Option<&SemanticPlaceV1>,
         )>())?,
+        // 22: exact shared reborrow classification is a distinct nested call.
+        bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1(),
     ])
 }
 pub(super) fn extent_frame_v1() -> Result<usize, Error> {
@@ -744,7 +746,7 @@ pub(super) mod test_access {
             locals + 2 * size_of::<T>() + 2 * size_of::<Result<T, Error>>()
         }
         let rows = extent_frame_roster_v1().unwrap();
-        assert_eq!(rows.len(), 22);
+        assert_eq!(rows.len(), 23);
         assert_eq!(rows[0], size_of::<BoundsExtentArgumentsV1>());
         // Independently spell the live shared-call inputs and retained outputs:
         // even without the remaining branch locals, neither may use another
@@ -800,7 +802,24 @@ pub(super) mod test_access {
             sum = sum.checked_add(row).unwrap();
         }
         assert_eq!(extent_frame_v1().unwrap(), sum);
-        assert!(rows[1..22].iter().all(|n| *n > 0));
+        assert!(rows[1..23].iter().all(|n| *n > 0));
+        let reborrow_inputs = size_of::<(
+            &[SemanticTypeDeclV1],
+            &SemanticFunctionDeclV1,
+            &SemanticRvalueV1,
+            &SemanticPlaceV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1,
+            &SemanticTypeShapeV1,
+            Option<SemanticLocalIdV1>,
+            Option<SemanticLocalIdV1>,
+        )>();
+        assert!(rows[22] >= reborrow_inputs);
+        assert_eq!(
+            rows[22],
+            bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1()
+        );
     }
     pub(in crate::production_ranked_projection_v1) fn audit_projection_frame_rows() {
         let rows = extent_frame_roster_v1().unwrap();

@@ -387,7 +387,7 @@ fn nested_attached(
     values.resize_with(count, Vec::new);
     Ok(())
 }
-const FRAME_ROWS: usize = 25;
+const FRAME_ROWS: usize = 26;
 fn typed_rows() -> Result<[usize; FRAME_ROWS]> {
     Ok([
         size_of::<RetainedLocalProvenanceV1>(),
@@ -520,6 +520,7 @@ fn typed_rows() -> Result<[usize; FRAME_ROWS]> {
             &mut Resources<'static, 'static>,
             Result<()>,
         )>(),
+        bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1(),
     ])
 }
 fn fill_frame<T>() -> usize {

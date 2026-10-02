@@ -42,6 +42,29 @@ pub(super) fn exact_shared_slice_reborrow_source_v1(
     .then_some(place.local())
 }
 
+pub(super) fn shared_slice_reborrow_frame_v1() -> usize {
+    std::mem::size_of::<(
+        &[SemanticTypeDeclV1],
+        &SemanticFunctionDeclV1,
+        &SemanticRvalueV1,
+        &SemanticPlaceV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+        Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
+        Option<&SemanticTypeDeclV1>,
+        &SemanticTypeDeclV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1,
+        Option<&SemanticTypeDeclV1>,
+        &SemanticTypeShapeV1,
+        SemanticTypeIdV1,
+        SemanticTypeIdV1,
+        usize,
+        bool,
+        Option<SemanticLocalIdV1>,
+        Option<SemanticLocalIdV1>,
+    )>()
+}
+
 // Prepay every variable transparency/reborrow scan before invoking the shared
 // helpers. Fixed statement classification does not cover source-sized spines.
 pub(super) fn prepay_provenance_spines_v1(
@@ -86,6 +109,7 @@ pub(super) fn local_provenance_with_resources_v1(
     address_escaped: &[bool],
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
+    resources.reserve_storage(shared_slice_reborrow_frame_v1())?;
     resources.reserve_storage(
         std::mem::size_of::<LocalProvenanceV1>()
             + 3 * std::mem::size_of::<Vec<Vec<usize>>>()

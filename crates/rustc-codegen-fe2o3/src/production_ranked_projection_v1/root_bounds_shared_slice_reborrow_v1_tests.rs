@@ -54,6 +54,48 @@ fn shared_slice_reborrow_preserves_both_provenance_paths_and_extent_slots() {
         allocation.allocation_provenance,
         old_allocation.allocation_provenance
     );
+    {
+        use super::super::bf16_nominal_source_algorithms_v1::RetainedLocalProvenanceV1;
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let mut owned = 0;
+        let mut retained = RetainedLocalProvenanceV1::new();
+        let mut resources = PreparationResourcesV1::new(&mut budget, &mut owned);
+        retained
+            .prepare_into(
+                &[],
+                &types,
+                &function,
+                &seed.definitions,
+                &seed.escaped,
+                &mut resources,
+            )
+            .unwrap();
+        let actual = retained
+            .completed_for(
+                &[],
+                &types,
+                &function,
+                &seed.definitions,
+                &seed.escaped,
+                &resources,
+            )
+            .unwrap();
+        assert_eq!(
+            actual.stable_argument_origins,
+            allocation.stable_argument_origins
+        );
+        assert_eq!(actual.allocation_origins, allocation.allocation_origins);
+        assert_eq!(
+            actual.allocation_provenance,
+            allocation.allocation_provenance
+        );
+        drop(resources);
+        drop(retained);
+        assert_eq!(budget.storage(), owned);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
     let mut facts = TraceFacts::default();
     let mut next = 3;
     for (length, argument) in [(6, 3), (7, 3), (6, 3), (8, 4)] {
