@@ -50,8 +50,8 @@ fn float_owner_v54(bits: u16) -> ProductionSemanticSsaOwnerV1 {
             unreachable!();
         };
         let stored_value = arithmetic.value().kind().clone();
-        // Private WriteValue and explicit Store have distinct correspondence
-        // queries. Retain a real original Store instead of assuming one exists.
+        // A Store to the captured local remains a typed private WriteValue.
+        // A separate uncaptured scalar slot exercises physical Store transport.
         statements.insert(3, assign(place(4, U32), stored_value));
         statements.insert(
             4,
@@ -65,9 +65,26 @@ fn float_owner_v54(bits: u16) -> ProductionSemanticSsaOwnerV1 {
                 )),
             ),
         );
+        statements.insert(
+            5,
+            SemanticStatementV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    place(5, U32),
+                    SemanticOperandV1::Copy(place(4, U32)),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            ),
+        );
         let mut locals = old.locals().to_vec();
         locals.push(local(
             if index == 1 { 104 } else { 164 },
+            U32,
+            SemanticLocalRoleV1::Temporary,
+        ));
+        locals.push(local(
+            if index == 1 { 105 } else { 165 },
             U32,
             SemanticLocalRoleV1::Temporary,
         ));
@@ -186,10 +203,10 @@ fn original_float_writes_check_exact_private_and_store_transcripts_on_both_roots
             })
         })
         .unwrap();
-        assert!(
-            counts.get().into_iter().flatten().all(|count| count > 0),
-            "each root must check both private writes and retained Stores: {:?}",
-            counts.get()
+        assert_eq!(
+            counts.get(),
+            [[2, 1], [2, 1]],
+            "each root must check both captured writes and the uncaptured Store"
         );
     }
 }
