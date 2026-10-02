@@ -77,4 +77,17 @@ mod tests {
     fn actual_rust_test_invocation_is_not_a_descriptor_only_service() {
         assert!(require_descriptor_only_invocation().is_err());
     }
+
+    #[cfg(not(target_feature = "crt-static"))]
+    #[test]
+    fn dynamic_consumers_have_no_secure_entry_and_cannot_claim_invocation() {
+        assert_eq!(crate::protected_service_secure_start_address_v1(), 0);
+        assert!(!crate::secure_start::descriptor_invocation_checked());
+        assert!(matches!(
+            require_descriptor_only_invocation(),
+            Err(Error::InvalidState(
+                "descriptor-only secure entry was not observed"
+            ))
+        ));
+    }
 }
