@@ -15,6 +15,7 @@ EXAMPLES = (
     "qwen3_swiglu_v1",
     "qwen3_logits_compact_v1",
     "qwen3_rope_kv_v1",
+    "qwen3_linear_reference_v1",
 )
 HARNESS = r'''
 set -Eeuo pipefail

@@ -39,7 +39,8 @@ bash scripts/ci-local.sh host-reference
 This also runs from `test`, `generic-core`, and `generic`. It checks formatting,
 strict Clippy, all test targets in debug and release, and strict rustdoc for
 RMSNorm/residual, GQA prefill, paged GQA decode, SwiGLU, logits/compact
-completion, and RoPE/paged KV. The standalone manifests are selected explicitly;
+completion, RoPE/paged KV, and the pinned Ferric B3 linear reference.
+The standalone manifests are selected explicitly;
 root workspace tests do not include them. All share a `host-reference` subdirectory of
 the configured Cargo target root, and each test harness runs serially.
 Their tracked lockfiles also participate in `standalone-locks`.
