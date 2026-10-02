@@ -6,7 +6,10 @@ use crate::persistent_directional_sdma::{
     Gfx942PersistentDirectionalSdmaPairV1, promote_directional_persistent_sdma_custody_v1,
 };
 use crate::queue::QueueModelFoundationV1;
-use crate::sdma::{ComputeXgmiCopyCustodyV1, ComputeXgmiQueueFixtureV1, SdmaSingleMemoryV1};
+use crate::sdma::{
+    ComputeXgmiCopyCustodyV1, ComputeXgmiQueueFixtureV1, Gfx942ComputeXgmiPacketV1,
+    SdmaSingleMemoryV1,
+};
 use crate::shared_memory::{
     Gfx942DeviceMemoryIdentityV1, Gfx942XgmiMappedDeviceMemoryV1, LiveQueueModelFoundationLoanV1,
     PreparationMemoryFixtureV1, PreparationMemoryObservationV1,
@@ -25,6 +28,7 @@ struct Pair {
     retake_fault: Option<(usize, bool, bool)>,
     complete_on_submit: bool,
     waits: usize,
+    packets: Vec<Gfx942ComputeXgmiPacketV1>,
 }
 
 struct Before {
@@ -33,13 +37,29 @@ struct Before {
     addresses: [u64; 2],
     memory: [PreparationMemoryObservationV1; 2],
     models: [(u64, Option<u64>, u64); 2],
+    logical_bytes: u64,
+    physical_bytes: [usize; 2],
 }
 
 fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
-    let mut memory = [
-        PreparationMemoryFixtureV1::compute_xgmi_v1(GPU_IDS[0], 0x1_0000, configured),
-        PreparationMemoryFixtureV1::compute_xgmi_v1(GPU_IDS[1], 0x41_0000, configured),
-    ];
+    fixture_extent(configured, u64::from(LOGICAL_BYTES), PHYSICAL_BYTES, false)
+}
+
+fn fixture_extent(
+    configured: bool,
+    logical_bytes: u64,
+    physical_bytes: [usize; 2],
+    packetized: bool,
+) -> (Pair, TransferRoot, Before) {
+    let mut memory = if packetized {
+        GPU_IDS.map(|id| PreparationMemoryFixtureV1::compute_xgmi_packetized_v1(id, configured))
+    } else {
+        [
+            PreparationMemoryFixtureV1::compute_xgmi_v1(GPU_IDS[0], 0x1_0000, configured),
+            PreparationMemoryFixtureV1::compute_xgmi_v1(GPU_IDS[1], 0x41_0000, configured),
+        ]
+    };
+    let plan = Gfx942ComputeXgmiPacketPlanV1::new(logical_bytes).unwrap();
     let keys = std::array::from_fn::<_, 2, _>(|index| QueueKeyV1 {
         vm: memory[index].primary_vm(),
         id: QueueInstanceIdV1(11 + index as u64),
@@ -49,7 +69,7 @@ fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
     let mut foundations = memory.each_mut().map(|m| m.primary_transfer(&[]).unwrap());
     let allocations = std::array::from_fn::<_, 2, _>(|index| {
         let loan = memory[index].primary_loan(&mut foundations[index]).unwrap();
-        let lease = memory[index].compute_xgmi_lease_v1(PHYSICAL_BYTES[index]);
+        let lease = memory[index].compute_xgmi_lease_v1(physical_bytes[index]);
         memory[index]
             .primary_reclaim(&mut foundations[index], loan)
             .unwrap();
@@ -57,8 +77,8 @@ fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
             lease,
             keys[index],
             7,
-            u64::from(LOGICAL_BYTES),
-            u64::from(LOGICAL_BYTES),
+            logical_bytes,
+            logical_bytes,
         );
         promote_directional_persistent_sdma_custody_v1(
             buffer,
@@ -82,7 +102,7 @@ fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
             memory[index]
                 .single_device_facts(allocations[index].owner.local_native_for_sdma().unwrap())
                 .unwrap()
-                .checked_gpu_subrange(0, u64::from(LOGICAL_BYTES), 1)
+                .checked_gpu_subrange(0, logical_bytes, 1)
                 .unwrap()
         }),
         memory: memory
@@ -91,12 +111,10 @@ fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
         models: std::array::from_fn(|index| {
             memory[index].primary_loan_state_v1(&foundations[index])
         }),
+        logical_bytes,
+        physical_bytes,
     };
-    let mut root = TransferRoot::new(
-        allocations.each_ref().map(|a| a.attachment),
-        GPU_IDS,
-        LOGICAL_BYTES,
-    );
+    let mut root = TransferRoot::new(allocations.each_ref().map(|a| a.attachment), GPU_IDS, plan);
     root.allocations = allocations.map(Some);
     (
         Pair {
@@ -108,6 +126,7 @@ fn fixture(configured: bool) -> (Pair, TransferRoot, Before) {
             retake_fault: None,
             complete_on_submit: false,
             waits: 0,
+            packets: Vec::with_capacity(plan.count()),
         },
         root,
         before,
@@ -185,16 +204,18 @@ impl transfer::TransferIo for Pair {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        bytes: u32,
+        packet: Gfx942ComputeXgmiPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let [source_memory, destination_memory] = &mut self.memory;
+        self.packets.push(packet);
         self.queue.submit(
             source_memory,
             destination_memory,
             source,
             destination,
-            bytes,
+            packet.offset,
+            packet.bytes,
             custody,
         )?;
         if self.complete_on_submit {
@@ -277,12 +298,12 @@ fn assert_models_retaken(pair: &Pair, before: &Before, operations: u64) {
 }
 
 fn assert_original_owners(root: &TransferRoot, before: &Before, restored: bool) {
-    for (index, physical_bytes) in PHYSICAL_BYTES.into_iter().enumerate() {
+    for (index, physical_bytes) in before.physical_bytes.into_iter().enumerate() {
         let allocation = root.allocations[index].as_ref().unwrap();
         let owner = allocation.owner.ownership_snapshot_for_test_v1();
         assert!(before.owners[index].same_allocation(&owner));
         assert_eq!(allocation.attachment, root.certificates[index]);
-        assert_eq!(allocation.byte_len(), u64::from(LOGICAL_BYTES));
+        assert_eq!(allocation.byte_len(), before.logical_bytes);
         assert_eq!(allocation.physical_byte_len(), physical_bytes as u64);
         assert_eq!(allocation.attachment.pool_generation, 7);
         assert_eq!(owner.local_native().is_some(), restored);
@@ -350,6 +371,288 @@ fn assert_terminal(pair: &Pair, root: &TransferRoot, before: &Before) {
     );
     assert_original_owners(root, before, false);
     assert_conserved(pair, root, before);
+}
+
+fn packetized_fixture(configured: bool) -> (Pair, TransferRoot, Before) {
+    let bytes = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1) + 37;
+    fixture_extent(configured, bytes, [0x402000, 0x404000], true)
+}
+
+fn progress(pair: &mut Pair, root: &mut TransferRoot) -> Gfx942ComputeXgmiProgressV1 {
+    root.progress(pair, |pair, core| core.progress_with(pair))
+        .unwrap()
+}
+
+fn complete_first_packet(pair: &mut Pair, root: &mut TransferRoot) {
+    begin(pair, root);
+    pair.queue
+        .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+    assert_eq!(progress(pair, root), Gfx942ComputeXgmiProgressV1::Changed);
+    assert_eq!(root.phase, Phase::Published);
+}
+
+#[test]
+fn compute_xgmi_composed_packetized_copy_keeps_one_pair_across_tail_wrap_and_observers() {
+    for configured in [false, true] {
+        let bytes = 2 * u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1) + 37;
+        let (mut pair, mut root, before) =
+            fixture_extent(configured, bytes, [0x802000, 0x804000], true);
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(before.logical_bytes).unwrap();
+        pair.queue.start_at_ring_tail(&mut pair.memory[0]);
+        begin(&mut pair, &mut root);
+        let first_ticket = root.core.copy_custody_for_test().ticket.unwrap();
+        assert_eq!(pair.packets, [plan.packet(0).unwrap()]);
+        pair.queue
+            .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+        assert!(
+            !root
+                .poll(&mut pair, |pair, core| core.poll_with(pair))
+                .unwrap()
+        );
+        let sampled = pair.queue.snapshot(&pair.memory[0]);
+        let retakes = pair.retakes;
+        for _ in 0..2 {
+            assert!(
+                !root
+                    .poll(&mut pair, |pair, core| core.poll_with(pair))
+                    .unwrap()
+            );
+            assert_eq!(pair.queue.snapshot(&pair.memory[0]), sampled);
+            assert_eq!(
+                pair.packets.len(),
+                1,
+                "ordinary sample never publishes a next packet"
+            );
+            assert_conserved(&pair, &root, &before);
+        }
+        assert_eq!(pair.retakes, retakes.map(|n| n + 2));
+        let retakes = pair.retakes;
+        assert!(
+            root.finish(&mut pair, |pair, core| core.finish_with(pair))
+                .is_err()
+        );
+        assert_eq!(
+            pair.retakes, retakes,
+            "incomplete finish has no model or native effects"
+        );
+        assert_eq!(root.phase, Phase::Published);
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Changed
+        );
+        let second_ticket = root.core.copy_custody_for_test().ticket.unwrap();
+        assert_ne!(first_ticket, second_ticket);
+        assert_eq!(
+            pair.packets,
+            [plan.packet(0).unwrap(), plan.packet(1).unwrap()]
+        );
+        let snapshot = pair.queue.snapshot(&pair.memory[0]);
+        assert_eq!(snapshot.generations[0], 8);
+        let fence = u64::from_le_bytes(snapshot.ring[32..40].try_into().unwrap());
+        let tail = plan.packet(1).unwrap();
+        let expected = crate::sdma::Gfx942SdmaCopySubmissionV1::new(
+            before.addresses[0] + tail.offset,
+            before.addresses[1] + tail.offset,
+            tail.bytes,
+            fence,
+            8,
+        )
+        .unwrap();
+        assert_eq!(&snapshot.ring[..64], expected.bytes());
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Pending
+        );
+        assert_eq!(root.phase, Phase::Published);
+        assert_original_owners(&root, &before, false);
+        assert_conserved(&pair, &root, &before);
+        for memory in &pair.memory {
+            let state = memory.compute_xgmi_snapshot_v1();
+            assert_eq!(state.maps, [(GPU_IDS.to_vec(), 0)]);
+            assert!(state.unmaps.is_empty());
+        }
+        pair.queue
+            .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Changed
+        );
+        assert_eq!(pair.packets.len(), 2);
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Changed
+        );
+        assert_eq!(
+            pair.packets,
+            [
+                plan.packet(0).unwrap(),
+                plan.packet(1).unwrap(),
+                plan.packet(2).unwrap()
+            ]
+        );
+        let snapshot = pair.queue.snapshot(&pair.memory[0]);
+        let fence = u64::from_le_bytes(snapshot.ring[96..104].try_into().unwrap());
+        let tail = plan.packet(2).unwrap();
+        let expected = crate::sdma::Gfx942SdmaCopySubmissionV1::new(
+            before.addresses[0] + tail.offset,
+            before.addresses[1] + tail.offset,
+            tail.bytes,
+            fence,
+            snapshot.generations[1],
+        )
+        .unwrap();
+        assert_eq!(&snapshot.ring[64..128], expected.bytes());
+        assert_eq!(tail.bytes, 37);
+        pair.queue
+            .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Ready
+        );
+        let retakes = pair.retakes;
+        assert_eq!(
+            progress(&mut pair, &mut root),
+            Gfx942ComputeXgmiProgressV1::Ready
+        );
+        assert_eq!(pair.retakes, retakes);
+        root.finish(&mut pair, |pair, core| core.finish_with(pair))
+            .unwrap();
+        assert_original_owners(&root, &before, true);
+        assert_conserved(&pair, &root, &before);
+        assert_eq!(pair.waits, 0);
+        for memory in &pair.memory {
+            let state = memory.compute_xgmi_snapshot_v1();
+            assert_eq!(state.maps, [(GPU_IDS.to_vec(), 0)]);
+            assert_eq!(state.unmaps, [(GPU_IDS.to_vec(), 0)]);
+        }
+    }
+}
+
+#[test]
+fn compute_xgmi_composed_packetized_later_publication_faults_retain_both_originals() {
+    for operation in ["reset", "ring", "control", "doorbell"] {
+        for panic in [false, true] {
+            let (mut pair, mut root, before) = packetized_fixture(true);
+            complete_first_packet(&mut pair, &mut root);
+            pair.queue.fault(&mut pair.memory[0], operation, panic);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                root.progress(&mut pair, |pair, core| core.progress_with(pair))
+            }));
+            assert_eq!(result.is_err(), panic);
+            if !panic {
+                assert!(result.unwrap().is_err());
+            }
+            assert_terminal(&pair, &root, &before);
+            let snapshot = pair.queue.snapshot(&pair.memory[0]);
+            assert_eq!(snapshot.retained, before.identities);
+            assert!(snapshot.uncertain.is_some());
+            assert_eq!(pair.packets.len(), 2);
+            assert_eq!(pair.retakes, [3; 2]);
+        }
+    }
+}
+
+#[test]
+fn compute_xgmi_composed_packetized_later_poll_and_closing_faults_preserve_custody() {
+    for closing in [false, true] {
+        for panic in [false, true] {
+            let (mut pair, mut root, before) = packetized_fixture(true);
+            complete_first_packet(&mut pair, &mut root);
+            assert_eq!(
+                progress(&mut pair, &mut root),
+                Gfx942ComputeXgmiProgressV1::Changed
+            );
+            if closing {
+                pair.queue
+                    .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+                pair.memory[0].sdma_fail_operational_currentness_v1(2, panic);
+            } else {
+                pair.queue.fault(&mut pair.memory[0], "observe", panic);
+            }
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                root.progress(&mut pair, |pair, core| core.progress_with(pair))
+            }));
+            assert_eq!(result.is_err(), panic);
+            if !panic {
+                assert!(result.unwrap().is_err());
+            }
+            assert_terminal(&pair, &root, &before);
+            assert_eq!(
+                root.core.copy_custody_for_test().completed.is_some(),
+                closing
+            );
+            assert_eq!(pair.retakes, [4; 2]);
+        }
+    }
+}
+
+#[test]
+fn compute_xgmi_composed_packetized_both_retake_failures_preserve_prefix_and_pair() {
+    for phase in 0..3 {
+        for endpoint in 0..2 {
+            for after in [false, true] {
+                for panic in [false, true] {
+                    let (mut pair, mut root, before) = packetized_fixture(true);
+                    if phase == 0 {
+                        begin(&mut pair, &mut root);
+                        pair.queue
+                            .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+                    } else {
+                        complete_first_packet(&mut pair, &mut root);
+                    }
+                    if phase == 2 {
+                        assert_eq!(
+                            progress(&mut pair, &mut root),
+                            Gfx942ComputeXgmiProgressV1::Changed
+                        );
+                        pair.queue
+                            .complete(&mut pair.memory[0], root.core.copy_custody_for_test());
+                    }
+                    let retakes = pair.retakes;
+                    pair.retake_fault = Some((endpoint, after, panic));
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        root.progress(&mut pair, |pair, core| core.progress_with(pair))
+                    }));
+                    assert_eq!(result.is_err(), panic);
+                    if !panic {
+                        assert!(result.unwrap().is_err());
+                    }
+                    assert_terminal(&pair, &root, &before);
+                    assert_eq!(pair.retakes, retakes.map(|n| n + 1));
+                    assert_eq!(
+                        root.core.copy_custody_for_test().completed.is_some(),
+                        phase != 1
+                    );
+                    let retakes = pair.retakes;
+                    assert!(
+                        root.progress(&mut pair, |pair, core| core.progress_with(pair))
+                            .is_err()
+                    );
+                    assert_eq!(pair.retakes, retakes);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compute_xgmi_composed_packetized_synchronous_path_maps_and_restores_only_once() {
+    let (mut pair, mut root, before) = packetized_fixture(false);
+    pair.complete_on_submit = true;
+    root.execute(&mut pair, |pair, core| {
+        core.run_with(pair, Duration::from_secs(10))
+    })
+    .unwrap();
+    assert_eq!(pair.waits, 2);
+    assert_eq!(pair.packets.len(), 2);
+    assert_eq!(pair.retakes, [1; 2]);
+    assert_original_owners(&root, &before, true);
+    assert_conserved(&pair, &root, &before);
+    for memory in &pair.memory {
+        let state = memory.compute_xgmi_snapshot_v1();
+        assert_eq!(state.maps, [(GPU_IDS.to_vec(), 0)]);
+        assert_eq!(state.unmaps, [(GPU_IDS.to_vec(), 0)]);
+    }
 }
 
 #[test]

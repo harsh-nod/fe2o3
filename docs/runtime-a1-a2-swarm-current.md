@@ -12,8 +12,11 @@ and matched wait-cadence measurements remain scoped to their recorded sources;
 they are not qualification of this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
-has recovered. The latest MI300X SSH attempts fail at hostname resolution,
-before remote execution; no current GPU pair is admitted.
+has recovered. Primary-session SSH reaches MI300X as of 2026-10-02 03:47 UTC;
+earlier DNS failures were worker-namespace observations, not evidence of a host
+outage. The fresh process roster shows GPU 0 occupied and GPUs 6/7 idle. Every
+native run still requires a new occupancy check; no exclusive reservation or
+performance qualification follows from that observation.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -22,7 +25,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Current priority, incomplete | Qualify the implemented asynchronous compute/XGMI route on two GPUs; all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A3: local multi-GPU | Selected two-GPU pipeline qualified; incomplete | Production-authority peer opt-in, native 65-packet ring reuse, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -35,23 +38,55 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Current Priority: Working Multi-GPU
 
+The accepted `1327f19b1` executable now passes both the explicit-copy-drain and
+queued-consumer witnesses on MI300X GPUs 6 -> 7 (2026-10-02, 03:52-03:53 UTC).
+Each run executes four exact R57 launches, one 262,144-byte native XGMI copy,
+13 full-buffer readbacks and explicit logical/native cleanup. Its local and
+remote SHA-256 are both
+`13f1c30355e837934096231ca01cdaf20cc35c1717fab892ec67b3f3f46b3ff8`.
+These are baseline hardware results, not acceptance of later working-tree
+changes, all-device sharding, physical overlap or performance parity.
+
+The subsequent [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
+passes five current-source hardware modes: default, queued consumer, large copies,
+combined queued-consumer/large copies, and reverse-direction large copies.
+The 4,194,273-byte and 8,388,581-byte transfers use two and three SDMA packets;
+each retains one original owner pair and counts one completed logical copy.
+The two/three-packet cases require 21 full-buffer readbacks and explicit cleanup.
+The packet-count/subrange arithmetic has a shared-executable-body proof, but the
+whole transfer adapter, DMA and Context integration are not formally refined.
+Remote files and the owned scratch directory were removed; GPU counters and the
+process roster returned to baseline. This is correctness, not performance parity.
+Current-source CPU qualification passes all 1,918 KFD tests in four exact
+disjoint shards and 1,986 runtime tests with 32 existing hardware ignores.
+Strict Clippy, witness tests and all 32 source-control workflow commands pass.
+The deliberately stopped serial KFD attempt remains recorded as nonzero; its
+replacement shards have an independently checked complete roster union.
+
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Qualify the implemented compute/XGMI pipeline on two freshly admitted free
-   MI300X devices: produce on both, overwrite the destination with a distinct
-   sentinel, copy natively into that same allocation, consume on both devices,
-   verify every byte and explicitly retire logical and native resources.
-2. Complete composed native fault tests and qualify asynchronous peer progress,
-   then exercise retained multi-device async group drain and shutdown, including
+1. Expose explicit native-peer opt-in for already-admitted production kernel
+   authorities, preserving private defaults, authority checks and staged fallback.
+   Continue retained multi-device async group drain and shutdown, including
    pending, failed and uncertain outcomes. Reuse the existing current-thread
    owner and drain API; do not create a second orchestration interface.
-3. Qualify dependency-driven peer-to-compute pipelines and additional device
-   pairs, without relaxing the existing exact launch authorities.
+2. Extend the now-passing two-GPU witness to actual ring reuse at 65 packets,
+   repeated copies and further freshly admitted pairs. The 65-packet extent
+   268,433,409 bytes fits the existing 256 MiB runtime allocation cap.
+3. Support exact completed deferred-consumer results as new producer inputs with
+   independent result retains, without treating them as directed ancestry or
+   relaxing launch authorities. Pending downstream chains remain separate.
 4. Add real workload partitioning, partial-failure campaigns and matched scaling
    measurements only after the complete-output execution path passes.
+
+## Earlier Multi-GPU Checkpoints
+
+These entries retain the status at each earlier source checkpoint. Their
+pending hardware gates and worker-network failures are historical, not the
+current status reported above.
 
 The first witness uses replicated repository-owned exact fixtures and
 **host-staged** transfers. It does not establish sharding, physical overlap,

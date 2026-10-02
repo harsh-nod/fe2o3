@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use fe2o3_kfd::{GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942ComputeXgmiPacketPlanV1};
 use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
     GFX942_R57_N3_QUALIFICATION_BUFFER_ALIGNMENT_V1, GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1,
     GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1, GFX942_R57_N3_QUALIFICATION_KERNEL_V1,
@@ -17,26 +18,35 @@ use fe2o3_runtime::{
 type ContextV1 = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type ResultV1<T> = Result<T, String>;
 const WAIT: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: gfx942-runtime-compute-xgmi-smoke [--queued-consumer] <0xsource-unique-id> <0xdestination-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-compute-xgmi-smoke [--queued-consumer] [--packetized-copy] <0xsource-unique-id> <0xdestination-unique-id>";
+const PACKETIZED_EXTENTS: [u64; 2] = [
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 1,
+    2 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 37,
+];
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
     unique_ids: [u64; 2],
     queued_consumer: bool,
+    packetized_copy: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
-    let queued_consumer = arguments
-        .first()
-        .is_some_and(|arg| arg == "--queued-consumer");
-    let ids = if queued_consumer {
-        &arguments[1..]
-    } else {
-        arguments
-    };
+    let mut queued_consumer = false;
+    let mut packetized_copy = false;
+    let mut ids = arguments;
+    while let Some(flag) = ids.first().filter(|arg| arg.starts_with("--")) {
+        match flag.as_str() {
+            "--queued-consumer" if !queued_consumer => queued_consumer = true,
+            "--packetized-copy" if !packetized_copy => packetized_copy = true,
+            _ => return Err(USAGE.into()),
+        }
+        ids = &ids[1..];
+    }
     Ok(Options {
         unique_ids: unique_ids(ids)?,
         queued_consumer,
+        packetized_copy,
     })
 }
 
@@ -71,11 +81,23 @@ fn full_region(
     allocation: RuntimeAllocationIdV1,
     access: RuntimeAccessV1,
 ) -> RuntimeMemoryRegionV1 {
+    region(
+        allocation,
+        access,
+        GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+    )
+}
+
+fn region(
+    allocation: RuntimeAllocationIdV1,
+    access: RuntimeAccessV1,
+    byte_len: u64,
+) -> RuntimeMemoryRegionV1 {
     RuntimeMemoryRegionV1 {
         allocation,
         access,
         byte_offset: 0,
-        byte_len: GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+        byte_len,
     }
 }
 
@@ -131,8 +153,8 @@ fn upload_full_h2d(
     let mut submission = context
         .copy_async(
             stream,
-            full_region(upload, RuntimeAccessV1::Read),
-            full_region(destination, RuntimeAccessV1::Write),
+            region(upload, RuntimeAccessV1::Read, bytes.len() as u64),
+            region(destination, RuntimeAccessV1::Write, bytes.len() as u64),
             &[],
         )
         .map_err(|error| failure("upload-enqueue", error))?;
@@ -157,6 +179,111 @@ struct DeviceRun {
     kernel: TypedRuntimeKernelV1<Gfx942R57N3QualificationArgumentsV2>,
     upload: RuntimeAllocationIdV1,
     allocations: [RuntimeAllocationIdV1; 4],
+}
+
+fn packetized_pattern_byte(index: u64) -> u8 {
+    // Mix the absolute offset so replaying packet zero is observable across boundaries.
+    let mut value = index.wrapping_add(0x9e3779b97f4a7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    (value ^ (value >> 31)) as u8
+}
+
+fn packetized_copies(context: &mut ContextV1, runs: &[DeviceRun]) -> ResultV1<()> {
+    let devices = [context.devices()[0].id(), context.devices()[1].id()];
+    for (case, bytes) in PACKETIZED_EXTENTS.into_iter().enumerate() {
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(bytes)
+            .ok_or_else(|| failure("packet-plan", "invalid witness extent"))?;
+        if plan.count() != case + 2 {
+            return Err(failure("packet-plan", "unexpected witness packet count"));
+        }
+        let source_bytes: Vec<_> = (0..bytes).map(packetized_pattern_byte).collect();
+        let destination_bytes: Vec<_> = source_bytes.iter().map(|byte| !byte).collect();
+        // These auxiliary data allocations do not extend either exact kernel authority.
+        let mut pairs = Vec::with_capacity(2);
+        for (index, contents) in [&source_bytes, &destination_bytes].into_iter().enumerate() {
+            let upload = context
+                .allocate(
+                    devices[index],
+                    RuntimeMemoryKindV1::HostVisible,
+                    bytes,
+                    4096,
+                )
+                .map_err(|error| failure("packet-upload-allocation", error))?;
+            let data = context
+                .allocate(
+                    devices[index],
+                    RuntimeMemoryKindV1::DeviceLocal,
+                    bytes,
+                    4096,
+                )
+                .map_err(|error| failure("packet-data-allocation", error))?;
+            upload_full_h2d(context, runs[index].stream, upload, data, contents)?;
+            verify(context, data, "packet-initial-contents", contents)?;
+            pairs.push((upload, data));
+        }
+        let expected_before = case as u64 + 1;
+        if context.backend().completed_compute_xgmi_copies_v1() != expected_before {
+            return Err(failure(
+                "packet-native-before",
+                "unexpected native copy count",
+            ));
+        }
+        let mut copy = context
+            .peer_copy(
+                runs[1].stream,
+                region(pairs[0].1, RuntimeAccessV1::Read, bytes),
+                region(pairs[1].1, RuntimeAccessV1::Write, bytes),
+                &[],
+            )
+            .map_err(|error| failure("packet-copy-enqueue", error))?;
+        if context
+            .poll(&mut copy)
+            .map_err(|error| failure("packet-copy-poll", error))?
+            != RuntimePollV1::Pending
+            || context.backend().completed_compute_xgmi_copies_v1() != expected_before
+        {
+            return Err(failure(
+                "packet-copy-observer",
+                "unflushed copy must stay pending",
+            ));
+        }
+        if context
+            .drain(&mut copy, Instant::now() + WAIT)
+            .map_err(|error| failure("packet-copy-drain", error))?
+            != RuntimePollV1::Succeeded
+            || context.backend().completed_compute_xgmi_copies_v1() != expected_before + 1
+        {
+            return Err(failure(
+                "packet-copy-drain",
+                "expected one completed native logical copy",
+            ));
+        }
+        context
+            .release_submission(copy)
+            .map_err(|error| failure("packet-copy-release", error))?;
+        verify(
+            context,
+            pairs[0].1,
+            "packet-source-unchanged",
+            &source_bytes,
+        )?;
+        verify(
+            context,
+            pairs[1].1,
+            "packet-destination-copied",
+            &source_bytes,
+        )?;
+        for (upload, data) in pairs.into_iter().rev() {
+            context
+                .release_allocation(data)
+                .map_err(|error| failure("packet-data-release", error))?;
+            context
+                .release_allocation(upload)
+                .map_err(|error| failure("packet-upload-release", error))?;
+        }
+    }
+    Ok(())
 }
 
 fn compute_round(context: &mut ContextV1, runs: &[DeviceRun], consumer: bool) -> ResultV1<()> {
@@ -468,6 +595,15 @@ fn run(options: Options) -> ResultV1<()> {
             verify(&mut context, allocation, label, expected)?;
         }
     }
+    if options.packetized_copy {
+        packetized_copies(&mut context, &runs)?;
+    }
+    let native_copies = context.backend().completed_compute_xgmi_copies_v1();
+    let extra_copies = if options.packetized_copy {
+        PACKETIZED_EXTENTS.len()
+    } else {
+        0
+    };
     for run in runs.into_iter().rev() {
         for allocation in run.allocations.into_iter().rev() {
             context
@@ -501,14 +637,24 @@ fn run(options: Options) -> ResultV1<()> {
         "explicit-drain"
     };
     println!(
-        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies=1 bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending expired_drain=rejected copy_progress={} consumer_admission={} destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks=13 modules=2 allocations=10 cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
+        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies={} bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending expired_drain=rejected copy_progress={} consumer_admission={} destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks={} modules=2 allocations={} packetized_copies={} packetized_packets={} packetized_bytes={} cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
         GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2,
+        1 + extra_copies,
         expected_c.len(),
         native_copies,
         unique_ids[0],
         unique_ids[1],
         copy_progress,
         consumer_admission,
+        13 + 4 * extra_copies,
+        10 + 4 * extra_copies,
+        extra_copies,
+        if options.packetized_copy { 5 } else { 0 },
+        if options.packetized_copy {
+            PACKETIZED_EXTENTS.iter().sum::<u64>()
+        } else {
+            0
+        },
     );
     Ok(())
 }
@@ -558,6 +704,52 @@ mod tests {
         assert!(exact_bytes("no-op-copy", &sentinel, buffers.expected_c()).is_err());
         assert!(exact_bytes("correct-copy", buffers.expected_c(), buffers.expected_c()).is_ok());
     }
+
+    #[test]
+    fn packetized_witness_covers_two_and_three_packets_with_nonperiodic_boundaries() {
+        let cap = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+        for (index, bytes) in PACKETIZED_EXTENTS.into_iter().enumerate() {
+            let plan = Gfx942ComputeXgmiPacketPlanV1::new(bytes).unwrap();
+            assert_eq!(plan.count(), index + 2);
+            let last = plan.packet(plan.count() - 1).unwrap();
+            assert_eq!(last.offset + u64::from(last.bytes), bytes);
+            assert_eq!(last.bytes, if index == 0 { 1 } else { 37 });
+        }
+        for offset in [cap - 1, cap, 2 * cap - 1, 2 * cap] {
+            let window: Vec<_> = (offset..offset + 32).map(packetized_pattern_byte).collect();
+            let first: Vec<_> = (0..32).map(packetized_pattern_byte).collect();
+            assert_ne!(window, first);
+            assert!(window.iter().all(|byte| *byte != !byte));
+        }
+    }
+
+    #[test]
+    fn packetized_cli_accepts_both_flag_orders_and_rejects_duplicates() {
+        for flags in [
+            vec!["--packetized-copy"],
+            vec!["--queued-consumer", "--packetized-copy"],
+            vec!["--packetized-copy", "--queued-consumer"],
+        ] {
+            let mut arguments: Vec<String> = flags.iter().map(|flag| (*flag).into()).collect();
+            arguments.extend(["0x1".into(), "0x2".into()]);
+            assert_eq!(
+                options(&arguments),
+                Ok(Options {
+                    unique_ids: [1, 2],
+                    queued_consumer: flags.len() == 2,
+                    packetized_copy: true,
+                })
+            );
+        }
+        for arguments in [
+            vec!["--packetized-copy", "--packetized-copy", "0x1", "0x2"],
+            vec!["0x1", "0x2", "--packetized-copy"],
+            vec!["--unknown", "0x1", "0x2"],
+            vec!["--packetized-copy", "0x1"],
+        ] {
+            assert!(options(&arguments.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+        }
+    }
 }
 #[test]
 fn queued_consumer_is_an_explicit_leading_option() {
@@ -572,6 +764,7 @@ fn queued_consumer_is_an_explicit_leading_option() {
             Ok(Options {
                 unique_ids: [1, 2],
                 queued_consumer,
+                packetized_copy: false,
             }),
         );
     }

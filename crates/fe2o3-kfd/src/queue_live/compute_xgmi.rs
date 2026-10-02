@@ -7,6 +7,17 @@ use crate::topology::Gfx942XgmiRouteV1;
 
 #[path = "compute_xgmi/persistent.rs"]
 mod persistent;
+
+/// One bounded step of a retained full-extent peer transfer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942ComputeXgmiProgressV1 {
+    /// The current packet has not completed; no next packet was published.
+    Pending,
+    /// One packet completed or the next packet was published; owners remain retained.
+    Changed,
+    /// Every packet completed; explicit finish and queue retirement remain required.
+    Ready,
+}
 #[path = "compute_xgmi/transfer.rs"]
 mod transfer;
 

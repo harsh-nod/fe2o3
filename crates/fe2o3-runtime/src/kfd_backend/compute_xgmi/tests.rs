@@ -6,6 +6,7 @@ use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 mod lifecycle;
+mod packetized;
 mod queued_consumer;
 
 const BYTES: usize = 64;
@@ -45,6 +46,24 @@ impl Fixture {
         unwind: bool,
         pending_samples: usize,
         child_count: usize,
+        destination_steps: Vec<ScriptedSdmaStepV1>,
+    ) -> Self {
+        Self::with_bytes(
+            failure,
+            unwind,
+            pending_samples,
+            child_count,
+            BYTES,
+            destination_steps,
+        )
+    }
+
+    fn with_bytes(
+        failure: Option<Stage>,
+        unwind: bool,
+        pending_samples: usize,
+        child_count: usize,
+        byte_len: usize,
         mut destination_steps: Vec<ScriptedSdmaStepV1>,
     ) -> Self {
         let children = (0..child_count)
@@ -57,17 +76,17 @@ impl Fixture {
         let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(children).unwrap();
         let stream = backend.create_stream_v1(8).unwrap();
         let source = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, BYTES as u64, 8)
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, byte_len as u64, 8)
             .unwrap();
         let destination = backend
-            .allocate_v1(8, RuntimeMemoryKindV1::DeviceLocal, BYTES as u64, 8)
+            .allocate_v1(8, RuntimeMemoryKindV1::DeviceLocal, byte_len as u64, 8)
             .unwrap();
         for index in 2..child_count {
             backend
                 .allocate_v1(
                     7 + index as u64,
                     RuntimeMemoryKindV1::DeviceLocal,
-                    BYTES as u64,
+                    byte_len as u64,
                     8,
                 )
                 .unwrap();
@@ -89,7 +108,7 @@ impl Fixture {
                 ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
             ]);
             let driver = ScriptedSdmaDriverV1::new(steps);
-            let mut owner = driver.test_device_owner(BYTES);
+            let mut owner = driver.test_device_owner(byte_len);
             owner.scripted_bytes_mut().unwrap().fill(fill);
             let child = &mut backend.children[route.child];
             let record = child.allocations.get_mut(&route.local).unwrap();
@@ -120,13 +139,13 @@ impl Fixture {
                 allocation: source,
                 access: RuntimeAccessV1::Read,
                 byte_offset: 0,
-                byte_len: BYTES as u64,
+                byte_len: byte_len as u64,
             },
             destination: BackendMemoryRegionV1 {
                 allocation: destination,
                 access: RuntimeAccessV1::Write,
                 byte_offset: 0,
-                byte_len: BYTES as u64,
+                byte_len: byte_len as u64,
             },
         }
     }
@@ -193,10 +212,15 @@ impl Fixture {
     }
 
     fn producer(&mut self, status: BackendPollV1) -> (u64, u64, RoutedHandleV1) {
-        let stream = self.backend.create_stream_v1(7).unwrap();
+        self.producer_on(0, status)
+    }
+
+    fn producer_on(&mut self, child: usize, status: BackendPollV1) -> (u64, u64, RoutedHandleV1) {
+        let device = self.backend.children[child].description.backend_device;
+        let stream = self.backend.create_stream_v1(device).unwrap();
         let stream_route = self.backend.streams[&stream];
-        let local = self.backend.children[0].next_id().unwrap();
-        self.backend.children[0].submissions.insert(
+        let local = self.backend.children[child].next_id().unwrap();
+        self.backend.children[child].submissions.insert(
             local,
             SubmissionRecordV1 {
                 stream: stream_route.local,
@@ -209,7 +233,7 @@ impl Fixture {
             .reserve_native_stream_submission_v1(stream)
             .unwrap();
         let producer = self.backend.next_id().unwrap();
-        let route = RoutedHandleV1 { child: 0, local };
+        let route = RoutedHandleV1 { child, local };
         self.backend
             .submissions
             .insert(producer, RoutedSubmissionV1::Native { route, stream });

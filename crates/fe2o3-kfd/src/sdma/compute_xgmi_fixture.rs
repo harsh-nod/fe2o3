@@ -75,6 +75,13 @@ impl ComputeXgmiQueueFixtureV1 {
         memory.sdma_arm_access_fault_v1(operation, panic);
     }
 
+    pub(crate) fn start_at_ring_tail(&mut self, memory: &mut PreparationMemoryFixtureV1) {
+        assert!(self.retained_identities().is_empty() && self.binding.is_none());
+        let write = u64::from(GFX942_SDMA_RING_BYTES_V1) - GFX942_SDMA_SUBMISSION_BYTES_V1 as u64;
+        memory.sdma_fixture_counters_v1(self.owner.control.as_ref().unwrap(), write, write);
+        self.owner.generations[0] = 7;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn submit(
         &mut self,
@@ -82,6 +89,7 @@ impl ComputeXgmiQueueFixtureV1 {
         destination_memory: &PreparationMemoryFixtureV1,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        offset: u64,
         copy_bytes: u32,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
@@ -93,11 +101,11 @@ impl ComputeXgmiQueueFixtureV1 {
         memory.check_queue_operational_currentness()?;
         let source_address = memory
             .compute_xgmi_facts_v1(source.as_ref().unwrap())?
-            .checked_gpu_subrange(0, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract("fixture source extent"))?;
         let destination_address = destination_memory
             .compute_xgmi_facts_v1(destination.as_ref().unwrap())?
-            .checked_gpu_subrange(0, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract("fixture destination extent"))?;
         assert_ne!(
             source.as_ref().unwrap().lease().storage_identity(),
@@ -180,7 +188,6 @@ impl ComputeXgmiQueueFixtureV1 {
         self.owner.require_live().unwrap();
         let ticket = custody.ticket.unwrap();
         let slot = self.owner.validate_xgmi_ticket(ticket).unwrap();
-        assert_eq!(slot, 0);
         assert!(custody.completed.is_none() && self.owner.uncertain_xgmi_ticket.is_none());
         let (source, destination, bytes) = self.binding.unwrap();
         let record = self.owner.xgmi_records[slot].as_ref().unwrap();
@@ -188,7 +195,8 @@ impl ComputeXgmiQueueFixtureV1 {
         let completion_address = memory
             .single_host_facts(self.owner.completions.as_ref().unwrap())
             .unwrap()
-            .gpu_va();
+            .gpu_va()
+            + (slot * 8) as u64;
         let packet = Gfx942SdmaCopySubmissionV1::new(
             source,
             destination,
@@ -198,22 +206,21 @@ impl ComputeXgmiQueueFixtureV1 {
         )
         .unwrap();
         let observed = self.snapshot(memory);
-        assert_eq!(&observed.ring[..64], packet.bytes());
-        assert_eq!(observed.doorbell, 64);
-        assert_eq!(
-            memory
-                .observe_aql_control_counters_in_current_scope(self.owner.control.as_mut().unwrap())
-                .unwrap(),
-            (64, 0)
-        );
-        assert_eq!(&observed.completions[..8], &[0; 8]);
+        assert_eq!(&observed.ring[slot * 64..slot * 64 + 64], packet.bytes());
+        let (write, read) = memory
+            .observe_aql_control_counters_in_current_scope(self.owner.control.as_mut().unwrap())
+            .unwrap();
+        assert_eq!(observed.doorbell, write);
+        assert_eq!(write - read, 64);
+        assert_eq!(&observed.completions[slot * 8..slot * 8 + 8], &[0; 8]);
         memory
             .overwrite_mapped_host_visible_subrange_in_current_scope(
                 self.owner.completions.as_mut().unwrap(),
-                0,
+                (slot * 8) as u64,
                 &i64::from(ticket.generation).to_le_bytes(),
             )
             .unwrap();
+        memory.sdma_fixture_counters_v1(self.owner.control.as_ref().unwrap(), write, write);
     }
 
     pub(crate) fn poison(&mut self) {

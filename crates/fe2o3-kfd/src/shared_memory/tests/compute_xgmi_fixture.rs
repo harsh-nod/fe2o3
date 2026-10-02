@@ -68,8 +68,24 @@ impl PreparationMemoryFixtureV1 {
             (gpu_id, va_base),
             (1001, 0x1_0000) | (1002, 0x41_0000)
         ));
+        Self::compute_xgmi_with_layout_v1(gpu_id, va_base, configured, 0x80_0000, 1 << 20)
+    }
+
+    pub(crate) fn compute_xgmi_packetized_v1(gpu_id: u32, configured: bool) -> Self {
+        assert!(matches!(gpu_id, 1001 | 1002));
+        let base = if gpu_id == 1001 { 0x1_0000 } else { 0x101_0000 };
+        Self::compute_xgmi_with_layout_v1(gpu_id, base, configured, 0x400_0000, 1 << 24)
+    }
+
+    fn compute_xgmi_with_layout_v1(
+        gpu_id: u32,
+        va_base: u64,
+        configured: bool,
+        aperture: u64,
+        budget: u64,
+    ) -> Self {
         let (identity, memory, device, vm) = transferred_model_foundation_with_correlation(
-            0x80_0000,
+            aperture,
             model_correlation_for_gpu(gpu_id),
         );
         let mut backend = FakeBackend::good();
@@ -83,7 +99,7 @@ impl PreparationMemoryFixtureV1 {
             vm,
         };
         fixture
-            .configure(configured.then(|| Gfx942DeviceBackingBudgetV1::new(1 << 20, 64).unwrap()))
+            .configure(configured.then(|| Gfx942DeviceBackingBudgetV1::new(budget, 64).unwrap()))
             .unwrap();
         if configured {
             fixture

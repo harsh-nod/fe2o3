@@ -2,8 +2,11 @@
 
 use super::*;
 use crate::queue::dispatch_binding::{DispatchDataInputStorageV1, DispatchDataStorageRefV1};
-use crate::sdma::ComputeXgmiCopyCustodyV1;
+use crate::sdma::{
+    ComputeXgmiCopyCustodyV1, Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiPacketV1,
+};
 use crate::shared_memory::{ComputeXgmiBufferV1, Gfx942XgmiMappedDeviceMemoryV1};
+use fe2o3_runtime_model::{OrderedPeerCopyActionV1 as CopyAction, OrderedPeerCopyCursorV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 struct DetachedCertificate {
@@ -44,7 +47,9 @@ pub(super) struct TransferCore {
     pub(super) rosters: [Option<Box<[u32]>>; 2],
     copy: ComputeXgmiCopyCustodyV1,
     progress: Progress,
-    bytes: u32,
+    plan: Gfx942ComputeXgmiPacketPlanV1,
+    packet: Gfx942ComputeXgmiPacketV1,
+    cursor: OrderedPeerCopyCursorV1,
 }
 
 pub(super) trait TransferIo {
@@ -68,7 +73,7 @@ pub(super) trait TransferIo {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        bytes: u32,
+        packet: Gfx942ComputeXgmiPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
     fn poll(
@@ -137,7 +142,7 @@ impl TransferIo for NativeTransferIo<'_> {
         &mut self,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
-        bytes: u32,
+        packet: Gfx942ComputeXgmiPacketV1,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.queue.submit_compute_xgmi_rooted_v1(
@@ -145,7 +150,8 @@ impl TransferIo for NativeTransferIo<'_> {
             self.destination,
             source,
             destination,
-            bytes,
+            packet.offset,
+            packet.bytes,
             custody,
         )?;
         Ok(())
@@ -256,6 +262,14 @@ impl TransferCore {
     }
 
     pub(super) fn new(roster: [u32; 2], bytes: u32) -> Self {
+        Self::with_plan(
+            roster,
+            Gfx942ComputeXgmiPacketPlanV1::new(u64::from(bytes))
+                .unwrap_or_else(|| std::process::abort()),
+        )
+    }
+
+    pub(super) fn with_plan(roster: [u32; 2], plan: Gfx942ComputeXgmiPacketPlanV1) -> Self {
         Self {
             buffers: [None, None],
             rosters: [
@@ -264,7 +278,10 @@ impl TransferCore {
             ],
             copy: Default::default(),
             progress: Default::default(),
-            bytes,
+            packet: plan.packet(0).unwrap_or_else(|| std::process::abort()),
+            cursor: OrderedPeerCopyCursorV1::new(plan.count())
+                .unwrap_or_else(|| std::process::abort()),
+            plan,
         }
     }
 
@@ -290,7 +307,29 @@ impl TransferCore {
         io: &mut impl TransferIo,
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.run_steps(io, timeout, &STEPS)
+        let deadline = std::time::Instant::now().checked_add(timeout).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("compute-XGMI deadline overflow"),
+        )?;
+        self.begin_with(io)?;
+        loop {
+            self.progress.attempted = Some(Step::Wait);
+            self.cursor_step(CopyAction::Open)?;
+            io.wait(
+                deadline.saturating_duration_since(std::time::Instant::now()),
+                &mut self.copy,
+            )?;
+            self.complete_packet()?;
+            self.cursor_step(CopyAction::Close)?;
+            if self.all_packets_completed() {
+                return self.finish_with(io);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                    "compute-XGMI transfer deadline",
+                ));
+            }
+            self.publish_next_with(io)?;
+        }
     }
 
     pub(super) fn begin(
@@ -310,7 +349,10 @@ impl TransferCore {
         &mut self,
         io: &mut impl TransferIo,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.run_steps(io, Duration::ZERO, &STEPS[..BEGIN_STEP_COUNT])
+        self.cursor_step(CopyAction::Open)?;
+        self.cursor_step(CopyAction::Publish)?;
+        self.run_steps(io, Duration::ZERO, &STEPS[..BEGIN_STEP_COUNT])?;
+        self.cursor_step(CopyAction::Close)
     }
 
     pub(super) fn poll(
@@ -330,13 +372,107 @@ impl TransferCore {
         &mut self,
         io: &mut impl TransferIo,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        if self.copy.completed.is_some() {
+            return Ok(self.all_packets_completed());
+        }
+        self.cursor_step(CopyAction::Open)?;
         self.progress.attempted = Some(Step::Wait);
         let ready = io.poll(&mut self.copy)?;
         if ready {
-            require_completed_extent(&self.copy, self.bytes)?;
-            self.progress.completed = Some(Step::Wait);
+            self.complete_packet()?;
         }
-        Ok(ready)
+        self.cursor_step(CopyAction::Close)?;
+        Ok(self.all_packets_completed())
+    }
+
+    fn cursor_step(&mut self, action: CopyAction) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.cursor =
+            self.cursor
+                .transition(action)
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "compute-XGMI packet cursor",
+                ))?;
+        Ok(())
+    }
+
+    fn all_packets_completed(&self) -> bool {
+        self.cursor.completed() == self.cursor.count()
+    }
+
+    fn complete_packet(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        require_completed_extent(&self.copy, self.packet.bytes)?;
+        self.cursor_step(CopyAction::Complete {
+            segment: self.cursor.completed(),
+        })?;
+        self.progress.completed = Some(Step::Wait);
+        Ok(())
+    }
+
+    fn publish_next_with(
+        &mut self,
+        io: &mut impl TransferIo,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.all_packets_completed() || self.copy.completed.is_none() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute-XGMI next packet phase",
+            ));
+        }
+        let next = self.plan.packet(self.cursor.completed() as usize).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("compute-XGMI next packet extent"),
+        )?;
+        let [source, destination] = &mut self.buffers;
+        restore_completed_mappings(
+            &mut self.copy,
+            self.packet.bytes,
+            source.as_mut().unwrap_or_else(|| std::process::abort()),
+            destination
+                .as_mut()
+                .unwrap_or_else(|| std::process::abort()),
+        )?;
+        // Only the exact completed packet gives both mappings back to this root.
+        self.copy.ticket = None;
+        self.packet = next;
+        self.cursor_step(CopyAction::Open)?;
+        self.cursor_step(CopyAction::Publish)?;
+        self.run_steps(
+            io,
+            Duration::ZERO,
+            &STEPS[BEGIN_STEP_COUNT - 1..BEGIN_STEP_COUNT],
+        )?;
+        self.cursor_step(CopyAction::Close)
+    }
+
+    pub(super) fn progress_with(
+        &mut self,
+        io: &mut impl TransferIo,
+    ) -> Result<Gfx942ComputeXgmiProgressV1, ComputeAqlQueueSessionErrorV1> {
+        if self.all_packets_completed() {
+            return Ok(Gfx942ComputeXgmiProgressV1::Ready);
+        }
+        if self.copy.completed.is_some() {
+            self.publish_next_with(io)?;
+            return Ok(Gfx942ComputeXgmiProgressV1::Changed);
+        }
+        if self.poll_with(io)? {
+            Ok(Gfx942ComputeXgmiProgressV1::Ready)
+        } else if self.copy.completed.is_some() {
+            Ok(Gfx942ComputeXgmiProgressV1::Changed)
+        } else {
+            Ok(Gfx942ComputeXgmiProgressV1::Pending)
+        }
+    }
+
+    pub(super) fn progress(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    ) -> Result<Gfx942ComputeXgmiProgressV1, ComputeAqlQueueSessionErrorV1> {
+        self.progress_with(&mut NativeTransferIo {
+            source,
+            destination,
+            queue,
+        })
     }
 
     pub(super) fn finish(
@@ -356,10 +492,15 @@ impl TransferCore {
         &mut self,
         io: &mut impl TransferIo,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if !self.all_packets_completed() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute-XGMI unfinished packet prefix",
+            ));
+        }
         let [source_buffer, destination_buffer] = &mut self.buffers;
         restore_completed_mappings(
             &mut self.copy,
-            self.bytes,
+            self.packet.bytes,
             source_buffer
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort()),
@@ -367,7 +508,8 @@ impl TransferCore {
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort()),
         )?;
-        self.run_steps(io, Duration::ZERO, &STEPS[FINISH_STEP_START..])
+        self.run_steps(io, Duration::ZERO, &STEPS[FINISH_STEP_START..])?;
+        self.cursor_step(CopyAction::Succeed)
     }
 
     fn run_steps(
@@ -392,14 +534,14 @@ impl TransferCore {
                 Step::Submit => io.submit(
                     &mut source_buffer.peer,
                     &mut destination_buffer.peer,
-                    self.bytes,
+                    self.packet,
                     &mut self.copy,
                 )?,
                 Step::Wait => {
                     io.wait(timeout, &mut self.copy)?;
                     restore_completed_mappings(
                         &mut self.copy,
-                        self.bytes,
+                        self.packet.bytes,
                         source_buffer,
                         destination_buffer,
                     )?;

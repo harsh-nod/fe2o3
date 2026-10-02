@@ -168,18 +168,20 @@ R57 DeviceLocal launches use persistent SDMA allocations, not recycled
 fixed-dispatch DATA. The new
 `Gfx942ComputeXgmiQueueV1` persistent transfer adapter
 retains the original persistent owners, directional attachments, identities and
-pool generations. It copies equal complete logical extents up to `0x003f_ffe0`
-bytes, while preserving independently sized physical pool extents. Both buffers
+pool generations. It copies equal complete logical extents in up to 4,096
+ordered packets, each at most `0x003f_ffe0` bytes, while preserving independently
+sized physical pool extents. The runtime's separate 256 MiB allocation cap still
+applies; the packet planner's larger arithmetic limit does not raise it. Both buffers
 must already be fully initialized PUBLIC storage with retired use frontiers.
 The shared rooted mapping/copy/remapping sequence restores both VM models before
 restoring either persistent output. This is not a demote/re-promote conversion.
 
 The opt-in runtime selects this transport only for ordinary, full-range,
-single-packet DeviceLocal copies between distinct children whose persistent
+bounded DeviceLocal copies between distinct children whose persistent
 storage is already initialized and normalizable at admission. Submission preserves
 the existing stream, dependency, event and allocation-retain indexes and reserves
 restoration shells, but no host payload staging or SDMA scratch. Uninitialized,
-demoted, in-flight, partial, directed and larger copies retain host staging.
+demoted, in-flight, partial, directed and over-plan copies retain host staging.
 Poll and wait do not advance a native copy.
 
 Once dependencies succeed, both children must be physically quiescent. Existing
@@ -194,12 +196,18 @@ Success is published only after restoration. Any uncertain error or unwind
 poisons both children and retains the occupied root, without staged fallback.
 
 The runtime uses `begin_persistent_data_full_extent_with_peer_v1`,
-`poll_persistent_data_full_extent_with_peer_v1` and
-`finish_persistent_data_full_extent_with_peer_v1`. Each sample reads the fence
-once, without a GPU wait. Pending retains the exact ticket, mapping owners and
+`progress_persistent_data_full_extent_with_peer_v1` and
+`finish_persistent_data_full_extent_with_peer_v1`. A progress call samples one
+fence or publishes the next packet, without a GPU wait loop. The separate lower
+`poll_persistent_data_full_extent_with_peer_v1` remains observation-only and never
+publishes the next packet. Pending retains the exact ticket, mapping owners and
 both child reservations across calls; it does not advance the cooperative
 progress generation. Both model foundations are retaken before each return.
-Ready retains custody until explicit finish restores the original owners.
+Intermediate completions and next-packet publication advance the progress
+generation, but do not release either child or count a completed logical copy.
+Mappings remain rooted across packets, with at most one ticket in flight.
+Ready requires the complete extent and retains custody until explicit finish
+restores the original owners.
 The synchronous lower adapter remains available for its existing callers.
 
 Both entire child backends are reserved before owner extraction. Conflicting
@@ -235,8 +243,11 @@ that an expired public drain deadline is rejected without completing the copy,
 then drives the outstanding copy through `RuntimeContextV1::drain`. It checks
 the native completion counter changes from zero to one and
 performs 13 full-buffer readbacks before explicit logical and native shutdown.
-It is implemented but has not run on GPUs. The latest SSH attempt failed hostname
-resolution before executing a remote command; no current device pair is admitted.
+Both the baseline and packetized successor now pass the selected two-GPU gate.
+Primary-session SSH and
+ROCm process discovery succeeded on 2026-10-02 at 03:47 UTC. Earlier failed DNS
+checks were from the worker execution namespace and do not establish a host
+outage. Device occupancy must be rechecked immediately before each run.
 
 ```sh
 cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
@@ -262,8 +273,30 @@ and zero-time wait remain Pending and expired drain is rejected, then drains
 only the consumer until its backend and version-journal reconciliation finish.
 It does not separately drive the copy. The original four exact launches,
 sentinel, native completion count of one, 13 full-buffer readbacks and explicit
-cleanup remain required. Neither mode has current hardware acceptance. Run the
-default explicit-copy-drain mode first, then this additional dependency gate.
+cleanup remain required. Both modes pass on MI300X GPUs 6 -> 7 in the scoped
+campaign below. Run the default explicit-copy-drain mode first, then this
+additional dependency gate.
+
+The optional leading `--packetized-copy` flag adds two auxiliary full-buffer
+peer copies after the four exact launches and their readbacks. The extents are
+4,194,273 and 8,388,581 bytes: two and three packets with one-byte and 37-byte
+tails. Absolute-offset-derived source bytes and complementary destination
+sentinels distinguish no-op, omitted-tail and repeated-first-packet errors.
+Each case verifies both initial buffers, unchanged source and copied destination.
+It requires one native completion per logical copy, not per packet. Successful
+cleanup reports three total logical peer copies, 21 readbacks and 18 total
+allocations. These auxiliary allocations do not expand kernel launch authority.
+The flag can be combined with `--queued-consumer`; the large copies themselves
+have no kernel consumer. This additional hardware mode passes in both directions
+between the selected GPUs; combined queued-consumer/packetized mode also passes
+in the original direction. These results do not qualify a general large-buffer
+kernel consumer or actual 65-packet ring reuse.
+
+```sh
+cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
+  --features hardware-qualification --example gfx942-runtime-compute-xgmi-smoke \
+  -- --packetized-copy 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
+```
 
 At the preceding synchronous checkpoint `d2ff52f63`, CPU testing passes 12
 scripted runtime route tests, two example tests, and the focused KFD
@@ -304,10 +337,20 @@ hardware, a full KFD suite, physical overlap or performance.
 
 ## Next Dependencies
 
-Native hardware qualification, complete composed native fault coverage,
-hardware validation of the asynchronous custody path, persistent peer mappings
-and multi-packet copies remain open. The current route does not qualify a
-general native runtime pipeline.
+The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
+passes five current-source hardware modes: default, queued consumer, packetized,
+combined, and reverse-direction packetized. Every run checks four exact launches,
+full byte contents and explicit cleanup. Two earlier baseline runs are retained
+separately. Initial/final executable hashes match, selected-device memory use and
+the process roster return to baseline, and the two uploaded files plus the owned
+scratch directory are removed. These are correctness observations on a shared
+host, not performance or exclusive-reservation evidence.
+
+Actual ring reuse at 65 packets, additional pairs, complete native fault coverage,
+and peer mappings retained across separate logical copies remain open. General
+authority constructors still use private/staged-only children; an explicit peer
+opt-in must preserve their existing kernel authority and private defaults. The
+current route does not qualify a general native runtime pipeline.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed

@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::persistent_allocation::{detach_sdma_buffer_pair_v1, restore_sdma_buffer_pair_v1};
-use crate::sdma::{Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1};
+use crate::sdma::{
+    Gfx942ComputeXgmiPacketPlanV1, Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1,
+};
 use crate::shared_memory::{
     ComputeXgmiBufferV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
 };
@@ -35,7 +37,7 @@ impl TransferRoot {
     fn new(
         certificates: [Gfx942PersistentDirectionalSdmaAttachmentV1; 2],
         roster: [u32; 2],
-        bytes: u32,
+        plan: Gfx942ComputeXgmiPacketPlanV1,
     ) -> Self {
         Self {
             phase: Phase::Admitted,
@@ -44,7 +46,7 @@ impl TransferRoot {
             sdma: [None, None],
             metadata: [None, None],
             locals: [None, None],
-            core: transfer::TransferCore::new(roster, bytes),
+            core: transfer::TransferCore::with_plan(roster, plan),
         }
     }
 
@@ -197,6 +199,36 @@ impl TransferRoot {
             |root, context| operation(context, &mut root.core),
             Self::restore,
         )
+    }
+
+    fn progress<C: model_pair_loan::Context<Error = ComputeAqlQueueSessionErrorV1>>(
+        &mut self,
+        context: &mut C,
+        operation: impl FnOnce(
+            &mut C,
+            &mut transfer::TransferCore,
+        )
+            -> Result<Gfx942ComputeXgmiProgressV1, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<Gfx942ComputeXgmiProgressV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_pollable()?;
+        if self.phase == Phase::Ready {
+            return Ok(Gfx942ComputeXgmiProgressV1::Ready);
+        }
+        let mut progress = Gfx942ComputeXgmiProgressV1::Pending;
+        self.settle(
+            context,
+            Phase::Published,
+            Phase::Published,
+            |root, context| {
+                progress = operation(context, &mut root.core)?;
+                Ok(())
+            },
+            |_| Ok(()),
+        )?;
+        if progress == Gfx942ComputeXgmiProgressV1::Ready {
+            self.phase = Phase::Ready;
+        }
+        Ok(progress)
     }
 
     fn require_phase(&self, phase: Phase) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -428,17 +460,20 @@ impl Gfx942ComputeXgmiQueueV1 {
                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                     "missing persistent compute-XGMI destination",
                 ))?;
-        let bytes = transfer::exact_extent(
-            require_allocation(source, source_allocation)?,
-            require_allocation(destination, destination_allocation)?,
-        )?;
+        let source_bytes = require_allocation(source, source_allocation)?;
+        let destination_bytes = require_allocation(destination, destination_allocation)?;
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(source_bytes)
+            .filter(|_| source_bytes == destination_bytes)
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute-XGMI requires equal complete bounded extents",
+            ))?;
         self.persistent_transfer = Some(Box::new(TransferRoot::new(
             [
                 source_allocation.attachment,
                 destination_allocation.attachment,
             ],
             self.attachment.route.canonical_mapping_gpu_ids(),
-            bytes,
+            plan,
         )));
         let root = self
             .persistent_transfer
@@ -488,7 +523,7 @@ impl Gfx942ComputeXgmiQueueV1 {
         Ok(())
     }
 
-    /// Publishes one full logical copy and retains both original owners here.
+    /// Publishes the first packet of a full logical copy and retains both owners here.
     ///
     /// This does not wait for GPU completion. Mapping and currentness operations
     /// still make synchronous native calls. Keep this queue and both sessions
@@ -528,6 +563,8 @@ impl Gfx942ComputeXgmiQueueV1 {
     ///
     /// `false` is a successful pending observation. `true` means finish may run;
     /// all custody remains here. Repeated ready observations are effect-free.
+    /// This never publishes another packet. Multi-packet transfers require the
+    /// explicit progress method to advance after an intermediate completion.
     /// Attachment, endpoint-quiescence, and phase rejection preserve the transfer.
     /// Errors or unwinds after the paired model loan starts are terminal.
     pub fn poll_persistent_data_full_extent_with_peer_v1(
@@ -558,9 +595,47 @@ impl Gfx942ComputeXgmiQueueV1 {
         settle_result(result, root, &mut self.queue, source, destination)
     }
 
+    /// Advances at most one packet publication or one completion sample.
+    ///
+    /// Each active step retakes both VM models; repeated `Ready` observations
+    /// are effect-free. `Changed` means a packet
+    /// completed or the next packet was published; it never returns allocation
+    /// authority. `Ready` requires the entire ordered extent, but still requires
+    /// finish followed by peer queue retirement. There is no GPU wait loop.
+    /// Native mapping/currentness calls remain synchronous. Every admitted error
+    /// or unwind is terminal and retains both original owners for teardown.
+    pub fn progress_persistent_data_full_extent_with_peer_v1(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+    ) -> Result<Gfx942ComputeXgmiProgressV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_persistent_transfer_attachment(source, destination)?;
+        let root =
+            self.persistent_transfer
+                .as_mut()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing persistent compute-XGMI transfer",
+                ))?;
+        root.require_pollable()?;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            root.progress(
+                &mut Sessions {
+                    source: &mut *source,
+                    destination: &mut *destination,
+                },
+                |sessions, core| {
+                    let (source, destination) = sessions.memories();
+                    core.progress(source, destination, &mut self.queue)
+                },
+            )
+        }));
+        settle_result(result, root, &mut self.queue, source, destination)
+    }
+
     /// Restores local mappings and returns the exact original persistent owners.
     ///
-    /// Both output slots must be empty and a prior poll must have returned true.
+    /// Both output slots must be empty and a prior poll must have returned true,
+    /// or explicit progress must have returned `Ready`.
     /// Structural or endpoint-quiescence rejection has no native effects and
     /// preserves both the transfer and output slots. Once admitted, every error
     /// or unwind is terminal. Both model retakes precede owner restoration and
@@ -651,7 +726,7 @@ mod tests {
                 .each_ref()
                 .map(|allocation| allocation.attachment),
             [7, 9],
-            2048,
+            Gfx942ComputeXgmiPacketPlanV1::new(2048).unwrap(),
         );
         root.allocations = allocations.map(Some);
         root

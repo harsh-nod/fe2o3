@@ -95,6 +95,36 @@ impl SdmaSingleMemoryV1 for PreparationMemoryFixtureV1 {
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn sdma_fixture_counters_v1(
+        &mut self,
+        control: &SdmaControlAuthorityV1,
+        write: u64,
+        read: u64,
+    ) {
+        let engine = &mut self.fixture.engine;
+        let index = engine
+            .index(
+                &control.token,
+                SharedAllocationPhaseV1::GpuAccessibleMutable,
+            )
+            .unwrap();
+        let record = &mut engine.allocations[index];
+        let mapping = record.mapping.as_mut().unwrap();
+        for (offset, value) in [
+            (
+                crate::queue_resources::AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+                write,
+            ),
+            (
+                crate::queue_resources::AMD_AQL_READ_DISPATCH_ID_OFFSET_V1,
+                read,
+            ),
+        ] {
+            let start = mapping.byte_offset + offset;
+            mapping.bytes[start..start + 8].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+
     fn sdma_access_fault_v1(&self, operation: &'static str) -> Result<(), MemorySessionError> {
         if let Some((selected, panic)) = self.sdma_access_fault
             && selected == operation

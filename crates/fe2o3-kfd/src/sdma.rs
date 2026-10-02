@@ -50,6 +50,8 @@ pub(crate) use host_pool_policy::{
 pub(crate) mod creation;
 use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod compute_xgmi;
+mod compute_xgmi_plan;
+pub use compute_xgmi_plan::{Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiPacketV1};
 mod xgmi_creation;
 pub(crate) use compute_xgmi::ComputeXgmiCopyCustodyV1;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;

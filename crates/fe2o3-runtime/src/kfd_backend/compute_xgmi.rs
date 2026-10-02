@@ -2,6 +2,7 @@
 
 use super::*;
 use fe2o3_kfd::{
+    Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiProgressV1,
     Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1,
     Gfx942DirectionalQueuePersistentAllocationV1,
 };
@@ -24,6 +25,7 @@ pub(super) enum Route {
 pub(super) enum Stage {
     Create,
     Copy,
+    NextPacket,
     Poll,
     Finish,
     Retire,
@@ -57,6 +59,12 @@ pub(super) struct Root {
     trace: Vec<Stage>,
     #[cfg(test)]
     pending_samples: usize,
+    #[cfg(test)]
+    packet_plan: Gfx942ComputeXgmiPacketPlanV1,
+    #[cfg(test)]
+    packet_index: usize,
+    #[cfg(test)]
+    between_packets: bool,
 }
 
 impl fmt::Debug for Root {
@@ -87,7 +95,10 @@ fn terminal(detail: impl Into<String>) -> Failure {
 }
 
 impl Root {
-    fn prepare(route: Route) -> Result<Box<Self>, Failure> {
+    fn prepare(
+        route: Route,
+        _packet_plan: Gfx942ComputeXgmiPacketPlanV1,
+    ) -> Result<Box<Self>, Failure> {
         let capacity = || KfdRuntimeBackendV1::capacity("compute-XGMI owner allocation failed");
         let root = try_uninit_box_v1().map_err(|()| capacity())?;
         let shells = [
@@ -103,9 +114,12 @@ impl Root {
                 } => pending_samples,
                 Route::Native(_) => 0,
             };
-            trace
-                .try_reserve_exact(samples.checked_add(6).ok_or_else(capacity)?)
-                .map_err(|_| capacity())?;
+            let stages = samples
+                .checked_add(2)
+                .and_then(|per_packet| per_packet.checked_mul(_packet_plan.count()))
+                .and_then(|stages| stages.checked_add(4))
+                .ok_or_else(capacity)?;
+            trace.try_reserve_exact(stages).map_err(|_| capacity())?;
             trace
         };
         Ok(Box::write(
@@ -128,6 +142,12 @@ impl Root {
                     } => pending_samples,
                     Route::Native(_) => 0,
                 },
+                #[cfg(test)]
+                packet_plan: _packet_plan,
+                #[cfg(test)]
+                packet_index: 0,
+                #[cfg(test)]
+                between_packets: false,
             },
         ))
     }
@@ -227,12 +247,28 @@ impl Root {
                         Ok(Progress::Changed)
                     }
                     Phase::Published => {
+                        if self.between_packets {
+                            self.script_step(Stage::NextPacket)?;
+                            self.packet_index += 1;
+                            self.pending_samples = match self.route {
+                                Route::Scripted {
+                                    pending_samples, ..
+                                } => pending_samples,
+                                Route::Native(_) => unreachable!(),
+                            };
+                            self.between_packets = false;
+                            return Ok(Progress::Changed);
+                        }
                         self.script_step(Stage::Poll)?;
                         if self.pending_samples != 0 {
                             self.pending_samples -= 1;
                             return Ok(Progress::Pending);
                         }
-                        self.phase = Phase::Ready;
+                        if self.packet_index + 1 < self.packet_plan.count() {
+                            self.between_packets = true;
+                        } else {
+                            self.phase = Phase::Ready;
+                        }
                         Ok(Progress::Changed)
                     }
                     Phase::Ready => {
@@ -285,17 +321,20 @@ impl Root {
                 Ok(Progress::Changed)
             }
             Phase::Published => {
-                let ready = self
+                let progress = self
                     .queue
                     .as_mut()
                     .unwrap_or_else(|| std::process::abort())
-                    .poll_persistent_data_full_extent_with_peer_v1(source, destination)
-                    .map_err(|error| terminal(format!("compute-XGMI observation: {error}")))?;
-                if !ready {
-                    return Ok(Progress::Pending);
+                    .progress_persistent_data_full_extent_with_peer_v1(source, destination)
+                    .map_err(|error| terminal(format!("compute-XGMI progress: {error}")))?;
+                match progress {
+                    Gfx942ComputeXgmiProgressV1::Pending => Ok(Progress::Pending),
+                    Gfx942ComputeXgmiProgressV1::Changed => Ok(Progress::Changed),
+                    Gfx942ComputeXgmiProgressV1::Ready => {
+                        self.phase = Phase::Ready;
+                        Ok(Progress::Changed)
+                    }
                 }
-                self.phase = Phase::Ready;
-                Ok(Progress::Changed)
             }
             Phase::Ready => {
                 let queue = self.queue.as_mut().unwrap_or_else(|| std::process::abort());
@@ -336,7 +375,7 @@ fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bo
         && record.sdma_backed
         && region.byte_offset == 0
         && region.byte_len != 0
-        && region.byte_len <= u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)
+        && Gfx942ComputeXgmiPacketPlanV1::new(region.byte_len).is_some()
         && region.byte_len == record.bytes.len() as u64
         && record.native_dirty.is_empty()
 }
@@ -476,7 +515,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Ok(None);
             }
         }
-        Root::prepare(route).map(Some)
+        let Some(plan) = Gfx942ComputeXgmiPacketPlanV1::new(source_region.byte_len) else {
+            return Ok(None);
+        };
+        Root::prepare(route, plan).map(Some)
     }
 
     pub(super) fn compute_xgmi_endpoints_v1(&self, submission: u64) -> Option<[usize; 2]> {

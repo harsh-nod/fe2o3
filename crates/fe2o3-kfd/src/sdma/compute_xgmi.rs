@@ -108,6 +108,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         destination_session: &mut SharedGttMemorySessionV1,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        offset: u64,
         copy_bytes: u32,
         custody: &mut ComputeXgmiCopyCustodyV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
@@ -136,11 +137,11 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         }
         let source_address = source_session
             .mapped_xgmi_device_memory_facts(source_mapping)?
-            .checked_gpu_subrange(0, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract("compute-XGMI source extent"))?;
         let destination_address = destination_session
             .mapped_xgmi_device_memory_facts(destination_mapping)?
-            .checked_gpu_subrange(0, u64::from(copy_bytes), 1)
+            .checked_gpu_subrange(offset, u64::from(copy_bytes), 1)
             .ok_or(Gfx942SdmaErrorV1::Contract(
                 "compute-XGMI destination extent",
             ))?;
