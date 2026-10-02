@@ -388,10 +388,8 @@ fn build_execution_parameters_with_references_v29<'scope>(
                 budget,
             )?
             .ok_or_else(execution_call_error_v29)?;
-            (source_reference_node_has_loan_v29(references.plan, node, budget)?
-                || source_reference_node_has_selected_pointer_v29(references.plan, node, budget)?
-                || source_descriptor_node_present_v29(references.plan, node, &mut 0, budget)?)
-            .then_some(node)
+            source_call_requires_captured_carrier_v55(references.plan, node, budget)?
+                .then_some(node)
         } else {
             None
         };

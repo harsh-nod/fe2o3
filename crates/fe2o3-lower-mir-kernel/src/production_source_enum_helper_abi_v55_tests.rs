@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_enum_helper_transport_v55_tests.rs"]
+mod transport_tests;
+
 const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
 const HELPER: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(3);
 
@@ -28,8 +31,40 @@ fn enum_helper_owner_case_v55(
     ownership: SemanticSourceArgumentOwnershipV1,
     returns: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
+    enum_helper_owner_transport_case_v55(variant, moved, nested, ownership, returns, false)
+}
+
+fn enum_helper_owner_transport_case_v55(
+    variant: u32,
+    moved: bool,
+    nested: bool,
+    ownership: SemanticSourceArgumentOwnershipV1,
+    returns: bool,
+    scalar_payload: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     owner_with(Case::Shared, |types, functions| {
-        types.push(enum_declaration());
+        let declaration = enum_declaration();
+        types.push(if scalar_payload {
+            SemanticTypeDeclV1::new(
+                declaration.identity(),
+                declaration.layout_identity(),
+                declaration.layout().clone(),
+                SemanticTypeShapeV1::enum_type(
+                    WORD,
+                    TAGS.iter()
+                        .map(|&tag| {
+                            SemanticEnumVariantV1::new(
+                                tag,
+                                SemanticAggregateTypeV1::new(vec![WORD, WORD]).unwrap(),
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap(),
+            )
+        } else {
+            declaration
+        });
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([202; 32]),
             SemanticLayoutIdentityV1::from_sha256([202; 32]),
@@ -49,7 +84,20 @@ fn enum_helper_owner_case_v55(
             locals.push(local(205, input, SemanticLocalRoleV1::Temporary));
         }
         let mut initial = functions[2].blocks()[0].statements().to_vec();
-        initial.push(construct(variant, 2));
+        initial.push(if scalar_payload {
+            assign(
+                place(5, ENUM),
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::EnumVariant(variant),
+                        vec![SemanticOperandV1::Copy(place(3, WORD)); 2],
+                    )
+                    .unwrap(),
+                ),
+            )
+        } else {
+            construct(variant, 2)
+        });
         if nested {
             initial.push(assign(
                 place(6, PAIR),
