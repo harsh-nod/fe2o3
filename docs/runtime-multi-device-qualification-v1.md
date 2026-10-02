@@ -231,7 +231,9 @@ fixed-dispatch initializer was already PUBLIC. Neither path retags private
 allocations.
 
 The witness requires pre-flush poll and zero-time wait to remain Pending, checks
-the native completion counter changes from zero to one, and
+that an expired public drain deadline is rejected without completing the copy,
+then drives the outstanding copy through `RuntimeContextV1::drain`. It checks
+the native completion counter changes from zero to one and
 performs 13 full-buffer readbacks before explicit logical and native shutdown.
 It is implemented but has not run on GPUs. The latest SSH attempt failed hostname
 resolution before executing a remote command; no current device pair is admitted.
@@ -267,12 +269,36 @@ commands pass, with 76 executable proof files unchanged. The
 records final-source executable hashes, earlier rejected checks and the exact
 boundary between scripted, mapped-arena and unexecuted native coverage.
 
+The next lifecycle increment composes the production persistent transfer,
+paired model loans, native-leaf mapping outcomes and SDMA publication/fence
+algorithms in CPU tests. Seven test functions cover 85 loop cases, including
+errors and unwinds; the public Linux endpoint adapter and actual GPU payload
+movement remain outside that fixture. Six runtime lifecycle tests add expired
+and resumed drain, opposite directions, disjoint outcomes, owned shutdown and
+pending ordinary-copy consumer rejection. Final-source checks pass 47 KFD
+compute-XGMI tests, the broader memory/SDMA filters, 23 runtime transfer tests,
+seven multi-group tests and both example tests. The full runtime has 1,952
+passes, the same three socket-inspection permission failures and 32 ignores.
+Strict combined Clippy and the no-default check pass; the witness builds.
+All 32 source-control commands pass with 76 executable proof files unchanged.
+The [lifecycle CPU packet](evidence/dev-multigpu-async-lifecycle-cpu-2026-10-02/README.md)
+retains complete commands and scope limits. None of these checks qualifies
+hardware, a full KFD suite, physical overlap or performance.
+
 ## Next Dependencies
 
 Native hardware qualification, complete composed native fault coverage,
 hardware validation of the asynchronous custody path, persistent peer mappings
 and multi-packet copies remain open. The current route does not qualify a
 general native runtime pipeline.
+
+The first two-GPU witness does not require accepting a consumer while its
+ordinary native peer copy is pending: it drains and validates the copy before
+launching either consumer. Queued-consumer support is a separate implementation
+gate. It must defer child compute admission until peer queue retirement, both
+allocation restorations and endpoint release. Merely relaxing `Busy` or the
+directed-provenance checks can acquire child allocation custody that blocks the
+copy producer itself. The existing rejection behavior remains intentional.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

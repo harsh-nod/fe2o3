@@ -89,7 +89,11 @@ pub use persistent_wait_diagnostic::{
     Gfx942SdmaPersistentWaitCpuV1, Gfx942SdmaPersistentWaitDiagnosticsV1,
 };
 #[cfg(test)]
+mod compute_xgmi_fixture;
+#[cfg(test)]
 mod initialized_prefix_tests;
+#[cfg(test)]
+pub(crate) use compute_xgmi_fixture::ComputeXgmiQueueFixtureV1;
 mod owner_release;
 pub(crate) mod retained_release;
 mod single_copy;
@@ -2197,7 +2201,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn submit_xgmi(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
         source_address: u64,
         destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
@@ -2255,7 +2259,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let completion_value = generation;
         let completion_offset = (ring_slot * 8) as u64;
         let completion_address = memory
-            .mapped_resource_facts(
+            .single_host_facts(
                 self.completions
                     .as_ref()
                     .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
@@ -2312,10 +2316,11 @@ impl Gfx942SdmaQueueOwnerV1 {
             write,
             write_end,
         )?;
-        self.doorbell
-            .as_mut()
-            .expect("checked SDMA doorbell")
-            .store_packet_id_release(write_end)
+        memory
+            .single_doorbell(
+                self.doorbell.as_mut().expect("checked SDMA doorbell"),
+                write_end,
+            )
             .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         self.poisoned = false;
         self.uncertain_xgmi_ticket = None;

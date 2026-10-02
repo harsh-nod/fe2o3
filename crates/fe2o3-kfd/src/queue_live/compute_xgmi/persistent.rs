@@ -8,6 +8,10 @@ use crate::shared_memory::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+#[cfg(test)]
+#[path = "persistent_composed_tests.rs"]
+mod composed_tests;
+
 pub(super) struct TransferRoot {
     phase: Phase,
     allocations: [Option<Gfx942DirectionalQueuePersistentAllocationV1>; 2],

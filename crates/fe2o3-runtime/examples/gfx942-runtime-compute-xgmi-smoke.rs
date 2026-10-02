@@ -10,8 +10,8 @@ use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
 };
 use fe2o3_runtime::{
     KfdMultiDeviceRuntimeBackendV1, RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeContextV1,
-    RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimeModuleIdV1, RuntimePollV1,
-    RuntimeStreamIdV1, TypedRuntimeKernelV1,
+    RuntimeErrorV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimeModuleIdV1, RuntimePollV1,
+    RuntimeStreamIdV1, RuntimeValidationErrorV1, TypedRuntimeKernelV1,
 };
 
 type ContextV1 = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
@@ -312,26 +312,26 @@ fn run(unique_ids: &[u64; 2]) -> ResultV1<()> {
             "observers must not publish or complete the unflushed copy",
         ));
     }
-    let deadline = Instant::now() + WAIT;
-    loop {
-        context
-            .flush_stream(runs[1].stream)
-            .map_err(|error| failure("peer-copy-flush", error))?;
-        match context
-            .poll(&mut copy)
-            .map_err(|error| failure("peer-copy-poll", error))?
-        {
-            RuntimePollV1::Succeeded => break,
-            RuntimePollV1::Pending if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_micros(50));
-            }
-            status => {
-                return Err(failure(
-                    "peer-copy-poll",
-                    format!("native peer transfer did not succeed: {status:?}"),
-                ));
-            }
-        }
+    if !matches!(
+        context.drain(&mut copy, Instant::now()),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidDeadline
+        ))
+    ) || context.backend().completed_compute_xgmi_copies_v1() != 0
+    {
+        return Err(failure(
+            "peer-copy-expired-drain",
+            "expired drain must reject without completing the copy",
+        ));
+    }
+    let status = context
+        .drain(&mut copy, Instant::now() + WAIT)
+        .map_err(|error| failure("peer-copy-drain", error))?;
+    if status != RuntimePollV1::Succeeded {
+        return Err(failure(
+            "peer-copy-drain",
+            format!("native peer transfer did not succeed: {status:?}"),
+        ));
     }
     let native_copies = context.backend().completed_compute_xgmi_copies_v1();
     if native_copies != 1 {
@@ -391,7 +391,7 @@ fn run(unique_ids: &[u64; 2]) -> ResultV1<()> {
         .shutdown_native_v1()
         .map_err(|error| failure("native-shutdown", error))?;
     println!(
-        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies=1 bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks=13 modules=2 allocations=10 cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
+        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies=1 bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending expired_drain=rejected copy_progress=explicit-drain destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks=13 modules=2 allocations=10 cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
         GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2,
         expected_c.len(),
         native_copies,

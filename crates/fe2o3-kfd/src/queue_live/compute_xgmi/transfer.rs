@@ -3,7 +3,7 @@
 use super::*;
 use crate::queue::dispatch_binding::{DispatchDataInputStorageV1, DispatchDataStorageRefV1};
 use crate::sdma::ComputeXgmiCopyCustodyV1;
-use crate::shared_memory::ComputeXgmiBufferV1;
+use crate::shared_memory::{ComputeXgmiBufferV1, Gfx942XgmiMappedDeviceMemoryV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 struct DetachedCertificate {
@@ -45,6 +45,130 @@ pub(super) struct TransferCore {
     copy: ComputeXgmiCopyCustodyV1,
     progress: Progress,
     bytes: u32,
+}
+
+pub(super) trait TransferIo {
+    fn local_unmap(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    fn peer_transition(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+        mapping: bool,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    fn local_map(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    fn submit(
+        &mut self,
+        source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        bytes: u32,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    fn poll(
+        &mut self,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1>;
+    fn wait(
+        &mut self,
+        timeout: Duration,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+}
+
+struct NativeTransferIo<'a> {
+    source: &'a mut SharedGttMemorySessionV1,
+    destination: &'a mut SharedGttMemorySessionV1,
+    queue: &'a mut Gfx942NativeXgmiSdmaQueueV1,
+}
+
+impl TransferIo for NativeTransferIo<'_> {
+    fn local_unmap(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        [&mut *self.source, &mut *self.destination][endpoint]
+            .unmap_compute_xgmi_local_v1(buffer)?;
+        Ok(())
+    }
+
+    fn peer_transition(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+        mapping: bool,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let route = self.queue.route();
+        if endpoint == 0 {
+            self.source.transition_compute_xgmi_peer_v1(
+                self.destination,
+                route,
+                buffer,
+                mapping,
+            )?;
+        } else {
+            self.destination.transition_compute_xgmi_peer_v1(
+                self.source,
+                route,
+                buffer,
+                mapping,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn local_map(
+        &mut self,
+        endpoint: usize,
+        buffer: &mut ComputeXgmiBufferV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        [&mut *self.source, &mut *self.destination][endpoint].map_compute_xgmi_local_v1(buffer)?;
+        Ok(())
+    }
+
+    fn submit(
+        &mut self,
+        source: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        destination: &mut Option<Gfx942XgmiMappedDeviceMemoryV1>,
+        bytes: u32,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.queue.submit_compute_xgmi_rooted_v1(
+            self.source,
+            self.destination,
+            source,
+            destination,
+            bytes,
+            custody,
+        )?;
+        Ok(())
+    }
+
+    fn poll(
+        &mut self,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        Ok(self
+            .queue
+            .poll_compute_xgmi_rooted_v1(self.source, self.destination, custody)?)
+    }
+
+    fn wait(
+        &mut self,
+        timeout: Duration,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.queue
+            .wait_compute_xgmi_rooted_v1(self.source, self.destination, timeout, custody)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +250,11 @@ impl TransferRoot {
 }
 
 impl TransferCore {
+    #[cfg(test)]
+    pub(super) fn copy_custody_for_test(&self) -> &ComputeXgmiCopyCustodyV1 {
+        &self.copy
+    }
+
     pub(super) fn new(roster: [u32; 2], bytes: u32) -> Self {
         Self {
             buffers: [None, None],
@@ -146,7 +275,22 @@ impl TransferCore {
         queue: &mut Gfx942NativeXgmiSdmaQueueV1,
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.run_steps(source, destination, queue, timeout, &STEPS)
+        self.run_with(
+            &mut NativeTransferIo {
+                source,
+                destination,
+                queue,
+            },
+            timeout,
+        )
+    }
+
+    pub(super) fn run_with(
+        &mut self,
+        io: &mut impl TransferIo,
+        timeout: Duration,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.run_steps(io, timeout, &STEPS)
     }
 
     pub(super) fn begin(
@@ -155,13 +299,18 @@ impl TransferCore {
         destination: &mut SharedGttMemorySessionV1,
         queue: &mut Gfx942NativeXgmiSdmaQueueV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.run_steps(
+        self.begin_with(&mut NativeTransferIo {
             source,
             destination,
             queue,
-            Duration::ZERO,
-            &STEPS[..BEGIN_STEP_COUNT],
-        )
+        })
+    }
+
+    pub(super) fn begin_with(
+        &mut self,
+        io: &mut impl TransferIo,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.run_steps(io, Duration::ZERO, &STEPS[..BEGIN_STEP_COUNT])
     }
 
     pub(super) fn poll(
@@ -170,8 +319,19 @@ impl TransferCore {
         destination: &mut SharedGttMemorySessionV1,
         queue: &mut Gfx942NativeXgmiSdmaQueueV1,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        self.poll_with(&mut NativeTransferIo {
+            source,
+            destination,
+            queue,
+        })
+    }
+
+    pub(super) fn poll_with(
+        &mut self,
+        io: &mut impl TransferIo,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
         self.progress.attempted = Some(Step::Wait);
-        let ready = queue.poll_compute_xgmi_rooted_v1(source, destination, &mut self.copy)?;
+        let ready = io.poll(&mut self.copy)?;
         if ready {
             require_completed_extent(&self.copy, self.bytes)?;
             self.progress.completed = Some(Step::Wait);
@@ -185,6 +345,17 @@ impl TransferCore {
         destination: &mut SharedGttMemorySessionV1,
         queue: &mut Gfx942NativeXgmiSdmaQueueV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.finish_with(&mut NativeTransferIo {
+            source,
+            destination,
+            queue,
+        })
+    }
+
+    pub(super) fn finish_with(
+        &mut self,
+        io: &mut impl TransferIo,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let [source_buffer, destination_buffer] = &mut self.buffers;
         restore_completed_mappings(
             &mut self.copy,
@@ -196,20 +367,12 @@ impl TransferCore {
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort()),
         )?;
-        self.run_steps(
-            source,
-            destination,
-            queue,
-            Duration::ZERO,
-            &STEPS[FINISH_STEP_START..],
-        )
+        self.run_steps(io, Duration::ZERO, &STEPS[FINISH_STEP_START..])
     }
 
     fn run_steps(
         &mut self,
-        source: &mut SharedGttMemorySessionV1,
-        destination: &mut SharedGttMemorySessionV1,
-        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+        io: &mut impl TransferIo,
         timeout: Duration,
         steps: &[Step],
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -220,40 +383,20 @@ impl TransferCore {
         let destination_buffer = destination_buffer
             .as_mut()
             .unwrap_or_else(|| std::process::abort());
-        let route = queue.route();
         run_steps(&mut self.progress, steps, |step| {
             match step {
-                Step::SourceLocalUnmap => source.unmap_compute_xgmi_local_v1(source_buffer)?,
-                Step::DestinationLocalUnmap => {
-                    destination.unmap_compute_xgmi_local_v1(destination_buffer)?
-                }
-                Step::SourcePeerMap => source.transition_compute_xgmi_peer_v1(
-                    destination,
-                    route,
-                    source_buffer,
-                    true,
-                )?,
-                Step::DestinationPeerMap => destination.transition_compute_xgmi_peer_v1(
-                    source,
-                    route,
-                    destination_buffer,
-                    true,
-                )?,
-                Step::Submit => queue.submit_compute_xgmi_rooted_v1(
-                    source,
-                    destination,
+                Step::SourceLocalUnmap => io.local_unmap(0, source_buffer)?,
+                Step::DestinationLocalUnmap => io.local_unmap(1, destination_buffer)?,
+                Step::SourcePeerMap => io.peer_transition(0, source_buffer, true)?,
+                Step::DestinationPeerMap => io.peer_transition(1, destination_buffer, true)?,
+                Step::Submit => io.submit(
                     &mut source_buffer.peer,
                     &mut destination_buffer.peer,
                     self.bytes,
                     &mut self.copy,
                 )?,
                 Step::Wait => {
-                    queue.wait_compute_xgmi_rooted_v1(
-                        source,
-                        destination,
-                        timeout,
-                        &mut self.copy,
-                    )?;
+                    io.wait(timeout, &mut self.copy)?;
                     restore_completed_mappings(
                         &mut self.copy,
                         self.bytes,
@@ -261,22 +404,10 @@ impl TransferCore {
                         destination_buffer,
                     )?;
                 }
-                Step::SourcePeerUnmap => source.transition_compute_xgmi_peer_v1(
-                    destination,
-                    route,
-                    source_buffer,
-                    false,
-                )?,
-                Step::DestinationPeerUnmap => destination.transition_compute_xgmi_peer_v1(
-                    source,
-                    route,
-                    destination_buffer,
-                    false,
-                )?,
-                Step::SourceLocalMap => source.map_compute_xgmi_local_v1(source_buffer)?,
-                Step::DestinationLocalMap => {
-                    destination.map_compute_xgmi_local_v1(destination_buffer)?
-                }
+                Step::SourcePeerUnmap => io.peer_transition(0, source_buffer, false)?,
+                Step::DestinationPeerUnmap => io.peer_transition(1, destination_buffer, false)?,
+                Step::SourceLocalMap => io.local_map(0, source_buffer)?,
+                Step::DestinationLocalMap => io.local_map(1, destination_buffer)?,
             }
             Ok(())
         })

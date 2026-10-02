@@ -7211,6 +7211,7 @@ pub(crate) use tests::queue_construction::{
 mod tests {
     mod allocation;
     mod composed_backing;
+    pub(super) mod compute_xgmi_fixture;
     mod compute_xgmi_transition;
     mod device_backing;
     pub(super) mod device_initialization;
@@ -7282,6 +7283,7 @@ mod tests {
     }
 
     struct FakeBackend {
+        gpu_id: u32,
         opener_pid_override: Option<u32>,
         next_va: u64,
         next_handle: u64,
@@ -7335,6 +7337,7 @@ mod tests {
     impl FakeBackend {
         fn good() -> Self {
             Self {
+                gpu_id: 7,
                 opener_pid_override: None,
                 next_va: 0x2_0000,
                 next_handle: 1,
@@ -7461,7 +7464,7 @@ mod tests {
             self.opener_pid_override.unwrap_or_else(std::process::id)
         }
         fn gpu_id(&self) -> u32 {
-            7
+            self.gpu_id
         }
         fn gpuvm_aperture(&self) -> crate::InclusiveAperture {
             crate::InclusiveAperture::from_checked_parts_for_memory_tests(
@@ -7528,7 +7531,7 @@ mod tests {
             self.flags.push(flags.bits());
             let handle = self.next_handle;
             self.next_handle += 1;
-            let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(va, bytes, 7, flags);
+            let mut args = KfdIoctlAllocMemoryOfGpuArgs::new(va, bytes, self.gpu_id, flags);
             args.handle = handle;
             args.mmap_offset = 0x40_000 + handle * 4096;
             if self.corrupt_flags {
@@ -7589,11 +7592,11 @@ mod tests {
             let handle = self.next_handle;
             self.next_handle += 1;
             let mut args = if flags == KfdAllocMemoryFlags::USERPTR_EXECUTABLE {
-                KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, 7)
+                KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id)
             } else if flags == KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL {
-                KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, 7)
+                KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, self.gpu_id)
             } else {
-                KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, 7, flags)
+                KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, self.gpu_id, flags)
             };
             args.handle = handle;
             // KFD overwrites the input CPU pointer with an opaque BO offset.
@@ -7942,12 +7945,22 @@ mod tests {
     }
 
     fn model_correlation() -> model::ModelCorrelatedDeviceV1 {
+        model_correlation_for_gpu(7)
+    }
+
+    fn model_correlation_for_gpu(gpu_id: u32) -> model::ModelCorrelatedDeviceV1 {
         let domain_id = model_domain();
         let epoch = model::ObservationEpochV1(9);
+        let node = match gpu_id {
+            7 => 1,
+            1001 => 2,
+            1002 => 3,
+            _ => panic!("unknown fixture GPU"),
+        };
         let pci = model::PciAddressV1 {
             domain: 0,
             bus: 1,
-            device: 1,
+            device: node as u8,
             function: 0,
         };
         let profile =
@@ -7972,10 +7985,10 @@ mod tests {
             vec![model::UntrustedTopologyObservationV1 {
                 domain_id,
                 epoch,
-                topology_node_id: 1,
-                kfd_gpu_id: 7,
-                gpu_unique_id: 101,
-                drm_render_minor: model::DRM_RENDER_MIN_MINOR_V1 + 1,
+                topology_node_id: node,
+                kfd_gpu_id: gpu_id,
+                gpu_unique_id: 94 + u64::from(gpu_id),
+                drm_render_minor: model::DRM_RENDER_MIN_MINOR_V1 + node,
                 pci,
                 vendor_id: model::AMD_PCI_VENDOR_ID_V1,
                 device_id: model::MI300X_PCI_DEVICE_ID_V1,
@@ -7988,9 +8001,9 @@ mod tests {
                 epoch,
                 node: model::DeviceNodeV1 {
                     major: model::DRM_DEVICE_MAJOR_V1,
-                    minor: model::DRM_RENDER_MIN_MINOR_V1 + 1,
+                    minor: model::DRM_RENDER_MIN_MINOR_V1 + node,
                 },
-                gpu_unique_id: 101,
+                gpu_unique_id: 94 + u64::from(gpu_id),
                 pci,
                 vendor_id: model::AMD_PCI_VENDOR_ID_V1,
                 device_id: model::MI300X_PCI_DEVICE_ID_V1,
@@ -8026,9 +8039,21 @@ mod tests {
         ModelDeviceAdmissionV1,
         VmKeyV1,
     ) {
+        transferred_model_foundation_with_correlation(byte_len, model_correlation())
+    }
+
+    fn transferred_model_foundation_with_correlation(
+        byte_len: u64,
+        correlation: model::ModelCorrelatedDeviceV1,
+    ) -> (
+        model::DeviceIdentityStateV1,
+        MemoryLifecycleStateV1,
+        ModelDeviceAdmissionV1,
+        VmKeyV1,
+    ) {
         let domain_id = model_domain();
         let (identity, device) = model::DeviceIdentityStateV1::new(domain_id)
-            .register_device_model_only(model_correlation(), model::DeviceGenerationV1(1))
+            .register_device_model_only(correlation, model::DeviceGenerationV1(1))
             .unwrap();
         let correlated = device.correlation();
         let (identity, vm) = identity

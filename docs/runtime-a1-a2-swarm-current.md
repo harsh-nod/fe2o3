@@ -134,8 +134,9 @@ The no-default check passes with one feature-specific dead-code warning. The
 [persistent runtime CPU packet](evidence/dev-compute-xgmi-persistent-cpu-2026-10-02/README.md)
 retains the earlier rejected guard/formatting checks and the corrected outcomes.
 
-The current increment replaces that fixed GPU wait with retained native
-begin/sample/finish phases. Each sample reads the fence once; Pending preserves
+Checkpoint `a400b2c79`, pushed to both repositories, replaces that fixed GPU wait
+with retained native begin/sample/finish phases. Each sample reads the fence once;
+Pending preserves
 both original owners and does not increment cooperative progress. Both model
 foundations are restored before every return. Whole-child reservations exclude
 conflicting native work until queue retirement and both allocation restorations;
@@ -161,6 +162,36 @@ runs pass 39 compute-XGMI, eight single-sample, seven paired-restoration,
 broad KFD qualification remains incomplete. Strict combined Clippy and all
 32 source-control commands pass, with 76 executable proof files unchanged.
 The latest SSH receipt is still a DNS failure before remote execution.
+
+The next increment composes production persistent transfer, genuine model-pair
+loans, memory transitions and SDMA publication/polling in CPU tests. Seven test
+functions cover 85 loop cases, including independent physical extents, accounting,
+mapping and publication errors, panics, closing currentness and model retake.
+The private static transfer interface keeps concrete native wrappers and route
+eligibility unchanged. Injected completion establishes packet/custody behavior,
+not GPU payload movement or full concrete Linux/public-wrapper qualification.
+
+Six additional runtime tests exercise public expired/resumed drain, opposite
+directions, disjoint success/cancellation/uncertainty, retained owned-group
+shutdown and rejection of a consumer behind a pending ordinary native copy.
+The native witness now drives the copy through public drain and checks an
+expired deadline before progress. First hardware acceptance still uses explicit
+copy drain before consumers; queued-consumer admission is a separate follow-up
+because premature child allocation custody can deadlock its producer. The
+[lifecycle CPU packet](evidence/dev-multigpu-async-lifecycle-cpu-2026-10-02/README.md)
+records exact scope. The fresh SSH attempt at `2026-10-02T01:47:50Z` again fails
+DNS before remote execution; this attempt creates no scratch or workload and
+admits no pair.
+
+Final-source checks pass 23 runtime transfer tests, seven multi-group tests and
+both example tests. The full runtime records 1,952 passes, the same three
+socket-inspection permission failures and 32 ignores, not a full-suite pass.
+Eight overlapping KFD filters pass, including 47 compute-XGMI, 329 shared-memory
+and 114 SDMA tests; broad KFD acceptance remains open. Strict combined Clippy
+and the no-default runtime check pass; the native witness builds but has not
+run on GPUs. All 32 source-control commands pass after metadata-only source
+binding updates; all 76 executable proof files remain unchanged. This is not
+new formal qualification and does not close A3.
 
 ## Latest Qualification
 

@@ -47,6 +47,7 @@ pub(crate) enum PreparationNativeFaultV1 {
 
 pub(crate) struct PreparationMemoryFixtureV1 {
     pub(super) fixture: BackingConstructorFixture,
+    pub(super) sdma_access_fault: Option<(&'static str, bool)>,
     pub(super) disposed_controls: Vec<SharedGttAllocationIdentityV1>,
     pub(super) disposed_host_data: Vec<SharedGttAllocationIdentityV1>,
     pub(super) disposed_queue_resources: Vec<(SharedGttAllocationIdentityV1, SharedGttProfileV1)>,
@@ -154,6 +155,7 @@ impl PreparationMemoryFixtureV1 {
         }
         Self {
             fixture,
+            sdma_access_fault: None,
             disposed_controls: Vec::new(),
             disposed_host_data: Vec::new(),
             disposed_queue_resources: Vec::new(),

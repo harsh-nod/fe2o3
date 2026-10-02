@@ -90,7 +90,7 @@ impl ComputeXgmiCopyCustodyV1 {
         Ok(ready)
     }
 
-    fn retain_completion_then_check(
+    pub(super) fn retain_completion_then_check(
         &mut self,
         completed: Result<Gfx942XgmiCompletedCopyV1, Gfx942SdmaErrorV1>,
         closing_check: impl FnOnce() -> Result<(), Gfx942SdmaErrorV1>,

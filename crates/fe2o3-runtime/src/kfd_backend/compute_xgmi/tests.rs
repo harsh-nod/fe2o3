@@ -5,6 +5,8 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod lifecycle;
+
 const BYTES: usize = 64;
 const STAGES: [Stage; 6] = [
     Stage::Create,

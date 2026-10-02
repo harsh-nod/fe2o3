@@ -43,6 +43,7 @@ impl SdmaSingleMemoryV1 for PreparationMemoryFixtureV1 {
         offset: u64,
         bytes: &[u8],
     ) -> Result<(), MemorySessionError> {
+        self.sdma_access_fault_v1("reset")?;
         self.fixture
             .engine
             .overwrite_mapped_host_visible_subrange_in_current_scope(token, offset, bytes)
@@ -53,6 +54,7 @@ impl SdmaSingleMemoryV1 for PreparationMemoryFixtureV1 {
         slot: u32,
         packet: &[u8; 64],
     ) -> Result<(), MemorySessionError> {
+        self.sdma_access_fault_v1("ring")?;
         self.fixture
             .engine
             .write_sdma_slot_in_current_scope(&mut ring.token, slot, packet)
@@ -63,6 +65,7 @@ impl SdmaSingleMemoryV1 for PreparationMemoryFixtureV1 {
         expected: u64,
         new: u64,
     ) -> Result<(), MemorySessionError> {
+        self.sdma_access_fault_v1("control")?;
         self.fixture
             .engine
             .publish_sdma_write_release_in_current_scope(&mut control.token, expected, new)
@@ -72,14 +75,46 @@ impl SdmaSingleMemoryV1 for PreparationMemoryFixtureV1 {
         token: &mut MappedHostBufferV1,
         offset: u64,
     ) -> Result<i64, MemorySessionError> {
+        self.sdma_access_fault_v1("observe")?;
         let offset = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
         self.fixture
             .engine
             .observe_i64_acquire_in_current_scope(token, offset)
     }
+
+    fn single_doorbell(
+        &mut self,
+        doorbell: &mut crate::queue_linux::LinuxDoorbellSliceV1,
+        write: u64,
+    ) -> Result<(), crate::sdma::Gfx942SdmaErrorV1> {
+        self.sdma_access_fault_v1("doorbell")?;
+        doorbell
+            .store_packet_id_release(write)
+            .map_err(|_| crate::sdma::Gfx942SdmaErrorV1::Contract("SDMA doorbell operation failed"))
+    }
 }
 
 impl PreparationMemoryFixtureV1 {
+    fn sdma_access_fault_v1(&self, operation: &'static str) -> Result<(), MemorySessionError> {
+        if let Some((selected, panic)) = self.sdma_access_fault
+            && selected == operation
+        {
+            if panic {
+                std::panic::panic_any(("compute-XGMI SDMA access panic", operation));
+            }
+            return Err(MemorySessionError::Injected(operation));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn sdma_arm_access_fault_v1(&mut self, operation: &'static str, panic: bool) {
+        assert!(matches!(
+            operation,
+            "reset" | "ring" | "control" | "doorbell" | "observe"
+        ));
+        self.sdma_access_fault = Some((operation, panic));
+    }
+
     pub(crate) fn sdma_fail_operational_currentness_v1(&mut self, ordinal: usize, panic: bool) {
         let backend = &mut self.fixture.engine.backend;
         let selected = backend.operational_currentness_calls + ordinal;

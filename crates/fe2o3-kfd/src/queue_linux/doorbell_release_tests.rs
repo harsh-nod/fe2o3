@@ -50,6 +50,15 @@ pub(crate) fn cleanup_local_doorbell(doorbell: &mut LinuxDoorbellSliceV1) {
     }
 }
 
+pub(crate) fn local_doorbell_value(doorbell: &LinuxDoorbellSliceV1) -> u64 {
+    assert!(doorbell.active);
+    assert_eq!(doorbell.plan.encoded_slice_offset, 0);
+    assert_eq!(doorbell.plan.queue_byte_offset, 0);
+    // SAFETY: callers retain the independent anonymous test slice from local_doorbell;
+    // its page-aligned first eight bytes stay mapped throughout this observation.
+    u64::from_le(unsafe { core::ptr::read_volatile(doorbell.address.as_ptr().cast::<u64>()) })
+}
+
 pub(crate) fn release_local_doorbell(
     doorbell: &mut LinuxDoorbellSliceV1,
     progress: &mut LinuxDoorbellReleaseProgressV1,
