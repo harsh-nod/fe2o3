@@ -247,6 +247,7 @@ fn audit_inactive_sink(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stage_edge(
     function: usize,
     source: BlockId,

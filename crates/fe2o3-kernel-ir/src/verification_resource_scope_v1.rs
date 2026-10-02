@@ -10,7 +10,7 @@ impl CanonicalKernelIrVerificationResourceBudgetV1<'_> {
     pub const BOUNDED_SCRATCH_WORK_V1: usize = 8;
     /// Logical control-frame charge, included in the additional storage allowance.
     pub const BOUNDED_SCRATCH_STORAGE_V1: usize =
-        4 * size_of::<Self>() + 8 * size_of::<usize>() + 1024;
+        4 * size_of::<Self>() + size_of::<[usize; 8]>() + 1024;
 
     /// Runs a scratch-only query on the original work and storage account.
     ///
