@@ -1226,6 +1226,18 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::prepare_with_compiler(function, slots, parts, accesses, layouts, None, budget)
+    }
+
+    fn prepare_with_compiler(
+        function: &'kir Function,
+        slots: &[ScopedSourceSlotV29],
+        parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
+        accesses: &[SourceAddressAccessV29],
+        layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
+        compiler: Option<&scoped_raw_admission_v29::CheckedCompilerEnumMemoryV55<'_>>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut scratch = 0;
         let index =
             call_splice_index_with_deferred_parts_v29(function, parts, budget, &mut scratch)
@@ -1239,7 +1251,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                 _ => source_raw_physical_error_v29(),
             },
         )?;
-        Self::prepare_indexed(function, slots, accesses, index, layouts, budget)
+        Self::prepare_indexed(function, slots, accesses, index, layouts, compiler, budget)
     }
 
     // Final lifecycle operations are already part of this verified inventory.
@@ -1249,6 +1261,17 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         coordinate: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
         slots: &[ScopedSourceSlotV29],
         accesses: &[SourceAddressAccessV29],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::prepare_inventory_with_compiler(inventory, coordinate, slots, accesses, None, budget)
+    }
+
+    fn prepare_inventory_with_compiler(
+        inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'kir>,
+        coordinate: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+        slots: &[ScopedSourceSlotV29],
+        accesses: &[SourceAddressAccessV29],
+        compiler: Option<&scoped_raw_admission_v29::CheckedCompilerEnumMemoryV55<'_>>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         budget.charge_work(3)?;
@@ -1303,6 +1326,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
             accesses,
             index,
             &inventory.owner().module().storage_layouts,
+            compiler,
             budget,
         )
     }
@@ -1313,8 +1337,12 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         accesses: &[SourceAddressAccessV29],
         index: CallSpliceIndexV1<'kir>,
         layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
+        compiler: Option<&scoped_raw_admission_v29::CheckedCompilerEnumMemoryV55<'_>>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if compiler.is_some_and(|checked| !checked.belongs_to(function)) {
+            return Err(scoped_compiler_enum_error_v55());
+        }
         budget.reserve_storage(source_tag_geometry_headers_v43()?)?;
         let body = function
             .body
@@ -1493,6 +1521,18 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                     let [result] = operation.results.as_slice() else {
                         return Err(source_raw_physical_error_v29());
                     };
+                    if let Some(compiler) = compiler
+                        && compiler.contains_allocation(result.id, budget)?
+                    {
+                        // Only the closed compiler-only use census establishes
+                        // disjointness. These are never original source seeds.
+                        let node = graph.value(result.id, budget)?;
+                        if graph.origins[node] != SourceAddressOriginV29::Unknown {
+                            return Err(scoped_compiler_enum_error_v55());
+                        }
+                        graph.origins[node] = SourceAddressOriginV29::Exact(None);
+                        continue;
+                    }
                     if allocations.len() == slots.len() {
                         return Err(source_raw_physical_error_v29());
                     }

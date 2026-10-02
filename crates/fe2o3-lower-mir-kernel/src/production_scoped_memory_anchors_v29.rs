@@ -538,6 +538,8 @@ struct ScopedMemoryAnchorV29 {
     kind: ScopedMemoryAnchorKindV29,
 }
 
+include!("production_scoped_compiler_enum_roles_v55.rs");
+
 struct ScopedMemoryAnchorsV29 {
     subject: ScopedInitializationSubjectV29,
     placement: SemanticEmissionPlacementV1,
@@ -545,6 +547,7 @@ struct ScopedMemoryAnchorsV29 {
     objects: Vec<ScopedObjectPayloadV29>,
     object_components: Vec<ScopedObjectComponentV29>,
     zero_objects: Vec<ScopedZeroObjectV29>,
+    compiler_enum: Vec<ScopedCompilerEnumAccessV55>,
 }
 
 impl ScopedMemoryAnchorsV29 {
@@ -565,6 +568,10 @@ impl ScopedMemoryAnchorsV29 {
             argument_product_v1(
                 self.zero_objects.capacity(),
                 std::mem::size_of::<ScopedZeroObjectV29>(),
+            )?,
+            argument_product_v1(
+                self.compiler_enum.capacity(),
+                std::mem::size_of::<ScopedCompilerEnumAccessV55>(),
             )?,
         ])?)
     }
@@ -592,6 +599,7 @@ impl ScopedMemoryRecorderV29 {
                 objects: Vec::new(),
                 object_components: Vec::new(),
                 zero_objects: Vec::new(),
+                compiler_enum: Vec::new(),
             },
             block: None,
             frame: None,

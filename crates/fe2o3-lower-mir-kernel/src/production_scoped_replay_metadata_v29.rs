@@ -251,6 +251,7 @@ fn memory(
         objects,
         object_components,
         zero_objects,
+        compiler_enum,
     } = a;
     ledger(subject.ledger, b.subject.ledger, budget)?;
     Ok(
@@ -258,6 +259,7 @@ fn memory(
             && fixed_rows(rows, &b.rows, budget)?
             && fixed_rows(objects, &b.objects, budget)?
             && fixed_rows(zero_objects, &b.zero_objects, budget)?
+            && fixed_rows(compiler_enum, &b.compiler_enum, budget)?
             && fixed_rows(object_components, &b.object_components, budget)?,
     )
 }
@@ -657,8 +659,12 @@ pub(super) fn matches_roots(
             budget,
         )? && fixed_rows(&active_instances.rows, &b.active_instances.rows, budget)?
             && coordinates(coords, &b.coordinates, budget)?
-            && optional(rvalue_results.as_ref(), b.rvalue_results.as_ref(), budget,
-                |a, b, budget| a.matches_replay_v30(b, budget))?
+            && optional(
+                rvalue_results.as_ref(),
+                b.rvalue_results.as_ref(),
+                budget,
+                |a, b, budget| a.matches_replay_v30(b, budget),
+            )?
             && source_slots(slots, &b.source_slots, budget)?
             && optional(
                 slot_relocation.as_ref(),

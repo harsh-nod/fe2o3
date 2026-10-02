@@ -1951,6 +1951,15 @@ fn source_address_accesses_v29(
                     }
                 }
                 None => {
+                    if scoped_raw_admission_v29::source_address_compiler_enum_access_v55(
+                        instances,
+                        source_index,
+                        instance,
+                        anchor,
+                        budget,
+                    )? {
+                        continue;
+                    }
                     return Err(source_reference_error_v29(
                         "raw-root access lacks its exact source payload role",
                     ));

@@ -366,6 +366,7 @@ fn inspect_memory_transport(
             objects: anchors.objects.clone(),
             object_components: anchors.object_components.clone(),
             zero_objects: anchors.zero_objects.clone(),
+            compiler_enum: anchors.compiler_enum.clone(),
         };
         let rows = &mut changed.rows;
         let mut changed_row = *row;
