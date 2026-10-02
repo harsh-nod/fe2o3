@@ -95,6 +95,29 @@ struct NativeValueMeter<'a, 'w> {
     budget: &'a mut ArgumentBudgetV1<'w>,
     allowance: Option<&'a mut TranslationAllowanceV1>,
     failed: bool,
+    resource_error: Option<ArgumentResourceV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NativeTranslationErrorV1 {
+    Resource(ArgumentResourceV1),
+    Translation(ProductionMirPlironTranslationErrorV1),
+}
+
+impl NativeTranslationErrorV1 {
+    pub(super) fn into_translation(self) -> ProductionMirPlironTranslationErrorV1 {
+        match self {
+            Self::Resource(_) => ProductionMirPlironTranslationErrorV1::ResourceLimit,
+            Self::Translation(error) => error,
+        }
+    }
+
+    pub(super) fn into_semantic(self) -> ProductionSemanticKirErrorV1 {
+        match self {
+            Self::Resource(error) => error.into(),
+            Self::Translation(error) => ProductionSemanticKirErrorV1::MirPlironTranslation(error),
+        }
+    }
 }
 
 impl NativeHelperMeter for NativeValueMeter<'_, '_> {
@@ -151,7 +174,26 @@ impl NativeHelperMeter for NativeValueMeter<'_, '_> {
         match result {
             Ok(()) => Ok(true),
             Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(resource)) => {
-                self.resource(Err(resource))
+                // The scoped cap may be the phase allowance, not the parent ledger.
+                // Ties retain the same local-first policy as work() and reserve().
+                let local = self.allowance.is_some()
+                    && match resource {
+                        ArgumentResourceV1::Work(error) => {
+                            start.checked_add(work) == Some(error.limit())
+                        }
+                        ArgumentResourceV1::Storage(error) => {
+                            floor.checked_add(storage) == Some(error.limit())
+                        }
+                        _ => false,
+                    };
+                if local {
+                    self.allowance
+                        .as_deref_mut()
+                        .expect("checked local allowance")
+                        .refuse()
+                } else {
+                    self.resource(Err(resource))
+                }
             }
             Err(_) => Ok(false),
         }
@@ -160,7 +202,8 @@ impl NativeHelperMeter for NativeValueMeter<'_, '_> {
 
 impl NativeValueMeter<'_, '_> {
     fn resource<T>(&mut self, result: Result<T, ArgumentResourceV1>) -> Result<T, &'static str> {
-        result.map_err(|_| {
+        result.map_err(|error| {
+            self.resource_error.get_or_insert(error);
             self.failed = true;
             if let Some(allowance) = &mut self.allowance {
                 allowance.failed = true;
@@ -234,6 +277,7 @@ pub(super) fn with_no_helpers_for_test_v1<R>(
         budget,
         allowance: None,
         failed: false,
+        resource_error: None,
     };
     let mut expansion = NativeValueExpansion {
         helpers: None,
@@ -436,84 +480,119 @@ pub(super) fn with_native_value_expansion_and_allowance_v1(
         ProductionMirPlironTranslationErrorV1,
     >,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    with_native_value_expansion_and_allowance_resources_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel,
+        budget,
+        allowance,
+        action,
+    )
+    .map_err(NativeTranslationErrorV1::into_translation)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn with_native_value_expansion_and_allowance_resources_v1(
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel: &str,
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut TranslationAllowanceV1>,
+    action: impl FnOnce(
+        &mut NativeValueExpansion<'_, '_>,
+    ) -> Result<
+        ProductionMirPlironTranslationValidationV1,
+        ProductionMirPlironTranslationErrorV1,
+    >,
+) -> Result<ProductionMirPlironTranslationValidationV1, NativeTranslationErrorV1> {
     let mut meter = NativeValueMeter {
         budget,
         allowance,
         failed: false,
+        resource_error: None,
     };
-    let Some(semantic) = semantic else {
-        return run(None, &mut meter, action);
-    };
-    let work = module
-        .kernels
-        .len()
-        .checked_add(module.functions.len())
-        .and_then(|n| n.checked_add(correspondence.lowered_functions.len()))
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    meter
-        .work(work)
-        .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let entry = module
-        .kernels
-        .iter()
-        .find(|candidate| candidate.id.as_str() == kernel)
-        .and_then(|kernel| {
-            module
-                .functions
-                .iter()
-                .find(|function| function.id == kernel.entry)
-        })
-        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
-    let root = correspondence
-        .lowered_functions
-        .iter()
-        .find(|row| {
-            row.role == SemanticKirFunctionRoleV1::KernelEntry && row.kernel_ir_function == entry.id
-        })
-        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
-        .correspondence_owner;
-    let mut needed = false;
-    for block in entry
-        .body
-        .as_ref()
-        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
-        .blocks
-        .iter()
-    {
-        for operation in &block.operations {
-            meter
-                .work(1)
-                .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-            if matches!(operation.kind, OperationKind::Call { .. }) {
-                needed = true;
+    let result = (|| {
+        let Some(semantic) = semantic else {
+            return run(None, &mut meter, action);
+        };
+        let work = module
+            .kernels
+            .len()
+            .checked_add(module.functions.len())
+            .and_then(|n| n.checked_add(correspondence.lowered_functions.len()))
+            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        meter
+            .work(work)
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        let entry = module
+            .kernels
+            .iter()
+            .find(|candidate| candidate.id.as_str() == kernel)
+            .and_then(|kernel| {
+                module
+                    .functions
+                    .iter()
+                    .find(|function| function.id == kernel.entry)
+            })
+            .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+        let root = correspondence
+            .lowered_functions
+            .iter()
+            .find(|row| {
+                row.role == SemanticKirFunctionRoleV1::KernelEntry
+                    && row.kernel_ir_function == entry.id
+            })
+            .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
+            .correspondence_owner;
+        let mut needed = false;
+        for block in entry
+            .body
+            .as_ref()
+            .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
+            .blocks
+            .iter()
+        {
+            for operation in &block.operations {
+                meter
+                    .work(1)
+                    .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+                if matches!(operation.kind, OperationKind::Call { .. }) {
+                    needed = true;
+                    break;
+                }
+            }
+            if needed {
                 break;
             }
         }
-        if needed {
-            break;
+        if !needed {
+            return run(None, &mut meter, action);
         }
+        let mut result = None;
+        let checked = with_native_helper_values(
+            semantic,
+            module,
+            correspondence,
+            root,
+            entry,
+            &mut meter,
+            |context, meter| {
+                result = Some(run(Some(context), meter, action));
+                Ok(())
+            },
+        );
+        if meter.exhausted() {
+            return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
+        }
+        checked.map_err(|_| ProductionMirPlironTranslationErrorV1::KernelShape)?;
+        result.ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
+    })();
+    match meter.resource_error {
+        Some(error) => Err(NativeTranslationErrorV1::Resource(error)),
+        None => result.map_err(NativeTranslationErrorV1::Translation),
     }
-    if !needed {
-        return run(None, &mut meter, action);
-    }
-    let mut result = None;
-    let checked = with_native_helper_values(
-        semantic,
-        module,
-        correspondence,
-        root,
-        entry,
-        &mut meter,
-        |context, meter| {
-            result = Some(run(Some(context), meter, action));
-            Ok(())
-        },
-    );
-    if meter.exhausted() {
-        return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
-    }
-    checked.map_err(|_| ProductionMirPlironTranslationErrorV1::KernelShape)?;
-    result.ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
 }
 
 #[cfg(test)]
@@ -523,3 +602,11 @@ mod node_cap_tests;
 #[cfg(test)]
 #[path = "native_helper_translation_allowance_v1_tests.rs"]
 mod allowance_tests;
+
+#[cfg(test)]
+#[path = "native_helper_checked_allowance_v1_tests.rs"]
+mod checked_allowance_tests;
+
+#[cfg(test)]
+#[path = "native_helper_resource_error_v1_tests.rs"]
+mod resource_error_tests;

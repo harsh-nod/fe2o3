@@ -93,7 +93,38 @@ fn validate_mir_pliron_recipe_translation_with_allowance_v1(
     budget: &mut ArgumentBudgetV1<'_>,
     allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
-    native_helper_value_expansion_v1::with_native_value_expansion_and_allowance_v1(
+    validate_mir_pliron_recipe_translation_with_allowance_resources_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel_id,
+        recipe,
+        sources,
+        executable_effect_sources,
+        max_operations,
+        budget,
+        allowance,
+    )
+    .map_err(native_helper_value_expansion_v1::NativeTranslationErrorV1::into_translation)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_mir_pliron_recipe_translation_with_allowance_resources_v1(
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel_id: &str,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+    max_operations: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
+) -> Result<
+    ProductionMirPlironTranslationValidationV1,
+    native_helper_value_expansion_v1::NativeTranslationErrorV1,
+> {
+    native_helper_value_expansion_v1::with_native_value_expansion_and_allowance_resources_v1(
         semantic,
         module,
         correspondence,
@@ -130,6 +161,36 @@ fn validate_mir_pliron_translation_with_allowance_v1(
     allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
     validate_mir_pliron_recipe_translation_with_allowance_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel_id,
+        lowering.kernel(),
+        sources,
+        executable_effect_sources,
+        max_operations,
+        budget,
+        allowance,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_mir_pliron_translation_with_allowance_resources_v1(
+    semantic: Option<&ProductionSemanticSsaOwnerV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel_id: &str,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+    max_operations: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
+) -> Result<
+    ProductionMirPlironTranslationValidationV1,
+    native_helper_value_expansion_v1::NativeTranslationErrorV1,
+> {
+    validate_mir_pliron_recipe_translation_with_allowance_resources_v1(
         semantic,
         module,
         correspondence,

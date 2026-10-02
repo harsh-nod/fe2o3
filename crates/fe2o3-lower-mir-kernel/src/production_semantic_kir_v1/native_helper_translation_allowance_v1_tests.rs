@@ -14,6 +14,7 @@ fn local_work_exact_then_one_short_refuses_before_original_charge() {
         budget: &mut budget,
         allowance: Some(&mut allowance),
         failed: false,
+        resource_error: None,
     };
     meter.work(7).unwrap();
     assert!(meter.work(1).is_err());
@@ -34,6 +35,7 @@ fn local_storage_exact_then_one_short_refuses_before_original_reservation() {
         budget: &mut budget,
         allowance: Some(&mut allowance),
         failed: false,
+        resource_error: None,
     };
     meter.reserve(11).unwrap();
     assert!(meter.reserve(1).is_err());
@@ -57,6 +59,7 @@ fn allowance_is_shared_across_meter_views_not_refreshed_per_root() {
             budget: &mut budget,
             allowance: Some(&mut allowance),
             failed: false,
+            resource_error: None,
         };
         meter.work(3).unwrap();
         meter.reserve(11).unwrap();
@@ -67,6 +70,7 @@ fn allowance_is_shared_across_meter_views_not_refreshed_per_root() {
             budget: &mut budget,
             allowance: Some(&mut allowance),
             failed: false,
+            resource_error: None,
         };
         meter.work(4).unwrap();
         assert!(meter.work(1).is_err());
@@ -90,6 +94,7 @@ fn original_work_and_storage_limits_remain_stricter_when_smaller() {
             budget: &mut budget,
             allowance: Some(&mut allowance),
             failed: false,
+            resource_error: None,
         };
         let result = if storage_case {
             meter.reserve(11)
@@ -118,6 +123,7 @@ fn foreign_original_account_and_floor_release_are_rejected_before_effect() {
             budget: &mut second,
             allowance: Some(&mut allowance),
             failed: false,
+            resource_error: None,
         };
         assert!(meter.work(1).is_err());
         assert_eq!(meter.budget.work(), 0);
@@ -127,6 +133,7 @@ fn foreign_original_account_and_floor_release_are_rejected_before_effect() {
         budget: &mut first,
         allowance: Some(&mut allowance),
         failed: false,
+        resource_error: None,
     };
     assert!(meter.release(1).is_err());
     assert_eq!(meter.budget.storage(), 31);
@@ -143,6 +150,7 @@ fn local_arithmetic_overflow_refuses_without_forwarding() {
             budget: &mut budget,
             allowance: Some(&mut allowance),
             failed: false,
+            resource_error: None,
         };
         meter.work(usize::MAX).unwrap(); // synthetic charge, no work is executed
         assert!(meter.work(1).is_err());
@@ -154,6 +162,7 @@ fn local_arithmetic_overflow_refuses_without_forwarding() {
         budget: &mut budget,
         allowance: Some(&mut allowance),
         failed: false,
+        resource_error: None,
     };
     meter.reserve(usize::MAX).unwrap(); // synthetic reservation, no allocation
     assert!(meter.reserve(1).is_err());
@@ -170,6 +179,7 @@ fn none_keeps_the_existing_caller_budget_behavior() {
         budget: &mut budget,
         allowance: None,
         failed: false,
+        resource_error: None,
     };
     meter.work(8).unwrap();
     meter.reserve(12).unwrap();

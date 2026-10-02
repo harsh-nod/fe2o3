@@ -2319,7 +2319,7 @@ impl ProductionSemanticKirOwnerV1 {
             {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
-            let revalidated = validate_mir_pliron_translation_with_allowance_v1(
+            let revalidated = validate_mir_pliron_translation_with_allowance_resources_v1(
                 Some(&self.semantic_ssa),
                 &self.module,
                 &self.correspondence,
@@ -2331,7 +2331,7 @@ impl ProductionSemanticKirOwnerV1 {
                 budget,
                 allowance.as_deref_mut(),
             )
-            .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+            .map_err(native_helper_value_expansion_v1::NativeTranslationErrorV1::into_semantic)?;
             if revalidated != generic_checks.translation_validation {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
