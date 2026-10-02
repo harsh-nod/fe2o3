@@ -1,6 +1,6 @@
 //! Immutable workspace target projection for the authority-free check wrapper.
 
-use rustix::fs::{FileType, MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, fstat};
+use rustix::fs::{FileType, MemfdFlags, SealFlags, fcntl_get_seals, fstat};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -178,11 +178,10 @@ impl SealedProjection {
                 .map_err(|error| format!("failed to create binding projection memfd: {error}"))?;
         file.write_all(&bytes)
             .map_err(|error| format!("failed to write binding projection: {error}"))?;
-        fcntl_add_seals(
+        fe2o3_process_identity::seal_immutable_memfd_v1(
             &file,
-            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
         )
-        .and_then(|()| fcntl_add_seals(&file, SealFlags::SEAL))
         .map_err(|error| format!("failed to seal binding projection: {error}"))?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind binding projection: {error}"))?;
@@ -194,9 +193,14 @@ impl SealedProjection {
         {
             return Err("binding projection does not have exact immutable seals".to_owned());
         }
+        let length = u64::try_from(stat.st_size)
+            .map_err(|_| "sealed binding projection has a negative size".to_owned())?;
+        if length != bytes.len() as u64 || read_projection_at_zero(&file, bytes.len())? != bytes {
+            return Err("sealed binding projection content changed".to_owned());
+        }
         Ok(Self {
             file,
-            identity: (stat.st_dev, stat.st_ino, stat.st_size as u64),
+            identity: (stat.st_dev, stat.st_ino, length),
         })
     }
 
@@ -576,6 +580,24 @@ mod tests {
             b"/workspace/managed/src/lib.rs\0ignored".to_vec(),
         ));
         assert!(nul.validate_and_encode().is_err());
+    }
+
+    #[test]
+    fn sealed_projection_preserves_exact_contents_and_refuses_mutation() {
+        let projection = fixture();
+        let bytes = projection.validate_and_encode().unwrap();
+        let mut sealed = SealedProjection::new(&projection).unwrap();
+        assert_eq!(sealed.identity.2, bytes.len() as u64);
+        assert_eq!(sealed.file.stream_position().unwrap(), 0);
+        assert_eq!(fcntl_get_seals(&sealed.file).unwrap(), REQUIRED_SEALS);
+        assert_eq!(
+            read_projection_at_zero(&sealed.file, bytes.len()).unwrap(),
+            bytes
+        );
+        assert!(sealed.file.write_at(b"x", 0).is_err());
+        assert!(sealed.file.set_len(0).is_err());
+        assert!(sealed.file.set_len(bytes.len() as u64 + 1).is_err());
+        assert_eq!(sealed.file.stream_position().unwrap(), 0);
     }
 
     #[test]

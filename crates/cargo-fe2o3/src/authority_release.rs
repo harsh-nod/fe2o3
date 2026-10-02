@@ -18,7 +18,7 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -1294,17 +1294,34 @@ fn write_and_seal_contract(file: &File, bytes: &[u8]) -> Result<(), String> {
         .write_all(bytes)
         .and_then(|()| writer.flush())
         .map_err(|error| format!("cannot write release contract: {error}"))?;
-    rustix::fs::fcntl_add_seals(
+    drop(writer);
+    fe2o3_process_identity::seal_immutable_memfd_v1(
         file,
-        rustix::fs::SealFlags::WRITE | rustix::fs::SealFlags::GROW | rustix::fs::SealFlags::SHRINK,
+        fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
     )
-    .and_then(|()| rustix::fs::fcntl_add_seals(file, rustix::fs::SealFlags::SEAL))
     .map_err(|error| format!("cannot seal release contract: {error}"))?;
     if rustix::fs::fcntl_get_seals(file)
         .map_err(|error| format!("cannot inspect release contract seals: {error}"))?
         != REQUIRED_SEALS
     {
         return Err("release contract has unexpected seals".to_owned());
+    }
+    if file
+        .metadata()
+        .map_err(|error| format!("cannot inspect sealed release contract: {error}"))?
+        .len()
+        != bytes.len() as u64
+    {
+        return Err("sealed release contract content changed".to_owned());
+    }
+    let mut buffer = [0_u8; 16 * 1024];
+    for (index, expected) in bytes.chunks(buffer.len()).enumerate() {
+        let observed = &mut buffer[..expected.len()];
+        file.read_exact_at(observed, (index * (16 * 1024)) as u64)
+            .map_err(|error| format!("cannot verify sealed release contract: {error}"))?;
+        if observed != expected {
+            return Err("sealed release contract content changed".to_owned());
+        }
     }
     Ok(())
 }
@@ -1826,6 +1843,7 @@ fn exit_code(status: ExitStatus) -> u8 {
 mod tests {
     use super::*;
     include!("authority_release_v4_tests.rs");
+    include!("authority_release_sealed_memfd_tests.rs");
 
     fn object(seed: u64, mode: u32) -> ObjectIdentity {
         ObjectIdentity {
