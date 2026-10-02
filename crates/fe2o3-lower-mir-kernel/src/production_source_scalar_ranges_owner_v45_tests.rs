@@ -481,7 +481,7 @@ fn retained_scalar_range_moves_reject_failure_and_success_reads_after_consumptio
     // can be constructed. Do not mistake that refusal for a byte-census test.
     for (case, expected_block, expected_statement) in [
         (RangeCaseV45::FailureMoveThenRead, 2, None),
-        (RangeCaseV45::ReadMoved, 4, Some(0)),
+        (RangeCaseV45::ReadMoved, 5, Some(0)),
     ] {
         let Err(error) = try_scalar_range_owner_v45(case) else {
             panic!("{case:?}: consumed original scalar range was admitted");
