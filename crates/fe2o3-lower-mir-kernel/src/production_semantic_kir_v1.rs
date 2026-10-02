@@ -14110,12 +14110,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             }
         }
         let mut fields = Vec::with_capacity(variant_definition.fields().fields().len());
-        for (field_type, restoration) in variant_definition
+        for (field, (field_type, restoration)) in variant_definition
             .fields()
             .fields()
             .iter()
             .copied()
             .zip(restorations)
+            .enumerate()
         {
             match restoration {
                 SemanticEnumPayloadRestoreV1::UniqueSource(source) => fields.push(source),
@@ -14129,7 +14130,8 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         ));
                     }
                     let mut values = Vec::with_capacity(storage.components.len());
-                    for component in storage.components.iter() {
+                    for (component_index, component) in storage.components.iter().enumerate() {
+                        let position = target.operations.len();
                         let value = self
                             .emit(
                                 &mut target.operations,
@@ -14144,6 +14146,17 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                             )?
                             .value()
                             .expect("enum payload component load returns one value");
+                        self.record_scoped_enum_spill_load_v55(
+                            block,
+                            SemanticLocalIdV1::from_index(local),
+                            variant,
+                            u32::try_from(field).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                            u32::try_from(component_index)
+                                .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                            position,
+                            component.pointer,
+                            value.0,
+                        )?;
                         values.push(ValueDef::new(value.0, value.1));
                     }
                     fields.push(match storage.exact_enum_variant {
@@ -21425,8 +21438,10 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         "enum payload changed its private-storage component types",
                     ));
                 }
-                for ((value, actual), component) in
-                    values.into_iter().zip(storage.components.iter())
+                for (component_index, ((value, actual), component)) in values
+                    .into_iter()
+                    .zip(storage.components.iter())
+                    .enumerate()
                 {
                     let value = self.coerce_transport_value_v1(
                         operations,
@@ -21438,6 +21453,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         None,
                         "enum payload changed its private-storage component types",
                     )?;
+                    let position = operations.len();
                     self.push_operation(operations, || {
                         Operation::new(
                             vec![],
@@ -21451,6 +21467,18 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                             },
                         )
                     })?;
+                    self.record_scoped_enum_spill_store_v55(
+                        execution_site_v29(block, statement),
+                        local,
+                        variant,
+                        u32::try_from(field).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        u32::try_from(component_index)
+                            .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        position,
+                        component.pointer,
+                        value,
+                        None,
+                    )?;
                 }
             }
         }

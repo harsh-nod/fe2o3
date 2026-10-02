@@ -979,11 +979,15 @@ fn check_optimized_source_memory_equations_v18(
         &mut SourceCorrespondenceWorkV18(budget),
         || ArgumentResourceV1::Arithmetic.into(),
     )?;
-    let prepared = SourceAddressMemoryV29::prepare_inventory(
+    let compiler_enum = optimized_compiler_enum_memory_v55(original, optimized, budget)?;
+    let checked_compiler = check_compiler_enum_closed_memory_v55(function, &compiler_enum, budget)
+        .map_err(immutable_memory_error_v29)?;
+    let prepared = SourceAddressMemoryV29::prepare_inventory_with_compiler(
         output,
         function_coordinate,
         &slots,
         &accesses,
+        Some(&checked_compiler),
         budget,
     )
     .map_err(immutable_memory_error_v29)?;

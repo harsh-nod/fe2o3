@@ -1,4 +1,5 @@
 include!("production_scoped_enum_spill_census_v55_tests.rs");
+include!("production_compiler_enum_roles_v55_tests.rs");
 
 fn transported_enum_owner_v50() -> ProductionSemanticSsaOwnerV1 {
     let previous = promoted_enum_owner_v47();

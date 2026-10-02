@@ -238,6 +238,7 @@ fn assemble_pending_scoped_root_body_v29(
 pub(super) struct PendingSourceMemoryV29 {
     source: ExecutionCallSourceV29,
     issued: PendingSourceIssuedRolesV29,
+    compiler_enum: PendingCompilerEnumMemoryV55,
     accesses: Vec<PendingSourceMemoryAccessV29>,
     projects: Vec<PendingSourceObjectProjectV29>,
     alternatives: Vec<PendingSourceMemoryAlternativeV29>,
@@ -256,6 +257,7 @@ pub(super) struct PendingSourceMemoryV29 {
 }
 
 include!("production_source_object_activation_roster_v40.rs");
+include!("production_compiler_enum_memory_v55.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceMemoryActivationV29 {
@@ -340,6 +342,9 @@ pub(super) fn pending_memory_matches_v29(
         return Ok(false);
     }
     if !pending_issued_roles_match_v29(&left.issued, &right.issued, budget)? {
+        return Ok(false);
+    }
+    if !compiler_enum_memory_equal_v55(&left.compiler_enum, &right.compiler_enum, budget)? {
         return Ok(false);
     }
     // Fixed-width source keys and physical locators only. The entire source
@@ -1226,13 +1231,26 @@ fn check_immutable_source_memory_v29(
     // These are the actual final operations, not an erased or reconstructed
     // shadow graph. All memory/operand/edge/return uses are checked again.
     let slots = &owner.source_slots.slots;
-    let prepared = SourceAddressMemoryV29::prepare_inventory(
+    let compiler_enum =
+        immutable_compiler_enum_memory_v55(correspondence, root, &pending.compiler_enum, budget)?;
+    let function = correspondence
+        .inventory
+        .functions()
+        .get(owner.function_ordinal)
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "compiler memory function",
+        ))?
+        .function;
+    let checked_compiler = check_compiler_enum_closed_memory_v55(function, &compiler_enum, budget)
+        .map_err(immutable_memory_error_v29)?;
+    let prepared = SourceAddressMemoryV29::prepare_inventory_with_compiler(
         correspondence.inventory,
         fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
             u32::try_from(owner.function_ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?,
         ),
         slots,
         &accesses,
+        Some(&checked_compiler),
         budget,
     )
     .map_err(immutable_memory_error_v29)?;
@@ -2127,6 +2145,9 @@ fn check_expanded_source_memory_inner_v29(
         return Err(source_raw_physical_error_v29());
     }
     let source_index = SourceAddressSourceIndexV29::new(instances, pending, budget)?;
+    let compiler_enum = pending_compiler_enum_memory_v55(instances, &source_index, budget)?;
+    let checked_compiler =
+        check_compiler_enum_closed_memory_v55(&pending.function, &compiler_enum, budget)?;
     // Validate every object payload even when no physical value access is
     // retained. Diagnostic reads are joined to their own history stream below.
     for sidecar in &pending.sidecars.rows {
@@ -2194,16 +2215,25 @@ fn check_expanded_source_memory_inner_v29(
             .ok_or_else(source_raw_physical_error_v29)?
             .source_layouts(instances, budget)?;
         let rows = layouts.rows(instances.owner(), budget)?;
-        SourceAddressMemoryV29::prepare_with_layouts(
+        SourceAddressMemoryV29::prepare_with_compiler(
             &pending.function,
             &slots.slots,
             parts,
             &accesses,
             &rows,
+            Some(&checked_compiler),
             budget,
         )?
     } else {
-        SourceAddressMemoryV29::prepare(&pending.function, &slots.slots, parts, &accesses, budget)?
+        SourceAddressMemoryV29::prepare_with_compiler(
+            &pending.function,
+            &slots.slots,
+            parts,
+            &accesses,
+            &[],
+            Some(&checked_compiler),
+            budget,
+        )?
     };
     let boundaries =
         source_address_boundaries_v29(instances, &source_index, slots, &graph, budget)?;
@@ -2343,6 +2373,7 @@ fn check_expanded_source_memory_inner_v29(
         instances,
         references.plan,
         issued,
+        compiler_enum,
         &sources,
         &boundaries,
         slots,
@@ -2372,6 +2403,7 @@ fn retain_pending_memory_v29(
     instances: &ExecutionInstancesV29<'_>,
     plan: &SourceReferencePlanV29<'_, '_>,
     issued: PendingSourceIssuedRolesV29,
+    compiler_enum: PendingCompilerEnumMemoryV55,
     sources: &[SourceAddressAccessSourceV29],
     boundaries: &[SourceAddressBoundaryV29],
     slots: &OwnedScopedSourceSlotsV29,
@@ -2502,6 +2534,7 @@ fn retain_pending_memory_v29(
     let mut output = PendingSourceMemoryV29 {
         source: ExecutionCallSourceV29::from_instances(instances, budget)?,
         issued,
+        compiler_enum,
         accesses: emission_vec_v1(sources.len(), budget)?,
         projects,
         alternatives: emission_vec_v1(alternative_capacity, budget)?,
@@ -2806,6 +2839,7 @@ fn retain_pending_memory_v29(
         output.alternatives.len(),
     ));
     output.retained_storage = argument_sum_v1(&[
+        output.compiler_enum.retained_storage()?,
         argument_product_v1(
             output.object_lifetimes.capacity(),
             std::mem::size_of::<PendingSourceObjectLifetimeV40>(),
