@@ -212,7 +212,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 )];
 // Pin the complete reviewed crate, including fixture sources and lockfiles.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "8571bfcc59beeb4f8d665059fd755883063984f849c8bf220e5082fa241a82a1";
+    "4fc3ed319775e16101a6266f3a572e3120ad77b57eb80495a49df5b84d6fe5a2";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =

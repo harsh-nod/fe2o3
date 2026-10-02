@@ -4,7 +4,8 @@ use gpu_device::{
 
 #[kernel(
     typed,
-    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d",
+    launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn renamed_typed(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let _ = (a, b, &mut c);
@@ -38,6 +39,14 @@ pub fn renamed_result(
     let _ = input.first().ok_or(KernelError::OutOfBounds)?;
     let _ = output;
     Ok(())
+}
+
+#[kernel(
+    typed,
+    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn renamed_aggregate(value: (u32, u32)) {
+    let _ = value;
 }
 
 fn assert_expectation<T: gpu_host::__generated::CompilerGeneratedKernelExpectationV1>() {}
