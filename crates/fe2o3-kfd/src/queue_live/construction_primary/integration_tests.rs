@@ -831,6 +831,53 @@ fn assert_partition_with_markers<P>(
 }
 
 #[test]
+fn constructed_cold_primary_owners_admit_initial_compute_xgmi_facts_without_dispatch() {
+    use crate::queue::live::compute_xgmi::{
+        ComputeXgmiColdEndpointFactsV1, compute_xgmi_cold_endpoint_is_quiescent_v1,
+    };
+
+    let (memory, trace) = setup_memory();
+    let root = Root::<()>::new_with(memory, ());
+    let address = &*root as *const Root<()> as usize;
+    let (root, result) = run_with(root, QueueRingBackingV1::AqlSpecial, None, |_| Ok(()));
+    assert!(result.is_ok());
+    assert_common(&root, address, &trace);
+    let complete = root.completed.as_ref().unwrap();
+    assert!(complete.dispatch.is_none());
+    assert!(complete.submission.is_pristine_v1());
+    complete.completion_owner.ensure_releasable().unwrap();
+    complete.dependency_owner.ensure_idle().unwrap();
+    complete
+        .engine
+        .backend
+        .session
+        .primary_authenticate(&complete.engine.foundation)
+        .unwrap();
+    // The constructor's real owners enter the empty ledgers installed by into_session.
+    let facts = ComputeXgmiColdEndpointFactsV1 {
+        completion_releasable: complete.completion_owner.ensure_releasable().is_ok(),
+        submission_pristine: complete.submission.is_pristine_v1(),
+        dispatch_attached: complete.dispatch.is_some(),
+        unpublished_clear: UnpublishedDispatchStateV1::default().is_clear(),
+        detached_data_count: 0,
+        detached_generation_present: false,
+        detached_identity_count: 0,
+        detached_insertion_present: false,
+        next_persistent_generation: 1,
+    };
+    assert!(compute_xgmi_cold_endpoint_is_quiescent_v1(facts));
+    assert!(!auxiliary_compute_lane_quiescence_from_facts_v1(
+        facts.completion_releasable,
+        None,
+        0,
+        None,
+        0,
+        None,
+    ));
+    assert!(!trace.borrow().poison);
+}
+
+#[test]
 fn same_session_primary_success_uses_actual_preparation_resources_foundation_and_create() {
     for backing in [
         QueueRingBackingV1::AqlSpecial,

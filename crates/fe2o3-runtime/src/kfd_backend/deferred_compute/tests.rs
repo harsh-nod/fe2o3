@@ -1,5 +1,7 @@
 use super::*;
 
+mod completed_results;
+
 struct Fixture {
     backend: KfdMultiDeviceRuntimeBackendV1,
     consumer: u64,
@@ -107,6 +109,7 @@ impl Fixture {
             route: None,
             status: BackendPollV1::Pending,
             quiescent: None,
+            completed: None,
             launch: Some(RetainedComputeLaunchV1::copy_from(launch, None).unwrap()),
             collected: Some(collected),
             kernel: (kernel, backend.kernels[&kernel]),

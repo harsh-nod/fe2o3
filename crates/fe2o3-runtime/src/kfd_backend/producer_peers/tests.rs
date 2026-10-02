@@ -168,6 +168,129 @@ fn peer_launch_retain_overflow_rejects_before_acquisition() {
 }
 
 #[test]
+fn completed_result_retains_reject_duplicate_overlap_and_overflow_before_acquisition() {
+    for (ancestors, results) in [(vec![40], vec![40]), (vec![], vec![40, 40])] {
+        let mut retains = PeerLaunchRetainsV1::default();
+        assert!(matches!(retains.prepare_with_results(&ancestors, &results),
+            Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
+        assert!(retains.is_empty());
+    }
+    let mut retains = PeerLaunchRetainsV1::default();
+    retains.producers.insert(40, usize::MAX);
+    assert!(matches!(retains.prepare_with_results(&[39], &[40]),
+        Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity));
+    assert!(retains.consumers.is_empty());
+    assert_eq!(retains.producers, HashMap::from([(40, usize::MAX)]));
+}
+
+#[test]
+fn completed_result_custody_rolls_back_only_definite_child_admission_failures() {
+    for mode in 0..4 {
+        let mut backend = backend();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.with_peer_launch_ancestry_and_results_v1(
+                41,
+                stream,
+                None,
+                vec![40],
+                |backend| {
+                    let entry = &backend.peer_launch_retains.consumers[&41];
+                    assert!(entry.producers.is_empty());
+                    assert_eq!(entry.completed_results, [40]);
+                    assert!(backend.peer_launch_retains.ancestries.is_empty());
+                    assert_eq!(backend.peer_launch_retains.streams[&stream], [41]);
+                    let error = KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::Native,
+                        "completed result child boundary",
+                    );
+                    match mode {
+                        0 => Err(RuntimeBackendFailureV1::Rejected(error)),
+                        1 => Err(RuntimeBackendFailureV1::Quiescent(error)),
+                        2 => Err(RuntimeBackendFailureV1::Terminal(error)),
+                        _ => std::panic::panic_any(0xfeed_u32),
+                    }
+                },
+            )
+        }));
+        if mode == 3 {
+            assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 0xfeed);
+        } else {
+            assert!(result.unwrap().is_err());
+        }
+        assert_eq!(backend.terminal, mode >= 2);
+        assert_eq!(backend.peer_launch_retains.retains(40), mode >= 2);
+        // Only constructed metadata was retained at this boundary.
+        backend.terminal = false;
+        assert!(backend.peer_launch_retains.release(41));
+        assert!(backend.peer_launch_retains.release(41));
+        assert!(backend.peer_launch_retains.is_empty());
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+}
+
+#[test]
+fn completed_results_do_not_change_mixed_peer_ancestry_identity() {
+    let mut backend = backend();
+    let stream = backend.create_stream_v1(8).unwrap();
+    let source = backend
+        .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+        .unwrap();
+    let destination = backend
+        .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 8, 8)
+        .unwrap();
+    let region = |allocation, access| BackendMemoryRegionV1 {
+        allocation,
+        access,
+        byte_offset: 0,
+        byte_len: 8,
+    };
+    let peer = backend
+        .peer_copy_v1(
+            stream,
+            region(source, RuntimeAccessV1::Read),
+            region(destination, RuntimeAccessV1::Write),
+            &[],
+        )
+        .unwrap();
+    backend.flush_stream_v1(stream).unwrap();
+    let consumer = backend.next_id().unwrap();
+    let local = backend.children[1].next_handle;
+    let ancestry = backend
+        .capture_peer_launch_ancestry_v1(consumer, stream, &[peer])
+        .unwrap();
+    let completed = u64::MAX;
+    backend
+        .with_peer_launch_ancestry_and_results_v1(
+            consumer,
+            stream,
+            Some(ancestry),
+            vec![completed],
+            |_| Ok(local),
+        )
+        .unwrap();
+    let entry = &backend.peer_launch_retains.consumers[&consumer];
+    assert_eq!(entry.producers, [peer]);
+    assert_eq!(entry.completed_results, [completed]);
+    assert_eq!(
+        backend.peer_launch_retains.ancestries[&consumer]
+            .producers()
+            .collect::<Vec<_>>(),
+        [peer]
+    );
+    assert_eq!(backend.peer_launch_retains.producers[&peer], 1);
+    assert_eq!(backend.peer_launch_retains.producers[&completed], 1);
+    assert!(backend.peer_launch_retains.release(consumer));
+    assert!(backend.peer_launch_retains.is_empty());
+    backend.release_submission_v1(peer).unwrap();
+    backend.release_allocation_v1(source).unwrap();
+    backend.release_allocation_v1(destination).unwrap();
+    backend.destroy_stream_v1(stream).unwrap();
+    backend.shutdown_native_v1().unwrap();
+}
+
+#[test]
 fn flush_retires_only_the_matching_conclusive_native_consumers() {
     let mut backend = backend();
     let stream = backend.create_stream_v1(7).unwrap();

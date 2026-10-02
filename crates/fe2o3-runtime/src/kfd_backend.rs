@@ -89,6 +89,7 @@ mod allocation_request;
 mod allocation_table;
 mod multi_admission;
 mod multi_allocation;
+mod multi_open;
 #[cfg(feature = "hardware-qualification")]
 mod multi_qualification;
 use allocation_table::AllocationTableV1;
@@ -7050,7 +7051,7 @@ impl CooperativeCopySubmissionV1 {
 /// different children can execute independently. Live same-device copies use
 /// the selected child's native SDMA path. Peer copies use a bounded,
 /// explicitly flush-driven state machine; poll and deadline wait only observe
-/// stored state. The peer-visible qualification constructor enables bounded
+/// stored state. The native-peer opt-in constructors enable bounded
 /// native XGMI transfers of complete persistent allocations; other copies use
 /// host staging. Mixed native/cooperative work is rejected
 /// while either domain remains live on one logical stream.
@@ -7870,109 +7871,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     pub fn open_default(
         devices: Vec<(u64, Box<dyn KfdRuntimeLaunchAuthorityV1>)>,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        let mut gated = Vec::new();
-        gated.try_reserve_exact(devices.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device authority roster allocation failed",
-            )
-        })?;
-        gated.extend(
-            devices
-                .into_iter()
-                .map(|(device, authority)| (device, KfdRuntimeLaunchGateV1::Production(authority))),
-        );
-        Self::open_default_with_gates_v1(gated)
+        Self::open_with_authorities_v1(devices, KfdRuntimeLaunchGateV1::Production, false)
     }
 
     /// Admits multiple devices with exact semantic launch authorities.
     pub fn open_default_with_semantic_authorities_v1(
         devices: Vec<(u64, Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>)>,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        let mut gated = Vec::new();
-        gated.try_reserve_exact(devices.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device semantic-authority roster allocation failed",
-            )
-        })?;
-        gated.extend(
-            devices
-                .into_iter()
-                .map(|(device, authority)| (device, KfdRuntimeLaunchGateV1::Semantic(authority))),
-        );
-        Self::open_default_with_gates_v1(gated)
+        Self::open_with_authorities_v1(devices, KfdRuntimeLaunchGateV1::Semantic, false)
     }
 
     fn open_default_with_gates_v1(
         devices: Vec<(u64, KfdRuntimeLaunchGateV1)>,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        if devices.len() < 2 {
-            return Err(KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "multi-device KFD requires at least two devices",
-            ));
-        }
-        let mut checked = Vec::new();
-        checked.try_reserve_exact(devices.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device checked-device roster allocation failed",
-            )
-        })?;
-        let mut seen = HashSet::new();
-        seen.try_reserve(devices.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device identity-set allocation failed",
-            )
-        })?;
-        for (unique_id, gate) in devices {
-            if unique_id == 0 || !seen.insert(unique_id) {
-                return Err(KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                    "multi-device unique IDs must be nonzero and distinct",
-                ));
-            }
-            let opened = OpenedKfd::open_default().map_err(|error| {
-                KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Native,
-                    error.to_string(),
-                )
-            })?;
-            let admitted = opened.admit_uapi().map_err(|error| {
-                KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Native,
-                    error.to_string(),
-                )
-            })?;
-            let device = admitted
-                .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))
-                .map_err(|error| {
-                    KfdRuntimeBackendErrorV1::new(
-                        KfdRuntimeBackendErrorKindV1::Native,
-                        error.to_string(),
-                    )
-                })?;
-            checked.push((device, gate));
-        }
-        let mut children = Vec::new();
-        children.try_reserve_exact(checked.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device child roster allocation failed",
-            )
-        })?;
-        for (device, gate) in checked {
-            children.push(KfdRuntimeBackendV1::from_checked_device_with_gate(
-                device, gate,
-            ));
-        }
-        Self::from_backends(children)
+        Self::open_default_with_gate_policy_v1(devices, false)
     }
 
     // Composition stays private so a caller cannot hide already-live child
     // handles behind newly empty routing tables.
+    #[cfg(test)]
     fn from_backends(children: Vec<KfdRuntimeBackendV1>) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let device_children = multi_admission::reserve_device_index_v1(children.len())?;
         Self::from_backends_with_index_v1(children, device_children)
@@ -8277,32 +8194,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })?;
         let (event_route, event_submission) = match event {
             RoutedEventV1::Native { route, submission } => (route, submission),
-            RoutedEventV1::DeferredCompute {
-                submission,
-                child: event_child,
-            } => {
-                if submission != dependency.producer_submission {
-                    return Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "deferred event does not name the exact producer",
-                    ));
-                }
-                let root = self.deferred_compute_v1(submission).ok_or_else(|| {
-                    KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "deferred event lost its exact producer",
-                    )
-                })?;
-                if event_child != child || root.child != child {
-                    return Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::WrongDevice,
-                        "deferred producer belongs to another device",
-                    ));
-                }
-                return Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "exact producer-aware launch does not admit deferred compute events",
-                ));
+            RoutedEventV1::DeferredCompute { .. } => {
+                self.completed_deferred_dependency_depth_v1(dependency, child)?;
+                return Ok(None);
             }
             RoutedEventV1::CooperativeCopy {
                 submission,
@@ -12579,6 +12473,23 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         peer_producers.try_reserve_exact(peer_count).map_err(|_| {
             KfdRuntimeBackendV1::capacity("peer launch dependency translation failed")
         })?;
+        let mut completed_results = Vec::new();
+        let completed_count = request
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                matches!(
+                    self.events.get(&dependency.event),
+                    Some(RoutedEventV1::DeferredCompute { .. })
+                )
+            })
+            .count();
+        completed_results
+            .try_reserve_exact(completed_count)
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("completed launch result roster allocation failed")
+            })?;
+        let mut completed_depth = 1;
         for (index, dependency) in request.dependencies.iter().enumerate() {
             if request.dependencies[..index]
                 .iter()
@@ -12598,7 +12509,12 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 {
                     peer_producers.push(dependency.producer_submission)
                 }
-                None => {}
+                None => {
+                    completed_depth = completed_depth.max(
+                        self.completed_deferred_dependency_depth_v1(*dependency, stream.child)?,
+                    );
+                    completed_results.push(dependency.producer_submission);
+                }
             }
         }
         let child_launch = BackendLaunchV1 {
@@ -12615,6 +12531,8 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             ComputeDependencyRosterV1::Exact(&dependencies),
         );
         let mut collected = self.latch(child_preflight)?;
+        collected.minimum_dependency_depth =
+            collected.minimum_dependency_depth.max(completed_depth);
         let inherited = self.inherited_peer_launch_roots_v1(stream, &collected)?;
         self.reserve_native_stream_submission_v1(request.stream)?;
         Self::reserve_route(
@@ -12639,7 +12557,8 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         if let Some(ancestry) = &ancestry {
             let child_id = self.children[stream.child].next_handle;
-            collected.minimum_dependency_depth = ancestry.depth();
+            collected.minimum_dependency_depth =
+                collected.minimum_dependency_depth.max(ancestry.depth());
             collected.peer_access = self.prepare_peer_compute_access_v1(
                 RoutedHandleV1 {
                     child: stream.child,
@@ -12665,9 +12584,20 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "kernel binding is retained by an unrelated cooperative copy",
             ));
         }
-        let local = self.with_peer_launch_ancestry_v1(id, ancestry, |backend| {
+        let submit = |backend: &mut Self| {
             backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
-        })?;
+        };
+        let local = if completed_results.is_empty() {
+            self.with_peer_launch_ancestry_v1(id, ancestry, submit)
+        } else {
+            self.with_peer_launch_ancestry_and_results_v1(
+                id,
+                request.stream,
+                ancestry,
+                completed_results,
+                submit,
+            )
+        }?;
         self.submissions.insert(
             id,
             RoutedSubmissionV1::Native {

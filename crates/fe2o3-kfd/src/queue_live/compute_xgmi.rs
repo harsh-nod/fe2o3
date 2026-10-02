@@ -5,6 +5,27 @@ use super::*;
 use crate::sdma::{Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1};
 use crate::topology::Gfx942XgmiRouteV1;
 
+include!("compute_xgmi_cold_body.rs");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ComputeXgmiColdEndpointFactsV1 {
+    pub(super) completion_releasable: bool,
+    pub(super) submission_pristine: bool,
+    pub(super) dispatch_attached: bool,
+    pub(super) unpublished_clear: bool,
+    pub(super) detached_data_count: usize,
+    pub(super) detached_generation_present: bool,
+    pub(super) detached_identity_count: usize,
+    pub(super) detached_insertion_present: bool,
+    pub(super) next_persistent_generation: u64,
+}
+
+pub(super) const fn compute_xgmi_cold_endpoint_is_quiescent_v1(
+    facts: ComputeXgmiColdEndpointFactsV1,
+) -> bool {
+    compute_xgmi_cold_endpoint_body_v1!(facts)
+}
+
 #[path = "compute_xgmi/persistent.rs"]
 mod persistent;
 
@@ -224,6 +245,36 @@ fn session_error(failure: Failure<ComputeAqlQueueSessionErrorV1>) -> ComputeAqlQ
 }
 
 impl ComputeAqlQueueSessionV1 {
+    fn primary_lane_is_quiescent_for_compute_xgmi_v1(&self) -> bool {
+        let completion_releasable = self.completion_owner.ensure_releasable().is_ok();
+        let established = auxiliary_compute_lane_quiescence_from_facts_v1(
+            completion_releasable,
+            self.dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.ensure_releasable().is_ok()),
+            self.detached_data_count,
+            self.detached_dispatch_generation,
+            self.detached_data_identities.len(),
+            self.detached_next_insertion_index,
+        );
+        let cold = self.key == self.compute_lane_session
+            && compute_xgmi_cold_endpoint_is_quiescent_v1(ComputeXgmiColdEndpointFactsV1 {
+                completion_releasable,
+                submission_pristine: self
+                    .submission
+                    .as_ref()
+                    .is_some_and(NativeAqlSubmissionOwnerV1::is_pristine_v1),
+                dispatch_attached: self.dispatch.is_some(),
+                unpublished_clear: self.unpublished_dispatch.is_clear(),
+                detached_data_count: self.detached_data_count,
+                detached_generation_present: self.detached_dispatch_generation.is_some(),
+                detached_identity_count: self.detached_data_identities.len(),
+                detached_insertion_present: self.detached_next_insertion_index.is_some(),
+                next_persistent_generation: self.next_persistent_compute_generation,
+            });
+        established || cold
+    }
+
     pub(super) fn require_no_xgmi_attachment_v1(
         &self,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -255,16 +306,7 @@ impl ComputeAqlQueueSessionV1 {
             || self.sdma_pool_trim.is_some()
             || self.auxiliary_release.is_some()
             || !auxiliary_compute_lanes_are_quiescent_v1(&self.auxiliary_compute_lanes)
-            || !auxiliary_compute_lane_quiescence_from_facts_v1(
-                self.completion_owner.ensure_releasable().is_ok(),
-                self.dispatch
-                    .as_ref()
-                    .map(|dispatch| dispatch.ensure_releasable().is_ok()),
-                self.detached_data_count,
-                self.detached_dispatch_generation,
-                self.detached_data_identities.len(),
-                self.detached_next_insertion_index,
-            )
+            || !self.primary_lane_is_quiescent_for_compute_xgmi_v1()
         {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "compute-XGMI endpoint must be active and quiescent",
@@ -451,6 +493,102 @@ mod tests {
             route: crate::topology::tests::admitted_xgmi_routes()[0],
             native_queue_id: 99,
         }
+    }
+
+    #[test]
+    fn compute_xgmi_cold_facts_reject_every_partial_or_noninitial_state() {
+        let initial = ComputeXgmiColdEndpointFactsV1 {
+            completion_releasable: true,
+            submission_pristine: true,
+            dispatch_attached: false,
+            unpublished_clear: true,
+            detached_data_count: 0,
+            detached_generation_present: false,
+            detached_identity_count: 0,
+            detached_insertion_present: false,
+            next_persistent_generation: 1,
+        };
+        for bits in 0..64 {
+            for detached_data_count in [0, 1, usize::MAX] {
+                for detached_identity_count in [0, 1, usize::MAX] {
+                    for next_persistent_generation in [0, 1, 2, u64::MAX] {
+                        let facts = ComputeXgmiColdEndpointFactsV1 {
+                            completion_releasable: bits & 1 != 0,
+                            submission_pristine: bits & 2 != 0,
+                            dispatch_attached: bits & 4 != 0,
+                            unpublished_clear: bits & 8 != 0,
+                            detached_data_count,
+                            detached_generation_present: bits & 16 != 0,
+                            detached_identity_count,
+                            detached_insertion_present: bits & 32 != 0,
+                            next_persistent_generation,
+                        };
+                        assert_eq!(
+                            compute_xgmi_cold_endpoint_is_quiescent_v1(facts),
+                            facts == initial,
+                            "{facts:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(!auxiliary_compute_lane_quiescence_from_facts_v1(
+            true, None, 0, None, 0, None
+        ));
+    }
+
+    #[test]
+    fn compute_xgmi_cold_primary_requires_submission_history_and_complete_empty_ledger() {
+        let mut session =
+            persistent_compute_cancellation_test_session(test_queue_key(11, 1), None, None);
+        session.next_persistent_compute_generation = 1;
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.submission = Some(NativeAqlSubmissionOwnerV1::new(4096).unwrap());
+        assert!(session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.compute_lane_session = test_queue_key(12, 1);
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.compute_lane_session = session.key;
+        session.detached_data_count = 1;
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.detached_data_count = 0;
+        session.detached_next_insertion_index = Some(0);
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.detached_next_insertion_index = None;
+        session.next_persistent_compute_generation = 2;
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.next_persistent_compute_generation = 1;
+        let (_, retained) = session
+            .completion_owner
+            .bind_barrier_probe()
+            .unwrap()
+            .into_parts();
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session
+            .completion_owner
+            .cancel_bound_barrier_probe(retained)
+            .unwrap();
+        assert!(session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.submission.as_mut().unwrap().poison();
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+    }
+
+    #[test]
+    fn compute_xgmi_cold_primary_does_not_replace_missing_detach_provenance_after_publication() {
+        let mut session =
+            persistent_compute_cancellation_test_session(test_queue_key(11, 1), None, None);
+        session.next_persistent_compute_generation = 1;
+        for (write, read) in [(1, 0), (1, 1), (64, 64), (u64::MAX, u64::MAX)] {
+            session.submission =
+                Some(NativeAqlSubmissionOwnerV1::from_counters(4096, write, read).unwrap());
+            assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        }
+        session.detached_dispatch_generation = Some(1);
+        session.detached_next_insertion_index = Some(0);
+        assert!(session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.detached_dispatch_generation = Some(0);
+        assert!(session.primary_lane_is_quiescent_for_compute_xgmi_v1());
+        session.detached_next_insertion_index = None;
+        assert!(!session.primary_lane_is_quiescent_for_compute_xgmi_v1());
     }
 
     #[test]

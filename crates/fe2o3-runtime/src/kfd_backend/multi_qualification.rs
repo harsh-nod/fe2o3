@@ -101,8 +101,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     /// This opt-in selects genuine KFD PUBLIC allocations before any child
     /// queue or allocation exists. Private and PUBLIC cached buffers remain
     /// separate; HostVisible storage and the existing launch policies are
-    /// unchanged. Equal complete persistent allocations within one native copy
-    /// packet use XGMI after dependency resolution and endpoint quiescence.
+    /// unchanged. Eligible initialized, equal complete persistent allocations
+    /// use the bounded native packet plan after dependency resolution and
+    /// endpoint quiescence.
     /// Other copies retain the ordinary bounded host-staging path.
     /// Flush/drain publish a retained native ticket, sample its completion once
     /// per progress step, and retire the queue before restoring both owners.
@@ -113,12 +114,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     pub fn open_gfx942_r57_n3_peer_qualification_v2(
         unique_ids: &[u64],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        let mut backend = Self::open_gfx942_r57_n3_qualification_v2(unique_ids)?;
-        backend.admit_compute_xgmi_routes_v1()?;
-        for child in &mut backend.children {
-            child.peer_visible_device_allocations = true;
-        }
-        Ok(backend)
+        let gates = admit_qualification_devices_v1(unique_ids, admit_r57_n3_v2)?;
+        Self::open_default_with_gate_policy_v1(gates, true)
     }
 }
 

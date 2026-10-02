@@ -20,6 +20,34 @@ pub(super) enum Route {
     },
 }
 
+pub(super) fn admit_native_route_v1(
+    source: &KfdRuntimeBackendV1,
+    destination: &KfdRuntimeBackendV1,
+) -> Result<Route, KfdRuntimeBackendErrorV1> {
+    let unopened = || {
+        KfdRuntimeBackendErrorV1::new(
+            KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+            "compute-XGMI admission requires unopened compute sessions",
+        )
+    };
+    let source = source.admitted_device.as_ref().ok_or_else(unopened)?;
+    let destination = destination.admitted_device.as_ref().ok_or_else(unopened)?;
+    source
+        .topology_snapshot()
+        .topology()
+        .admit_gfx942_xgmi_route(
+            source.observation().kfd_gpu_id(),
+            destination.observation().kfd_gpu_id(),
+        )
+        .map(Route::Native)
+        .map_err(|error| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                format!("compute-XGMI route admission: {error}"),
+            )
+        })
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Stage {
@@ -423,61 +451,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     /// Native compute-owned peer copies whose queue and both buffers were retired
     /// or restored before successful completion. This is an observation, not authority.
-    #[cfg(feature = "hardware-qualification")]
     pub fn completed_compute_xgmi_copies_v1(&self) -> u64 {
         self.completed_compute_xgmi_copies
-    }
-
-    #[cfg(feature = "hardware-qualification")]
-    pub(super) fn admit_compute_xgmi_routes_v1(&mut self) -> Result<(), KfdRuntimeBackendErrorV1> {
-        let mut routes = HashMap::new();
-        routes
-            .try_reserve(
-                self.children
-                    .len()
-                    .saturating_mul(self.children.len().saturating_sub(1)),
-            )
-            .map_err(|_| {
-                KfdRuntimeBackendErrorV1::new(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "compute-XGMI route roster allocation failed",
-                )
-            })?;
-        for (source_index, source) in self.children.iter().enumerate() {
-            for (destination_index, destination) in self.children.iter().enumerate() {
-                if source_index == destination_index {
-                    continue;
-                }
-                let source = source.admitted_device.as_ref().ok_or_else(|| {
-                    KfdRuntimeBackendErrorV1::new(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "compute-XGMI admission requires unopened compute sessions",
-                    )
-                })?;
-                let destination = destination.admitted_device.as_ref().ok_or_else(|| {
-                    KfdRuntimeBackendErrorV1::new(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "compute-XGMI admission requires unopened compute sessions",
-                    )
-                })?;
-                let route = source
-                    .topology_snapshot()
-                    .topology()
-                    .admit_gfx942_xgmi_route(
-                        source.observation().kfd_gpu_id(),
-                        destination.observation().kfd_gpu_id(),
-                    )
-                    .map_err(|error| {
-                        KfdRuntimeBackendErrorV1::new(
-                            KfdRuntimeBackendErrorKindV1::Unsupported,
-                            format!("compute-XGMI route admission: {error}"),
-                        )
-                    })?;
-                routes.insert((source_index, destination_index), Route::Native(route));
-            }
-        }
-        self.compute_xgmi_routes = routes;
-        Ok(())
     }
 
     pub(super) fn prepare_compute_xgmi_v1(

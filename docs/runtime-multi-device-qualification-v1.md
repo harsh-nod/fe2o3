@@ -154,13 +154,58 @@ This constructor does not by itself enable native peer routing or PUBLIC storage
 The separate opt-in
 `KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_peer_qualification_v2`
 selects genuine PUBLIC DeviceLocal allocations before lazy child queue or
-allocation creation. Ordinary constructors retain private allocations, and
+allocation creation. Existing non-opt-in constructors retain private allocations, and
 HostVisible behavior is unchanged. Pooled checkout matches exact allocation
 flags as well as kind, extent and alignment; private and PUBLIC leases cannot
 be substituted or relabeled. Both classes use the existing shared accounting
 and capacity classification. This constructor also admits directional XGMI routes
 from the checked devices before their compute sessions consume those admissions.
-Ordinary constructors do not enable this route.
+Non-opt-in constructors do not enable this route.
+
+The production-authority equivalents are available without hardware-qualification
+features:
+
+- `KfdMultiDeviceRuntimeBackendV1::open_default_with_native_peer_copy_v1`
+- `KfdMultiDeviceRuntimeBackendV1::open_default_with_semantic_authorities_and_native_peer_copy_v1`
+
+Both validate the complete bounded, distinct, nonzero UID roster before native
+opens, admit every device before constructing children, and require every
+ordered XGMI route before enabling PUBLIC DeviceLocal storage. An unsupported
+route fails construction; no partially enabled backend escapes. Caller launch
+authorities and semantic profiles are retained unchanged. Peer visibility grants
+no additional kernel authority. Composed/accounted-profile constructors have no
+new opt-in in this increment. Existing private defaults, PUBLIC/private pool
+separation, HostVisible behavior and ineligible-copy staged fallback remain.
+`completed_compute_xgmi_copies_v1` is now a default-feature read-only observation.
+
+The copy-only public-API witness deliberately denies all kernel launches and
+advertises no atomic or collective profiles. It performs two changed-content
+8,388,581-byte copies using the same four allocations, checks every source and
+destination byte, and explicitly closes logical and native resources:
+
+```sh
+cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
+  --no-default-features --example gfx942-runtime-peer-copy-smoke \
+  -- 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
+```
+
+Leading `--semantic-authority` selects the semantic constructor;
+`--staged-default` selects the corresponding unchanged private/staged constructor.
+These flags combine. Native runs require two logical native completions;
+staged runs require zero. This witness does not qualify compute authorization.
+
+Cold copy-only sessions need no warm-up dispatch. Their primary AQL owner must
+be Ready with zero write/read history, releasable completion, no dispatch,
+clear unpublished state, empty detached ownership ledgers and initial persistent
+generation. The endpoint admits this initial state in addition to its existing
+quiescence rule; the shared auxiliary and detached-dispatch rules are unchanged.
+Previously this initial state incorrectly failed peer queue creation.
+
+The shared cold-predicate body has a bounded Verus proof of its exact Boolean
+conditions and preservation of previously accepted states. Two positive contracts,
+nine one-condition negative mutations and six controller controls pass. The
+native fact observers are source-bound, not formally refined: this is not proof
+of Linux currentness, ownership restoration, DMA or the complete runtime adapter.
 
 ## Persistent Native Route
 
@@ -220,7 +265,7 @@ No uncertain native prefix falls back to host staging.
 Drain checks its deadline between phases and before starting new progress.
 Native mapping, topology/currentness, creation and retirement calls remain
 synchronous: this is not a hard syscall deadline or general same-VM compute/copy
-concurrency guarantee. The qualification-only completion counter increases only
+concurrency guarantee. The native completion counter increases only
 after an actual native transfer, queue retirement and both restorations succeed;
 scripted CPU execution does not increase it.
 
@@ -290,13 +335,38 @@ The flag can be combined with `--queued-consumer`; the large copies themselves
 have no kernel consumer. This additional hardware mode passes in both directions
 between the selected GPUs; combined queued-consumer/packetized mode also passes
 in the original direction. These results do not qualify a general large-buffer
-kernel consumer or actual 65-packet ring reuse.
+kernel consumer. They also do not cover the separate ring-reuse extension below.
 
 ```sh
 cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
   --features hardware-qualification --example gfx942-runtime-compute-xgmi-smoke \
   -- --packetized-copy 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
 ```
+
+The leading `--ring-reuse` extension performs two 268,433,409-byte copies
+through a single 64-slot physical queue per logical copy. Each plan contains
+65 packets with a one-byte tail; the allocation cap stays at 256 MiB. Four
+auxiliary allocations are reused, and every source byte changes on the second
+round. Initial source/sentinel and final unchanged-source/copied-destination
+checks cover every byte, using at most one packet-sized readback scratch buffer.
+The logical native completion count advances exactly once per completed copy.
+The reported packet count is source-bound plan evidence, not raw ring telemetry;
+queues are not cached between logical copies. No large compute authority is added.
+
+```sh
+cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
+  --features hardware-qualification --example gfx942-runtime-compute-xgmi-smoke \
+  -- --queued-consumer --ring-reuse 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
+```
+
+`--ring-reuse`, `--queued-consumer` and `--packetized-copy` may be combined.
+
+The [production-peer packet](evidence/dev-multigpu-production-peers-2026-10-02/README.md)
+qualifies all seven native/staged and ring combinations selected by its controller
+on MI300X GPUs 6/7. The large upload explicitly continues across two directional
+windows (63+2 packets), while each ring-reuse peer copy retains one native queue across all
+65 packets. Rejected cold-start and upload-helper attempts remain in the packet;
+only the final immutable source and complete seven-case run are accepted.
 
 At the preceding synchronous checkpoint `d2ff52f63`, CPU testing passes 12
 scripted runtime route tests, two example tests, and the focused KFD
@@ -346,11 +416,10 @@ the process roster return to baseline, and the two uploaded files plus the owned
 scratch directory are removed. These are correctness observations on a shared
 host, not performance or exclusive-reservation evidence.
 
-Actual ring reuse at 65 packets, additional pairs, complete native fault coverage,
-and peer mappings retained across separate logical copies remain open. General
-authority constructors still use private/staged-only children; an explicit peer
-opt-in must preserve their existing kernel authority and private defaults. The
-current route does not qualify a general native runtime pipeline.
+The public-authority opt-in and 65-packet witness are implemented as described
+above. Additional pairs, all-admitted-device workload sharding, complete native
+fault coverage, and peer mappings retained across separate logical copies remain
+open. The current route does not qualify a general native runtime pipeline.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed
@@ -362,13 +431,25 @@ does not release the retained producer. This metadata-only admission is not
 permission for concurrent native work within an occupied child.
 
 There is at most one deferred head per stream. Ordinary `launch` still rejects
-pending-copy inputs, and deferred-compute events are not supported as exact
-downstream producer-aware inputs. Failure of a never-dispatched consumer does
+pending-copy inputs. Exact **completed** deferred-compute events are now valid
+producer-aware inputs: a private immutable completion receipt must match the
+original child route, global/local stream, dependency depth and successful,
+quiescent child record. The original stream may already be destroyed. Independent
+global result custody is acquired before child entry and is separate from directed
+ancestry. Public event release does not release it; conclusive settlement or
+cancellation does, while terminal/uncertain outcomes retain it. Checked dependency
+depth still includes the child preflight minimum and the existing maximum.
+Pending deferred-compute chains remain unsupported.
+
+Typed CPU tests begin at an already-admitted child handoff, then exercise normal
+Context event/result lifetimes through scripted completion. The Write-to-Read
+case checks journal bookkeeping and cancellation before readback; it does not
+fabricate or qualify GPU-produced bytes. Failure of a never-dispatched consumer does
 not invent an observation of its parent's logical result. The changed ordinary
 observation-leaf adapter is not covered by the prior completion-reconciliation
 proof's exact unchanged-adapter correspondence. These restrictions and the
-unchanged qualification-only native copy profile prevent treating the feature
-as general dependency, native runtime or formally verified pipeline parity.
+unchanged caller kernel authorities prevent treating the feature as general
+dependency, native runtime or formally verified pipeline parity.
 
 The [queued-consumer CPU packet](evidence/dev-multigpu-queued-consumer-cpu-2026-10-02/README.md)
 records 1,980 passing runtime tests, zero failures, 32 existing ignores, all

@@ -4,12 +4,11 @@
 
 Local qualification snapshot: 2026-10-02 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
-2026-10-01: the issue remained Open. Both runtime branch refs now include signed
-commit `0dcf69d36`: concrete producer-journal composition, the shared native
-wait-arithmetic component and its proof packet, provisioned peer receipt-origin
-ingress, and repaired source-guard bindings. Earlier combined CPU regression
-and matched wait-cadence measurements remain scoped to their recorded sources;
-they are not qualification of this whole integration tree.
+2026-10-01: the issue remained Open. Published baseline `7256bcfaf` includes
+packetized native compute-XGMI transfers. The production-peer checkpoint below
+adds public native-peer opt-in, cold copy-only admission, repeated ring reuse
+and completed deferred-result custody. Earlier matched wait-cadence measurements
+remain scoped to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
 has recovered. Primary-session SSH reaches MI300X as of 2026-10-02 03:47 UTC;
@@ -25,7 +24,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Selected two-GPU pipeline qualified; incomplete | Production-authority peer opt-in, native 65-packet ring reuse, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A3: local multi-GPU | Public two-GPU peer path and ring reuse qualified; incomplete | All-admitted-GPU sharding, outstanding group drain, broader kernel authority and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -57,30 +56,53 @@ The packet-count/subrange arithmetic has a shared-executable-body proof, but the
 whole transfer adapter, DMA and Context integration are not formally refined.
 Remote files and the owned scratch directory were removed; GPU counters and the
 process roster returned to baseline. This is correctness, not performance parity.
-Current-source CPU qualification passes all 1,918 KFD tests in four exact
+That checkpoint's CPU qualification passes all 1,918 KFD tests in four exact
 disjoint shards and 1,986 runtime tests with 32 existing hardware ignores.
 Strict Clippy, witness tests and all 32 source-control workflow commands pass.
 The deliberately stopped serial KFD attempt remains recorded as nonzero; its
 replacement shards have an independently checked complete roster union.
+
+The [production-peer checkpoint](evidence/dev-multigpu-production-peers-2026-10-02/README.md)
+passes seven final-source MI300X modes on GPUs 6/7: production and semantic
+copy-only constructors, their staged-default controls, queued-consumer ring
+reuse, reverse ring reuse, and combined queued/packetized/ring reuse. Public
+constructors retain caller kernel authorities; the copy-only witness denies
+all launches. Each native copy-only case performs two changed-content
+8,388,581-byte copies. Each ring case performs two changed-content
+268,433,409-byte copies through a single 64-slot native queue per copy, requiring
+65 packets per copy. Every source and destination byte is checked.
+
+The campaign exposed and fixed cold-primary admission and an example upload loop
+that stopped after the first of two directional windows. The cold predicate has
+two shared-body proof contracts and nine rejected logical mutants; this is not
+whole-adapter or native-observer refinement. Completed deferred-result reuse has
+typed CPU custody/authentication tests, not new GPU-produced-result qualification.
+All 2,001 runtime tests pass with 32 existing hardware ignores, both examples
+pass 12 tests, and strict Clippy/no-default checks and all 32 source controls pass.
+All 1,925 KFD tests pass in five disjoint exact-roster shards with no failures
+or ignores; this is a fresh final-source run, not reuse of the prior checkpoint.
+Owned remote files were removed and GPU/process baselines restored. No physical
+overlap, all-device scaling, exclusive reservation or performance acceptance is
+claimed.
 
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Expose explicit native-peer opt-in for already-admitted production kernel
-   authorities, preserving private defaults, authority checks and staged fallback.
-   Continue retained multi-device async group drain and shutdown, including
-   pending, failed and uncertain outcomes. Reuse the existing current-thread
-   owner and drain API; do not create a second orchestration interface.
-2. Extend the now-passing two-GPU witness to actual ring reuse at 65 packets,
-   repeated copies and further freshly admitted pairs. The 65-packet extent
-   268,433,409 bytes fits the existing 256 MiB runtime allocation cap.
-3. Support exact completed deferred-consumer results as new producer inputs with
-   independent result retains, without treating them as directed ancestry or
-   relaxing launch authorities. Pending downstream chains remain separate.
-4. Add real workload partitioning, partial-failure campaigns and matched scaling
-   measurements only after the complete-output execution path passes.
+1. Partition a fixed global payload across 2..8 explicitly admitted GPUs, with
+   distinct contiguous shards and full global coverage. Enqueue all ring edges
+   through the existing current-thread owned async engine before driving them.
+   Neighboring routes may serialize on child custody; do not infer overlap.
+2. Qualify outstanding multi-device group drain and shutdown, including pending,
+   failed and uncertain outcomes. The current single-range host capture is not
+   forwarded by the multi-device backend. Post-drain multi-shard verification
+   needs a bounded capture extension because drain closes command admission.
+3. Add genuine compute sharding under a new finite kernel policy, keeping old
+   exact authorities unchanged. Current R57 per-device fixtures replicate work;
+   completed-result CPU tests do not establish arbitrary producer chains.
+4. Run isolated partial-failure campaigns and matched HIP/HSA scaling only after
+   complete-output sharded execution passes. A1/A2 remain parked and incomplete.
 
 ## Earlier Multi-GPU Checkpoints
 

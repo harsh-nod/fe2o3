@@ -17,6 +17,7 @@ pub(super) struct PeerLaunchRetainsV1 {
 #[derive(Debug)]
 struct PeerLaunchConsumerV1 {
     producers: Vec<u64>,
+    completed_results: Vec<u64>,
     stream: Option<u64>,
     route: Option<RoutedHandleV1>,
 }
@@ -38,11 +39,30 @@ impl PeerLaunchRetainsV1 {
         &mut self,
         producers: &[u64],
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if producers.is_empty() {
+        self.prepare_with_results(producers, &[])
+    }
+
+    fn prepare_with_results(
+        &mut self,
+        producers: &[u64],
+        completed_results: &[u64],
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if producers.is_empty() && completed_results.is_empty() {
             return Ok(());
+        }
+        if completed_results
+            .iter()
+            .enumerate()
+            .any(|(index, id)| producers.contains(id) || completed_results[..index].contains(id))
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "completed launch results must have distinct custody",
+            ));
         }
         if producers
             .iter()
+            .chain(completed_results)
             .any(|id| self.producers.get(id) == Some(&usize::MAX))
         {
             return Err(KfdRuntimeBackendV1::capacity(
@@ -52,13 +72,22 @@ impl PeerLaunchRetainsV1 {
         self.consumers.try_reserve(1).map_err(|_| {
             KfdRuntimeBackendV1::capacity("peer launch consumer custody growth failed")
         })?;
-        self.producers.try_reserve(producers.len()).map_err(|_| {
+        let count = producers
+            .len()
+            .checked_add(completed_results.len())
+            .ok_or_else(|| KfdRuntimeBackendV1::capacity("peer launch producer roster overflow"))?;
+        self.producers.try_reserve(count).map_err(|_| {
             KfdRuntimeBackendV1::capacity("peer launch producer custody growth failed")
         })
     }
 
-    fn acquire(&mut self, consumer: u64, producers: Vec<u64>) {
-        if producers.is_empty() {
+    fn acquire_with_results(
+        &mut self,
+        consumer: u64,
+        producers: Vec<u64>,
+        completed_results: Vec<u64>,
+    ) {
+        if producers.is_empty() && completed_results.is_empty() {
             return;
         }
         assert!(!self.consumers.contains_key(&consumer));
@@ -66,11 +95,13 @@ impl PeerLaunchRetainsV1 {
             consumer,
             PeerLaunchConsumerV1 {
                 producers,
+                completed_results,
                 stream: None,
                 route: None,
             },
         );
-        for producer in &self.consumers[&consumer].producers {
+        let entry = &self.consumers[&consumer];
+        for producer in entry.producers.iter().chain(&entry.completed_results) {
             *self.producers.entry(*producer).or_insert(0) += 1;
         }
     }
@@ -113,6 +144,7 @@ impl PeerLaunchRetainsV1 {
         entry
             .producers
             .iter()
+            .chain(&entry.completed_results)
             .all(|id| self.producers.get(id).is_some_and(|count| *count != 0))
             && match entry.route {
                 Some(route) => {
@@ -181,7 +213,7 @@ impl PeerLaunchRetainsV1 {
                     self.streams.remove(&stream);
                 }
             }
-            for producer in entry.producers {
+            for producer in entry.producers.into_iter().chain(entry.completed_results) {
                 KfdMultiDeviceRuntimeBackendV1::decrement_indexed_count(
                     &mut self.producers,
                     producer,
@@ -208,7 +240,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         stream: RoutedHandleV1,
         collected: &CollectedComputeDependenciesV1,
     ) -> Result<Vec<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.peer_launch_retains.is_empty()
+        if self.peer_launch_retains.ancestries.is_empty()
             && !self.children[stream.child].has_admitted_peer_gate
         {
             if collected
@@ -332,7 +364,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if self.compute_xgmi_child_occupied_v1(route.child) {
             return Ok(());
         }
-        let no_peer_custody = self.peer_launch_retains.is_empty();
+        let no_peer_custody = self.peer_launch_retains.ancestries.is_empty();
         if no_peer_custody && !self.children[route.child].has_admitted_peer_gate {
             if self.children[route.child]
                 .pending_compute
@@ -444,6 +476,45 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let Some(ancestry) = ancestry else {
             return self.with_peer_launch_custody_v1(id, Vec::new(), submit);
         };
+        self.with_peer_launch_ancestry_and_results_v1(
+            id,
+            ancestry.stream(),
+            Some(ancestry),
+            Vec::new(),
+            submit,
+        )
+    }
+
+    pub(super) fn with_peer_launch_ancestry_and_results_v1(
+        &mut self,
+        id: u64,
+        stream: u64,
+        ancestry: Option<PeerLaunchAncestryV1>,
+        completed_results: Vec<u64>,
+        submit: impl FnOnce(&mut Self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(ancestry) = ancestry else {
+            if completed_results.is_empty() {
+                return self.with_peer_launch_custody_v1(id, Vec::new(), submit);
+            }
+            self.peer_launch_retains
+                .prepare_with_results(&[], &completed_results)?;
+            let prepared = self.peer_launch_retains.prepare_stream(stream)?;
+            return self.with_peer_launch_custody_and_results_v1(
+                id,
+                Vec::new(),
+                completed_results,
+                |backend| {
+                    backend
+                        .peer_launch_retains
+                        .acquire_stream(id, stream, prepared);
+                    submit(backend)
+                },
+            );
+        };
+        if ancestry.stream() != stream {
+            return Err(self.directed_corruption_v1());
+        }
         if ancestry.owner() != id || self.peer_launch_retains.ancestries.contains_key(&id) {
             return Err(self.directed_corruption_v1());
         }
@@ -455,7 +526,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "peer ancestry custody requires a predecessor",
             ));
         }
-        self.peer_launch_retains.prepare(&ids)?;
+        self.peer_launch_retains
+            .prepare_with_results(&ids, &completed_results)?;
         self.peer_launch_retains
             .ancestries
             .try_reserve(1)
@@ -476,7 +548,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .routes
             .try_reserve(1)
             .map_err(|_| KfdRuntimeBackendV1::capacity("peer launch route index growth failed"))?;
-        self.with_peer_launch_custody_v1(id, ids, |backend| {
+        self.with_peer_launch_custody_and_results_v1(id, ids, completed_results, |backend| {
             backend
                 .peer_launch_retains
                 .acquire_stream(id, stream, prepared);
@@ -502,13 +574,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         producers: Vec<u64>,
         submit: impl FnOnce(&mut Self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if producers.is_empty() {
+        self.with_peer_launch_custody_and_results_v1(id, producers, Vec::new(), submit)
+    }
+
+    fn with_peer_launch_custody_and_results_v1(
+        &mut self,
+        id: u64,
+        producers: Vec<u64>,
+        completed_results: Vec<u64>,
+        submit: impl FnOnce(&mut Self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if producers.is_empty() && completed_results.is_empty() {
             let result = submit(self);
             return self.latch(result);
         }
         // Custody precedes child entry, including publication followed by unwind.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.peer_launch_retains.acquire(id, producers);
+            self.peer_launch_retains
+                .acquire_with_results(id, producers, completed_results);
             submit(self)
         }));
         match result {
@@ -620,7 +703,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 if let Some(route) = entry.route {
                     routes.remove(&route);
                 }
-                for producer in entry.producers {
+                for producer in entry.producers.into_iter().chain(entry.completed_results) {
                     Self::decrement_indexed_count(producers, producer, "flushed peer launch retains producer");
                 }
             }

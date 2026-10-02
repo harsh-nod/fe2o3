@@ -2,7 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use fe2o3_kfd::{GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942ComputeXgmiPacketPlanV1};
+use fe2o3_kfd::{
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, GFX942_SDMA_RING_BYTES_V1,
+    GFX942_SDMA_SUBMISSION_BYTES_V1, Gfx942ComputeXgmiPacketPlanV1,
+};
 use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
     GFX942_R57_N3_QUALIFICATION_BUFFER_ALIGNMENT_V1, GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1,
     GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1, GFX942_R57_N3_QUALIFICATION_KERNEL_V1,
@@ -10,35 +13,42 @@ use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
     admit_gfx942_r57_n3_qualification_v2,
 };
 use fe2o3_runtime::{
-    KfdMultiDeviceRuntimeBackendV1, RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeContextV1,
-    RuntimeErrorV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimeModuleIdV1, RuntimePollV1,
-    RuntimeStreamIdV1, RuntimeValidationErrorV1, TypedRuntimeKernelV1,
+    KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1, KfdMultiDeviceRuntimeBackendV1, RuntimeAccessV1,
+    RuntimeAllocationIdV1, RuntimeContextV1, RuntimeErrorV1, RuntimeMemoryKindV1,
+    RuntimeMemoryRegionV1, RuntimeModuleIdV1, RuntimePollV1, RuntimeStreamIdV1,
+    RuntimeValidationErrorV1, TypedRuntimeKernelV1,
 };
 
 type ContextV1 = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type ResultV1<T> = Result<T, String>;
 const WAIT: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: gfx942-runtime-compute-xgmi-smoke [--queued-consumer] [--packetized-copy] <0xsource-unique-id> <0xdestination-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-compute-xgmi-smoke [--queued-consumer] [--packetized-copy] [--ring-reuse] <0xsource-unique-id> <0xdestination-unique-id>";
 const PACKETIZED_EXTENTS: [u64; 2] = [
     GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 1,
     2 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 37,
 ];
+const RING_SLOTS: usize = GFX942_SDMA_RING_BYTES_V1 as usize / GFX942_SDMA_SUBMISSION_BYTES_V1;
+const RING_REUSE_EXTENT: u64 = RING_SLOTS as u64 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 1;
+const RING_REUSE_ITERATIONS: usize = 2;
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
     unique_ids: [u64; 2],
     queued_consumer: bool,
     packetized_copy: bool,
+    ring_reuse: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
     let mut queued_consumer = false;
     let mut packetized_copy = false;
+    let mut ring_reuse = false;
     let mut ids = arguments;
     while let Some(flag) = ids.first().filter(|arg| arg.starts_with("--")) {
         match flag.as_str() {
             "--queued-consumer" if !queued_consumer => queued_consumer = true,
             "--packetized-copy" if !packetized_copy => packetized_copy = true,
+            "--ring-reuse" if !ring_reuse => ring_reuse = true,
             _ => return Err(USAGE.into()),
         }
         ids = &ids[1..];
@@ -47,6 +57,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         unique_ids: unique_ids(ids)?,
         queued_consumer,
         packetized_copy,
+        ring_reuse,
     })
 }
 
@@ -158,15 +169,32 @@ fn upload_full_h2d(
             &[],
         )
         .map_err(|error| failure("upload-enqueue", error))?;
-    context
-        .flush_stream(stream)
-        .map_err(|error| failure("upload-flush", error))?;
-    if context
-        .wait(&mut submission, WAIT)
-        .map_err(|error| failure("upload-wait", error))?
-        != RuntimePollV1::Succeeded
-    {
-        return Err(failure("upload-wait", "full H2D upload did not succeed"));
+    let deadline = Instant::now() + WAIT;
+    let mut status = RuntimePollV1::Pending;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(failure(
+                "upload-progress",
+                format!("full H2D upload deadline expired: status={status:?}"),
+            ));
+        }
+        // Completed windows retain Pending custody until an explicit continuation flush.
+        context
+            .flush_stream(stream)
+            .map_err(|error| failure("upload-flush", error))?;
+        status = context
+            .poll(&mut submission)
+            .map_err(|error| failure("upload-poll", error))?;
+        match status {
+            RuntimePollV1::Pending => std::thread::sleep(Duration::from_micros(50)),
+            RuntimePollV1::Succeeded => break,
+            _ => {
+                return Err(failure(
+                    "upload-progress",
+                    format!("full H2D upload did not succeed: status={status:?}"),
+                ));
+            }
+        }
     }
     context
         .release_submission(submission)
@@ -282,6 +310,172 @@ fn packetized_copies(context: &mut ContextV1, runs: &[DeviceRun]) -> ResultV1<()
                 .release_allocation(upload)
                 .map_err(|error| failure("packet-upload-release", error))?;
         }
+    }
+    Ok(())
+}
+
+fn ring_reuse_pattern_byte(index: u64, iteration: usize) -> u8 {
+    packetized_pattern_byte(index) ^ (iteration as u8).wrapping_mul(0x5b)
+}
+
+fn verify_ring_reuse(
+    context: &mut ContextV1,
+    allocation: RuntimeAllocationIdV1,
+    label: &str,
+    expected: &[u8],
+) -> ResultV1<()> {
+    let mut observed = vec![0; GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize];
+    for (index, expected) in expected.chunks(observed.len()).enumerate() {
+        let offset = index as u64 * u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+        let observed = &mut observed[..expected.len()];
+        context
+            .read_allocation(allocation, offset, observed)
+            .map_err(|error| failure(label, error))?;
+        if observed != expected {
+            let mismatch = observed
+                .iter()
+                .zip(expected)
+                .position(|(a, b)| a != b)
+                .unwrap();
+            return Err(failure(
+                label,
+                format!("full-byte mismatch at {}", offset + mismatch as u64),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ring_reuse_copies(context: &mut ContextV1, runs: &[DeviceRun]) -> ResultV1<()> {
+    // The native full-extent route retains one physical ring across all packets.
+    // This binds the completed 65-packet copy to its 64 slots, not raw ring telemetry.
+    let plan = Gfx942ComputeXgmiPacketPlanV1::new(RING_REUSE_EXTENT)
+        .ok_or_else(|| failure("ring-plan", "invalid witness extent"))?;
+    if RING_SLOTS != 64
+        || plan.count() != RING_SLOTS + 1
+        || plan
+            .packet(RING_SLOTS)
+            .is_none_or(|packet| packet.bytes != 1)
+        || RING_REUSE_EXTENT > KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1
+    {
+        return Err(failure(
+            "ring-plan",
+            "65 packets within the allocation cap required",
+        ));
+    }
+    let devices = [context.devices()[0].id(), context.devices()[1].id()];
+    let mut pairs = Vec::with_capacity(2);
+    for device in devices {
+        let upload = context
+            .allocate(
+                device,
+                RuntimeMemoryKindV1::HostVisible,
+                RING_REUSE_EXTENT,
+                4096,
+            )
+            .map_err(|error| failure("ring-upload-allocation", error))?;
+        let data = context
+            .allocate(
+                device,
+                RuntimeMemoryKindV1::DeviceLocal,
+                RING_REUSE_EXTENT,
+                4096,
+            )
+            .map_err(|error| failure("ring-data-allocation", error))?;
+        pairs.push((upload, data));
+    }
+    // Refill one host vector and reuse both device identities; no large compute authority.
+    let mut contents = vec![0; RING_REUSE_EXTENT as usize];
+    let initial_copies = context.backend().completed_compute_xgmi_copies_v1();
+    for iteration in 0..RING_REUSE_ITERATIONS {
+        for (index, byte) in contents.iter_mut().enumerate() {
+            *byte = ring_reuse_pattern_byte(index as u64, iteration);
+        }
+        for (index, (run, &(upload, data))) in runs.iter().zip(&pairs).enumerate() {
+            if index == 1 {
+                for byte in &mut contents {
+                    *byte = !*byte;
+                }
+            }
+            upload_full_h2d(context, run.stream, upload, data, &contents)?;
+            verify_ring_reuse(context, data, "ring-initial-contents", &contents)?;
+        }
+        for byte in &mut contents {
+            *byte = !*byte;
+        }
+        let expected_before = initial_copies + iteration as u64;
+        if context.backend().completed_compute_xgmi_copies_v1() != expected_before {
+            return Err(failure(
+                "ring-native-before",
+                "unexpected native logical-copy count",
+            ));
+        }
+        let mut copy = context
+            .peer_copy(
+                runs[1].stream,
+                region(pairs[0].1, RuntimeAccessV1::Read, RING_REUSE_EXTENT),
+                region(pairs[1].1, RuntimeAccessV1::Write, RING_REUSE_EXTENT),
+                &[],
+            )
+            .map_err(|error| failure("ring-copy-enqueue", error))?;
+        if context
+            .poll(&mut copy)
+            .map_err(|error| failure("ring-unflushed-poll", error))?
+            != RuntimePollV1::Pending
+            || context
+                .wait(&mut copy, Duration::ZERO)
+                .map_err(|error| failure("ring-unflushed-wait", error))?
+                != RuntimePollV1::Pending
+            || context.backend().completed_compute_xgmi_copies_v1() != expected_before
+        {
+            return Err(failure(
+                "ring-unflushed-observers",
+                "copy must remain pending and uncounted",
+            ));
+        }
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(failure(
+                    "ring-copy-progress",
+                    "bounded native copy deadline expired",
+                ));
+            }
+            context
+                .flush_stream(runs[1].stream)
+                .map_err(|error| failure("ring-copy-flush", error))?;
+            let status = context
+                .poll(&mut copy)
+                .map_err(|error| failure("ring-copy-poll", error))?;
+            let completed = context.backend().completed_compute_xgmi_copies_v1();
+            match status {
+                RuntimePollV1::Pending if completed == expected_before => {
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+                RuntimePollV1::Succeeded if completed == expected_before + 1 => break,
+                _ => {
+                    return Err(failure(
+                        "ring-copy-logical-count",
+                        format!(
+                            "status={status:?} expected_before={expected_before} observed={completed}"
+                        ),
+                    ));
+                }
+            }
+        }
+        context
+            .release_submission(copy)
+            .map_err(|error| failure("ring-copy-release", error))?;
+        verify_ring_reuse(context, pairs[0].1, "ring-source-unchanged", &contents)?;
+        verify_ring_reuse(context, pairs[1].1, "ring-destination-copied", &contents)?;
+    }
+    for (upload, data) in pairs.into_iter().rev() {
+        context
+            .release_allocation(data)
+            .map_err(|error| failure("ring-data-release", error))?;
+        context
+            .release_allocation(upload)
+            .map_err(|error| failure("ring-upload-release", error))?;
     }
     Ok(())
 }
@@ -598,12 +792,27 @@ fn run(options: Options) -> ResultV1<()> {
     if options.packetized_copy {
         packetized_copies(&mut context, &runs)?;
     }
+    if options.ring_reuse {
+        ring_reuse_copies(&mut context, &runs)?;
+    }
     let native_copies = context.backend().completed_compute_xgmi_copies_v1();
-    let extra_copies = if options.packetized_copy {
+    let packetized_copies = if options.packetized_copy {
         PACKETIZED_EXTENTS.len()
     } else {
         0
     };
+    let ring_copies = if options.ring_reuse {
+        RING_REUSE_ITERATIONS
+    } else {
+        0
+    };
+    let extra_copies = packetized_copies + ring_copies;
+    if native_copies != 1 + extra_copies as u64 {
+        return Err(failure(
+            "final-native-count",
+            "unexpected final native logical-copy count",
+        ));
+    }
     for run in runs.into_iter().rev() {
         for allocation in run.allocations.into_iter().rev() {
             context
@@ -637,7 +846,7 @@ fn run(options: Options) -> ResultV1<()> {
         "explicit-drain"
     };
     println!(
-        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies={} bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending expired_drain=rejected copy_progress={} consumer_admission={} destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks={} modules=2 allocations={} packetized_copies={} packetized_packets={} packetized_bytes={} cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
+        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies={} bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending expired_drain=rejected copy_progress={} consumer_admission={} destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks={} modules=2 allocations={} packetized_copies={} packetized_packets={} packetized_bytes={} ring_reuse_copies={} ring_reuse_packets={} ring_reuse_bytes={} ring_reuse_extent={} ring_slots={} ring_reuse_evidence={} cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
         GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2,
         1 + extra_copies,
         expected_c.len(),
@@ -647,13 +856,27 @@ fn run(options: Options) -> ResultV1<()> {
         copy_progress,
         consumer_admission,
         13 + 4 * extra_copies,
-        10 + 4 * extra_copies,
-        extra_copies,
+        10 + 4 * packetized_copies + if options.ring_reuse { 4 } else { 0 },
+        packetized_copies,
         if options.packetized_copy { 5 } else { 0 },
         if options.packetized_copy {
             PACKETIZED_EXTENTS.iter().sum::<u64>()
         } else {
             0
+        },
+        ring_copies,
+        ring_copies * (RING_SLOTS + 1),
+        ring_copies as u64 * RING_REUSE_EXTENT,
+        if options.ring_reuse {
+            RING_REUSE_EXTENT
+        } else {
+            0
+        },
+        RING_SLOTS,
+        if options.ring_reuse {
+            "single-native-queue-full-extent"
+        } else {
+            "disabled"
         },
     );
     Ok(())
@@ -738,6 +961,7 @@ mod tests {
                     unique_ids: [1, 2],
                     queued_consumer: flags.len() == 2,
                     packetized_copy: true,
+                    ring_reuse: false,
                 })
             );
         }
@@ -748,6 +972,115 @@ mod tests {
             vec!["--packetized-copy", "0x1"],
         ] {
             assert!(options(&arguments.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+        }
+    }
+
+    #[test]
+    fn ring_reuse_extent_requires_physical_slot_reuse_with_one_byte_tail() {
+        assert_eq!(RING_SLOTS, 64);
+        assert_eq!(RING_REUSE_EXTENT, 268_433_409);
+        assert_eq!(RING_REUSE_ITERATIONS, 2);
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(RING_REUSE_EXTENT).unwrap();
+        assert_eq!(plan.count(), 65);
+        assert_eq!(plan.total_bytes(), RING_REUSE_EXTENT);
+        assert_eq!(plan.packet(64).unwrap().bytes, 1);
+        assert_eq!(plan.packet(64).unwrap().offset + 1, RING_REUSE_EXTENT);
+        assert_eq!(
+            RING_REUSE_EXTENT.div_ceil(4096) * 4096,
+            KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1
+        );
+        assert_eq!(
+            RING_REUSE_ITERATIONS as u64 * RING_REUSE_EXTENT,
+            536_866_818
+        );
+    }
+
+    #[test]
+    fn ring_reuse_upload_requires_two_directional_windows() {
+        use fe2o3_kfd::{
+            GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_BYTES_V1,
+            GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
+        };
+
+        let window_packets = GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1;
+        let window_bytes = GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_BYTES_V1;
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(RING_REUSE_EXTENT).unwrap();
+        assert_eq!(window_packets, 63);
+        assert_eq!(plan.count().div_ceil(window_packets), 2);
+        assert_eq!(RING_REUSE_EXTENT.div_ceil(window_bytes), 2);
+        assert_eq!(plan.count() - window_packets, 2);
+        assert_eq!(
+            RING_REUSE_EXTENT - window_bytes,
+            u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1) + 1
+        );
+    }
+
+    #[test]
+    fn ring_reuse_payloads_change_every_byte_and_distinguish_replayed_packets() {
+        let cap = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+        for packet in 0..=RING_SLOTS {
+            let offset = packet as u64 * cap;
+            let end = (offset + 32).min(RING_REUSE_EXTENT);
+            let first: Vec<_> = (0..end - offset)
+                .map(|index| ring_reuse_pattern_byte(index, 0))
+                .collect();
+            let window: Vec<_> = (offset..end)
+                .map(|index| ring_reuse_pattern_byte(index, 0))
+                .collect();
+            if packet != 0 {
+                assert_ne!(window, first);
+            }
+            for index in offset..end {
+                let previous = ring_reuse_pattern_byte(index, 0);
+                let next = ring_reuse_pattern_byte(index, 1);
+                assert_ne!(previous, next);
+                assert_ne!(!previous, next);
+                assert_ne!(!next, previous);
+                assert_ne!(!next, next);
+            }
+        }
+    }
+
+    #[test]
+    fn ring_reuse_cli_accepts_composed_modes_and_rejects_duplicates() {
+        for flags in [
+            vec!["--ring-reuse"],
+            vec!["--ring-reuse", "--queued-consumer"],
+            vec!["--queued-consumer", "--ring-reuse"],
+            vec!["--ring-reuse", "--packetized-copy"],
+            vec!["--packetized-copy", "--ring-reuse"],
+            vec!["--ring-reuse", "--queued-consumer", "--packetized-copy"],
+            vec!["--ring-reuse", "--packetized-copy", "--queued-consumer"],
+            vec!["--queued-consumer", "--ring-reuse", "--packetized-copy"],
+            vec!["--queued-consumer", "--packetized-copy", "--ring-reuse"],
+            vec!["--packetized-copy", "--ring-reuse", "--queued-consumer"],
+            vec!["--packetized-copy", "--queued-consumer", "--ring-reuse"],
+        ] {
+            let mut arguments: Vec<String> = flags.iter().map(|flag| (*flag).into()).collect();
+            arguments.extend(["0x1".into(), "0x2".into()]);
+            assert_eq!(
+                options(&arguments),
+                Ok(Options {
+                    unique_ids: [1, 2],
+                    queued_consumer: flags.contains(&"--queued-consumer"),
+                    packetized_copy: flags.contains(&"--packetized-copy"),
+                    ring_reuse: true,
+                })
+            );
+        }
+        for flags in [
+            vec!["--ring-reuse", "--ring-reuse", "0x1", "0x2"],
+            vec![
+                "--ring-reuse",
+                "--queued-consumer",
+                "--ring-reuse",
+                "0x1",
+                "0x2",
+            ],
+            vec!["0x1", "0x2", "--ring-reuse"],
+            vec!["--ring-reuse", "0x1"],
+        ] {
+            assert!(options(&flags.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
         }
     }
 }
@@ -765,6 +1098,7 @@ fn queued_consumer_is_an_explicit_leading_option() {
                 unique_ids: [1, 2],
                 queued_consumer,
                 packetized_copy: false,
+                ring_reuse: false,
             }),
         );
     }

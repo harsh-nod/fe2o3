@@ -12,12 +12,21 @@ pub(super) struct DeferredComputeV1 {
     pub(super) route: Option<RoutedHandleV1>,
     pub(super) status: BackendPollV1,
     quiescent: Option<KfdRuntimeBackendErrorV1>,
+    completed: Option<CompletedDeferredResultV1>,
     launch: Option<Arc<RetainedComputeLaunchV1>>,
     collected: Option<CollectedComputeDependenciesV1>,
     kernel: (u64, RoutedHandleV1),
     module: (u64, RoutedHandleV1),
     allocations: Vec<(u64, RoutedHandleV1)>,
     peers: Vec<NativePeerProducerV1>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompletedDeferredResultV1 {
+    route: RoutedHandleV1,
+    stream: u64,
+    local_stream: u64,
+    dependency_depth: usize,
 }
 
 #[derive(Debug)]
@@ -139,6 +148,90 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             Some(RoutedSubmissionV1::DeferredCompute(root)) => Some(root),
             _ => None,
         }
+    }
+
+    pub(super) fn completed_deferred_dependency_depth_v1(
+        &self,
+        dependency: BackendLaunchProducerV1,
+        child: usize,
+    ) -> Result<usize, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(RoutedEventV1::DeferredCompute {
+            submission,
+            child: event_child,
+        }) = self.events.get(&dependency.event).copied()
+        else {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "completed deferred dependency requires its exact event",
+            ));
+        };
+        if submission != dependency.producer_submission {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "deferred event does not name the exact producer",
+            ));
+        }
+        let root = self.deferred_compute_v1(submission).ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "deferred event lost its exact producer",
+            )
+        })?;
+        if event_child != child || root.child != child {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "deferred producer belongs to another device",
+            ));
+        }
+        if root.status == BackendPollV1::Pending {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "exact producer-aware launch does not admit pending deferred compute events",
+            ));
+        }
+        let receipt = root.completed.filter(|receipt| {
+            root.route == Some(receipt.route)
+                && receipt.route.child == child
+                && root.stream == receipt.stream
+        });
+        let record = receipt.and_then(|receipt| {
+            let endpoint = self.children.get(child)?;
+            endpoint
+                .submissions
+                .get(&receipt.route.local)
+                .filter(|record| {
+                    record.status == BackendPollV1::Succeeded
+                        && record.stream == receipt.local_stream
+                        && record.dependency_depth == receipt.dependency_depth
+                        && endpoint.exact_submission_quiescent_v1(receipt.route.local)
+                })
+        });
+        let record = record
+            .filter(|_| {
+                root.status == BackendPollV1::Succeeded
+                    && root.quiescent.is_none()
+                    && root.launch.is_none()
+                    && root.collected.is_none()
+            })
+            .ok_or_else(|| {
+                KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "deferred producer lacks exact successful child completion",
+                )
+            })?;
+        if record.dependency_depth == 0 {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "completed deferred producer has no dependency depth",
+            ));
+        }
+        record
+            .dependency_depth
+            .checked_add(1)
+            .filter(|depth| *depth <= MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1)
+            .ok_or_else(|| {
+                KfdRuntimeBackendV1::capacity("completed deferred dependency depth exceeded")
+            })
     }
 
     fn deferred_compute_mut_v1(&mut self, id: u64) -> &mut DeferredComputeV1 {
@@ -367,6 +460,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         .expect("native event returns an exact local producer");
                     native.push(local);
                 }
+                Some(RoutedEventV1::DeferredCompute { .. }) => {
+                    depth = depth.max(
+                        self.completed_deferred_dependency_depth_v1(*dependency, stream.child)?,
+                    );
+                }
                 _ => {
                     return Err(KfdRuntimeBackendV1::rejected(
                         KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -434,6 +532,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     {
                         Some(*id)
                     }
+                    RoutedSubmissionV1::DeferredCompute(root)
+                        if root.route
+                            == Some(RoutedHandleV1 {
+                                child: stream.child,
+                                local: prior,
+                            })
+                            && root.status == BackendPollV1::Succeeded
+                            && retained.contains(id) =>
+                    {
+                        Some(*id)
+                    }
                     _ => None,
                 })
                 .ok_or_else(|| {
@@ -471,6 +580,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     route: None,
                     status: BackendPollV1::Pending,
                     quiescent: None,
+                    completed: None,
                     launch: Some(payload),
                     collected: Some(collected),
                     kernel: (request.kernel, kernel),
@@ -495,6 +605,36 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         status: BackendPollV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if status != BackendPollV1::Pending {
+            let completed = if status == BackendPollV1::Succeeded {
+                let root = self
+                    .deferred_compute_v1(id)
+                    .expect("known deferred completion");
+                let receipt = root.route.and_then(|route| {
+                    let child = self.children.get(route.child)?;
+                    let record = child.submissions.get(&route.local)?;
+                    (route.child == root.child
+                        && record.status == BackendPollV1::Succeeded
+                        && child.exact_submission_quiescent_v1(route.local)
+                        && root
+                            .launch
+                            .as_ref()
+                            .is_some_and(|launch| launch.stream == record.stream)
+                        && self.streams.get(&root.stream)
+                            == Some(&RoutedHandleV1 {
+                                child: route.child,
+                                local: record.stream,
+                            }))
+                    .then_some(CompletedDeferredResultV1 {
+                        route,
+                        stream: root.stream,
+                        local_stream: record.stream,
+                        dependency_depth: record.dependency_depth,
+                    })
+                });
+                Some(receipt.ok_or_else(|| self.directed_corruption_v1())?)
+            } else {
+                None
+            };
             if !self.peer_launch_retains.release(id) {
                 return Err(self.directed_corruption_v1());
             }
@@ -508,6 +648,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
             let root = self.deferred_compute_mut_v1(id);
             root.status = status;
+            root.completed = completed;
             root.launch = None;
             root.collected = None;
         }

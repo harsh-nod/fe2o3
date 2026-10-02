@@ -126,6 +126,12 @@ impl NativeAqlSubmissionOwnerV1 {
         self.phase = SubmissionPhaseV1::Poisoned;
     }
 
+    pub(super) fn is_pristine_v1(&self) -> bool {
+        self.phase == SubmissionPhaseV1::Ready
+            && self.ring.write() == 0
+            && self.ring.last_read() == 0
+    }
+
     pub(super) fn from_counters(
         ring_bytes: u32,
         write: u64,
@@ -1039,6 +1045,65 @@ mod tests {
             })
             .collect::<Vec<_>>();
         AqlPreparedDependencyDispatchV1::new(&signals, indexed_packet(7)).unwrap()
+    }
+
+    #[test]
+    fn pristine_submission_requires_unpoisoned_zero_history() {
+        let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+        assert!(owner.is_pristine_v1());
+        owner.poison();
+        assert!(!owner.is_pristine_v1());
+        for (write, read) in [(1, 0), (1, 1), (64, 0), (64, 64), (u64::MAX, u64::MAX)] {
+            let owner = NativeAqlSubmissionOwnerV1::from_counters(4_096, write, read).unwrap();
+            assert!(!owner.is_pristine_v1());
+        }
+    }
+
+    #[test]
+    fn pristine_submission_is_lost_after_each_actual_publication_kind() {
+        for kind in 0..3 {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            assert!(owner.is_pristine_v1());
+            match kind {
+                0 => assert_eq!(owner.submit(packet(), &mut backend), Ok(0)),
+                1 => assert_eq!(owner.submit_barrier_and(barrier(), &mut backend), Ok(0)),
+                2 => {
+                    owner
+                        .submit_dependency_dispatch_classified(dependency_plan(6), &mut backend)
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(!owner.is_pristine_v1());
+            assert!(!backend.doorbells.is_empty());
+            backend
+                .read
+                .store(backend.write.load(Ordering::Acquire), Ordering::Release);
+            assert!(!owner.is_pristine_v1());
+        }
+    }
+
+    #[test]
+    fn pristine_submission_rejects_prepublication_and_native_prefix_failures() {
+        for prefix in 0..5 {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            if prefix == 0 {
+                backend.fail_check = Some(1);
+            } else {
+                backend.fail_after = Some(match prefix {
+                    1 => FailureAfterV1::FetchAdd,
+                    2 => FailureAfterV1::Body(0),
+                    3 => FailureAfterV1::Header(0),
+                    4 => FailureAfterV1::Doorbell,
+                    _ => unreachable!(),
+                });
+            }
+            assert!(owner.submit(packet(), &mut backend).is_err());
+            assert!(!owner.is_pristine_v1());
+            assert!(owner.is_poisoned_for_test());
+        }
     }
 
     #[test]
