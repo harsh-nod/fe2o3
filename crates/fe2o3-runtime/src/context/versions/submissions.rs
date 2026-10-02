@@ -363,6 +363,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             (Some(1), None) | (None, Some(_))
         ) || record.journal_writer != Some(writer)
             || root.domain != SubmissionWriterDomainV1::Ordinary
+            || self
+                .scalar_peer_copies
+                .get(&id)
+                .is_some_and(|peer| peer.compute.is_some())
+                && root.queued.is_some()
             || root.disposal_started
             || root.disposed_count != 0
             || root.journal_disposed

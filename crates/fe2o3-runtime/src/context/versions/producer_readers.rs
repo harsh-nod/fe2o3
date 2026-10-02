@@ -43,6 +43,7 @@ enum ProducerReadDomainV1 {
     DirectedPeer,
     Launch,
     Copy,
+    ComputePeer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,8 +212,11 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         active_index: &mut usize,
         queued_index: &mut usize,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
-        if self.root.domain == ProducerReadDomainV1::Copy {
-            return self.validate_copy_input_v1(index, active_index, queued_index);
+        if matches!(
+            self.root.domain,
+            ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+        ) {
+            return self.validate_single_input_v1(index, active_index, queued_index);
         }
         let context = self.context;
         let root = self.root;
@@ -233,7 +237,7 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         )
     }
 
-    fn validate_copy_input_v1(
+    fn validate_single_input_v1(
         &mut self,
         index: usize,
         active_index: &mut usize,
@@ -249,18 +253,43 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         };
         let reference = self.root.references[0];
         let source = input.source;
-        let copy = self
-            .context
-            .same_device_copies
-            .get(&self.id)
-            .ok_or(E::InvalidReference)?;
+        let (held, producer, dependencies, original) = match self.root.domain {
+            ProducerReadDomainV1::Copy => {
+                let copy = self
+                    .context
+                    .same_device_copies
+                    .get(&self.id)
+                    .ok_or(E::InvalidReference)?;
+                (
+                    copy.dependencies_held,
+                    copy.producer,
+                    copy.dependencies.as_slice(),
+                    copy.source,
+                )
+            }
+            ProducerReadDomainV1::ComputePeer => {
+                let peer = self
+                    .context
+                    .scalar_peer_copies
+                    .get(&self.id)
+                    .ok_or(E::InvalidReference)?;
+                let compute = peer.compute.as_ref().ok_or(E::InvalidReference)?;
+                (
+                    peer.dependencies_held,
+                    compute.producer,
+                    peer.dependencies.as_slice(),
+                    peer.source,
+                )
+            }
+            _ => return Err(E::InvalidReference),
+        };
         if self.root.requests[0] != request
             || reference.consumer != self.consumer
-            || !copy.dependencies_held
-            || copy.producer != input.dependency
-            || !producer_dependency_contains_v1(&copy.dependencies, &input.dependency)
-            || copy.source.region != source.region
-            || copy.source.record != source.record
+            || !held
+            || producer != input.dependency
+            || !producer_dependency_contains_v1(dependencies, &input.dependency)
+            || original.region != source.region
+            || original.record != source.record
             || request.producer.key
                 != (ContextWriterKeyV1 {
                     context_generation: input.dependency.submission.context_generation,
@@ -322,6 +351,17 @@ pub(super) struct PreparedProducerReadsV1 {
 pub(super) enum MixedInputFaultV1 {
     RejectPending,
     FinalizationPanic(Box<dyn core::any::Any + Send>),
+}
+
+impl ContextVersionsV1 {
+    pub(in crate::context) fn retains_compute_peer_input_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> bool {
+        self.producer_readers
+            .get(&id)
+            .is_some_and(|root| root.domain == ProducerReadDomainV1::ComputePeer)
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +433,24 @@ impl ContextVersionsV1 {
         self.producer_readers.get_mut(&id).unwrap().references[index].incarnation += 1;
     }
 
+    pub(in crate::context) fn corrupt_active_input_request_for_test_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        corruption: usize,
+    ) {
+        let root = self.producer_readers.get_mut(&id).unwrap();
+        let request = &mut root.requests[0];
+        match corruption {
+            0 => request.read.attempt_epoch += 1,
+            1 => request.read.content_lineage += 1,
+            2 => request.producer.slot += 1,
+            3 => request.producer.key.local += 1,
+            4 => request.read.allocation.key.local += 1,
+            _ => panic!("unknown active input corruption"),
+        }
+        root.inputs[0].request = ProducerReadRequestV1::Active(*request);
+    }
+
     pub(in crate::context) fn corrupt_queued_read_for_test_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -416,6 +474,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         dependencies: &[ScalarPeerDependencyV1],
         launch: Option<&ProducerLaunchRootV1>,
         copy: Option<&SameDeviceCopyRootV1>,
+        compute_peer: Option<&ScalarPeerCopyRootV1>,
     ) -> Result<Option<ProducerInputV1>, RuntimeValidationErrorV1> {
         if self.allocations.get(&source.region.allocation) != Some(&source.record)
             || !self
@@ -524,6 +583,24 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             } else {
                 self.validate_pending_peer_copy_roots_v1(dependency.submission)
             };
+            self.journal_result_v1(result)?;
+        } else if let Some(peer) = compute_peer {
+            let compute = peer
+                .compute
+                .as_ref()
+                .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+            let producer = self
+                .producer_launches
+                .get(&dependency.submission)
+                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+            if dependency != compute.producer
+                || source.region != peer.source.region
+                || source.record != peer.source.record
+                || !producer.covers_input_v1(source)
+            {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
+            let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
             self.journal_result_v1(result)?;
         } else if let Some(copy) = copy {
             let producer = self
@@ -688,7 +765,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.guard_journal_unwind_v1(|context| {
             let Some(root) = peer
                 .and_then(|peer| peer.scalar.as_ref())
-                .filter(|root| root.directed.is_some())
+                .filter(|root| root.directed.is_some() || root.compute.is_some())
             else {
                 return Ok(None);
             };
@@ -696,12 +773,26 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             inputs
                 .try_reserve_exact(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-            if let Some(input) =
-                context.prepare_pending_input_v1(root.source, &root.dependencies, None, None)?
-            {
+            let compute = root.compute.is_some();
+            if let Some(input) = context.prepare_pending_input_v1(
+                root.source,
+                &root.dependencies,
+                None,
+                None,
+                compute.then_some(root),
+            )? {
                 inputs.push(input);
+            } else if compute {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
             }
-            context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::DirectedPeer)
+            context.prepare_producer_batch_v1(
+                inputs,
+                if compute {
+                    ProducerReadDomainV1::ComputePeer
+                } else {
+                    ProducerReadDomainV1::DirectedPeer
+                },
+            )
         })
     }
 
@@ -742,6 +833,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     *source,
                     &root.dependencies,
                     Some(root),
+                    None,
                     None,
                 )? {
                     Some(input) => pending.push(input),
@@ -921,6 +1013,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let result = (|| {
                 let launch = context.producer_launches.contains_key(&id);
                 let copy = context.same_device_copies.contains_key(&id);
+                let compute_peer = context
+                    .scalar_peer_copies
+                    .get(&id)
+                    .is_some_and(|root| root.compute.is_some());
                 let versions = context
                     .versions
                     .as_mut()
@@ -928,6 +1024,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if versions.producer_readers.contains_key(&id)
                     || launch != (prepared.root.domain == ProducerReadDomainV1::Launch)
                     || copy != (prepared.root.domain == ProducerReadDomainV1::Copy)
+                    || compute_peer != (prepared.root.domain == ProducerReadDomainV1::ComputePeer)
                     || !launch && versions.submission_readers.contains_key(&id)
                     || versions
                         .submission_writers
@@ -980,9 +1077,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .versions
             .as_ref()
             .and_then(|versions| versions.producer_readers.get(&id))
-            .is_some_and(|root| root.domain == ProducerReadDomainV1::Copy)
+            .is_some_and(|root| {
+                matches!(
+                    root.domain,
+                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+                )
+            })
         {
-            return self.copy_producer_input_root_v1(id).map(Some);
+            return self.single_producer_input_root_v1(id).map(Some);
         }
         if self
             .submissions
@@ -992,24 +1094,41 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .same_device_copies
                 .get(&id)
                 .is_some_and(|copy| copy.dependencies_held)
+            || self
+                .scalar_peer_copies
+                .get(&id)
+                .is_some_and(|peer| peer.compute.is_some() && peer.dependencies_held)
         {
             return Err(ContextVersionJournalErrorV1::InvalidReference);
         }
         producer_input_preflight_body!(completion_journal_rust_syntax, self, id)
     }
 
-    fn copy_producer_input_root_v1(
+    fn single_producer_input_root_v1(
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<ProducerInputRootV1<'_>, ContextVersionJournalErrorV1> {
         use ContextVersionJournalErrorV1 as E;
-        self.validate_same_device_copy_custody_v1(id)
-            .map_err(|_| E::InvalidReference)?;
         let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
         let root = versions
             .producer_readers
             .get(&id)
             .ok_or(E::InvalidReference)?;
+        let compute = root.domain == ProducerReadDomainV1::ComputePeer;
+        if compute {
+            self.validate_scalar_peer_custody_v1(id)
+                .map_err(|_| E::InvalidReference)?;
+            if self
+                .scalar_peer_copies
+                .get(&id)
+                .is_none_or(|peer| peer.compute.is_none())
+            {
+                return Err(E::InvalidReference);
+            }
+        } else {
+            self.validate_same_device_copy_custody_v1(id)
+                .map_err(|_| E::InvalidReference)?;
+        }
         let marker = root.marker.ok_or(E::InvalidReference)?;
         let consumer = ContextWriterKeyV1 {
             context_generation: id.context_generation,
@@ -1020,8 +1139,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .submission_writers
             .get(&id)
             .ok_or(E::InvalidReference)?;
-        if root.domain != ProducerReadDomainV1::Copy
-            || root.inputs.len() != 1
+        if !matches!(
+            root.domain,
+            ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+        ) || root.inputs.len() != 1
             || root.references.len() != 1
             || root.requests.len() != 1
             || !root.queued_requests.is_empty()
@@ -1032,9 +1153,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || versions.submission_readers.contains_key(&id)
             || writer.domain != SubmissionWriterDomainV1::Ordinary
             || self.submissions.get(&id).is_some_and(|record| {
-                !record.same_device_copy
+                record.same_device_copy == compute
                     || record.producer_launch
-                    || record.scalar_peer_copy
+                    || record.scalar_peer_copy != compute
                     || record.directed_peer_copy
                     || record.journal_read.is_some()
                     || record.journal_producer_read != Some(marker)
@@ -1061,7 +1182,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .try_reserve_exact(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             let input = context
-                .prepare_pending_input_v1(root.source, &root.dependencies, None, Some(root))?
+                .prepare_pending_input_v1(root.source, &root.dependencies, None, Some(root), None)?
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
             inputs.push(input);
             context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::Copy)

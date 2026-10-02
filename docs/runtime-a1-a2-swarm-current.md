@@ -8,7 +8,8 @@ The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 public native-peer opt-in, cold copy-only admission, repeated ring reuse
 and completed deferred-result custody. The sharded checkpoints below add
 fixed-total native transfer rings, pending peer/readback group capture and
-finite sharded compute qualified through seven GPUs. Earlier matched wait-cadence
+finite sharded compute qualified through seven GPUs, including fully prequeued
+compute/peer/readback chains without a host compute join. Earlier matched wait-cadence
 measurements remain scoped to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -25,7 +26,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite sharded compute, native peer rings and pending readback/group capture qualified on 2/3/5/7 GPUs; incomplete | Fully prequeued compute/peer execution, repeated live-Context batches, broader kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Fully prequeued finite compute/native-peer/readback chains qualified on 2/3/5/7 GPUs; incomplete | Repeated live-Context batches, broader kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -142,23 +143,37 @@ not rerun. Owned remote resources are removed and baselines restored.
 This remains a joined-compute, trusted-artifact correctness checkpoint, not
 physical-overlap, performance, general application authority or formal refinement.
 
+The [queued-compute checkpoint](evidence/dev-multigpu-compute-peer-2026-10-02/README.md)
+removes that host compute join. Ten queued MI300X cases cover both changed-content
+rounds on 2/3/5/7 GPUs and reversed seven-GPU ordering; two joined controls also
+pass. Exact producer events retain each compute -> native peer -> D2H chain,
+and only final readback streams drive it before coherent group capture.
+Every logical output and padding byte and all 171 individual completion receipts
+pass across the twelve runs. Compute admission may eagerly publish, so this is
+not physical-overlap evidence. Each round still uses a separate process.
+
+All 2,069 runtime tests pass with 32 unchanged hardware ignores, along with 34
+example tests, strict Clippy/feature checks and all 32 source controls. The 21
+new tests cover backend ownership and Context completion reconciliation, including
+per-node journal validation and checked parent ranks. The unchanged 1,925-test
+KFD and kernel-rebuild results are authenticated reuse, not fresh runs. All owned
+remote resources are removed and baselines restored. Whole-adapter refinement,
+general kernel authority, repeated live-Context batches and performance remain open.
+
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Remove the host join with exact compute-producer-to-native-peer admission.
-   Retain authenticated metadata until producer success and owner restoration;
-   compose real journal reconciliation through the pending D2H/capture chain.
-2. Qualify changed compute/transfer batches inside one live Context, reusing
+1. Qualify changed compute/transfer batches inside one live Context, reusing
    allocations and streams before its final cutoff. Same-process reopen is a
    separate device/VM ownership redesign, not a prerequisite for iterative work;
    never reset process-lifetime admission history to make it appear supported.
-3. Add application kernel authority and native partial-failure qualification.
+2. Add application kernel authority and native partial-failure qualification.
    Existing production peer constructors already accept caller authorities;
    finite fixtures do not supply general compiler/effects evidence. CPU scripted
    failures are not a native fault campaign.
-4. Add eight-GPU coverage when every device is free, then matched HIP/HSA scaling
+3. Add eight-GPU coverage when every device is free, then matched HIP/HSA scaling
    and overlap measurements. Complete-output sharding now passes, but no timing
    speedup follows. A1/A2 remain parked and incomplete.
 

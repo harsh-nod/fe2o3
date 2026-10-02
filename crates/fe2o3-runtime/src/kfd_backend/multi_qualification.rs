@@ -105,10 +105,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     /// This grants no general kernel authority and changes no existing fixture.
     ///
     /// DeviceLocal storage and eligible copies use the existing native-peer
-    /// opt-in policy. Compute must be joined and its owners restored before
-    /// selecting a native peer copy; this constructor does not defer that route
-    /// selection. Each round requires a fresh process because native VM admission
-    /// retains process-lifetime device history even after successful shutdown.
+    /// opt-in policy. An exact producer-aware compute event can defer native peer
+    /// execution until successful completion and owner restoration; an ordinary
+    /// launch still requires an explicit join before peer admission. Each round
+    /// requires a fresh process because these gates are one-shot and native VM
+    /// admission retains device history even after successful shutdown.
     pub fn open_gfx942_sharded_vecadd_peer_qualification_v1(
         unique_ids: &[u64],
         round: usize,

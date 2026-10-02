@@ -1,5 +1,11 @@
 # Multi-Device Runtime Qualification
 
+The current [queued-compute checkpoint](evidence/dev-multigpu-compute-peer-2026-10-02/README.md)
+qualifies finite sharded compute -> native peer -> D2H/group capture without a
+host compute join on 2/3/5/7 MI300X GPUs. Reusable live-Context batches, broader
+kernel authority, native fault campaigns and performance remain open. Earlier
+sections below retain their original example and checkpoint scopes.
+
 ## Scope
 
 The `hardware-qualification` feature exposes
@@ -221,7 +227,7 @@ must already be fully initialized PUBLIC storage with retired use frontiers.
 The shared rooted mapping/copy/remapping sequence restores both VM models before
 restoring either persistent output. This is not a demote/re-promote conversion.
 
-The opt-in runtime selects this transport only for ordinary, full-range,
+The original joined-result profile selects this transport only for ordinary, full-range,
 bounded DeviceLocal copies between distinct children whose persistent
 storage is already initialized and normalizable at admission. Submission preserves
 the existing stream, dependency, event and allocation-retain indexes and reserves
@@ -526,7 +532,7 @@ HostVisible A/B/C inputs before upload, then joins every exact H2D completion.
 It preserves the authenticated H2dReady owners through launch authorization;
 precompute native readback would normalize those owners and clear required
 digests. All compute launches are admitted before explicit progress, although
-ordinary admission may eagerly publish them. The witness joins exact compute
+ordinary admission may eagerly publish them. Its default mode joins exact compute
 success and owner restoration before admitting the native peer ring, then
 queues event-bound D2H reads and closes admission with one group capture.
 
@@ -544,7 +550,7 @@ cargo +nightly-2026-04-03 run --locked --offline -p fe2o3-runtime \
 ```
 
 Use only freshly available devices. Each round is a separate process, not a
-reopened Context. This workload does not establish a fully prequeued compute-to-
+reopened Context. This default joined mode does not establish a fully prequeued compute-to-
 peer graph, arbitrary kernel authority, output-dependent recurrence, native
 partial-failure isolation, physical overlap, performance parity or machine-code
 refinement. The post-cutoff native counter and post-copy source preservation
@@ -567,6 +573,68 @@ identity. Ten source-control files update 17 hashes and seven inventory counts;
 all 76 proof files remain unchanged. The pinned ROCm 7.2.4 compiler reproduces
 the unchanged kernel object byte-for-byte, without proving compiler correctness.
 
+## Queued Compute-to-Peer Admission
+
+The additive `supports_pending_compute_peer_copy_v1` backend contract lets a
+journal-enabled Context admit a full DeviceLocal peer read behind one exact
+pending producer-aware compute writer. It defaults to false; the multi-KFD
+backend opts in. The producer's retained `Write` binding must cover the entire
+source allocation, and its explicit event must name the current journal writer.
+Partial ranges, ReadWrite/Read aliases, queued journal writers and pending
+router-deferred compute are outside this first profile.
+
+The ordinary scalar peer root retains a separate compute-input profile; it is
+not relabeled as a directed peer. The existing journal lease and bounded
+reconciliation planner observe the original compute parent before committing
+the peer's logical success. A dependent D2H read carries the real checked chain
+depth. Released public events do not release the retained producers.
+
+The backend keeps the original accounted launch recipe for eligible
+producer-aware results, including eagerly published persistent compute. Peer
+admission reserves native route metadata only: it neither detaches DATA owners
+nor publishes DMA or acquires endpoint occupancy. Explicit dependent-stream
+progress services the exact compute producer and required FIFO predecessors.
+Native peer work begins only after successful, quiescent producer completion and
+owner restoration; an admitted native candidate has no host-staging fallback.
+Pre-effect consumer cancellation leaves the producer live. Uncertain native
+custody stays retained through terminal failure.
+
+The existing sharded witness adds an explicit queued mode:
+
+```sh
+cargo +nightly-2026-04-03 run --locked --offline -p fe2o3-runtime \
+  --all-features --profile test \
+  --example gfx942-runtime-sharded-vecadd-capture-smoke -- \
+  --queued-compute --round 0 "$GPU0_UID" "$GPU1_UID"
+```
+
+It admits compute, exact-event peer copies and exact-event D2H readbacks before
+group cutoff, without an explicit compute join. Only final readback streams are
+registered for progress, all 3N results remain retained, and all 3N completion
+callbacks must succeed exactly once. Compute admission may eagerly publish;
+this is not a claim of physical overlap or an effects-free admission phase.
+The default joined mode and its existing result schema remain unchanged.
+
+The [queued-compute campaign](evidence/dev-multigpu-compute-peer-2026-10-02/README.md)
+passes ten queued cases: both changed-content rounds on 2/3/5/7 GPUs and the
+reversed seven-GPU roster. Two joined controls also pass. All output/padding
+bytes and 171 individual completion receipts pass across the twelve processes.
+Only readback streams drive the queued pipeline; no compute join occurs before
+peer/readback admission. The local/uploaded/final witness SHA-256 is
+`adee9d8e589445de6f42912e93fc1ebc8ac260fe751ea57030696b184f19bffd`.
+Owned remote resources are removed and GPU/process baselines restored.
+
+Final-source checks pass 2,069 runtime tests with 32 unchanged hardware ignores,
+34 example tests, strict Clippy/feature checks and all 32 source controls.
+The 21 new runtime tests cover Context journal/reconciliation and backend
+pending/eager custody, cancellation and scripted failures. Previous KFD and
+unchanged kernel-rebuild evidence are authenticated reuse, not fresh runs.
+Nine guard files refresh only 18 hashes and seven inventory counts; all 76
+associated proof files remain unchanged. The historical empty-hook planner
+invocation proof does not qualify the new per-node validation adapter.
+This is finite trusted-artifact correctness, not whole-adapter refinement,
+physical overlap, performance parity or repeated work inside one live Context.
+
 ## Next Dependencies
 
 The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
@@ -585,8 +653,9 @@ broader compute sharding, reusable live-Context batches, complete native fault
 coverage, and peer mappings retained across separate logical copies remain open.
 The current route does not qualify a general native runtime pipeline.
 
-Prioritize exact compute-producer-to-native-peer deferred admission and repeated
-work in one live Context. Same-process device reopen remains unsupported, but is
+Prioritize repeated changed-content compute/transfer batches in one live Context,
+using the now-qualified exact compute-producer-to-native-peer admission profile.
+Same-process device reopen remains unsupported, but is
 a separate device/VM ownership redesign rather than a prerequisite for useful
 iterative workloads. General application kernels still require an appropriate
 compiler/effects authority; the finite sharded policy does not supply it.

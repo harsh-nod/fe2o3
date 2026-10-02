@@ -127,6 +127,7 @@ use compute_peer_gate::{
 };
 mod cooperative_sdma;
 use cooperative_sdma::CooperativeSdmaLeafV1;
+mod compute_peer;
 mod compute_xgmi;
 mod cooperative_directed;
 mod native_reconcile;
@@ -7005,6 +7006,7 @@ enum CooperativeCopyPhaseV1 {
 struct CooperativeCopySubmissionV1 {
     directed: Option<cooperative_directed::Root>,
     compute_xgmi: Option<Box<compute_xgmi::Root>>,
+    compute_producer: Option<compute_peer::Producer>,
     stream: u64,
     prior_stream_submission: Option<u64>,
     source: RoutedHandleV1,
@@ -7080,6 +7082,7 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     kernels: HashMap<u64, RoutedHandleV1>,
     kernel_modules: HashMap<u64, u64>,
     submissions: HashMap<u64, RoutedSubmissionV1>,
+    producer_aware_native: HashMap<u64, Arc<RetainedComputeLaunchV1>>,
     events: HashMap<u64, RoutedEventV1>,
     cooperative_allocation_owners: HashMap<RoutedHandleV1, Vec<u64>>,
     cooperative_dependency_retain_counts: HashMap<u64, usize>,
@@ -7946,6 +7949,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             kernels: HashMap::new(),
             kernel_modules: HashMap::new(),
             submissions: HashMap::new(),
+            producer_aware_native: HashMap::new(),
             events: HashMap::new(),
             cooperative_allocation_owners: HashMap::new(),
             cooperative_dependency_retain_counts: HashMap::new(),
@@ -7972,6 +7976,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.kernels.is_empty()
             || !self.kernel_modules.is_empty()
             || !self.submissions.is_empty()
+            || !self.producer_aware_native.is_empty()
             || !self.events.is_empty()
             || !self.cooperative_allocation_owners.is_empty()
             || !self.cooperative_dependency_retain_counts.is_empty()
@@ -8392,6 +8397,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "compute-XGMI child reservation remains live"
             );
             copy.phase = phase;
+            copy.compute_producer = None;
             let staging = core::mem::take(&mut copy.staging);
             let released_staging_bytes = u64::try_from(staging.len())
                 .expect("cooperative staging length was admitted as u64");
@@ -8732,6 +8738,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         };
 
+        self.validate_compute_peer_v1(submission)?;
         if phase == CooperativeCopyPhaseV1::Read
             && self.compute_xgmi_endpoints_v1(submission).is_some()
         {
@@ -8783,7 +8790,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     }
                 };
                 if let Some(dependency) = dependency {
-                    match self.observe_dependency(dependency) {
+                    match self.progress_compute_peer_dependency_v1(submission, dependency) {
                         Ok(BackendPollV1::Succeeded) => {
                             let RoutedSubmissionV1::CooperativeCopy(copy) =
                                 self.submissions.get_mut(&submission).unwrap()
@@ -8795,6 +8802,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             return Ok(BackendPollV1::Pending);
                         }
                         Ok(BackendPollV1::Pending) => return Ok(BackendPollV1::Pending),
+                        Err(error @ RuntimeBackendFailureV1::Quiescent(_)) if matches!(&self.submissions[&submission], RoutedSubmissionV1::CooperativeCopy(copy) if copy.is_quiescent()) =>
+                        {
+                            return Err(error);
+                        }
                         Ok(BackendPollV1::Failed { .. })
                         | Err(RuntimeBackendFailureV1::Rejected(_))
                         | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
@@ -9116,6 +9127,36 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 );
             }
         }
+        let compute_producer = if directed.is_none() {
+            self.prepare_compute_peer_v1(
+                source_route,
+                source,
+                destination_route,
+                destination,
+                dependencies,
+            )?
+        } else {
+            None
+        };
+        if let Some(producer) = &compute_producer {
+            dependency_depth =
+                dependency_depth.max(producer.depth().checked_add(1).ok_or_else(|| {
+                    KfdRuntimeBackendV1::capacity("compute peer dependency depth overflow")
+                })?);
+            for dependency in &dependency_submissions {
+                let depth = self
+                    .compute_peer_dependency_depth_v1(*dependency)
+                    .ok_or_else(|| {
+                        KfdRuntimeBackendV1::rejected(
+                            KfdRuntimeBackendErrorKindV1::Unsupported,
+                            "compute peer control dependency has no retained depth",
+                        )
+                    })?;
+                dependency_depth = dependency_depth.max(depth.checked_add(1).ok_or_else(|| {
+                    KfdRuntimeBackendV1::capacity("compute peer control dependency depth overflow")
+                })?);
+            }
+        }
         if dependency_depth > MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Capacity,
@@ -9156,12 +9197,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
 
         for route in [source_route, destination_route] {
-            if !self.cooperative_native_custody_is_ordered_v1(
-                route,
-                stream,
-                &dependency_set,
-                directed.as_ref(),
-            ) {
+            if !compute_producer
+                .as_ref()
+                .is_some_and(|producer| producer.owns_source(&self.children[route.child], route))
+                && !self.cooperative_native_custody_is_ordered_v1(
+                    route,
+                    stream,
+                    &dependency_set,
+                    directed.as_ref(),
+                )
+            {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
                     "cooperative copy allocation has unrelated native custody",
@@ -9169,7 +9214,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
 
-        let compute_xgmi = if directed.is_none() {
+        let compute_xgmi = if compute_producer.is_some() {
+            Some(self.prepare_compute_xgmi_plan_v1(
+                source_route,
+                destination_route,
+                source.byte_len,
+            )?)
+        } else if directed.is_none() {
             self.prepare_compute_xgmi_v1(source_route, source, destination_route, destination)?
         } else {
             None
@@ -9358,6 +9409,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 CooperativeCopySubmissionV1 {
                     directed,
                     compute_xgmi,
+                    compute_producer,
                     stream,
                     prior_stream_submission: stream_tail,
                     source: source_route,
@@ -12262,6 +12314,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 .remove(&cooperative_stream.expect("matched cooperative stream"));
         }
         self.submissions.remove(&submission);
+        self.producer_aware_native.remove(&submission);
         Ok(())
     }
 
@@ -12384,6 +12437,10 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             "live multi-device event retain count is indexed",
         );
         Ok(())
+    }
+
+    fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+        true
     }
 
     fn peer_copy_v1(
@@ -12600,8 +12657,23 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "kernel binding is retained by an unrelated cooperative copy",
             ));
         }
+        let retained = if self.children[stream.child].peer_visible_device_allocations {
+            self.producer_aware_native.try_reserve(1).map_err(|_| {
+                KfdRuntimeBackendV1::capacity("producer-aware native identity index growth failed")
+            })?;
+            Some(RetainedComputeLaunchV1::copy_from(
+                child_launch,
+                self.children[stream.child].launch_payload_account.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let submit = |backend: &mut Self| {
-            backend.children[stream.child].submit_collected_compute_v1(child_launch, collected)
+            backend.children[stream.child].submit_collected_compute_with_payload_v1(
+                child_launch,
+                collected,
+                retained.as_ref().map(Arc::clone),
+            )
         };
         let local = if completed_results.is_empty() {
             self.with_peer_launch_ancestry_v1(id, ancestry, submit)
@@ -12625,6 +12697,9 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             },
         );
         self.retain_native_stream_submission_v1(request.stream);
+        if let Some(retained) = retained {
+            self.producer_aware_native.insert(id, retained);
+        }
         Ok(id)
     }
 }
@@ -13681,6 +13756,8 @@ mod retained_release_tests;
 mod tests {
     mod bind_recovery_tests;
     mod compute_peer_gate_tests;
+    #[path = "../compute_peer/tests.rs"]
+    mod compute_peer_tests;
     mod compute_quiescence_tests;
     mod compute_settlement_custody_tests;
     mod cooperative_directed_tests;

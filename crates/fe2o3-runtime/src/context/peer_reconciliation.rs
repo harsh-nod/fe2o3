@@ -6,6 +6,18 @@ use fe2o3_runtime_model::ContextProducerReadStatusV1;
 
 include!("completion_reconciliation_body.rs");
 
+// New profile adapters validate every descended node without changing the
+// historical planner body or running journal checks during partial disposal.
+macro_rules! completion_reconciliation_profiles_v1 {
+    ($context:ident, $requested:ident, [$($step:tt)*]) => {
+        completion_reconciliation_body!(@annotated completion_settlement_rust_expr,
+            $context, $requested,
+            path, length, id, validated, remaining, record, dependencies, state, dependency,
+            [], [$($step)*], [$context.validate_pending_completion_profile_v1(id)?;],
+            [], [], [], [], [], [])
+    };
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DirectedPeerStateV1 {
     pub(super) depth: usize,
@@ -39,12 +51,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         } else if let Some(root) = self.producer_launches.get(&id) {
             Some((&root.dependencies, &root.state))
         } else {
-            self.scalar_peer_copies
-                .get(&id)
-                .map(|root| match root.directed.as_ref() {
+            self.scalar_peer_copies.get(&id).map(|root| {
+                match root
+                    .directed
+                    .as_ref()
+                    .or_else(|| root.compute.as_ref().map(|compute| &compute.state))
+                {
                     Some(state) => (root.dependencies.as_slice(), state),
                     None => (&[][..], &ORDINARY_PEER_OBSERVATION_LEAF_V1),
-                })
+                }
+            })
         }
     }
 
@@ -57,9 +73,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         } else if let Some(root) = self.producer_launches.get_mut(&id) {
             Some(&mut root.state)
         } else {
-            self.scalar_peer_copies
-                .get_mut(&id)
-                .and_then(|root| root.directed.as_mut())
+            self.scalar_peer_copies.get_mut(&id).and_then(|root| {
+                root.directed
+                    .as_mut()
+                    .or_else(|| root.compute.as_mut().map(|compute| &mut compute.state))
+            })
         }
     }
 
@@ -101,7 +119,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if self
             .scalar_peer_copies
             .get(&id)
-            .is_some_and(|root| root.directed.is_none())
+            .is_some_and(|root| root.directed.is_none() && root.compute.is_none())
         {
             return Ok(());
         }
@@ -127,19 +145,37 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         Ok(())
     }
 
+    fn validate_pending_completion_profile_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let record = &self.submissions[&id];
+        if !record.status.is_terminal() {
+            let result = if record.same_device_copy {
+                self.validate_pending_same_device_copy_roots_v1(id)
+            } else if self
+                .scalar_peer_copies
+                .get(&id)
+                .is_some_and(|root| root.compute.is_some())
+                || self
+                    .versions
+                    .as_ref()
+                    .is_some_and(|versions| versions.retains_compute_peer_input_v1(id))
+            {
+                self.validate_pending_peer_copy_roots_v1(id)
+            } else {
+                return Ok(());
+            };
+            self.journal_result_v1(result)?;
+        }
+        Ok(())
+    }
+
     fn plan_completion_step_v1(
         &mut self,
         requested: RuntimeSubmissionIdV1,
     ) -> Result<CompletionStepV1, RuntimeValidationErrorV1> {
-        if self
-            .submissions
-            .get(&requested)
-            .is_some_and(|record| record.same_device_copy && !record.status.is_terminal())
-        {
-            let result = self.validate_pending_same_device_copy_roots_v1(requested);
-            self.journal_result_v1(result)?;
-        }
-        completion_reconciliation_body!(completion_settlement_rust_expr, self, requested, [])
+        completion_reconciliation_profiles_v1!(self, requested, [])
     }
 
     #[cfg(test)]
@@ -155,9 +191,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             requested: RuntimeSubmissionIdV1,
             steps: &mut usize,
         ) -> Result<CompletionStepV1, RuntimeValidationErrorV1> {
-            completion_reconciliation_body!(
-                completion_settlement_rust_expr, context, requested, [*steps += 1;]
-            )
+            completion_reconciliation_profiles_v1!(context, requested, [*steps += 1;])
         }
         let mut steps = 0;
         let result = counted(self, requested, &mut steps);

@@ -1,6 +1,9 @@
-//! Scalar operation provenance and dependency custody, not success-gated execution.
+//! Scalar provenance and dependency custody, with explicit opt-in producer profiles.
 
 use super::*;
+
+mod compute_peer;
+pub(super) use compute_peer::ComputePeerInputV1;
 
 pub(super) struct PreparedPeerSubmissionV1 {
     pub(super) mechanism: PeerTransferMechanismV1,
@@ -28,6 +31,7 @@ pub(super) struct ScalarPeerCopyRootV1 {
     pub(super) backend_submission: Option<u64>,
     pub(super) dependencies_held: bool,
     pub(super) directed: Option<super::peer_reconciliation::DirectedPeerStateV1>,
+    pub(super) compute: Option<ComputePeerInputV1>,
 }
 
 impl ScalarPeerCopyRootV1 {
@@ -89,6 +93,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_submission: None,
             dependencies_held: true,
             directed: None,
+            compute: None,
         })
     }
 
@@ -202,6 +207,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
             )
             || root.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
+            || root.directed.is_some() && root.compute.is_some()
         {
             return Err(invalid);
         }
@@ -240,7 +246,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(invalid);
         }
         if !root.dependencies_held {
-            return Ok(());
+            return self.validate_compute_peer_custody_v1(id, root);
         }
         let mut ordinals = [false; MAX_RUNTIME_DEPENDENCIES_V1];
         let mut previous: Option<(RuntimeSubmissionIdV1, RuntimeEventIdV1)> = None;
@@ -308,7 +314,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(invalid);
             }
         }
-        Ok(())
+        self.validate_compute_peer_custody_v1(id, root)
     }
 
     pub(super) fn check_scalar_peer_custody_v1(

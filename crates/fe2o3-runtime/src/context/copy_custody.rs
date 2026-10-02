@@ -58,6 +58,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Ok(None);
         };
         let dependencies = self.prepare_dependency_roster_v1(dependencies)?;
+        let mut depth = 1;
         for (index, dependency) in dependencies.iter().enumerate() {
             if index != 0 && dependencies[index - 1].submission == dependency.submission {
                 return Err(RuntimeValidationErrorV1::DuplicateDependency);
@@ -77,6 +78,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         && !record.same_device_copy => {}
                 _ => return Err(RuntimeValidationErrorV1::ContextReserved),
             }
+            depth = depth.max(
+                self.completion_parent_depth_v1(dependency.submission)?
+                    .checked_add(1)
+                    .ok_or(RuntimeValidationErrorV1::Capacity)?,
+            );
+        }
+        if depth > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(RuntimeValidationErrorV1::TooManyDependencies);
         }
         let producer = *dependencies
             .iter()
@@ -96,7 +105,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_submission: None,
             dependencies_held: true,
             state: DirectedPeerStateV1 {
-                depth: 2,
+                depth,
                 cursor: 0,
                 terminal: None,
             },
@@ -163,7 +172,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.source.region.byte_len != root.destination.region.byte_len
             || root.dependencies.is_empty()
             || root.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
-            || root.state.depth != 2
+            || root.state.depth < 2
+            || root.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
             || root.state.cursor > root.dependencies.len()
             || root.state.terminal == Some(BackendPollV1::Pending)
             || root.state.terminal.is_none() && root.state.cursor != 0
@@ -215,7 +225,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let mut ordinals = [false; MAX_RUNTIME_DEPENDENCIES_V1];
         let mut previous = None;
+        let mut depth = 1;
         for (index, dependency) in root.dependencies.iter().enumerate() {
+            self.validate_completion_parent_rank_v1(id, dependency.submission, root.state.depth)?;
             let producer = self
                 .submissions
                 .get(&dependency.submission)
@@ -247,10 +259,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(invalid);
             }
+            let parent = self
+                .completion_parent_depth_v1(dependency.submission)
+                .map_err(|_| invalid)?;
+            if parent == 0 || parent >= root.state.depth {
+                return Err(invalid);
+            }
+            depth = depth.max(parent + 1);
             ordinals[dependency.ordinal] = true;
             previous = Some(dependency.submission);
         }
-        if !root.dependencies.contains(&root.producer)
+        if depth != root.state.depth
+            || !root.dependencies.contains(&root.producer)
             || self
                 .scalar_peer_copies
                 .get(&root.producer.submission)

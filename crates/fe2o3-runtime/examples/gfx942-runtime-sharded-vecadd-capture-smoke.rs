@@ -1,4 +1,4 @@
-//! Finite vecadd shards, joined native compute, peer transfer, and group capture.
+//! Finite vecadd shards, joined or prequeued compute, peer transfer, and group capture.
 
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,53 @@ const ELEMENT_BYTES: usize = 4;
 const PAGE_BYTES: usize = 4096;
 const WAIT: Duration = Duration::from_secs(30);
 const DRAIN_TICKS: usize = 30_000;
-const USAGE: &str = "usage: gfx942-runtime-sharded-vecadd-capture-smoke --round <0|1> <0xunique-id> <0xunique-id> [up to eight total]";
+const USAGE: &str = "usage: gfx942-runtime-sharded-vecadd-capture-smoke [--queued-compute] --round <0|1> <0xunique-id> <0xunique-id> [up to eight total]";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComputeMode {
+    Joined,
+    Queued,
+}
+
+impl ComputeMode {
+    fn schema(self) -> &'static str {
+        match self {
+            Self::Joined => "fe2o3.sharded-vecadd-capture-smoke.v1",
+            Self::Queued => "fe2o3.sharded-vecadd-queued-capture-smoke.v1",
+        }
+    }
+
+    fn admission(self) -> &'static str {
+        match self {
+            Self::Joined => "all-before-explicit-progress",
+            Self::Queued => "may-publish-before-cutoff",
+        }
+    }
+
+    fn join(self) -> &'static str {
+        match self {
+            Self::Joined => "exact-succeeded-restored",
+            Self::Queued => "owned-drain",
+        }
+    }
+
+    fn retained_submissions(self, count: usize) -> usize {
+        match self {
+            Self::Joined => 2 * count,
+            Self::Queued => 3 * count,
+        }
+    }
+
+    fn extra_fields(self, count: usize) -> String {
+        match self {
+            Self::Joined => String::new(),
+            Self::Queued => format!(
+                " compute_api=producer-aware compute_dependency=exact-event compute_progress=dependent-readback-streams retained_submissions={}",
+                self.retained_submissions(count)
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Shard {
@@ -62,12 +108,12 @@ struct Buffers {
 }
 
 #[derive(Default)]
-struct Receipts {
-    observations: Vec<Option<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>>,
+struct Receipts<I = RuntimeSubmissionIdV1> {
+    observations: Vec<Option<(I, RuntimeCompletionStatusV1)>>,
     deliveries: Vec<usize>,
 }
 
-impl Receipts {
+impl<I: Copy + Eq> Receipts<I> {
     fn new(count: usize) -> Self {
         Self {
             observations: vec![None; count],
@@ -75,17 +121,12 @@ impl Receipts {
         }
     }
 
-    fn record(
-        &mut self,
-        index: usize,
-        id: RuntimeSubmissionIdV1,
-        status: RuntimeCompletionStatusV1,
-    ) {
+    fn record(&mut self, index: usize, id: I, status: RuntimeCompletionStatusV1) {
         self.deliveries[index] = self.deliveries[index].saturating_add(1);
         self.observations[index] = Some((id, status));
     }
 
-    fn succeeded(&self, expected: &[RuntimeSubmissionIdV1]) -> bool {
+    fn succeeded(&self, expected: &[I]) -> bool {
         self.observations.len() == expected.len()
             && self.deliveries.len() == expected.len()
             && expected.iter().enumerate().all(|(index, &id)| {
@@ -120,7 +161,12 @@ fn unique_ids(arguments: &[String]) -> ResultV1<Vec<u64>> {
     Ok(ids)
 }
 
-fn options(arguments: &[String]) -> ResultV1<(usize, Vec<u64>)> {
+fn options(arguments: &[String]) -> ResultV1<(ComputeMode, usize, Vec<u64>)> {
+    let (mode, arguments) = if arguments.first().map(String::as_str) == Some("--queued-compute") {
+        (ComputeMode::Queued, &arguments[1..])
+    } else {
+        (ComputeMode::Joined, arguments)
+    };
     if arguments.first().map(String::as_str) != Some("--round") {
         return Err(USAGE.into());
     }
@@ -129,7 +175,7 @@ fn options(arguments: &[String]) -> ResultV1<(usize, Vec<u64>)> {
         Some("1") => 1,
         _ => return Err(USAGE.into()),
     };
-    Ok((round, unique_ids(&arguments[2..])?))
+    Ok((mode, round, unique_ids(&arguments[2..])?))
 }
 
 fn partition(count: usize) -> ResultV1<Vec<Shard>> {
@@ -344,7 +390,7 @@ fn join_all<A>(
     Ok(())
 }
 
-fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
+fn run_round(ids: &[u64], shards: &[Shard], round: usize, mode: ComputeMode) -> ResultV1<String> {
     let recipes = shards
         .iter()
         .enumerate()
@@ -504,48 +550,71 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
     let compute_receipts = Arc::new(Mutex::new(Receipts::new(ids.len())));
     let mut compute = Vec::with_capacity(ids.len());
     let mut compute_ids = Vec::with_capacity(ids.len());
+    let mut compute_events = Vec::with_capacity(ids.len());
     // Admission may eagerly publish; no explicit progress begins before all N admissions.
     for (index, buffer) in buffers.iter().enumerate() {
         let [a, b, c] = buffer.device;
         let arguments = Arguments::new(buffer.recipe, a, b, c)
             .map_err(|error| failure("compute-arguments", error))?;
-        let submission = context
-            .launch(
+        let submission = match mode {
+            ComputeMode::Joined => context.launch(
                 buffer.compute_stream,
                 &buffer.kernel,
                 &arguments,
                 buffer.recipe.geometry(),
                 &[],
-            )
-            .map_err(|error| failure("compute-admission", error))?;
+            ),
+            ComputeMode::Queued => context.launch_producer_aware_v1(
+                buffer.compute_stream,
+                &buffer.kernel,
+                &arguments,
+                buffer.recipe.geometry(),
+                &[],
+            ),
+        }
+        .map_err(|error| failure("compute-admission", error))?;
         on_completion(&mut context, &submission, index, &compute_receipts)?;
         compute_ids.push(submission.id());
+        if mode == ComputeMode::Queued {
+            compute_events.push(
+                context
+                    .record_event(&submission)
+                    .map_err(|error| failure("compute-event", error))?,
+            );
+        }
         compute.push((buffer.compute_stream, submission));
     }
-    join_all(&mut context, &mut compute, "compute-join")?;
-    if !compute_receipts
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .succeeded(&compute_ids)
-    {
-        return Err(failure(
-            "compute-receipts",
-            "missing, foreign, duplicate or failed completion",
-        ));
+    if mode == ComputeMode::Joined {
+        join_all(&mut context, &mut compute, "compute-join")?;
+        if !compute_receipts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .succeeded(&compute_ids)
+        {
+            return Err(failure(
+                "compute-receipts",
+                "missing, foreign, duplicate or failed completion",
+            ));
+        }
+        for (_, submission) in compute.drain(..).rev() {
+            context
+                .release_submission(submission)
+                .map_err(|error| failure("compute-release", error))?;
+        }
     }
-    for (_, submission) in compute.into_iter().rev() {
-        context
-            .release_submission(submission)
-            .map_err(|error| failure("compute-release", error))?;
-    }
-    // Peer selection happens only after exact Context success and original owner restoration.
+    // Queued mode retains the exact compute producer; it does not observe or join it here.
     let receipts = Arc::new(Mutex::new(Receipts::new(2 * ids.len())));
     let mut peers = Vec::with_capacity(ids.len());
     let mut events = Vec::with_capacity(ids.len());
     let mut expected = Vec::with_capacity(2 * ids.len());
-    // All ring edges are admitted while every original owner slot is available.
+    // Admit every ring edge before transfer progress, including detached compute owners.
     for (index, shard) in shards.iter().enumerate() {
         let destination = &buffers[(index + 1) % ids.len()];
+        let dependencies = if mode == ComputeMode::Queued {
+            std::slice::from_ref(&compute_events[index])
+        } else {
+            &[]
+        };
         let peer = context
             .peer_copy(
                 destination.peer_stream,
@@ -559,7 +628,7 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
                     RuntimeAccessV1::Write,
                     shard.padded_bytes as u64,
                 ),
-                &[],
+                dependencies,
             )
             .map_err(|error| failure("peer-admission", error))?;
         on_completion(&mut context, &peer, index, &receipts)?;
@@ -570,6 +639,11 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
                 .map_err(|error| failure("peer-event", error))?,
         );
         peers.push(peer);
+    }
+    for event in compute_events {
+        context
+            .release_event(event)
+            .map_err(|error| failure("compute-event-release", error))?;
     }
     let mut readbacks = Vec::with_capacity(ids.len());
     for (index, shard) in shards.iter().enumerate() {
@@ -690,8 +764,8 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
         .map_err(|error| failure("capture-drive", error))?
         .map_err(|error| failure("capture-result", error))?;
     let expected_counts = RuntimeStreamObservationV1 {
-        total_submissions: 2 * ids.len(),
-        succeeded: 2 * ids.len(),
+        total_submissions: mode.retained_submissions(ids.len()),
+        succeeded: mode.retained_submissions(ids.len()),
         ..RuntimeStreamObservationV1::default()
     };
     if report.drain.outcome != RuntimeAsyncDrainOutcomeV1::Quiescent
@@ -703,6 +777,17 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
         || report.drain.ticks > DRAIN_TICKS
     {
         return Err(failure("pending-group-drain", report.drain));
+    }
+    if mode == ComputeMode::Queued
+        && !compute_receipts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .succeeded(&compute_ids)
+    {
+        return Err(failure(
+            "compute-receipts",
+            "missing, foreign, duplicate or failed completion",
+        ));
     }
     if !receipts
         .lock()
@@ -733,9 +818,20 @@ fn run_round(ids: &[u64], shards: &[Shard], round: usize) -> ResultV1<String> {
     Ok(digest)
 }
 
-fn run(ids: Vec<u64>, round: usize) -> ResultV1<()> {
+fn run(ids: Vec<u64>, round: usize, mode: ComputeMode) -> ResultV1<()> {
     let shards = partition(ids.len())?;
-    let digest = run_round(&ids, &shards, round)?;
+    let digest = run_round(&ids, &shards, round, mode)?;
+    println!("{}", success_line(&ids, &shards, round, mode, &digest));
+    Ok(())
+}
+
+fn success_line(
+    ids: &[u64],
+    shards: &[Shard],
+    round: usize,
+    mode: ComputeMode,
+    digest: &str,
+) -> String {
     let unique_ids = ids
         .iter()
         .map(|id| format!("0x{id:016x}"))
@@ -747,8 +843,9 @@ fn run(ids: Vec<u64>, round: usize) -> ResultV1<()> {
         .collect::<Vec<_>>()
         .join(",");
     let padded_bytes: usize = shards.iter().map(|shard| shard.padded_bytes).sum();
-    println!(
-        "PASS schema=fe2o3.sharded-vecadd-capture-smoke.v1 authority=qualification-sharded-vecadd-v1 devices={} unique_ids={} round={} rounds=1 logical_elements={} logical_bytes={} shard_ranges={} padded_bytes={} launches={} compute_receipts={} transfer_receipts={} completion_receipts={} compute_admission=all-before-explicit-progress compute_join=exact-succeeded-restored peer_copies={} dependent_readbacks={} capture_ranges={} captured_bytes={} abi_bytes=48 kernel=vecadd journal=enabled host_output_installations=0 c_initial=-1 incoming_sentinel=full-byte-pass output=full-byte-pass padding=full-byte-pass coverage=exact-contiguous-disjoint global_sha256={} admission=all-transfers-pending-before-cutoff public_events=released-before-cutoff native_transport=authenticated-pending-peer native_counter_before=0 native_counter_observed=false native_counter_after=unobserved source_preservation=unobserved allocation_reuse=false contexts=one-per-process drain=pending-group capture=coherent-host-group physical_overlap=unmeasured cleanup=owned-shutdown-explicit performance_acceptance=false formal_refinement=false",
+    format!(
+        "PASS schema={} authority=qualification-sharded-vecadd-v1 devices={} unique_ids={} round={} rounds=1 logical_elements={} logical_bytes={} shard_ranges={} padded_bytes={} launches={} compute_receipts={} transfer_receipts={} completion_receipts={} compute_admission={} compute_join={} peer_copies={} dependent_readbacks={} capture_ranges={} captured_bytes={} abi_bytes=48 kernel=vecadd journal=enabled host_output_installations=0 c_initial=-1 incoming_sentinel=full-byte-pass output=full-byte-pass padding=full-byte-pass coverage=exact-contiguous-disjoint global_sha256={} admission=all-transfers-pending-before-cutoff public_events=released-before-cutoff native_transport=authenticated-pending-peer native_counter_before=0 native_counter_observed=false native_counter_after=unobserved source_preservation=unobserved allocation_reuse=false contexts=one-per-process drain=pending-group capture=coherent-host-group physical_overlap=unmeasured cleanup=owned-shutdown-explicit performance_acceptance=false formal_refinement=false{}",
+        mode.schema(),
         ids.len(),
         unique_ids,
         round,
@@ -760,18 +857,20 @@ fn run(ids: Vec<u64>, round: usize) -> ResultV1<()> {
         ids.len(),
         2 * ids.len(),
         3 * ids.len(),
+        mode.admission(),
+        mode.join(),
         ids.len(),
         ids.len(),
         ids.len(),
         padded_bytes,
-        digest
-    );
-    Ok(())
+        digest,
+        mode.extra_fields(ids.len())
+    )
 }
 
 fn main() {
     if let Err(error) = options(&std::env::args().skip(1).collect::<Vec<_>>())
-        .and_then(|(round, ids)| run(ids, round))
+        .and_then(|(mode, round, ids)| run(ids, round, mode))
     {
         eprintln!("FAIL {error}");
         std::process::exit(1);
@@ -801,9 +900,135 @@ mod tests {
                 arguments.extend((1..=count).rev().map(|id| format!("0x{id:x}")));
                 assert_eq!(
                     options(&arguments).unwrap(),
-                    (round, (1..=count).rev().collect())
+                    (ComputeMode::Joined, round, (1..=count).rev().collect())
                 );
             }
+        }
+    }
+
+    #[test]
+    fn queued_compute_is_an_explicit_leading_mode_with_unchanged_round_and_uid_validation() {
+        for count in 2..=8 {
+            for round in 0..=1 {
+                let mut arguments = vec![
+                    "--queued-compute".into(),
+                    "--round".into(),
+                    round.to_string(),
+                ];
+                arguments.extend((1..=count).rev().map(|id| format!("0x{id:x}")));
+                assert_eq!(
+                    options(&arguments).unwrap(),
+                    (ComputeMode::Queued, round, (1..=count).rev().collect())
+                );
+            }
+        }
+        for arguments in [
+            vec!["--queued-compute"],
+            vec!["--queued-compute", "--round"],
+            vec![
+                "--queued-compute",
+                "--queued-compute",
+                "--round",
+                "0",
+                "0x1",
+                "0x2",
+            ],
+            vec!["--round", "0", "--queued-compute", "0x1", "0x2"],
+            vec!["--round", "0", "0x1", "0x2", "--queued-compute"],
+            vec!["--queued-compute", "--round", "2", "0x1", "0x2"],
+            vec!["--queued-compute", "--round", "0", "0x0", "0x2"],
+            vec!["--queued-compute", "--round", "0", "0x1", "0x01"],
+        ] {
+            assert!(
+                options(&arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err()
+            );
+        }
+        let mut arguments = vec!["--queued-compute".into(), "--round".into(), "0".into()];
+        arguments.extend((1..=9).map(|id| format!("0x{id:x}")));
+        assert!(options(&arguments).is_err());
+    }
+
+    #[test]
+    fn mode_report_preserves_joined_schema_and_marks_all_queued_compute_custody() {
+        for count in [2, 3, 5, 8] {
+            for round in 0..=1 {
+                let ids: Vec<_> = (1..=count as u64).rev().collect();
+                let shards = partition(count).unwrap();
+                for mode in [ComputeMode::Joined, ComputeMode::Queued] {
+                    let line = success_line(&ids, &shards, round, mode, "digest-under-test");
+                    assert!(line.starts_with("PASS "));
+                    let fields: std::collections::BTreeMap<_, _> = line
+                        .split_whitespace()
+                        .skip(1)
+                        .map(|token| token.split_once('=').unwrap())
+                        .collect();
+                    assert_eq!(fields.len(), line.split_whitespace().count() - 1);
+                    assert_eq!(fields["devices"], count.to_string());
+                    assert_eq!(fields["round"], round.to_string());
+                    assert_eq!(fields["compute_receipts"], count.to_string());
+                    assert_eq!(fields["transfer_receipts"], (2 * count).to_string());
+                    assert_eq!(fields["completion_receipts"], (3 * count).to_string());
+                    assert_eq!(fields["admission"], "all-transfers-pending-before-cutoff");
+                    assert_eq!(fields["public_events"], "released-before-cutoff");
+                    assert_eq!(fields["native_counter_observed"], "false");
+                    assert_eq!(fields["host_output_installations"], "0");
+                    assert_eq!(fields["global_sha256"], "digest-under-test");
+                    assert_eq!(fields["performance_acceptance"], "false");
+                    assert_eq!(fields["formal_refinement"], "false");
+                    match mode {
+                        ComputeMode::Joined => {
+                            assert_eq!(fields.len(), 45);
+                            assert_eq!(fields["schema"], "fe2o3.sharded-vecadd-capture-smoke.v1");
+                            assert_eq!(fields["compute_admission"], "all-before-explicit-progress");
+                            assert_eq!(fields["compute_join"], "exact-succeeded-restored");
+                            assert!(!fields.contains_key("compute_api"));
+                            assert!(!fields.contains_key("retained_submissions"));
+                            assert_eq!(mode.retained_submissions(count), 2 * count);
+                        }
+                        ComputeMode::Queued => {
+                            assert_eq!(fields.len(), 49);
+                            assert_eq!(
+                                fields["schema"],
+                                "fe2o3.sharded-vecadd-queued-capture-smoke.v1"
+                            );
+                            assert_eq!(fields["compute_admission"], "may-publish-before-cutoff");
+                            assert_eq!(fields["compute_join"], "owned-drain");
+                            assert_eq!(fields["compute_api"], "producer-aware");
+                            assert_eq!(fields["compute_dependency"], "exact-event");
+                            assert_eq!(fields["compute_progress"], "dependent-readback-streams");
+                            assert_eq!(fields["retained_submissions"], (3 * count).to_string());
+                            assert_eq!(mode.retained_submissions(count), 3 * count);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn receipt_validation_requires_each_exact_id_once_and_success_not_quiescence() {
+        let expected = [10_u64, 20, 30];
+        let mut receipts = Receipts::new(expected.len());
+        assert!(!receipts.succeeded(&expected));
+        for (index, id) in expected.into_iter().enumerate() {
+            receipts.record(index, id, RuntimeCompletionStatusV1::Succeeded);
+        }
+        assert!(receipts.succeeded(&expected));
+        assert!(!receipts.succeeded(&[10, 30, 20]));
+        assert!(!receipts.succeeded(&expected[..2]));
+        receipts.record(0, 10, RuntimeCompletionStatusV1::Succeeded);
+        assert!(!receipts.succeeded(&expected));
+        for status in [
+            RuntimeCompletionStatusV1::Pending,
+            RuntimeCompletionStatusV1::QuiescentWithoutResult,
+            RuntimeCompletionStatusV1::Failed(fe2o3_runtime::RuntimeCompletionFailureV1::Cancelled),
+            RuntimeCompletionStatusV1::Failed(
+                fe2o3_runtime::RuntimeCompletionFailureV1::BackendCode(-1),
+            ),
+        ] {
+            let mut receipts = Receipts::new(1);
+            receipts.record(0, 10_u64, status);
+            assert!(!receipts.succeeded(&[10]));
         }
     }
 

@@ -681,6 +681,25 @@ pub trait RuntimeBackendV1 {
 
     fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 
+    /// Opt in to full DeviceLocal peer reads behind an exact pending producer-aware
+    /// compute writer. Context additionally requires its version journal and exact
+    /// writer lease; this flag grants neither kernel authority nor initialized data.
+    ///
+    /// Authenticate the explicit event, producer-aware submission, original source
+    /// allocation and complete writable coverage. Retain the producer independently
+    /// of public events. No peer effect may begin before every dependency succeeded
+    /// and the producer's original owners were restored. Admission and observations
+    /// must not progress the producer or acquire physical peer custody. Explicit
+    /// peer/dependent progress must service the retained producer within the existing
+    /// bounded progress contract. Unknown/failed completion is never success.
+    /// Cancellation before peer custody releases only that consumer's retains;
+    /// uncertain custody remains rooted. Ordinary, non-producer-aware native compute
+    /// must not enter this profile. Context independently reconciles logical parents
+    /// before committing the peer's destination version.
+    fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+        false
+    }
+
     fn peer_copy_v1(
         &mut self,
         stream: u64,
@@ -3313,8 +3332,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimeSubmissionV1<RuntimePeerCopyV1>, RuntimeErrorV1<B::Error>> {
         let prepared =
             self.prepare_context_peer_copy_v1(stream, source, destination, dependencies, true)?;
-        let custody =
+        let mut custody =
             self.prepare_scalar_peer_custody_v1(stream, source, destination, dependencies)?;
+        self.prepare_compute_peer_custody_v1(&mut custody)?;
         self.submit_context_operation_v1(
             stream,
             prepared.stream_record,
@@ -3917,6 +3937,7 @@ mod tests {
     mod allocation_outcome_tests;
     mod async_journal_tests;
     mod completion_settlement_tests;
+    mod compute_peer_tests;
     mod construction_custody_tests;
     mod copy_custody_tests;
     mod copy_source_lease_tests;
@@ -4052,6 +4073,7 @@ mod tests {
         cancel_before_publication: bool,
         deferred_copies: bool,
         pending_peer_readback: bool,
+        pending_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
         deferred_kernel_reads: bool,
@@ -4677,6 +4699,10 @@ mod tests {
             }
             self.release_producer_launch_event_test_v1(event);
             Ok(())
+        }
+
+        fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+            self.pending_compute_peer
         }
 
         fn peer_copy_v1(

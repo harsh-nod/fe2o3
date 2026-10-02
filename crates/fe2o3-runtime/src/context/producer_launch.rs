@@ -194,6 +194,102 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(super) fn validate_completion_parent_rank_v1(
+        &self,
+        child: RuntimeSubmissionIdV1,
+        parent: RuntimeSubmissionIdV1,
+        child_depth: usize,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let invalid = RuntimeValidationErrorV1::InvalidBackendDescription;
+        if child.context_generation != self.context_generation
+            || parent.context_generation != self.context_generation
+            || parent.local >= child.local
+            || child_depth == 0
+            || child_depth > MAX_RUNTIME_DEPENDENCIES_V1
+        {
+            return Err(invalid);
+        }
+        let record = self.submissions.get(&parent).ok_or(invalid)?;
+        // Read only declared ranks here: recursive validation must strictly descend.
+        let depth = match (
+            self.same_device_copies.get(&parent),
+            self.producer_launches.get(&parent),
+            self.scalar_peer_copies.get(&parent),
+        ) {
+            (Some(root), None, None)
+                if record.same_device_copy
+                    && !record.producer_launch
+                    && !record.scalar_peer_copy
+                    && !record.directed_peer_copy =>
+            {
+                root.state.depth
+            }
+            (None, Some(root), None)
+                if record.producer_launch
+                    && !record.same_device_copy
+                    && !record.scalar_peer_copy
+                    && !record.directed_peer_copy =>
+            {
+                root.state.depth
+            }
+            (None, None, Some(root))
+                if record.scalar_peer_copy
+                    && !record.same_device_copy
+                    && !record.producer_launch
+                    && record.directed_peer_copy == root.directed.is_some()
+                    && !(root.directed.is_some() && root.compute.is_some()) =>
+            {
+                root.directed
+                    .as_ref()
+                    .or_else(|| root.compute.as_ref().map(|compute| &compute.state))
+                    .map_or(1, |state| state.depth)
+            }
+            (None, None, None)
+                if !record.same_device_copy
+                    && !record.producer_launch
+                    && !record.scalar_peer_copy
+                    && !record.directed_peer_copy
+                    && record.status == RuntimeCompletionStatusV1::Succeeded
+                    && record.quiescent =>
+            {
+                1
+            }
+            _ => return Err(invalid),
+        };
+        if depth == 0 || depth >= child_depth {
+            return Err(invalid);
+        }
+        Ok(())
+    }
+
+    pub(super) fn completion_parent_depth_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<usize, RuntimeValidationErrorV1> {
+        if let Some(parent) = self.same_device_copies.get(&id) {
+            self.validate_same_device_copy_custody_v1(id)?;
+            if self.submissions.get(&id).is_some_and(|record| {
+                record.status == RuntimeCompletionStatusV1::Succeeded
+                    && (!record.quiescent
+                        || parent.state.terminal != Some(BackendPollV1::Succeeded)
+                        || parent.state.cursor != parent.dependencies.len())
+            }) {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            return Ok(parent.state.depth);
+        }
+        if self.producer_launches.contains_key(&id) || self.scalar_peer_copies.contains_key(&id) {
+            return self.launch_parent_depth_v1(id);
+        }
+        if self.submissions.get(&id).is_some_and(|record| {
+            record.status == RuntimeCompletionStatusV1::Succeeded && record.quiescent
+        }) {
+            Ok(1)
+        } else {
+            Err(RuntimeValidationErrorV1::Unsupported)
+        }
+    }
+
     fn launch_parent_depth_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -216,7 +312,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.producer_launch {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
         }
-        if let Some(state) = &parent.directed {
+        if let Some(state) = parent
+            .directed
+            .as_ref()
+            .or_else(|| parent.compute.as_ref().map(|compute| &compute.state))
+        {
             if record.status == RuntimeCompletionStatusV1::Succeeded
                 && (!record.quiescent
                     || state.terminal != Some(BackendPollV1::Succeeded)
@@ -478,13 +578,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let mut previous = None;
         let mut depth = 1;
         for (index, dependency) in root.dependencies.iter().enumerate() {
+            self.validate_completion_parent_rank_v1(id, dependency.submission, root.state.depth)?;
             let producer = self
                 .submissions
                 .get(&dependency.submission)
                 .ok_or(invalid)?;
-            let parent_depth = self
-                .launch_parent_depth_v1(dependency.submission)
-                .map_err(|_| invalid)?;
             if previous.is_some_and(|previous| previous >= dependency.submission)
                 || dependency.ordinal >= root.dependencies.len()
                 || ordinals[dependency.ordinal]
@@ -500,13 +598,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || !self
                     .backend_submissions
                     .contains(&dependency.backend_submission)
-                || parent_depth == 0
-                || parent_depth >= root.state.depth
                 || index < root.state.cursor
                     && producer.status != RuntimeCompletionStatusV1::Succeeded
             {
                 return Err(invalid);
             }
+            let parent_depth = self
+                .launch_parent_depth_v1(dependency.submission)
+                .map_err(|_| invalid)?;
             ordinals[dependency.ordinal] = true;
             previous = Some(dependency.submission);
             depth = depth.max(parent_depth + 1);

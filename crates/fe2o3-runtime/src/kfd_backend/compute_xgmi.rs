@@ -398,7 +398,7 @@ fn pair_mut<T>(values: &mut [T], source: usize, destination: usize) -> (&mut T, 
     }
 }
 
-fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+pub(super) fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
     record.kind == RuntimeMemoryKindV1::DeviceLocal
         && record.sdma_backed
         && region.byte_offset == 0
@@ -409,6 +409,28 @@ fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bo
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    pub(super) fn prepare_compute_xgmi_plan_v1(
+        &self,
+        source: RoutedHandleV1,
+        destination: RoutedHandleV1,
+        bytes: u64,
+    ) -> Result<Box<Root>, Failure> {
+        let route = self
+            .compute_xgmi_routes
+            .get(&(source.child, destination.child))
+            .copied()
+            .ok_or_else(|| {
+                KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "pending compute peer has no native route",
+                )
+            })?;
+        let plan = Gfx942ComputeXgmiPacketPlanV1::new(bytes).ok_or_else(|| {
+            KfdRuntimeBackendV1::capacity("pending compute peer extent exceeds its packet plan")
+        })?;
+        Root::prepare(route, plan)
+    }
+
     pub(super) fn compute_xgmi_child_occupied_v1(&self, child: usize) -> bool {
         self.compute_xgmi_children[child].is_some()
     }
