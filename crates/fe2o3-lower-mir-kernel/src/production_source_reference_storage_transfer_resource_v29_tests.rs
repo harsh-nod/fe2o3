@@ -52,10 +52,11 @@ fn source_partial_identical_snapshot_join_has_an_independent_exact_work_boundary
                 let helper = capture_instance(plan, 0);
                 let entry = plan.entries[helper.index()].unwrap();
                 let snapshot = plan.storage_snapshots[plan.states[entry][1].storage.unwrap()];
-                // Owner authentication1 + one by-value root fact comparison1.
-                // The original CAPTURE argument has no paths, guards, enum rows or
-                // physical byte-write intervals, and equality allocates nothing.
-                let exact = 1 + 1;
+                // The original CAPTURE is one initialized thin reference at [0, 8).
+                // Copying it into the helper retains that byte interval and one
+                // root fact; replace_fact elides the equal inherited field fact.
+                // Owner1 + root fact1 + byte interval1; no guards, enums or allocation.
+                let exact = 1 + 1 + 1;
                 budget.charge_work(usize::MAX - budget.work() - exact + usize::from(short))?;
                 let before_work = budget.work();
                 let before_storage = budget.storage();
