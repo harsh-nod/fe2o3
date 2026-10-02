@@ -3,11 +3,52 @@
 use super::*;
 use crate::context::peer_reconciliation::DirectedPeerStateV1;
 
+#[cfg(test)]
+thread_local! {
+    static COMPUTE_PEER_VALIDATION_VISITS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 pub(in crate::context) struct ComputePeerInputV1 {
     pub(in crate::context) producer: ScalarPeerDependencyV1,
     pub(in crate::context) state: DirectedPeerStateV1,
     regions: [RuntimeMemoryRegionV1; 2],
     extents: [u64; 2],
+    predecessor: Option<usize>,
+    preserves_frame: bool,
+}
+
+impl ScalarPeerCopyRootV1 {
+    pub(in crate::context) fn compute_predecessor_v1(&self) -> Option<&ScalarPeerDependencyV1> {
+        self.compute
+            .as_ref()
+            .and_then(|compute| compute.predecessor)
+            .and_then(|index| self.dependencies.get(index))
+    }
+
+    pub(in crate::context) fn preserves_destination_frame_v1(
+        &self,
+        source: ContextReadSourceV1,
+    ) -> bool {
+        self.compute.as_ref().is_some_and(|compute| {
+            compute.preserves_frame
+                && compute.regions == [self.source.region, self.destination.region]
+                && compute.extents
+                    == [
+                        self.source.record.byte_len,
+                        self.destination.record.byte_len,
+                    ]
+        }) && self.directed.is_none()
+            && bounded_device_endpoints(self)
+            && source.region.access == RuntimeAccessV1::Read
+            && source.region.allocation == self.destination.region.allocation
+            && source.record == self.destination.record
+            && source.region.byte_len != 0
+            && source
+                .region
+                .byte_offset
+                .checked_add(source.region.byte_len)
+                .is_some_and(|end| end <= self.destination.record.byte_len)
+    }
 }
 
 fn bounded_device_endpoints(root: &ScalarPeerCopyRootV1) -> bool {
@@ -42,6 +83,37 @@ fn exact_written_source(launch: &ProducerLaunchRootV1, source: ContextReadSource
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    #[cfg(test)]
+    pub(in crate::context) fn count_compute_peer_validations_for_test_v1<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> (T, usize) {
+        COMPUTE_PEER_VALIDATION_VISITS.with(|visits| visits.set(0));
+        let result = operation(self);
+        let visits = COMPUTE_PEER_VALIDATION_VISITS.with(|visits| visits.replace(0));
+        (result, visits)
+    }
+
+    pub(in crate::context) fn compute_peer_predecessor_matches_v1(
+        &self,
+        root: &ScalarPeerCopyRootV1,
+        dependency: &ScalarPeerDependencyV1,
+    ) -> bool {
+        self.scalar_peer_copies
+            .get(&dependency.submission)
+            .is_some_and(|previous| {
+                previous
+                    .compute
+                    .as_ref()
+                    .is_some_and(|compute| compute.preserves_frame)
+                    && previous.directed.is_none()
+                    && previous.stream == root.stream
+                    && previous.destination.region.allocation == root.destination.region.allocation
+                    && previous.destination.record == root.destination.record
+                    && dependency.device == root.destination.record.device
+            })
+    }
+
     pub(in crate::context) fn prepare_compute_peer_custody_v1(
         &mut self,
         root: &mut ScalarPeerCopyRootV1,
@@ -68,6 +140,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Ok(());
         };
         let mut depth = 1;
+        let mut predecessor = None;
         for (index, dependency) in root.dependencies.iter().enumerate() {
             if index > 0 && root.dependencies[index - 1].submission == dependency.submission {
                 return Err(RuntimeValidationErrorV1::DuplicateDependency);
@@ -82,7 +155,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
             } else if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
-                return Err(RuntimeValidationErrorV1::ContextReserved);
+                if record.status != RuntimeCompletionStatusV1::Pending
+                    || record.quiescent
+                    || predecessor.is_some()
+                    || !self.backend.supports_ordered_compute_peer_copy_v1()
+                    || !self.compute_peer_predecessor_matches_v1(root, dependency)
+                {
+                    return Err(RuntimeValidationErrorV1::ContextReserved);
+                }
+                predecessor = Some(index);
             }
             depth = depth.max(
                 self.completion_parent_depth_v1(dependency.submission)?
@@ -100,6 +181,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 root.source.record.byte_len,
                 root.destination.record.byte_len,
             ],
+            predecessor,
+            preserves_frame: self.backend.supports_ordered_compute_peer_copy_v1(),
             state: DirectedPeerStateV1 {
                 depth,
                 cursor: 0,
@@ -117,6 +200,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let Some(compute) = &root.compute else {
             return Ok(());
         };
+        #[cfg(test)]
+        COMPUTE_PEER_VALIDATION_VISITS.with(|visits| visits.set(visits.get() + 1));
         let invalid = RuntimeValidationErrorV1::InvalidBackendDescription;
         if self.versions.is_none()
             || root.directed.is_some()
@@ -128,11 +213,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     root.destination.record.byte_len,
                 ]
             || compute.state.depth < 2
+            || compute.preserves_frame && !self.backend.supports_ordered_compute_peer_copy_v1()
+            || compute.predecessor.is_some() && !compute.preserves_frame
             || compute.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
             || compute.state.cursor > root.dependencies.len()
             || compute.state.terminal == Some(BackendPollV1::Pending)
             || compute.state.terminal.is_none() && compute.state.cursor != 0
             || !root.dependencies.contains(&compute.producer)
+            || compute.predecessor.is_some_and(|index| {
+                root.dependencies.get(index).is_none_or(|dependency| {
+                    dependency == &compute.producer
+                        || dependency.device != root.destination.record.device
+                })
+            })
             || compute.producer.device != root.source.record.device
             || self.submissions.get(&id).is_some_and(|record| {
                 record.producer_launch
@@ -190,6 +283,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .producer_launches
                         .get(&dependency.submission)
                         .is_none_or(|launch| !exact_written_source(launch, root.source))
+                {
+                    return Err(invalid);
+                }
+            } else if compute.predecessor == Some(index) {
+                if !record.scalar_peer_copy
+                    || record.directed_peer_copy
+                    || !self.compute_peer_predecessor_matches_v1(root, dependency)
                 {
                     return Err(invalid);
                 }

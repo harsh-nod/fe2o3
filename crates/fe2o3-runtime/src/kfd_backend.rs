@@ -8585,6 +8585,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let mut current = submission;
         for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
             self.check_directed_if_present_v1(current)?;
+            if matches!(
+                self.submissions.get(&current),
+                Some(RoutedSubmissionV1::CooperativeCopy(_))
+            ) {
+                self.validate_compute_peer_v1(current)?;
+            }
             let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&current)
             else {
                 return Ok(None);
@@ -9102,6 +9108,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         } else {
             None
         };
+        if compute_producer
+            .as_ref()
+            .is_some_and(|producer| !producer.orders_on_stream(stream))
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "ordered compute peer requires the predecessor on the same stream",
+            ));
+        }
         if (self.allocation_retained_by_deferred_compute_v1(source_route)
             && !compute_producer
                 .as_ref()
@@ -9205,12 +9220,22 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "cooperative copy dependency depth exceeds its admitted bound",
             ));
         }
+        let readback_frame = self.compute_peer_readback_frame_v1(
+            source_route,
+            source,
+            destination_route,
+            destination,
+            &dependency_submissions,
+        );
         let source_dependencies_complete = self
             .cooperative_allocation_owners
             .get(&source_route)
             .is_none_or(|owners| {
                 owners.iter().all(|owner| {
                     dependency_set.contains(owner)
+                        || readback_frame.is_some_and(|producer| {
+                            producer.orders_destination_owner(self, *owner)
+                        })
                         || matches!(
                             self.submissions.get(owner),
                             Some(RoutedSubmissionV1::CooperativeCopy(copy))
@@ -9224,6 +9249,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .is_none_or(|owners| {
                 owners.iter().all(|owner| {
                     dependency_set.contains(owner)
+                        || compute_producer.as_ref().is_some_and(|producer| {
+                            producer.orders_destination_owner(self, *owner)
+                        })
                         || matches!(
                             self.submissions.get(owner),
                             Some(RoutedSubmissionV1::CooperativeCopy(copy))
@@ -12486,6 +12514,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     }
 
     fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+        true
+    }
+
+    fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
+        // Exact destination predecessors serialize complete native owners and
+        // preserve initialized bytes outside each checked window.
         true
     }
 

@@ -6,6 +6,10 @@ use std::sync::{Arc, Mutex};
 
 #[path = "compute_peer_tests/deferred_chain.rs"]
 mod deferred_chain;
+#[path = "compute_peer_tests/gather.rs"]
+mod gather;
+#[path = "compute_peer_tests/gather_readback.rs"]
+mod gather_readback;
 #[path = "compute_peer_tests/repeated.rs"]
 mod repeated;
 #[path = "compute_peer_tests/windows.rs"]

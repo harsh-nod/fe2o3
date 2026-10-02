@@ -24,6 +24,9 @@ use sha2::{Digest, Sha256};
 mod data;
 use data::*;
 
+#[path = "live_sharded_vecadd/gather.rs"]
+mod gather;
+
 type Context = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type Engine = RuntimeAsyncCurrentThreadOwnedEngineV1<KfdMultiDeviceRuntimeBackendV1>;
 type Handle = RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>;
@@ -747,7 +750,7 @@ fn run_batches(
     })
 }
 
-fn run(ids: &[u64]) -> ResultV1<Report> {
+fn run(ids: &[u64], gather: Option<bool>) -> ResultV1<Report> {
     let shards = Arc::new(partition(ids.len())?);
     let (context, buffers) = setup(ids, &shards)?;
     let capacity = 3 * ids.len() + 4;
@@ -768,7 +771,10 @@ fn run(ids: &[u64]) -> ResultV1<Report> {
         progress,
     )
     .map_err(|error| failure("owner-open", error))?;
-    let result = run_batches(&mut engine, &handle, buffers, shards);
+    let result = match gather {
+        Some(overlap) => gather::run_batches(&mut engine, &handle, buffers, shards, overlap),
+        None => run_batches(&mut engine, &handle, buffers, shards),
+    };
     // Every post-engine error path attempts owned cleanup before reporting failure.
     let shutdown = engine.shutdown();
     if shutdown.disposition != RuntimeAsyncOwnedDispositionV1::Released
@@ -785,9 +791,15 @@ fn run(ids: &[u64]) -> ResultV1<Report> {
 }
 
 fn main() -> Result<(), String> {
-    let ids = unique_ids(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    let (mode, arguments) = gather::options(&arguments)?;
+    let ids = unique_ids(arguments)?;
     let shards = partition(ids.len())?;
-    let report = run(&ids)?;
+    let report = run(&ids, mode)?;
+    if let Some(overlap) = mode {
+        println!("{}", gather::report(&ids, &shards, overlap, &report));
+        return Ok(());
+    }
     let count = ids.len();
     let ids = ids
         .iter()

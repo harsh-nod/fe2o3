@@ -702,6 +702,27 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to success-ordered partial peer writes into one initialized allocation.
+    ///
+    /// This additionally requires `supports_pending_compute_peer_copy_v1`. Each
+    /// pending destination predecessor must be the exact retained earlier writer
+    /// on the same stream and original allocation, with a bounded acyclic chain.
+    /// A successor must not acquire the destination owner or publish any transfer
+    /// until every predecessor succeeded and restored its original owners. Public
+    /// event release must not remove this dependency. Failure, cancellation, or
+    /// unknown completion cannot authorize a successor or a dependent readback.
+    ///
+    /// The backend authenticates that the entire original destination is initialized
+    /// and that every write affects only its checked window, preserving all other
+    /// bytes. This frame guarantee permits a pending readback of the final whole
+    /// allocation, not a claim that the last partial peer produced every byte.
+    /// Whole-allocation custody remains serialized, including overlapping windows.
+    /// Backends supporting pending peer readback must apply the same exact retained
+    /// chain and original-owner restoration checks before any readback effect.
+    fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
+        false
+    }
+
     fn peer_copy_v1(
         &mut self,
         stream: u64,
@@ -4096,6 +4117,7 @@ mod tests {
         pending_peer_readback: bool,
         pending_directed_peer_readback: bool,
         pending_compute_peer: bool,
+        ordered_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
         deferred_kernel_reads: bool,
@@ -4725,6 +4747,10 @@ mod tests {
 
         fn supports_pending_compute_peer_copy_v1(&self) -> bool {
             self.pending_compute_peer
+        }
+
+        fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
+            self.ordered_compute_peer
         }
 
         fn peer_copy_v1(

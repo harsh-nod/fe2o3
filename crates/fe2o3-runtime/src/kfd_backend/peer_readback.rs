@@ -92,12 +92,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     .streams
                     .get(&copy.stream)
                     .is_some_and(|route| route.child == event_child)
-                && copy.destination_region.byte_offset <= source.byte_offset
-                && copy
-                    .destination_region
-                    .byte_offset
-                    .checked_add(copy.destination_region.byte_len)
-                    .is_some_and(|end| source_end <= end)
+                && ((copy.destination_region.byte_offset <= source.byte_offset
+                    && copy
+                        .destination_region
+                        .byte_offset
+                        .checked_add(copy.destination_region.byte_len)
+                        .is_some_and(|end| source_end <= end))
+                    || self
+                        .compute_peer_destination_frame_v1(submission, source_route, source)
+                        .is_some())
             {
                 return Ok(true);
             }

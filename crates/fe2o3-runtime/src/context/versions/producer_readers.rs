@@ -248,10 +248,6 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
             return Err(E::InvalidReference);
         }
         let input = &self.root.inputs[0];
-        let ProducerReadRequestV1::Active(request) = input.request else {
-            return Err(E::InvalidReference);
-        };
-        let reference = self.root.references[0];
         let source = input.source;
         let (held, producer, dependencies, original) = match self.root.domain {
             ProducerReadDomainV1::Copy => {
@@ -283,19 +279,11 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
             }
             _ => return Err(E::InvalidReference),
         };
-        if self.root.requests[0] != request
-            || reference.consumer != self.consumer
-            || !held
+        if !held
             || producer != input.dependency
             || !producer_dependency_contains_v1(dependencies, &input.dependency)
             || original.region != source.region
             || original.record != source.record
-            || request.producer.key
-                != (ContextWriterKeyV1 {
-                    context_generation: input.dependency.submission.context_generation,
-                    local: input.dependency.submission.local,
-                    kind: ContextWriterKindV1::Submission,
-                })
             || input.dependency.submission.local >= self.id.local
             || self.context.allocations.get(&source.region.allocation) != Some(&source.record)
             || !self
@@ -307,24 +295,63 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
                 source.record.device,
                 source.record.byte_len,
             )
-            || self.observe_live(source.region.allocation, &source.record)?
-                != request.read.allocation
-            || request.read.device
-                != enrollment(
-                    source.region.allocation,
-                    source.record.device,
-                    source.record.byte_len,
-                )
-                .device
-            || request.read.byte_extent != source.record.byte_len
-            || request.read.byte_offset != source.region.byte_offset
-            || request.read.byte_len != source.region.byte_len
-            || self.observe_active_lookup(reference)? != request
         {
             return Err(E::InvalidReference);
         }
-        *active_index = 1;
-        self.observe_active_status(reference)
+        let producer_key = ContextWriterKeyV1 {
+            context_generation: input.dependency.submission.context_generation,
+            local: input.dependency.submission.local,
+            kind: ContextWriterKindV1::Submission,
+        };
+        let allocation = self.observe_live(source.region.allocation, &source.record)?;
+        let device = enrollment(
+            source.region.allocation,
+            source.record.device,
+            source.record.byte_len,
+        )
+        .device;
+        match input.request {
+            ProducerReadRequestV1::Active(request) => {
+                let reference = self.root.references[0];
+                if self.root.requests[0] != request
+                    || reference.consumer != self.consumer
+                    || request.producer.key != producer_key
+                    || request.read.allocation != allocation
+                    || request.read.device != device
+                    || request.read.byte_extent != source.record.byte_len
+                    || request.read.byte_offset != source.region.byte_offset
+                    || request.read.byte_len != source.region.byte_len
+                    || self.observe_active_lookup(reference)? != request
+                {
+                    return Err(E::InvalidReference);
+                }
+                *active_index = 1;
+                self.observe_active_status(reference)
+            }
+            ProducerReadRequestV1::Queued(request) => {
+                let reference = self.root.queued_references[0];
+                if self.root.domain != ProducerReadDomainV1::Copy
+                    || self.root.queued_requests[0] != request
+                    || reference.consumer != self.consumer
+                    || request.producer.key != producer_key
+                    || request.allocation.allocation != allocation
+                    || request.allocation.device != device
+                    || request.allocation.byte_extent != source.record.byte_len
+                    || request.byte_offset != source.region.byte_offset
+                    || request.byte_len != source.region.byte_len
+                    || self
+                        .context
+                        .scalar_peer_copies
+                        .get(&producer.submission)
+                        .is_none_or(|peer| !peer.preserves_destination_frame_v1(source))
+                    || self.observe_queued_lookup(reference)? != request
+                {
+                    return Err(E::InvalidReference);
+                }
+                *queued_index = 1;
+                self.observe_queued_status(reference)
+            }
+        }
     }
 
     fn reconcile(&mut self) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
@@ -545,9 +572,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })
             .copied()
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
-        if queued
-            && (launch.is_none() || !self.producer_launches.contains_key(&dependency.submission))
-        {
+        let queued_launch =
+            launch.is_some() && self.producer_launches.contains_key(&dependency.submission);
+        let queued_frame_copy = copy.is_some()
+            && self
+                .scalar_peer_copies
+                .get(&dependency.submission)
+                .is_some_and(|producer| producer.preserves_destination_frame_v1(source));
+        if queued && !queued_launch && !queued_frame_copy {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
         if let Some(consumer) = launch {
@@ -610,7 +642,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if dependency != copy.producer
                 || source.region != copy.source.region
                 || source.record != copy.source.record
-                || !producer.covers_input_v1(source)
+                || (!producer.covers_input_v1(source)
+                    && !producer.preserves_destination_frame_v1(source))
             {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
@@ -1047,11 +1080,27 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     local: id.local,
                     kind: ContextWriterKindV1::Submission,
                 };
-                versions.journal.acquire_producer_reads(
-                    consumer,
-                    &root.requests,
-                    &mut prepared.output,
-                )?;
+                if root.queued_requests.is_empty() {
+                    versions.journal.acquire_producer_reads(
+                        consumer,
+                        &root.requests,
+                        &mut prepared.output,
+                    )?;
+                } else {
+                    if root.domain != ProducerReadDomainV1::Copy
+                        || !root.requests.is_empty()
+                        || root.queued_requests.len() != 1
+                    {
+                        return Err(ContextVersionJournalErrorV1::InvalidReference);
+                    }
+                    // The queued writer identity is retained without guessing its future version.
+                    versions.journal.acquire_mixed_reads_with_queued(
+                        consumer,
+                        (&[], &mut []),
+                        (&root.requests, &mut prepared.output),
+                        (&root.queued_requests, &mut prepared.queued_output),
+                    )?;
+                }
                 assert!(
                     root.references.capacity() >= prepared.output.len(),
                     "preallocated producer references"
@@ -1059,6 +1108,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 for reference in prepared.output {
                     root.references
                         .push(reference.expect("complete producer reservations"));
+                }
+                assert!(
+                    root.queued_references.capacity() >= prepared.queued_output.len(),
+                    "preallocated queued references"
+                );
+                for reference in prepared.queued_output {
+                    root.queued_references
+                        .push(reference.expect("complete queued reservations"));
                 }
                 let marker = root.complete_marker();
                 root.marker = Some(marker);
@@ -1138,15 +1195,27 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .submission_writers
             .get(&id)
             .ok_or(E::InvalidReference)?;
+        let request_shape = match root.inputs.first().map(|input| input.request) {
+            Some(ProducerReadRequestV1::Active(_)) => {
+                root.references.len() == 1
+                    && root.requests.len() == 1
+                    && root.queued_requests.is_empty()
+                    && root.queued_references.is_empty()
+            }
+            Some(ProducerReadRequestV1::Queued(_)) => {
+                root.domain == ProducerReadDomainV1::Copy
+                    && root.references.is_empty()
+                    && root.requests.is_empty()
+                    && root.queued_requests.len() == 1
+                    && root.queued_references.len() == 1
+            }
+            None => false,
+        };
         if !matches!(
             root.domain,
             ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
         ) || root.inputs.len() != 1
-            || root.references.len() != 1
-            || root.requests.len() != 1
-            || !root.queued_requests.is_empty()
-            || !root.queued_references.is_empty()
-            || !matches!(root.inputs[0].request, ProducerReadRequestV1::Active(_))
+            || !request_shape
             || marker != root.complete_marker()
             || marker.first.consumer != consumer
             || versions.submission_readers.contains_key(&id)

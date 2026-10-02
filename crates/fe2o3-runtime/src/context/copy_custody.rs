@@ -55,7 +55,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     } else {
                         ordinary
                     }) && record.status == RuntimeCompletionStatusV1::Pending
-                        && peer.covers_input_v1(source)
+                        && (peer.covers_input_v1(source)
+                            || peer.preserves_destination_frame_v1(source))
                 })
                 .map(|_| submission)
         });
@@ -283,7 +284,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self
                 .scalar_peer_copies
                 .get(&root.producer.submission)
-                .is_none_or(|producer| !producer.covers_input_v1(root.source))
+                .is_none_or(|producer| {
+                    !producer.covers_input_v1(root.source)
+                        && !producer.preserves_destination_frame_v1(root.source)
+                })
         {
             return Err(invalid);
         }

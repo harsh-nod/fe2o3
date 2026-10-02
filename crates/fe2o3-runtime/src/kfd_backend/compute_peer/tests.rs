@@ -14,6 +14,9 @@ mod prefix_progress;
 #[path = "window_tests.rs"]
 mod window;
 
+#[path = "gather_tests.rs"]
+mod gather;
+
 const BYTES: usize = 64;
 const ALLOCATIONS: usize = 10;
 
@@ -345,7 +348,16 @@ impl Fixture {
         panic!("bounded scripted progress did not settle {id}");
     }
 
-    fn clean(mut self) {
+    fn clean(self) {
+        self.clean_except(&[]);
+    }
+
+    fn clean_except(mut self, released: &[u64]) {
+        assert!(
+            released
+                .iter()
+                .all(|id| !self.backend.allocations.contains_key(id))
+        );
         for id in self.setup_predecessors.clone() {
             let RoutedSubmissionV1::Native { stream, .. } = self.backend.submissions[&id] else {
                 panic!("setup predecessor remains native");
@@ -369,7 +381,9 @@ impl Fixture {
         assert!(self.backend.cooperative_dependency_retain_counts.is_empty());
         for allocations in self.allocations {
             for allocation in allocations {
-                self.backend.release_allocation_v1(allocation).unwrap();
+                if !released.contains(&allocation) {
+                    self.backend.release_allocation_v1(allocation).unwrap();
+                }
             }
         }
         if let Some(host) = self.host {
