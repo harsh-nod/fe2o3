@@ -969,7 +969,7 @@ run_rustc_codegen_lib_tests() {
   # Keep the aggregate rustc-private harness bounded like the isolated targets;
   # full debuginfo can exceed the executable identity measurement limit.
   run_step rustc-codegen-lib-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+    env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
   run_step rustc-codegen-extractor-bin-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --bin fe2o3-rustc-extract
   run_step rustc-codegen-exporter-bin-tests \
@@ -1077,10 +1077,10 @@ run_workspace_tests() {
 }
 
 run_backend_build() {
-  run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
+  run_step backend-check-tests python3 -B scripts/tests/check-rustc-codegen-backend.py
+  run_step backend-build python3 -B scripts/check-rustc-codegen-backend.py
   run_step backend-all-features-build \
-    env CARGO_PROFILE_DEV_DEBUG=1 \
-      cargo build --locked -p rustc-codegen-fe2o3 --all-features
+    python3 -B scripts/check-rustc-codegen-backend.py --all-features
 }
 
 run_verus() {

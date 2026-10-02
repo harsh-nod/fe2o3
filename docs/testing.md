@@ -353,6 +353,21 @@ integration shards run only their assigned integration targets. The binary
 suites use default features and the production limited-debug profile. These
 unit regressions do not replace source-to-simulator, proof, or GPU qualification.
 
+`scripts/ci-local.sh backend` checks both default and all-feature library builds,
+one at a time. Each build uses limited debug information and no incremental
+compilation, and binds the actual Cargo JSON artifact to the workspace package
+and source. The gate enforces the runtime's existing 1 GiB backend bound,
+ELF64/ET_DYN shape, and a bounded metadata-only load with the selected rustc.
+The compiler is selected by `RUSTC` or the workspace's `rustc` proxy and set
+explicitly for Cargo as well; configured compiler wrappers are disabled for
+these host backend builds. No stripping or runtime limit change is applied.
+
+The checker reports bytes, headroom, and SHA-256 only after descriptor and path
+identity plus content checks succeed before and after loading. This is a CI
+artifact/loadability check, not sealed runtime custody, GPU code generation,
+source qualification, or launch authority. The checker regressions and both
+build/load checks run in the normal `generic-core` pipeline.
+
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
 

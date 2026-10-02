@@ -562,7 +562,7 @@ assert_codegen_lib_steps() {
     assert_step_count "${step}" 1 "backend unit step ${step} did not run exactly once"
   done
   assert_equals \
-    "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
     "$(step_command rustc-codegen-lib-tests)" \
     'backend library test command changed'
   assert_equals \
@@ -842,6 +842,7 @@ for core_step in \
   workspace-binding-projection-revalidation \
   standalone-tiled-gemm-general-host-check \
   standalone-flash-attention-general-host-check \
+  backend-check-tests \
   backend-build \
   backend-all-features-build \
   virtual-runtime-no-gpu-metadata \
@@ -931,9 +932,42 @@ assert_equals \
   "$(step_command generic-check-cargo-fe2o3-bootstrap)" \
   'generic check did not retain the feature-free production driver'
 assert_equals \
-  'env CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p rustc-codegen-fe2o3 --all-features' \
+  'python3 -B scripts/check-rustc-codegen-backend.py --all-features' \
   "$(step_command backend-all-features-build)" \
   'generic core did not build the all-feature production backend'
+assert_equals \
+  'python3 -B scripts/check-rustc-codegen-backend.py' \
+  "$(step_command backend-build)" \
+  'generic core did not check the default backend artifact'
+assert_equals \
+  'python3 -B scripts/tests/check-rustc-codegen-backend.py' \
+  "$(step_command backend-check-tests)" \
+  'generic core omitted backend checker regressions'
+for index in "${!STEP_NAMES[@]}"; do
+  if [[ "${STEP_NAMES[index]}" == backend-check-tests ]]; then
+    assert_equals backend-build "${STEP_NAMES[index+1]:-}" 'default backend check is out of order'
+    assert_equals backend-all-features-build "${STEP_NAMES[index+2]:-}" 'all-feature backend check is out of order'
+  fi
+done
+for step in backend-check-tests backend-build backend-all-features-build; do
+  trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+  status=0
+  timeout --signal=TERM --kill-after=2s 10s \
+    env BACKEND_FAIL_STEP="${step}" BACKEND_TRACE="${trace}" \
+    bash -c '
+      source "$1"
+      run_step() {
+        printf "%s\n" "$1" >>"${BACKEND_TRACE}"
+        [[ "$1" != "${BACKEND_FAIL_STEP}" ]] || return 37
+      }
+      run_backend_build
+      printf "%s\n" unexpected-success
+    ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+    >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+  assert_equals 37 "${status}" 'backend build/check failure was suppressed'
+  assert_equals "${step}" "$(tail -n 1 "${trace}")" 'backend checks continued after failure'
+  [[ ! -s "${trace}.stdout" ]]
+done
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
