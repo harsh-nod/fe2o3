@@ -1313,6 +1313,7 @@ fn expand_general_typed_kernel_with_imports(
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
     let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
+    let generated_context_arguments = generated_context_arguments_v1(&input, &model);
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
@@ -1514,6 +1515,7 @@ fn expand_general_typed_kernel_with_imports(
 
             #generated_host_arguments
             #generated_worker_v3_adapter
+            #generated_context_arguments
 
             const _: () = {
                 // SAFETY: these constants and the generated argument adapter
@@ -2298,6 +2300,120 @@ fn generated_disjoint_index_space_v1(
             )
         }
         _ => unreachable!("general typed validation accepts only known disjoint index spaces"),
+    }
+}
+
+fn generated_context_arguments_v1(
+    input: &ItemFn,
+    model: &GeneralTypedSignatureModelV1,
+) -> proc_macro2::TokenStream {
+    if model.arguments.iter().any(|argument| {
+        !matches!(
+            argument,
+            GeneralTypedArgumentKindV1::Scalar(_)
+                | GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+        )
+    }) {
+        return quote! {};
+    }
+
+    let fields = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.clone(),
+                _ => unreachable!("general typed validation requires identifier patterns"),
+            },
+            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+        })
+        .collect::<Vec<_>>();
+    let mut types = Vec::new();
+    let mut encodings = Vec::new();
+    let mut bindings = Vec::new();
+    for ((kind, field), abi) in model.arguments.iter().zip(&fields).zip(model.abi.fields()) {
+        let offset = usize::try_from(abi.offset()).expect("canonical argument offset fits usize");
+        match kind {
+            GeneralTypedArgumentKindV1::Scalar(scalar) => {
+                types.push(scalar.rust_type_tokens());
+                let end = offset + scalar.size_alignment().0 as usize;
+                encodings.push(quote! {
+                    __fe2o3_context_kernarg[#offset..#end]
+                        .copy_from_slice(&self.#field.to_le_bytes());
+                });
+            }
+            GeneralTypedArgumentKindV1::SharedSlice(scalar)
+            | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                let wrapper = match kind {
+                    GeneralTypedArgumentKindV1::SharedSlice(_) => {
+                        quote!(GeneratedContextReadSlice)
+                    }
+                    GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_) => {
+                        quote!(GeneratedContextWriteSlice)
+                    }
+                    GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
+                        quote!(GeneratedContextReadWriteSlice)
+                    }
+                    _ => unreachable!(),
+                };
+                types.push(quote!(__fe2o3_kernel_host::__generated::#wrapper<#scalar>));
+                let count_offset = offset + 8;
+                let end = count_offset + 8;
+                encodings.push(quote! {
+                    __fe2o3_context_kernarg[#count_offset..#end]
+                        .copy_from_slice(&self.#field.elements_v1().to_le_bytes());
+                });
+                let pointer_offset = u32::try_from(abi.offset())
+                    .expect("canonical pointer slot fits runtime binding offset");
+                bindings.push(quote! {
+                    __fe2o3_kernel_host::__generated::RuntimeBindingV1 {
+                        region: self.#field.region_v1(),
+                        kernarg_byte_offset: #pointer_offset,
+                    }
+                });
+            }
+            _ => unreachable!("unsupported Context argument kinds were excluded"),
+        }
+    }
+    let size = usize::try_from(model.abi.size()).expect("canonical argument size fits usize");
+    let signature = model.generated_host_contract_identity.as_bytes();
+    let mutable = (!encodings.is_empty()).then(|| quote!(mut));
+    quote! {
+        /// Address-free arguments referencing ordinary Context allocations.
+        /// This metadata owns no allocation and grants no launch or artifact authority.
+        #[must_use]
+        #[allow(dead_code)]
+        pub struct ContextArguments {
+            #(#fields: #types,)*
+        }
+
+        impl ContextArguments {
+            #[allow(clippy::too_many_arguments)]
+            pub fn new(#(#fields: #types),*) -> Self {
+                Self { #(#fields),* }
+            }
+        }
+
+        impl __fe2o3_kernel_host::__generated::RuntimeArgumentsV1 for ContextArguments {
+            const SIGNATURE_V1: [u8; 32] = [#(#signature),*];
+
+            fn encode_explicit_kernarg_v1(&self) -> ::std::vec::Vec<u8> {
+                let #mutable __fe2o3_context_kernarg = ::std::vec![0_u8; #size];
+                #(#encodings)*
+                __fe2o3_context_kernarg
+            }
+
+            fn bindings_v1(&self) -> ::std::vec::Vec<
+                __fe2o3_kernel_host::__generated::RuntimeBindingV1,
+            > {
+                ::std::vec![#(#bindings),*]
+            }
+        }
     }
 }
 
@@ -4622,10 +4738,10 @@ mod tests {
         device_import_for, device_path_for, expand_device_copy_with_core_import,
         expand_device_export_with_import, expand_device_import_with_import,
         expand_kernel_with_device_import, expand_kernel_with_imports,
-        general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
-        generated_worker_v3_adapter_v1, host_import_for, model_general_typed_signature_v1,
-        parse_device_ffi_options, parse_kernel_options, reconcile_crate_binding_v1,
-        simulation_attempt_value_v1, simulation_mode_value_v1,
+        general_typed_global_mut_pointer_type_identity_v1, generated_context_arguments_v1,
+        generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
+        model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
+        reconcile_crate_binding_v1, simulation_attempt_value_v1, simulation_mode_value_v1,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
         validate_kernel_source_safety, validate_typed_kernel_profile_v1,
         validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
@@ -5575,6 +5691,213 @@ mod tests {
     }
 
     #[test]
+    fn context_arguments_use_exact_canonical_offsets_and_ordinary_slice_access() {
+        let input: ItemFn = parse_quote! {
+            pub fn mixed_context(
+                tag: u8,
+                input: &[u16],
+                coefficient: f64,
+                output: WriteOnlyDisjointSlice<u32>,
+                update: DisjointSlice<i32>,
+            ) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x61; 32]).unwrap();
+        assert_eq!(model.abi.size(), 64);
+        assert_eq!(
+            model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.offset())
+                .collect::<Vec<_>>(),
+            [0, 8, 24, 32, 48]
+        );
+        let generated = generated_context_arguments_v1(&input, &model);
+        let parsed: syn::File = syn::parse2(generated.clone()).unwrap();
+        let arguments = parsed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Struct(item) if item.ident == "ContextArguments" => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        assert!(arguments.generics.params.is_empty());
+        assert!(
+            arguments
+                .fields
+                .iter()
+                .all(|field| matches!(field.vis, syn::Visibility::Inherited))
+        );
+        let generated = generated.to_string();
+        for expected in [
+            "GeneratedContextReadSlice < u16 >",
+            "GeneratedContextWriteSlice < u32 >",
+            "GeneratedContextReadWriteSlice < i32 >",
+            "vec ! [0_u8 ; 64usize]",
+            "__fe2o3_context_kernarg [0usize .. 1usize] . copy_from_slice (& self . tag . to_le_bytes ())",
+            "__fe2o3_context_kernarg [24usize .. 32usize] . copy_from_slice (& self . coefficient . to_le_bytes ())",
+            "__fe2o3_context_kernarg [16usize .. 24usize] . copy_from_slice (& self . input . elements_v1 () . to_le_bytes ())",
+            "__fe2o3_context_kernarg [40usize .. 48usize] . copy_from_slice (& self . output . elements_v1 () . to_le_bytes ())",
+            "__fe2o3_context_kernarg [56usize .. 64usize] . copy_from_slice (& self . update . elements_v1 () . to_le_bytes ())",
+            "region : self . input . region_v1 () , kernarg_byte_offset : 8u32",
+            "region : self . output . region_v1 () , kernarg_byte_offset : 32u32",
+            "region : self . update . region_v1 () , kernarg_byte_offset : 48u32",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "missing `{expected}` in {generated}"
+            );
+        }
+        assert_eq!(generated.matches(". copy_from_slice").count(), 5);
+        assert_eq!(generated.matches("kernarg_byte_offset :").count(), 3);
+        assert!(!generated.contains("as_ptr"));
+        assert!(!generated.contains("unsafe"));
+    }
+
+    #[test]
+    fn context_arguments_encode_every_supported_scalar_in_little_endian() {
+        let input: ItemFn = parse_quote! {
+            pub fn scalars(a: i8, b: u8, c: i16, d: u16, e: i32, f: u32,
+                g: i64, h: u64, i: f32, j: f64) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x62; 32]).unwrap();
+        let generated = generated_context_arguments_v1(&input, &model).to_string();
+        for (field, start, end) in [
+            ("a", 0, 1),
+            ("b", 1, 2),
+            ("c", 2, 4),
+            ("d", 4, 6),
+            ("e", 8, 12),
+            ("f", 12, 16),
+            ("g", 16, 24),
+            ("h", 24, 32),
+            ("i", 32, 36),
+            ("j", 40, 48),
+        ] {
+            let expected = format!(
+                "__fe2o3_context_kernarg [{start}usize .. {end}usize] . copy_from_slice (& self . {field} . to_le_bytes ())"
+            );
+            assert!(
+                generated.contains(&expected),
+                "missing `{expected}` in {generated}"
+            );
+        }
+        assert_eq!(model.abi.size(), 48);
+        assert_eq!(generated.matches(". copy_from_slice").count(), 10);
+        assert!(!generated.contains("kernarg_byte_offset :"));
+        assert!(!generated.contains("GeneratedContextRead"));
+    }
+
+    #[test]
+    fn context_arguments_signature_is_the_generated_contract_without_authority() {
+        let input: ItemFn = parse_quote! {
+            pub fn projected(value: u32, output: WriteOnlyDisjointSlice<u32>) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x63; 32]).unwrap();
+        let generated = generated_context_arguments_v1(&input, &model);
+        let parsed: syn::File = syn::parse2(generated.clone()).unwrap();
+        let implementation = parsed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Impl(item) if item.trait_.is_some() => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        assert!(implementation.unsafety.is_none());
+        let signature = implementation
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Const(item) if item.ident == "SIGNATURE_V1" => Some(&item.expr),
+                _ => None,
+            })
+            .unwrap();
+        let syn::Expr::Array(signature) = signature else {
+            panic!("literal contract bytes")
+        };
+        let signature = signature
+            .elems
+            .iter()
+            .map(|byte| {
+                let syn::Expr::Lit(byte) = byte else {
+                    panic!("literal byte")
+                };
+                let syn::Lit::Int(byte) = &byte.lit else {
+                    panic!("integer byte")
+                };
+                byte.base10_parse::<u8>().unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(signature, model.generated_host_contract_identity.as_bytes());
+        let changed = model_general_typed_signature_v1(&input, &options, [0x64; 32]).unwrap();
+        assert_ne!(
+            changed.generated_host_contract_identity,
+            model.generated_host_contract_identity
+        );
+        let generated = generated.to_string();
+        for forbidden in [
+            "KfdRuntimeLaunchAuthority",
+            "WorkerV3",
+            "revalidate_currentness",
+            "from_raw",
+            "GeneratedRuntimeStorage",
+        ] {
+            assert!(!generated.contains(forbidden), "unexpected {forbidden}");
+        }
+    }
+
+    #[test]
+    fn context_arguments_are_absent_for_unimplemented_argument_profiles() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let inputs: [ItemFn; 6] = [
+            parse_quote!(
+                pub fn mapped(out: DisjointSlice<u32, Blocked<Index1D, 1, 8>>) {}
+            ),
+            parse_quote!(
+                pub fn mapped_write(out: WriteOnlyDisjointSlice<u32, Shifted<Index1D, 1>>) {}
+            ),
+            parse_quote!(
+                pub fn pointer(out: fe2o3_device::DeviceGlobalMutPtr<u32>) {}
+            ),
+            parse_quote!(
+                pub fn array(value: [u32; 4]) {}
+            ),
+            parse_quote!(
+                pub fn tuple(value: (u32, u64)) {}
+            ),
+            parse_quote!(
+                pub fn record(value: Parameters) {}
+            ),
+        ];
+        for input in inputs {
+            let model = model_general_typed_signature_v1(&input, &options, [0x65; 32]).unwrap();
+            assert!(
+                generated_context_arguments_v1(&input, &model).is_empty(),
+                "{}",
+                input.sig.ident
+            );
+        }
+    }
+
+    #[test]
+    fn context_arguments_preserve_frontend_rejection_of_empty_signatures() {
+        let input: ItemFn = parse_quote!(
+            pub fn empty() {}
+        );
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let error = model_general_typed_signature_v1(&input, &options, [0x66; 32]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "general typed V1 requires at least one kernel argument"
+        );
+    }
+
+    #[test]
     fn mapped_worker_v3_dispatch_generates_only_the_exact_kfd_adapter() {
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let input: ItemFn = parse_quote! {
@@ -6046,6 +6369,7 @@ mod tests {
         assert!(expansion.contains("CompilerGeneratedKfdArguments"));
         assert!(expansion.contains("GeneratedKfdReadSlice"));
         assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
+        assert!(expansion.contains("pub struct ContextArguments"));
         assert_eq!(model.generated_host_contract_identity.as_bytes().len(), 32);
     }
 

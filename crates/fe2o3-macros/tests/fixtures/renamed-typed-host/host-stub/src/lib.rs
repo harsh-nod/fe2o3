@@ -65,6 +65,41 @@ pub mod __generated {
     impl GeneratedDeviceScalarV1 for u32 {}
     impl GeneratedDeviceScalarV1 for f32 {}
 
+    // Compile-only renamed-dependency fixture, not live Context authority.
+    #[derive(Clone, Copy)]
+    pub struct RuntimeMemoryRegionV1;
+
+    pub struct RuntimeBindingV1 {
+        pub region: RuntimeMemoryRegionV1,
+        pub kernarg_byte_offset: u32,
+    }
+
+    pub trait RuntimeArgumentsV1: Send + Sync + 'static {
+        const SIGNATURE_V1: [u8; 32];
+        fn encode_explicit_kernarg_v1(&self) -> Vec<u8>;
+        fn bindings_v1(&self) -> Vec<RuntimeBindingV1>;
+    }
+
+    macro_rules! context_fixture_slice {
+        ($name:ident) => {
+            pub struct $name<T>(PhantomData<T>);
+
+            impl<T> $name<T> {
+                pub fn region_v1(&self) -> RuntimeMemoryRegionV1 {
+                    RuntimeMemoryRegionV1
+                }
+
+                pub fn elements_v1(&self) -> u64 {
+                    1
+                }
+            }
+        };
+    }
+
+    context_fixture_slice!(GeneratedContextReadSlice);
+    context_fixture_slice!(GeneratedContextWriteSlice);
+    context_fixture_slice!(GeneratedContextReadWriteSlice);
+
     #[derive(Clone, Copy)]
     pub enum PointerWidth {
         Bits64,

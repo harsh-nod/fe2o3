@@ -706,10 +706,17 @@ broader application compute sharding, complete native fault
 coverage, and peer mappings retained across separate logical copies remain open.
 The current route does not qualify a general native runtime pipeline.
 
-Prioritize an exact pending deferred-compute output feeding a native peer copy,
-then an evidence-backed application kernel through the existing production
-constructor. The native-producer continuation and repeated live batches are
-qualified above; pending Deferred producers remain outside that peer profile.
+Pending deferred-compute output feeding native peer copies, checked pending
+source windows, ordered gathers and gathered-frame consumers are now qualified
+in the [pending-compute windows](evidence/dev-pending-compute-windows-2026-10-02/README.md),
+[ordered gather](evidence/dev-queued-gather-2026-10-02/README.md), and
+[gathered-frame consumer](evidence/dev-gather-compute-2026-10-02/README.md)
+checkpoints. The last packet includes eight new prequeued three/four-GPU
+compute/gather/compute/return/readback cases. Native late gathered-consumer
+admission remains open; direct-peer late-admission controls do not cover it.
+Prioritize [ordinary generated Context arguments](runtime-context-arguments-v1.md),
+that focused hardware gate, and an evidence-backed application kernel through
+the existing production constructor.
 Same-process device reopen is a separate device/VM ownership redesign, not a
 prerequisite for useful iterative workloads. General application kernels still
 require compiler/effects evidence; neither finite qualification policy nor the
@@ -734,7 +741,9 @@ global result custody is acquired before child entry and is separate from direct
 ancestry. Public event release does not release it; conclusive settlement or
 cancellation does, while terminal/uncertain outcomes retain it. Checked dependency
 depth still includes the child preflight minimum and the existing maximum.
-Pending deferred-compute chains remain unsupported.
+The earlier completed-only restriction is superseded for the exact bounded
+pending-producer profiles in the checkpoints above, not arbitrary dependency
+graphs or unqualified kernel authorities.
 
 Typed CPU tests begin at an already-admitted child handoff, then exercise normal
 Context event/result lifetimes through scripted completion. The Write-to-Read

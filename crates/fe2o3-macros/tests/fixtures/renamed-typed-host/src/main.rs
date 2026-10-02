@@ -1,6 +1,4 @@
-use gpu_device::{
-    DeviceGlobalMutPtr, DisjointSlice, KernelError, KernelResult, kernel,
-};
+use gpu_device::{DeviceGlobalMutPtr, DisjointSlice, KernelError, KernelResult, kernel};
 
 #[kernel(
     typed,
@@ -31,16 +29,14 @@ pub fn renamed_global_mut(target: DeviceGlobalMutPtr<u32>) {
     typed,
     namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
-pub fn renamed_result(
-    input: &[f32],
-    output: DisjointSlice<f32>,
-) -> KernelResult {
+pub fn renamed_result(input: &[f32], output: DisjointSlice<f32>) -> KernelResult {
     let _ = input.first().ok_or(KernelError::OutOfBounds)?;
     let _ = output;
     Ok(())
 }
 
 fn assert_expectation<T: gpu_host::__generated::CompilerGeneratedKernelExpectationV1>() {}
+fn assert_context_arguments<T: gpu_host::__generated::RuntimeArgumentsV1>() {}
 
 fn assert_general_arguments<'allocation>(
     input: &'allocation [f32],
@@ -64,9 +60,7 @@ fn assert_vecadd_arguments<'allocation>(
         renamed_typed_gpu::Arguments::new(a, b, c);
 }
 
-fn assert_global_mut_argument<'allocation>(
-    target: &'allocation mut [u32],
-) {
+fn assert_global_mut_argument<'allocation>(target: &'allocation mut [u32]) {
     let target = gpu_host::__generated::GeneratedKfdReadWriteSlice::new(target);
     let target = renamed_global_mut_gpu::GlobalMut::new(target).unwrap();
     assert_eq!(target.len(), 1);
@@ -78,6 +72,7 @@ fn assert_global_mut_argument<'allocation>(
 fn main() {
     assert_expectation::<renamed_typed_gpu::Marker>();
     assert_expectation::<renamed_general_gpu::Marker>();
+    assert_context_arguments::<renamed_general_gpu::ContextArguments>();
     assert_expectation::<renamed_result_gpu::Marker>();
     let _ = assert_vecadd_arguments;
     let _ = assert_general_arguments;

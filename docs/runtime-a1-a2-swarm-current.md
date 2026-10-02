@@ -16,7 +16,9 @@ checkpoints add native directed chains and fanout with dependent D2H on three
 GPUs, and late directed-peer/compute admission after an exact native producer's
 observed publication. Checked native peer subranges now also pass three-GPU
 chain/fanout/readback qualification with independent offsets and unequal logical
-owner lengths. Earlier matched wait-cadence measurements remain scoped
+owner lengths. Subsequent checkpoints qualify pending-compute source windows,
+ordered destination gathers, and gathered-frame compute consumers on three and
+four GPUs with final-readback-only progress. Earlier matched wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -33,7 +35,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs, directed and native-subrange chains/fanout/D2H on three, deferred continuation and bounded late admission; incomplete | Pending compute-output subranges, ordered gather, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and gathered-frame consumers; ordinary generated argument API CPU-qualified; incomplete | Native generated-argument and late-gather qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -270,17 +272,17 @@ This is not whole-adapter/DMA refinement, physical overlap or performance parity
 
 The remaining practical multi-GPU priority order is:
 
-1. Extend pending compute-output peer copies to checked subranges. Preserve the
-   exact producer's existing full-allocation Write coverage, but permit a contained
-   source window and independently checked initialized destination window. Retain
-   the immutable window through completion and whole-owner restoration. Qualify
-   existing R57 compute -> native slice -> D2H with final-stream-only progress,
-   wrong-producer/coverage/overflow negatives and complete guard checks. Pending
-   compute-output peer copies remain full-extent until this separate change lands.
-2. Admit explicitly ordered gather copies into one destination allocation. Reuse
-   queued-writer accounting without admitting concurrent writers or inferring
-   union coverage from the last partial writer. Require a three-GPU, preadmitted
-   two-source gather with a settled whole-destination readback and guard oracle.
+1. Use the CPU-qualified ordinary generated Context argument API for supported
+   scalar/slice arguments. The [qualification packet](evidence/dev-context-arguments-2026-10-02/README.md)
+   checks real-host encoding, admission failures and a scripted two-device
+   pipeline. It removes manual ABI packing, not private generated-storage or
+   execution-authority boundaries. Native use still needs the exact admitted
+   kernel path in item 3. See [Context arguments](runtime-context-arguments-v1.md).
+2. Qualify late gathered-frame consumer admission on hardware, after an exact
+   gather ancestor has published and while its native child custody is retained.
+   The implementation and CPU regressions exist; current gathered-consumer native
+   cases are prequeued. Drive only final D2H and check all computed/guard bytes
+   plus original-owner cleanup.
 3. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
@@ -298,6 +300,16 @@ The remaining practical multi-GPU priority order is:
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2
    remain parked and incomplete.
+
+Do not reopen already accepted pending-output and gather increments. The
+[pending-compute windows](evidence/dev-pending-compute-windows-2026-10-02/README.md),
+[ordered gather](evidence/dev-queued-gather-2026-10-02/README.md), and
+[gathered-frame consumers](evidence/dev-gather-compute-2026-10-02/README.md)
+packets retain their exact scopes. The last packet passes 2,198 runtime tests
+(32 existing ignores), 28 example tests and 28 native cases, including eight
+new three/four-GPU gathered-consumer cases. These are historical checkpoint
+results, not fresh qualification of generated Context arguments, arbitrary
+kernels, physical overlap or performance parity.
 
 ## Earlier Multi-GPU Checkpoints
 

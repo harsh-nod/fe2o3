@@ -119,6 +119,78 @@ fn generated_worker_v3_adapter_compiles_downstream() {
 }
 
 #[test]
+fn generated_context_arguments_execute_public_runtime_fixture() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let output = Command::new(env!("CARGO"))
+        .args(["test", "--offline", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .arg("--target-dir")
+        .arg(target_dir)
+        .args(["--lib", "--", "--test-threads=1"])
+        .env("FE2O3_HIP_SYS_DISABLE", "1")
+        .output()
+        .expect("failed to run generated Context fixture");
+    assert!(
+        output.status.success(),
+        "Context fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("5 passed; 0 failed"));
+}
+
+#[test]
+fn generated_context_arguments_reject_unsupported_profiles_and_typed_substitution() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "context_mapped_unsupported",
+            &[
+                "cannot find type `ContextArguments`",
+                "mapped_output_kernel_gpu",
+            ],
+        ),
+        (
+            "context_pointer_unsupported",
+            &["cannot find type `ContextArguments`", "pointer_only_gpu"],
+        ),
+        (
+            "context_aggregate_unsupported",
+            &["cannot find type `ContextArguments`", "aggregate_only_gpu"],
+        ),
+        (
+            "context_wrong_access",
+            &[
+                "mismatched types",
+                "GeneratedContextWriteSlice",
+                "GeneratedContextReadWriteSlice",
+            ],
+        ),
+        ("context_wrong_element", &["mismatched types", "f32", "u32"]),
+        (
+            "context_kernel_substitution",
+            &["mismatched types", "transform_gpu::ContextArguments"],
+        ),
+        ("context_private_fields", &["field `source`", "is private"]),
+    ];
+    for (bin, diagnostics) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in *diagnostics {
+            assert!(
+                stderr.contains(expected),
+                "{bin} omitted `{expected}`:\n{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");

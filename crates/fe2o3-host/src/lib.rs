@@ -11,6 +11,7 @@ mod compiler_execution_current_record_audit;
 mod compiler_generated_contract;
 mod generated_argument_borrow;
 mod generated_argument_plan;
+mod generated_context_arguments;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
 mod generated_runtime_arguments;
@@ -183,6 +184,9 @@ pub use generated_argument_plan::{
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
 };
+pub use generated_context_arguments::{
+    GeneratedContextReadSlice, GeneratedContextReadWriteSlice, GeneratedContextWriteSlice,
+};
 #[doc(hidden)]
 pub use generated_kfd_arguments::{
     CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
@@ -324,12 +328,18 @@ pub mod __generated {
     #[cfg(target_os = "linux")]
     pub use crate::production_application::prepare_admitted_worker_v3_kfd_application_v1;
     pub use crate::{
-        CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,
-        GeneratedRuntimeArgumentBudgetV1, GeneratedRuntimeArgumentErrorV1,
-        GeneratedRuntimeArgumentFootprintV1, GeneratedRuntimeArgumentLimitsV1,
-        GeneratedRuntimeOutputDecoderV1, GeneratedRuntimePackedArgumentsV1,
-        GeneratedRuntimeReadSlice, GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1,
-        GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
+        CompilerGeneratedRuntimeArguments, GeneratedContextReadSlice,
+        GeneratedContextReadWriteSlice, GeneratedContextWriteSlice,
+        GeneratedRuntimeArgumentBindingV1, GeneratedRuntimeArgumentBudgetV1,
+        GeneratedRuntimeArgumentErrorV1, GeneratedRuntimeArgumentFootprintV1,
+        GeneratedRuntimeArgumentLimitsV1, GeneratedRuntimeOutputDecoderV1,
+        GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice,
+        GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1,
+        GeneratedRuntimeWriteSlice,
+    };
+    pub use fe2o3_runtime::{
+        RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeBindingV1,
+        RuntimeMemoryRegionV1,
     };
 
     pub use crate::{

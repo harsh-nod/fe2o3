@@ -1,4 +1,42 @@
-use gpu_device::{Blocked, DisjointSlice, Index1D, kernel};
+use gpu_device::{
+    Blocked, DeviceGlobalMutPtr, DisjointSlice, Index1D, WriteOnlyDisjointSlice, kernel,
+};
+
+#[cfg(test)]
+mod context_arguments;
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn context_map(factor: f32, source: &[f32], destination: WriteOnlyDisjointSlice<f32>) {
+    let _ = (factor, source, destination);
+}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+#[allow(clippy::too_many_arguments)]
+pub fn scalar_packet(a: i8, b: u8, c: i16, d: u16, e: i32, f: u32, g: i64, h: u64, i: f32, j: f64) {
+    let _ = (a, b, c, d, e, f, g, h, i, j);
+}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn pointer_only(output: DeviceGlobalMutPtr<f32>) {
+    let _ = output;
+}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn aggregate_only(value: [u32; 2]) {
+    let _ = value;
+}
 
 #[kernel(
     typed,
@@ -118,9 +156,16 @@ pub fn prepare_owned_generated_arguments(
 pub fn prepare_charged_generated_arguments(
     executable: &gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
     budget: &gpu_host::GeneratedRuntimeResultBudgetV1,
-) -> Result<(gpu_host::GeneratedRuntimeChargedArgumentsV1, gpu_host::GeneratedRuntimeChargedResultV1<f32>), gpu_host::GeneratedRuntimeArgumentErrorV1> {
+) -> Result<
+    (
+        gpu_host::GeneratedRuntimeChargedArgumentsV1,
+        gpu_host::GeneratedRuntimeChargedResultV1<f32>,
+    ),
+    gpu_host::GeneratedRuntimeArgumentErrorV1,
+> {
     let source = gpu_host::GeneratedRuntimeReadSlice::new(vec![1f32, 2.0].into_boxed_slice());
-    let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(vec![0f32; 2].into_boxed_slice());
+    let (output, observer) =
+        gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(vec![0f32; 2].into_boxed_slice());
     let prepared = executable.prepare_generated_runtime_arguments_charged(
         transform_gpu::RuntimeArguments::new(2.0, source, output),
         gpu_host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 3),
@@ -135,7 +180,10 @@ pub fn prepare_chained_generated_arguments(
     result: gpu_host::ChargedTypedResultV1<f32>,
     budget: &gpu_host::GeneratedRuntimeResultBudgetV1,
 ) -> Result<
-    (gpu_host::GeneratedRuntimeChargedArgumentsV1, gpu_host::GeneratedRuntimeChargedResultV1<f32>),
+    (
+        gpu_host::GeneratedRuntimeChargedArgumentsV1,
+        gpu_host::GeneratedRuntimeChargedResultV1<f32>,
+    ),
     gpu_host::GeneratedRuntimeArgumentErrorV1,
 > {
     let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(
@@ -164,9 +212,8 @@ pub fn prepare_owned_generated_invocation(
     gpu_host::GeneratedWorkerV3RuntimeInvocationErrorV1,
 > {
     let source = gpu_host::GeneratedRuntimeReadSlice::new(vec![1f32, 2.0].into_boxed_slice());
-    let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(
-        vec![0f32; 2].into_boxed_slice(),
-    );
+    let (output, observer) =
+        gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(vec![0f32; 2].into_boxed_slice());
     let invocation = executable.prepare_generated_runtime_invocation(
         transform_gpu::RuntimeArguments::new(2.0, source, output),
         device,
