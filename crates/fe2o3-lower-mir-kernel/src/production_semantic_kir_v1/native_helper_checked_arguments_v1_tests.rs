@@ -12,6 +12,7 @@ fn checked_physical_slots_cover_tuples_zst_and_both_rust_call_forms() {
             vec![constant(7), constant(11), constant(17)]
         };
         let expected = inputs.last().unwrap().clone();
+        let mut checked_calls = 0;
         for root in owner.semantic_ssa.source_semantic().roots() {
             let association = owner
                 .correspondence
@@ -29,6 +30,7 @@ fn checked_physical_slots_cover_tuples_zst_and_both_rust_call_forms() {
                     let OperationKind::Call { callee, arguments } = &operation.kind else {
                         continue;
                     };
+                    checked_calls += 1;
                     let helper = module
                         .functions
                         .iter()
@@ -78,5 +80,6 @@ fn checked_physical_slots_cover_tuples_zst_and_both_rust_call_forms() {
                 }
             }
         }
+        assert_eq!(checked_calls, 4);
     }
 }
