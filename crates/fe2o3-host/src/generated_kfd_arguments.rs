@@ -956,6 +956,7 @@ impl std::error::Error for GeneratedKfdCompletionError {}
 mod tests {
     use super::*;
     include!("generated_kfd_conditional_premises_v1_tests.rs");
+    include!("generated_kfd_empty_slice_v1_tests.rs");
     use crate::generated_argument_plan::{
         CompilerGeneratedArgumentLayoutV1, validate_argument_packing,
     };
@@ -1480,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_slices_use_null_placeholders_without_runtime_buffers() {
+    fn empty_slices_use_aligned_dangling_pointers_without_runtime_buffers() {
         let plan = plan();
         let input = [];
         let mut output = [];
@@ -1500,7 +1501,10 @@ mod tests {
 
         assert!(packed.buffers().is_empty());
         assert!(packed.pointer_fixups().is_empty());
-        assert_eq!(&packed.explicit_kernarg()[..32], &[0; 32]);
+        assert_eq!(&packed.explicit_kernarg()[..8], &4_u64.to_le_bytes());
+        assert_eq!(&packed.explicit_kernarg()[8..16], &[0; 8]);
+        assert_eq!(&packed.explicit_kernarg()[16..24], &4_u64.to_le_bytes());
+        assert_eq!(&packed.explicit_kernarg()[24..32], &[0; 8]);
     }
 
     #[test]
@@ -1608,6 +1612,7 @@ mod tests {
                 .unwrap();
         assert!(packed.buffers().is_empty());
         assert!(packed.pointer_fixups().is_empty());
-        assert_eq!(packed.explicit_kernarg(), &[0; 16]);
+        assert_eq!(&packed.explicit_kernarg()[..8], &2_u64.to_le_bytes());
+        assert_eq!(&packed.explicit_kernarg()[8..16], &[0; 8]);
     }
 }

@@ -127,7 +127,7 @@ impl ConditionalDispatchPremisesV1 {
             let length_offset = s.pointer_offset.checked_add(8).ok_or(E::Arithmetic)?;
             if !s.pointer_offset.is_multiple_of(8)
                 || length_offset != s.length_offset
-                || read_word(explicit_kernarg, s.pointer_offset)? != 0
+                || read_word(explicit_kernarg, s.pointer_offset)? != template_pointer(s)
                 || read_word(explicit_kernarg, s.length_offset)? != s.length
                 || (s.buffer_index.is_none() && (s.length != 0 || s.buffer_byte_offset != 0))
             {
@@ -366,13 +366,21 @@ fn check_logical_extent(s: &ConditionalDispatchSliceV1, available: usize) -> Res
     }
     Ok(bytes)
 }
+fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
+    if s.buffer_index.is_some() {
+        0
+    } else {
+        u64::from(s.alignment)
+    }
+}
+
 fn live_span(
     s: &ConditionalDispatchSliceV1,
     facts: &[SharedGttMappedResourceFactsV1],
 ) -> Result<(u64, u64)> {
     use ConditionalDispatchErrorV1 as E;
     let Some(index) = s.buffer_index else {
-        return Ok((0, 0));
+        return Ok((template_pointer(s), 0));
     };
     let f = facts.get(index).ok_or(E::Binding)?;
     let bytes = check_logical_extent(s, f.logical_bytes())?;

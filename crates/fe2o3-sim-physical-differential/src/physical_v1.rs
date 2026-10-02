@@ -674,6 +674,13 @@ fn validate_generated_inputs(
                 let elements = buffer
                     .element_count(target)
                     .map_err(|_| PhysicalDifferentialErrorV1::GeneratedPackingSubstitution)?;
+                if elements == 0 {
+                    write_component(
+                        &mut explicit,
+                        pointer,
+                        &generated_empty_slice_pointer(buffer.element())?.to_le_bytes(),
+                    )?;
+                }
                 write_component(
                     &mut explicit,
                     length,
@@ -951,6 +958,25 @@ fn write_component(
     Ok(())
 }
 
+fn generated_empty_slice_pointer(ty: ScalarType) -> Result<u64, PhysicalDifferentialErrorV1> {
+    use fe2o3_host::GeneratedDeviceScalarV1;
+    // Generated V1 scalar layouts are sealed; caller allocation over-alignment
+    // must not change the canonical empty pointer derived from the element type.
+    Ok(match ty {
+        ScalarType::I8 => i8::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::U8 => u8::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::I16 => i16::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::U16 => u16::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::I32 => i32::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::U32 => u32::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::I64 => i64::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::U64 => u64::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::F32 => f32::RUST_SCALAR_TYPE.size_bytes(),
+        ScalarType::F64 => f64::RUST_SCALAR_TYPE.size_bytes(),
+        _ => return Err(PhysicalDifferentialErrorV1::GeneratedPackingSubstitution),
+    })
+}
+
 fn scalar_bytes(
     ty: ScalarType,
     target: SimulationTargetV1,
@@ -1177,6 +1203,7 @@ impl Error for PhysicalDifferentialErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("physical_empty_slice_v1_tests.rs");
 
     #[test]
     fn unavailable_never_counts_as_hardware_or_parity() {
