@@ -389,6 +389,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return Ok(());
         }
         for (id, stream) in order {
+            if execute && self.cooperative_progress_quantum_spent_v1() {
+                return Ok(());
+            }
             let gate = self.children[route.child]
                 .pending_compute
                 .get(&id)
@@ -404,6 +407,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 } else {
                     self.refresh_peer_launch_gate_v1(owner)?;
                 }
+            }
+            if execute && self.cooperative_progress_quantum_spent_v1() {
+                return Ok(());
             }
             if self.compute_xgmi_child_occupied_v1(route.child) {
                 continue;
@@ -818,10 +824,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .and_then(|ids| ids.get(index))
             .copied()
         {
+            if self.cooperative_progress_quantum_spent_v1() {
+                return Ok(());
+            }
             loop {
                 let before = self.cooperative_progress_generation;
                 self.progress_peer_launch_once_v1(id)?;
-                if before == self.cooperative_progress_generation {
+                if self.cooperative_progress_quantum_active_v1()
+                    || before == self.cooperative_progress_generation
+                {
                     break;
                 }
             }

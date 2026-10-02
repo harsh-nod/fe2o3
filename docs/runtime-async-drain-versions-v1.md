@@ -20,7 +20,7 @@ It also snapshots and observes Context submissions created by generic commands,
 including unregistered predecessors needed by tracked dependent operations.
 Native polling uses the ordinary Context completion transition, not a second
 completion implementation. Already-terminal records need no additional poll;
-an empty native roster needs no flush.
+an empty native roster needs no stream-progress attempt.
 
 `Quiescent` requires an exhausted command queue, no active graph, no operation
 or event waiter, and no retained pending submission. Failed completion and
@@ -35,8 +35,12 @@ The owner exits automatically after successful drain. A transferable engine
 can instead return its Context under its existing thread-safety contract.
 
 The budget is 1 through 1,000,000 cooperative ticks, not a wall-clock deadline.
-Per-tick native polling/flushing has independent configured budgets, additional
-to normal operation, graph and observer lanes. Initial snapshots scan retained
+Per-tick native polling and stream progress have independent configured budgets,
+additional to normal operation, graph and observer lanes. Drain uses
+`progress_stream_v1`; success can leave ready work unpublished, so drain still
+requires actual terminal observations. The backend-specific work bound applies;
+the default delegates to legacy full flush. Explicit Context and graph flush
+keep their full-publication contract. Initial snapshots scan retained
 records and sort identities; final counts scan records. These costs and backend
 calls, callbacks and wakers are not constant-time or preemptible.
 

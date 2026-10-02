@@ -3,7 +3,6 @@
 use super::*;
 
 const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--gather-compute|--gather-compute-overlap|--late-gather-compute|--late-gather-compute-overlap> <0xsource-id> <0xsource-id> [more source IDs] <0xsink-id>";
-const SEED_PROGRESS_QUANTUM: Duration = Duration::from_micros(50);
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
@@ -313,7 +312,8 @@ fn publication_observation(
 
 fn seed_oldest(
     context: &mut Context,
-    peers: &mut [RuntimeSubmissionV1<RuntimePeerCopyV1>],
+    peers: &[RuntimeSubmissionV1<RuntimePeerCopyV1>],
+    peer_stream: RuntimeStreamIdV1,
     deadline: Instant,
 ) -> ResultV1<()> {
     if publication_observation(context, peers)? {
@@ -323,18 +323,14 @@ fn seed_oldest(
         ));
     }
     for _ in 0..TICKS {
-        let now = Instant::now();
-        if now >= deadline {
+        if Instant::now() >= deadline {
             break;
         }
-        // Ordinary drain may perform several steps. A short deadline helps expose
-        // publication, but neither elapsed time nor a Pending result proves it.
-        let status = context
-            .drain(&mut peers[0], deadline.min(now + SEED_PROGRESS_QUANTUM))
-            .map_err(|error| failure("gather-late-oldest-drain", error))?;
-        if status != RuntimePollV1::Pending {
-            return Err(failure("gather-late-publication-missed", status));
-        }
+        // KfdMulti permits one peer leaf per call, so publication and retirement
+        // cannot occur in the same attempt. The actual custody check is decisive.
+        context
+            .progress_stream_v1(peer_stream)
+            .map_err(|error| failure("gather-late-oldest-progress", error))?;
         if publication_observation(context, peers)? {
             // These are the only peer roots. Shared-destination ordering and zero
             // completions identify the oldest; the counter alone exposes no pair.
@@ -422,7 +418,7 @@ fn admit(
         peers.push(submission);
     }
     if late {
-        seed_oldest(context, &mut peers, deadline)?;
+        seed_oldest(context, &peers, resources.peer_stream, deadline)?;
     }
     let event = predecessor.ok_or("missing gather tail")?;
     let arguments = Arguments::new(
@@ -732,10 +728,10 @@ fn report(options: &Options, output: &str) -> String {
         .join(",");
     let (schema, admission, progress, publication) = if options.late {
         (
-            "fe2o3.late-gather-compute.v1",
+            "fe2o3.late-gather-compute.v2",
             "gather-preadmitted-consumer-after-oldest-publication",
             "oldest-peer-seed-then-final-readback-stream-only",
-            " publication_observed=true publication_identity=ordered-roster-inference paired_custody=validated-by-consumer-admission retained_native_at_consumer_admission=1 retained_native_counter=0,1,0 publication_capture=timing-dependent-fail-closed oldest_seed=bounded-context-drain",
+            " publication_observed=true publication_identity=ordered-roster-inference paired_custody=validated-by-consumer-admission retained_native_at_consumer_admission=1 retained_native_counter=0,1,0 publication_capture=single-peer-leaf-quantum oldest_seed=bounded-context-progress",
         )
     } else {
         (
@@ -901,7 +897,7 @@ mod tests {
                 assert_eq!(old["schema"], "fe2o3.gather-compute.v1");
                 assert_eq!(old["admission"], "all-before-explicit-progress");
                 assert_eq!(old["progress"], "final-readback-stream-only");
-                assert_eq!(late["schema"], "fe2o3.late-gather-compute.v1");
+                assert_eq!(late["schema"], "fe2o3.late-gather-compute.v2");
                 assert_eq!(
                     late["admission"],
                     "gather-preadmitted-consumer-after-oldest-publication"
@@ -916,8 +912,8 @@ mod tests {
                     ("paired_custody", "validated-by-consumer-admission"),
                     ("retained_native_at_consumer_admission", "1"),
                     ("retained_native_counter", "0,1,0"),
-                    ("publication_capture", "timing-dependent-fail-closed"),
-                    ("oldest_seed", "bounded-context-drain"),
+                    ("publication_capture", "single-peer-leaf-quantum"),
+                    ("oldest_seed", "bounded-context-progress"),
                 ];
                 assert_eq!(late.len(), old.len() + new_fields.len());
                 for (name, value) in new_fields {

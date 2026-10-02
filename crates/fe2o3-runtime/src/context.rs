@@ -808,20 +808,36 @@ pub trait RuntimeCollectiveBackendV1: RuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
 
-/// Additive explicit-progress SPI encoded only by negotiated Runtime Worker V4.
+/// Additive full-publication and cooperative-progress SPI.
 ///
-/// For native work, a successful call establishes that every dependency-ready
-/// operation in the backend scheduling domain selected by `stream` at method
-/// entry was published. A cooperative backend with no native publication point
-/// may instead drive its retained, explicitly bounded host operation to a
-/// conclusive state; it must document the work bound and blocking behavior.
-/// Recoverable prepublication or cooperative-progress failure must be returned
-/// as an error, not hidden behind success. This operation does not wait for
-/// completion of native work or provide background progress. A backend whose
-/// bounded publication window cannot hold the complete ready native set must
-/// reject before mutation.
+/// Remote full flush is encoded only by negotiated Runtime Worker V4.
 pub trait RuntimeFlushBackendV1: RuntimeBackendV1 {
+    /// For native work, success establishes that every dependency-ready operation
+    /// in the stream's backend scheduling domain at entry was published. A
+    /// cooperative backend with no native publication point may instead drive
+    /// its retained, explicitly bounded host operation to a conclusive state;
+    /// it must document the work bound and blocking behavior. Recoverable
+    /// prepublication or cooperative-progress failure must be returned as an
+    /// error, not hidden behind success. This does not wait for native completion
+    /// or provide background progress. A backend whose bounded publication
+    /// window cannot hold the complete ready native set must reject before mutation.
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
+
+    /// Makes one cooperative progress attempt in the stream's scheduling domain.
+    ///
+    /// Unlike `flush_stream_v1`, success may leave dependency-ready work
+    /// unpublished. Backends document their own work bound; this method does not
+    /// impose a generic time bound or imply completion. Errors retain the same
+    /// rejected, quiescent, and terminal meanings as explicit flush.
+    ///
+    /// The default preserves legacy full-flush behavior, including for negotiated
+    /// Worker V4 adapters; it introduces no additional wire operation.
+    fn progress_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.flush_stream_v1(stream)
+    }
 }
 
 /// Explicit native teardown for a backend created on an async owner thread.
@@ -3054,6 +3070,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.flush_with_graph_access_v1(stream, None)
     }
 
+    /// Makes one backend-defined cooperative progress attempt for a stream.
+    ///
+    /// Success need not publish all ready work or observe completion. The backend
+    /// documents its work bound; the default delegates to full flush and there is
+    /// no generic hard time bound. Validation, reservations, journal custody, and
+    /// failure handling are identical to `flush_stream`.
+    pub fn progress_stream_v1(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeFlushBackendV1,
+    {
+        self.drive_stream_with_graph_access_v1(stream, None, B::progress_stream_v1)
+    }
+
     pub(crate) fn flush_with_graph_access_v1(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -3062,10 +3094,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     where
         B: RuntimeFlushBackendV1,
     {
+        self.drive_stream_with_graph_access_v1(stream, access, B::flush_stream_v1)
+    }
+
+    fn drive_stream_with_graph_access_v1(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        access: Option<ContextGraphReservationV1>,
+        drive: impl FnOnce(&mut B, u64) -> Result<(), RuntimeBackendFailureV1<B::Error>>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
         self.require_graph_access(access)?;
         let backend_stream = self.unheld_stream_v1(stream)?.backend_stream;
-        let result =
-            self.invoke_journal_backend_v1(|backend| backend.flush_stream_v1(backend_stream));
+        let result = self.invoke_journal_backend_v1(|backend| drive(backend, backend_stream));
         self.backend_result(result)
     }
 
@@ -3992,6 +4032,7 @@ mod tests {
     mod peer_directed_tests;
     mod peer_segments_tests;
     mod producer_launch_tests;
+    mod progress_stream_tests;
     mod quiescence_order_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
@@ -4041,7 +4082,9 @@ mod tests {
         #[default]
         None,
         RejectOnce,
+        Quiescent,
         Terminal,
+        Panic,
     }
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -4871,6 +4914,10 @@ mod tests {
                 MockFlushFailure::Terminal => Err(RuntimeBackendFailureV1::Terminal(MockError(
                     "flush terminal",
                 ))),
+                MockFlushFailure::Quiescent => Err(RuntimeBackendFailureV1::Quiescent(MockError(
+                    "flush quiescent",
+                ))),
+                MockFlushFailure::Panic => panic!("flush adapter panic"),
             }
         }
     }

@@ -31,9 +31,12 @@ the producer. No promise is made that it remains pending.
 Submission, event recording and completion observation occupy separate owner
 advances. The shared driver is rooted before each action and retains its
 submission across event recording. Directed operations add no automatic stream
-flush or event observer. Ordinary launch/copy operations retain their existing
-independently budgeted stream flushes. Other engine work keeps its own budgets;
-this is not a global one-action-per-tick guarantee.
+progress or event observer. Ordinary launch/copy operations retain independently
+budgeted `progress_stream_v1` attempts. Success may leave ready work unpublished;
+the backend documents its work bound, and the default retains legacy full-flush
+behavior. Explicit Context and graph flush remain unchanged. Other engine work
+keeps its own budgets; this is not a global one-action-per-tick or hard time
+guarantee.
 
 ## Event Lifetime
 

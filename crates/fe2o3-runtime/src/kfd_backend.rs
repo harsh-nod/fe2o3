@@ -173,6 +173,7 @@ pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1}
 mod compute_dependencies;
 mod native_budget;
 mod producer_peers;
+mod progress_quantum;
 use producer_peers::PeerLaunchRetainsV1;
 mod residency;
 use residency::{ResidentKernelImageV1, ResidentModuleImageV1};
@@ -7105,6 +7106,8 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     native_stream_submission_counts: HashMap<u64, usize>,
     event_submission_retain_counts: HashMap<u64, usize>,
     cooperative_progress_generation: u64,
+    // None preserves strict flush/drain; Some records a quantum's spent leaf.
+    cooperative_progress_quantum: Option<bool>,
     cooperative_staging_bytes: u64,
     cooperative_staging_limit_bytes: u64,
 }
@@ -7972,6 +7975,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             native_stream_submission_counts: HashMap::new(),
             event_submission_retain_counts: HashMap::new(),
             cooperative_progress_generation: 0,
+            cooperative_progress_quantum: None,
             cooperative_staging_bytes: 0,
             cooperative_staging_limit_bytes: KFD_RUNTIME_MAX_COOPERATIVE_COPY_STAGING_BYTES_V1,
         })
@@ -8736,6 +8740,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             },
             _ => None,
         };
+        if endpoint.is_some() && !self.take_cooperative_progress_leaf_v1() {
+            return Ok(BackendPollV1::Pending);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.progress_cooperative_copy_step_inner_v1(submission)
         }));
@@ -13538,79 +13545,19 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
 }
 
 impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    /// Attempts at most one cooperative Read/Write leaf, including nested native
+    /// peer progress. Metadata traversal and child-native calls retain their
+    /// existing bounds; this is not a wall-clock or complete-publication guarantee.
+    fn progress_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.progress_stream_quantum_v1(stream)
+    }
+
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
-        if let Some(submission) = self.deferred_stream_head_v1(stream) {
-            self.progress_deferred_compute_v1(submission)?;
-            return Ok(());
-        }
-        self.flush_peer_launch_roots_v1(stream)?;
-        if let Some(local) = self.children[route.child]
-            .pending_compute_streams
-            .get(&route.local)
-            .and_then(|ids| ids.front())
-            .copied()
-        {
-            let result = self.service_native_peer_prefix_v1(
-                RoutedHandleV1 {
-                    child: route.child,
-                    local,
-                },
-                true,
-            );
-            if let Err(error) = result {
-                if !self.terminal {
-                    self.retire_flushed_peer_launches_v1(stream)?;
-                }
-                return Err(error);
-            }
-        }
-        if let Some(submission) =
-            self.cooperative_stream_tails
-                .get(&stream)
-                .copied()
-                .filter(|submission| {
-                    matches!(
-                        self.submissions.get(submission),
-                        Some(RoutedSubmissionV1::CooperativeCopy(copy)) if !copy.is_quiescent()
-                    )
-                })
-        {
-            loop {
-                let progress_before = self.cooperative_progress_generation;
-                let status = if matches!(self.submissions.get(&submission), Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.directed.is_some())
-                {
-                    self.progress_retained_directed_peer_v1(submission)?
-                } else {
-                    self.progress_cooperative_copy(submission)?
-                };
-                match status {
-                    BackendPollV1::Succeeded => break,
-                    BackendPollV1::Failed { .. } => {
-                        return Err(KfdRuntimeBackendV1::quiescent_error(
-                            KfdRuntimeBackendErrorKindV1::Native,
-                            "multi-device cooperative flush ended in quiescent failure",
-                        ));
-                    }
-                    BackendPollV1::Pending
-                        if self.cooperative_progress_generation == progress_before =>
-                    {
-                        return Ok(());
-                    }
-                    BackendPollV1::Pending => {}
-                }
-            }
-        }
-        if self.compute_xgmi_child_occupied_v1(route.child) {
-            return Ok(());
-        }
-        let result = self.children[route.child].flush_stream_v1(route.local);
-        let result = self.latch(result);
-        if !self.terminal {
-            self.retire_flushed_peer_launches_v1(stream)?;
-        }
-        result
+        self.drive_stream_v1(stream)
     }
 }
 

@@ -36,7 +36,7 @@ impl<E> RegistrationResponseV1<E> {
 /// until this acknowledgment future is dropped, including after readiness.
 /// Dropping it abandons provisional observation and never cancels or releases
 /// native work. A registration already committed may have an in-flight poll or
-/// flush; ordinary observer abandonment removes it on subsequent owner progress.
+/// progress attempt; observer abandonment removes it on subsequent owner progress.
 #[must_use = "poll the admission acknowledgment to obtain the original observer"]
 pub struct RuntimeAsyncRegistrationFutureV1<T, E> {
     acknowledgment: RuntimeAsyncCommandFutureV1<Result<(), E>>,
@@ -185,7 +185,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     }
 
     /// Enqueues the existing atomic event/source-stream registration transaction.
-    /// Neither registration commits on admission failure. Polling, flushing,
+    /// Neither registration commits on admission failure. Polling, stream progress,
     /// retryable failures and Drop retain the semantics of
     /// [`Self::event_future_with_progress`]. No host thread is started.
     ///

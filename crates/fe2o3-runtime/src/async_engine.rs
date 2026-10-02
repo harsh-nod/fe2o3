@@ -60,7 +60,7 @@ pub const MAX_RUNTIME_ASYNC_POLLS_PER_TICK_V1: usize = 1024;
 pub const MAX_RUNTIME_ASYNC_POLL_INTERVAL_V1: Duration = Duration::from_secs(1);
 /// Hard upper bound for streams registered with one async progress engine.
 pub const MAX_RUNTIME_ASYNC_PROGRESS_STREAMS_V1: usize = 65_536;
-/// Hard upper bound for stream flushes attempted in one scheduling tick.
+/// Hard upper bound for stream-progress attempts in one scheduling lane per tick.
 pub const MAX_RUNTIME_ASYNC_FLUSHES_PER_TICK_V1: usize = 1024;
 /// Maximum retained standalone request payload budget, excluding native resources.
 pub const MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
@@ -294,6 +294,9 @@ impl RuntimeAsyncProgressConfigV1 {
         self.stream_capacity
     }
 
+    /// Maximum stream-progress attempts per scheduling lane and tick. The
+    /// legacy name is retained; normal drivers use `progress_stream_v1`, whose
+    /// default delegates to full flush. Graph execution still uses strict flush.
     pub const fn flushes_per_tick(self) -> usize {
         self.flushes_per_tick
     }
@@ -715,8 +718,8 @@ impl<E> Drop for RuntimeEventFutureV1<E> {
 /// One event future paired with background progress for its exact source stream.
 ///
 /// The engine admits both registrations in one transaction. Dropping this value
-/// abandons event observation and future flush attempts; it never cancels work,
-/// releases a resource, or performs a final flush.
+/// abandons event observation and future progress attempts; it never cancels
+/// work, releases a resource, or performs a final progress attempt.
 #[must_use = "dropping a progress event future does not cancel or release its submission"]
 pub struct RuntimeAsyncProgressEventFutureV1<E> {
     future: RuntimeEventFutureV1<E>,
@@ -798,13 +801,13 @@ impl<E> RuntimeAsyncProgressCellV1<E> {
 
 /// Unique lifetime guard for one stream's opt-in background progress.
 ///
-/// Retryable flush failures remain available in one bounded slot until taken;
+/// Retryable progress failures remain available in one bounded slot until taken;
 /// [`failure_count`](Self::failure_count) is a saturating count of observed
 /// failures. A terminal failure replaces any retained retryable failure so the
 /// exact sealing error remains observable. Dropping the guard only unregisters
-/// the stream after any in-flight flush returns. It never cancels work,
-/// destroys a stream, releases a resource, or performs a final flush.
-#[must_use = "dropping a progress registration stops background flush attempts"]
+/// the stream after any in-flight progress attempt returns. It never cancels
+/// work, destroys a stream, releases a resource, or performs a final attempt.
+#[must_use = "dropping a progress registration stops background progress attempts"]
 pub struct RuntimeAsyncProgressRegistrationV1<E> {
     stream: RuntimeStreamIdV1,
     cell: Arc<RuntimeAsyncProgressCellV1<E>>,
@@ -1044,7 +1047,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
 
 /// Cloneable observation and stream-registration handle for an opt-in progress engine.
 ///
-/// Only this handle can register streams for background flushes. Its observer
+/// Only this handle can register streams for background progress. Its observer
 /// view retains the ordinary engine's observation-only context and event APIs.
 pub struct RuntimeAsyncProgressHandleV1<B: RuntimeBackendV1 + 'static> {
     observer: RuntimeAsyncEngineHandleV1<B>,
@@ -1063,11 +1066,13 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self.observer
     }
 
-    /// Registers one unique live stream for cyclic background flush attempts.
+    /// Registers one unique live stream for cyclic background progress attempts.
     ///
     /// Registration authorizes the backend scheduling domain selected by this
     /// stream. A backend may publish other dependency-ready work in that same
-    /// domain. Retryable failures do not unregister the stream.
+    /// domain. Each call uses `progress_stream_v1`; success can leave ready work
+    /// unpublished. Its default delegates to full flush; the backend documents
+    /// its work bound. Retryable failures do not unregister the stream.
     /// Use [`Self::enqueue_stream_registration`] for nonblocking admission.
     pub fn register_stream(
         &self,
@@ -1101,12 +1106,12 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
 
     /// Atomically registers an event waiter and progress for its source stream.
     ///
-    /// Event polling runs before stream flushing in every engine tick. This
+    /// Event polling runs before stream progress in every engine tick. This
     /// lets an observed completed native window make its continuation ready for
-    /// the same tick's flush without requiring a caller-driven progress call.
+    /// the same tick's progress attempt, without promising full publication.
     /// A nonterminal polling error resolves the future and retires its paired
     /// progress registration; explicitly register the same event and stream
-    /// again to retry observation. Retryable flush errors retain registration.
+    /// again to retry observation. Retryable progress errors retain registration.
     /// Use [`Self::enqueue_event_registration_with_progress`] for nonblocking admission.
     pub fn event_future_with_progress(
         &self,
@@ -1173,7 +1178,7 @@ fn flush_stream_v1<B: RuntimeFlushBackendV1>(
     context: &mut RuntimeContextV1<B>,
     stream: RuntimeStreamIdV1,
 ) -> Result<(), RuntimeErrorV1<B::Error>> {
-    context.flush_stream(stream)
+    context.progress_stream_v1(stream)
 }
 
 /// One owned background observer for a runtime context.
@@ -1282,7 +1287,11 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         ))
     }
 
-    /// Starts an opt-in engine that observes events and flushes registered streams.
+    /// Starts an opt-in engine that observes events and progresses registered streams.
+    ///
+    /// Each selected stream receives one backend-defined progress attempt, not a
+    /// promise of full publication. Legacy backends default to explicit flush;
+    /// neither a tick nor an individual backend call has a generic hard time bound.
     ///
     /// The backend and its error type must be transferable without unsafe
     /// overrides. Runtime Worker V4 and V5 backends provide that path for KFD;
@@ -1397,8 +1406,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
     ///
     /// Stop is an ordered command rather than enqueue-time preemption. If it is
     /// beyond the current command batch, that tick completes its event-poll and
-    /// progress-flush phases before Stop is dequeued on the next tick. No final
-    /// flush is added after the command is dequeued.
+    /// stream-progress phases before Stop is dequeued on the next tick. No final
+    /// progress attempt is added after the command is dequeued.
     pub fn into_context(mut self) -> Result<RuntimeContextV1<B>, RuntimeAsyncEngineJoinErrorV1> {
         self.stop_and_join()
     }
@@ -1958,6 +1967,7 @@ mod tests {
     use super::*;
 
     mod owned_tests;
+    mod progress_spi_tests;
     pub(super) fn scheduler_fixture() -> (RuntimeContextV1<impl RuntimeBackendV1>, RuntimeStreamIdV1)
     {
         let mut context = RuntimeContextV1::open(MockBackend {
@@ -2040,6 +2050,10 @@ mod tests {
         poll_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
         created_streams: Vec<u64>,
         flush_calls: Vec<(u64, ThreadId)>,
+        override_progress: bool,
+        complete_on_progress: bool,
+        progress_calls: Vec<(u64, ThreadId)>,
+        progress_outcomes: VecDeque<MockFlushOutcome>,
         flush_outcomes: VecDeque<MockFlushOutcome>,
         flush_barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
         window_progress: Option<MockWindowProgressV1>,
@@ -2306,6 +2320,50 @@ mod tests {
     }
 
     impl RuntimeFlushBackendV1 for MockBackend {
+        fn progress_stream_v1(
+            &mut self,
+            stream: u64,
+        ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            if !self.state.lock().unwrap().override_progress {
+                return self.flush_stream_v1(stream);
+            }
+            let mut state = self.state.lock().unwrap();
+            state.progress_calls.push((stream, thread::current().id()));
+            if state.complete_on_progress {
+                let ready: Vec<_> = state
+                    .issues
+                    .iter()
+                    .filter_map(|(owner, id, _, _)| {
+                        (*owner == stream
+                            && state.submission_dependencies[id].iter().all(|event| {
+                                state.statuses.get(&state.event_sources[event])
+                                    == Some(&BackendPollV1::Succeeded)
+                            }))
+                        .then_some(*id)
+                    })
+                    .collect();
+                for id in ready {
+                    state.statuses.insert(id, BackendPollV1::Succeeded);
+                }
+            }
+            match state
+                .progress_outcomes
+                .pop_front()
+                .unwrap_or(MockFlushOutcome::Success)
+            {
+                MockFlushOutcome::Success => Ok(()),
+                MockFlushOutcome::Rejected(message) => {
+                    Err(RuntimeBackendFailureV1::Rejected(MockError(message)))
+                }
+                MockFlushOutcome::Quiescent(message) => {
+                    Err(RuntimeBackendFailureV1::Quiescent(MockError(message)))
+                }
+                MockFlushOutcome::Terminal(message) => {
+                    Err(RuntimeBackendFailureV1::Terminal(MockError(message)))
+                }
+            }
+        }
+
         fn flush_stream_v1(
             &mut self,
             stream: u64,

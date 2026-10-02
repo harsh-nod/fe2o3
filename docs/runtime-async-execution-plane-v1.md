@@ -60,9 +60,10 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
 
 - The existing command channel bounds queued commands. The operation registry
   independently admits at most `waiter_capacity` entries (maximum 65,536).
-- Each operation tick advances at most `polls_per_tick` entries and flushes at
-  most `flushes_per_tick` distinct streams. These budgets are additional to the
-  existing event-poll and observer-stream-flush lanes, not global totals.
+- Each operation tick advances at most `polls_per_tick` entries and makes a
+  `progress_stream_v1` attempt for at most `flushes_per_tick` distinct streams.
+  The configuration name is retained. These budgets are additional to the
+  existing event-poll and registered-stream progress lanes, not global totals.
 - A persistent refcounted stream roster has no more entries than the operation
   registry. Its cyclic flush cursor is independent of cyclic operation polling,
   including when the poll budget visits only part of the roster.
@@ -76,6 +77,18 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
   request payloads and compact dependency slices across cloned handles. Those
   broader end-to-end budgets remain #182 work. R65 separately bounds retained
   async reply cells, including completed caller-retained futures, by count.
+
+Normal registered-stream, standalone-operation and drain drivers use the
+cooperative progress SPI. A successful attempt can leave dependency-ready work
+unpublished; the backend documents its work bound. The default delegates to
+legacy full flush, with no generic hard time bound. Explicit Context
+`flush_stream` and the graph executor's full-publication flush are unchanged.
+
+The native multi-device KFD override attempts at most one cooperative peer-copy
+Read/Write leaf per call, including nested peer progress. It does not add a hard
+time bound for metadata traversal or child-native calls. See the
+[cooperative peer-progress qualification](evidence/dev-cooperative-peer-progress-2026-10-02/README.md)
+for the scripted fairness/custody checks, native matrix and proof limits.
 
 ## Evidence Boundaries
 

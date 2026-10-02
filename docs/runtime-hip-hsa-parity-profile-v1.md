@@ -909,9 +909,13 @@ prevent later pending submissions from receiving their one bounded wait;
 terminal ambiguity stops immediately.
 
 The additive runtime async progress mode is one declared portable mechanism for
-Send-capable backends: a bounded registered-stream roster receives bounded,
-cyclic `flush_stream` attempts on the owner thread while event observation keeps
-its independent budget. Ordinary async-engine construction remains
+Send-capable backends: a bounded registered-stream roster receives cyclic
+`progress_stream_v1` attempts on the owner thread while event observation keeps
+its independent budget. Normal standalone-operation and drain drivers use the
+same SPI. Success can leave dependency-ready work unpublished; the backend
+documents its work bound, with no generic hard time bound. The default delegates
+to legacy full flush. Explicit Context `flush_stream` and the graph executor's
+full-publication flush are unchanged. Ordinary async-engine construction remains
 observation-only. Direct in-process KFD remains thread-affine; caller-driven
 Context use requires explicit progress, while the owned engine can create and
 retain KFD on its dedicated thread and drive registered work. The owner trial

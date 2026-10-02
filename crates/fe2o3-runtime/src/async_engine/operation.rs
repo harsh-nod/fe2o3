@@ -621,8 +621,10 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// Registry capacity is reserved before submission. The engine retains and
     /// advances accepted work even if this future is dropped. At most
     /// `waiter_capacity` operations occupy this independent registry; each tick
-    /// advances at most `polls_per_tick` and flushes at most `flushes_per_tick`
-    /// distinct operation streams, in addition to the observer registries.
+    /// advances at most `polls_per_tick` and makes a `progress_stream_v1` attempt
+    /// for at most `flushes_per_tick` distinct operation streams, in addition to
+    /// the observer registries. Success may leave ready work unpublished; the
+    /// default backend operation retains legacy full-flush behavior.
     /// Arguments and kernel ownership remain subject to their existing contracts;
     /// these record bounds do not bound arbitrary user-owned argument bytes.
     /// Dependency lists are checked, compacted and charged before enqueue.
@@ -763,7 +765,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// Submission and progress occur in separate owner advances. Each progress
     /// advance performs at most one backend action through the Context directed
     /// API, including retained-producer reconciliation. This operation adds no
-    /// automatic stream flush. Other operations, event observers and explicit
+    /// automatic stream progress. Other operations, event observers and explicit
     /// stream registrations retain their independent scheduler budgets, even on
     /// the same stream; the bound is not global to an engine tick.
     /// Dependencies are charged until owner submission or disposal. Dropping the

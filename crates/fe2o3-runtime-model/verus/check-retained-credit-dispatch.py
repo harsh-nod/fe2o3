@@ -62,7 +62,7 @@ EXTRA = {MODEL / "r67_resource_credits.rs", MODEL / "lib.rs",
              "fe2o3-runtime-model", "fe2o3-runtime", "fe2o3-resource-accounting", "fe2o3-kfd"))}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "6374a45e0c440b917fa1eac169e4faadd1c9b4b8d347f301afef31029b701d67"
+SOURCE_TREE_SHA = "55b0bb36df23d1abaa8e4693ff889c0b17d7e98fbb0465ed663c722880ea6d2d"
 PROOF_SHA = "84352d8aec33bb9b42611c01a298216dcd12ed6c355ed3ba7a7f410f4681a8ca"
 EXPECTED_VERIFIED = 41
 MUTANT_COUNT = 25

@@ -597,39 +597,55 @@ fn current_thread_sharded_ring_queues_all_futures_before_expired_and_resumed_dri
             Err(RuntimeAsyncDriveErrorV1::DeadlineExceeded)
         ));
         engine.tick().unwrap();
-        let mut admitted = Box::pin(
-            handle
-                .observer()
-                .enqueue_with_context(move |context| {
-                    let backend = context.backend();
-                    assert_eq!(backend.submissions.len(), count);
-                    let mut published = 0;
-                    for id in backend.submissions.keys() {
-                        assert!(copy_submission_has_no_staging(context, *id));
-                        let root = root(context, *id);
-                        if root.phase == Phase::Published {
-                            published += 1;
-                        } else {
-                            assert!(root.trace.is_empty());
+        let mut observed_publication = false;
+        // A progress quantum may only prepare metadata. Observe every owner tick
+        // until the first actual publication, retaining the original futures.
+        for _ in 0..2 * count {
+            let mut admitted = Box::pin(
+                handle
+                    .observer()
+                    .enqueue_with_context(move |context| {
+                        let backend = context.backend();
+                        assert_eq!(backend.submissions.len(), count);
+                        let mut published = None;
+                        for id in backend.submissions.keys() {
+                            assert!(copy_submission_has_no_staging(context, *id));
+                            assert_eq!(copy(context, *id).status(), BackendPollV1::Pending);
+                            let root = root(context, *id);
+                            if root.phase == Phase::Published {
+                                assert!(published.replace(*id).is_none());
+                            } else {
+                                assert_eq!(root.phase, Phase::Prepared);
+                                assert!(root.trace.is_empty());
+                            }
                         }
-                    }
-                    assert_eq!(published, 1);
-                    assert_eq!(
-                        backend
+                        let held: Vec<_> = backend
                             .compute_xgmi_children
                             .iter()
-                            .filter(|id| id.is_some())
-                            .count(),
-                        2
-                    );
-                    assert_eq!(backend.completed_compute_xgmi_copies, 0);
-                })
-                .unwrap(),
+                            .filter_map(|id| *id)
+                            .collect();
+                        if let Some(id) = published {
+                            assert_eq!(held, [id, id]);
+                        } else {
+                            assert!(held.is_empty());
+                        }
+                        assert_eq!(backend.completed_compute_xgmi_copies, 0);
+                        published.is_some()
+                    })
+                    .unwrap(),
+            );
+            observed_publication = engine
+                .drive_until_ready(admitted.as_mut(), Instant::now() + Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            if observed_publication {
+                break;
+            }
+        }
+        assert!(
+            observed_publication,
+            "bounded owner progress never published an original ring edge"
         );
-        engine
-            .drive_until_ready(admitted.as_mut(), Instant::now() + Duration::from_secs(2))
-            .unwrap()
-            .unwrap();
         let mut submissions = Vec::new();
         for future in &mut futures {
             let result = engine
