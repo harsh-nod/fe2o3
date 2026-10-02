@@ -123,6 +123,83 @@ impl ContextVersionsV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(in crate::context) fn validate_pending_same_device_copy_roots_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        use fe2o3_runtime_model::ContextWriterStateV1;
+        self.validate_same_device_copy_custody_v1(id)
+            .map_err(|_| E::InvalidReference)?;
+        let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
+        let copy = self
+            .same_device_copies
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        if !record.same_device_copy
+            || record.quiescent
+            || record.status != RuntimeCompletionStatusV1::Pending
+        {
+            return Err(E::InvalidState);
+        }
+        let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
+        if self
+            .validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?
+            .is_some()
+            || self.validate_producer_read_v1(id)?.is_none()
+        {
+            return Err(E::InvalidReference);
+        }
+        let root = versions
+            .submission_writers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        let writer = root.writer;
+        if root.domain != SubmissionWriterDomainV1::Ordinary
+            || record.journal_writer != Some(writer)
+            || root.queued.is_some()
+            || root.disposal_started
+            || root.disposed_count != 0
+            || root.journal_disposed
+            || root.allocations.len() != 1
+            || root.members.len() != 1
+            || writer.key
+                != (ContextWriterKeyV1 {
+                    context_generation: id.context_generation,
+                    local: id.local,
+                    kind: ContextWriterKindV1::Submission,
+                })
+            || versions.retained_writer(writer)?
+                != (ContextWriterStateV1::Pending { member_count: 1 })
+        {
+            return Err(E::InvalidReference);
+        }
+        let allocation = &root.allocations[0];
+        let member = root.members[0];
+        if allocation.disposed
+            || allocation.id != copy.destination.region.allocation
+            || allocation.record != copy.destination.record
+            || self.allocations.get(&allocation.id) != Some(&allocation.record)
+            || !self
+                .backend_allocations
+                .contains(&allocation.record.backend_allocation)
+            || !self.allocation_admission.has_expected_credit(
+                allocation.id,
+                allocation.record.device,
+                allocation.record.byte_len,
+            )
+            || versions.whole_allocation(allocation.id, &allocation.record)? != member
+            || versions
+                .journal
+                .lookup_allocation(member.allocation)?
+                .pending_writer
+                != Some(writer)
+        {
+            return Err(E::InvalidAllocationReference);
+        }
+        Ok(())
+    }
+
     pub(in crate::context) fn validate_pending_producer_launch_roots_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -762,6 +839,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Some(PreparedSubmissionCustodyV1::Launch(root)) => {
                 self.prepare_launch_inputs_v1(root, sources)?
             }
+            Some(PreparedSubmissionCustodyV1::Copy(root)) => {
+                if sources.len() != 1
+                    || sources[0].region != root.source.region
+                    || sources[0].record != root.source.record
+                    || destinations != [root.destination.region.allocation]
+                {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+                (None, self.prepare_copy_inputs_v1(root)?)
+            }
             other => {
                 let peer = match other {
                     Some(PreparedSubmissionCustodyV1::Peer(peer)) => Some(peer),
@@ -793,10 +880,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .and_then(|peer| peer.scalar.as_ref())
             .is_some_and(|root| root.directed.is_some());
         let producer_launch = matches!(&custody, Some(PreparedSubmissionCustodyV1::Launch(_)));
+        let same_device_copy = matches!(&custody, Some(PreparedSubmissionCustodyV1::Copy(_)));
         // Retain all original footprints and dependencies before acquiring any journal lease.
         match custody {
             Some(PreparedSubmissionCustodyV1::Launch(root)) => {
                 self.begin_producer_launch_custody_v1(id, root)
+            }
+            Some(PreparedSubmissionCustodyV1::Copy(root)) => {
+                self.begin_same_device_copy_custody_v1(id, root)
             }
             Some(PreparedSubmissionCustodyV1::Peer(peer)) => {
                 if let Some(root) = peer.scalar {
@@ -841,6 +932,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 {
                     self.scalar_peer_copies.remove(&id);
                     self.producer_launches.remove(&id);
+                    self.same_device_copies.remove(&id);
                 }
                 return self.backend_result(Err(failure));
             }
@@ -857,6 +949,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if let Some(root) = self.producer_launches.get_mut(&id) {
             root.backend_submission = Some(backend_submission);
         }
+        if let Some(root) = self.same_device_copies.get_mut(&id) {
+            root.backend_submission = Some(backend_submission);
+        }
         self.submissions.insert(
             id,
             SubmissionRecordV1 {
@@ -871,6 +966,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 scalar_peer_copy,
                 directed_peer_copy,
                 producer_launch,
+                same_device_copy,
                 dependency_retains: 0,
             },
         );

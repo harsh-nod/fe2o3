@@ -7,6 +7,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 mod lifecycle;
 mod packetized;
+#[path = "../peer_readback/tests.rs"]
+mod peer_readback;
 mod queued_consumer;
 mod sharded;
 

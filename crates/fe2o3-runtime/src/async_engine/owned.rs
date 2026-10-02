@@ -322,7 +322,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         .and_then(|validated| {
-            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+            validated.with_drain_capture_group_byte_capacity(config.drain_capture_byte_capacity)
         })
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidEngineConfig)?;
         RuntimeAsyncProgressConfigV1::new(

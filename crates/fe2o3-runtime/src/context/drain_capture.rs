@@ -188,14 +188,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         ) {
             return Err(RuntimeHostCaptureErrorV1::InvalidRange);
         }
-        if self.graph_reservation.is_some()
-            || self
-                .submissions
-                .values()
-                .any(|record| !record.quiescent || !record.status.is_terminal())
-        {
-            return Err(RuntimeHostCaptureErrorV1::Pending);
-        }
         self.devices
             .iter()
             .find(|device| device.id == source.device)
@@ -207,9 +199,61 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         source: &RuntimeHostCaptureSourceV1,
         destination: &mut [u8],
+        quiescence: crate::async_engine::DrainQuiescenceV1,
+    ) -> Result<(), RuntimeHostCaptureErrorV1> {
+        self.capture_host_drain_group_v1(std::slice::from_ref(source), destination, quiescence)
+    }
+
+    pub(crate) fn capture_host_drain_group_v1(
+        &mut self,
+        sources: &[RuntimeHostCaptureSourceV1],
+        destination: &mut [u8],
         _quiescence: crate::async_engine::DrainQuiescenceV1,
     ) -> Result<(), RuntimeHostCaptureErrorV1> {
-        let device = self.validate_host_capture_source_v1(source, destination.len())?;
+        use crate::async_engine::{
+            MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1,
+            MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_RANGES_V1,
+        };
+        if sources.is_empty()
+            || sources.len() > MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_RANGES_V1
+            || destination.len() > MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1
+        {
+            return Err(RuntimeHostCaptureErrorV1::InvalidRange);
+        }
+        let extent = sources
+            .iter()
+            .try_fold(0usize, |sum, source| sum.checked_add(source.byte_len));
+        if extent != Some(destination.len()) {
+            return Err(RuntimeHostCaptureErrorV1::InvalidRange);
+        }
+        // Validate the complete logical roster before any backend can copy bytes.
+        let mut devices = [0; MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_RANGES_V1];
+        for (source, device) in sources.iter().zip(&mut devices) {
+            *device = self.validate_host_capture_source_v1(source, source.byte_len)?;
+        }
+        if self.graph_reservation.is_some()
+            || self
+                .submissions
+                .values()
+                .any(|record| !record.quiescent || !record.status.is_terminal())
+        {
+            return Err(RuntimeHostCaptureErrorV1::Pending);
+        }
+        let mut remaining = destination;
+        for (source, device) in sources.iter().zip(devices) {
+            let (range, rest) = remaining.split_at_mut(source.byte_len);
+            self.capture_validated_host_range_v1(source, device, range)?;
+            remaining = rest;
+        }
+        Ok(())
+    }
+
+    fn capture_validated_host_range_v1(
+        &mut self,
+        source: &RuntimeHostCaptureSourceV1,
+        device: u64,
+        destination: &mut [u8],
+    ) -> Result<(), RuntimeHostCaptureErrorV1> {
         match self.guard_journal_unwind_v1(|context| {
             context
                 .backend

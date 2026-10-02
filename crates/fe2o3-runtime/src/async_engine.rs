@@ -67,9 +67,14 @@ pub const MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
 pub const DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 16 * 1024 * 1024;
 pub const MAX_RUNTIME_ASYNC_REPLIES_V1: usize = 65_536;
 pub const DEFAULT_RUNTIME_ASYNC_REPLIES_V1: usize = 16_384;
-/// Maximum owned coherent capture extent; disabled by default.
+/// Maximum single-range owned coherent capture extent; disabled by default.
 pub const MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1: usize =
     drain_capture_storage::MAX_CAPTURE_BYTES_V1;
+/// Maximum concatenated extent of one owned coherent capture group.
+pub const MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1: usize =
+    drain_capture_storage::MAX_CAPTURE_GROUP_BYTES_V1;
+/// Maximum ordered source ranges in one coherent capture group.
+pub const MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_RANGES_V1: usize = 16;
 
 /// Bounded scheduling configuration for one async observation engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,6 +175,22 @@ impl RuntimeAsyncEngineConfigV1 {
 
     pub const fn drain_capture_byte_capacity(self) -> usize {
         self.drain_capture_byte_capacity
+    }
+
+    /// Opts into one capture group with a larger aggregate slice-byte budget.
+    /// Single and group capture share one account and one owner record. This
+    /// replaces, rather than adds to, the single-capture budget; zero disables
+    /// both. Single-range admission still has its independent 64 MiB limit.
+    /// Native backing, allocator overhead and caller-owned metadata are excluded.
+    pub fn with_drain_capture_group_byte_capacity(
+        mut self,
+        capacity: usize,
+    ) -> Result<Self, RuntimeAsyncEngineConfigErrorV1> {
+        if capacity > MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1 {
+            return Err(RuntimeAsyncEngineConfigErrorV1::DrainCaptureByteCapacity);
+        }
+        self.drain_capture_byte_capacity = capacity;
+        Ok(self)
     }
 
     fn capture_budget_v1(
@@ -1186,7 +1207,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         .and_then(|validated| {
-            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+            validated.with_drain_capture_group_byte_capacity(config.drain_capture_byte_capacity)
         }) {
             return Err(RuntimeAsyncEngineSpawnFailureV1 {
                 context: Box::new(context),
@@ -1284,7 +1305,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         .and_then(|validated| {
-            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+            validated.with_drain_capture_group_byte_capacity(config.drain_capture_byte_capacity)
         }) {
             return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
                 context: Box::new(context),
@@ -4039,6 +4060,30 @@ mod tests {
         assert_eq!(
             config.with_drain_capture_byte_capacity(MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1 + 1),
             Err(RuntimeAsyncEngineConfigErrorV1::DrainCaptureByteCapacity),
+        );
+        let grouped = config
+            .with_drain_capture_group_byte_capacity(MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1)
+            .unwrap();
+        assert_eq!(grouped.drain_capture_byte_capacity(), 128 * 1024 * 1024);
+        assert_eq!(
+            grouped.with_drain_capture_group_byte_capacity(
+                MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1 + 1
+            ),
+            Err(RuntimeAsyncEngineConfigErrorV1::DrainCaptureByteCapacity),
+        );
+        assert_eq!(
+            grouped
+                .with_drain_capture_group_byte_capacity(0)
+                .unwrap()
+                .drain_capture_byte_capacity(),
+            0
+        );
+        assert_eq!(
+            grouped
+                .with_drain_capture_byte_capacity(16)
+                .unwrap()
+                .drain_capture_byte_capacity(),
+            16
         );
     }
 

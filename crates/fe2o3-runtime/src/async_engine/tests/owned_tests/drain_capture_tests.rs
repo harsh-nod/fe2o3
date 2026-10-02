@@ -4,6 +4,9 @@ use crate::{
     RuntimeHostCaptureErrorV1 as CaptureError, RuntimeHostCaptureSourceV1,
 };
 
+#[path = "drain_capture_group_tests.rs"]
+mod group_tests;
+
 fn capture_config(bytes: usize) -> RuntimeAsyncEngineConfigV1 {
     RuntimeAsyncEngineConfigV1::default()
         .with_drain_capture_byte_capacity(bytes)

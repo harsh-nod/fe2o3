@@ -206,6 +206,7 @@ fn fixture(queued: &[bool], launch: bool, record_present: bool) -> Owner {
                 scalar_peer_copy: !launch,
                 directed_peer_copy: !launch,
                 producer_launch: launch,
+                same_device_copy: false,
                 dependency_retains: 1,
             },
         );

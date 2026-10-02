@@ -27,6 +27,8 @@ struct OwnerTrace {
     capture_failure: Option<crate::RuntimeHostCaptureErrorV1>,
     capture_terminal: bool,
     capture_panics: bool,
+    capture_fault_at: Option<usize>,
+    capture_fill_by_allocation: bool,
     capture_backing_pending: bool,
     capture_calls: usize,
     capture_requests: Vec<(u64, u64, u64, usize)>,
@@ -102,11 +104,19 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
             request.byte_offset(),
             request.destination_mut().len(),
         ));
-        let (failure, terminal, panics, pending) = (
-            trace.capture_failure,
-            trace.capture_terminal,
-            trace.capture_panics,
-            trace.capture_backing_pending,
+        let fault = trace
+            .capture_fault_at
+            .is_none_or(|at| at == trace.capture_calls);
+        let (failure, terminal, panics, pending, fill) = (
+            if fault { trace.capture_failure } else { None },
+            fault && trace.capture_terminal,
+            fault && trace.capture_panics,
+            fault && trace.capture_backing_pending,
+            if trace.capture_fill_by_allocation {
+                u8::try_from(request.allocation()).expect("bounded mock allocation id")
+            } else {
+                0x5a
+            },
         );
         let pause = trace.capture_pause.take();
         drop(trace);
@@ -129,7 +139,7 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("capture test did not release its private copy");
         }
-        request.destination_mut().fill(0x5a);
+        request.destination_mut().fill(fill);
         assert!(!panics, "capture adapter panic after private copy");
         Ok(())
     }

@@ -43,6 +43,7 @@ pub trait RuntimeProducerAwareLaunchBackendV1: RuntimeBackendV1 {
 pub(super) enum PreparedSubmissionCustodyV1 {
     Peer(PreparedPeerSubmissionV1),
     Launch(ProducerLaunchRootV1),
+    Copy(SameDeviceCopyRootV1),
 }
 
 pub(super) struct ProducerLaunchRootV1 {
@@ -522,7 +523,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         let result = self
             .validate_scalar_peer_custody_v1(id)
-            .and_then(|()| self.validate_producer_launch_custody_v1(id));
+            .and_then(|()| self.validate_producer_launch_custody_v1(id))
+            .and_then(|()| self.validate_same_device_copy_custody_v1(id));
         if result.is_err() {
             self.quarantine_after_async_command_panic_v1();
         }
@@ -535,6 +537,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         self.check_operation_custody_v1(id)?;
         self.release_scalar_peer_dependencies_v1(id)?;
+        self.release_same_device_copy_dependencies_v1(id);
         if let Some(root) = self.producer_launches.get_mut(&id)
             && root.dependencies_held
         {

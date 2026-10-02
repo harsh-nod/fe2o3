@@ -111,7 +111,7 @@ pub(super) struct MockProducerLaunchState {
     events: HashMap<u64, u64>,
     completed: HashMap<u64, BackendPollV1>,
     completed_copies: HashMap<u64, BackendPollV1>,
-    observations: HashMap<u64, Observation>,
+    pub(super) observations: HashMap<u64, Observation>,
     calls: Vec<(&'static str, u64)>,
 }
 

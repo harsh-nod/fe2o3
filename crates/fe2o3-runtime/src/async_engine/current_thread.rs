@@ -162,7 +162,7 @@ impl<B: RuntimeBackendV1 + RuntimeFlushBackendV1 + RuntimeOwnedShutdownBackendV1
         )
         .and_then(|v| v.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|v| v.with_reply_capacity(config.reply_capacity))
-        .and_then(|v| v.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity))
+        .and_then(|v| v.with_drain_capture_group_byte_capacity(config.drain_capture_byte_capacity))
         .map_err(RuntimeAsyncCurrentThreadInitErrorV1::InvalidEngineConfig)?;
         RuntimeAsyncProgressConfigV1::new(
             progress_config.stream_capacity,

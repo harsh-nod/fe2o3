@@ -24,8 +24,10 @@ mod allocation_witness;
 pub use allocation_witness::*;
 mod worker_admission;
 pub use worker_admission::RuntimeWorkerRequestOwnerV1;
+mod copy_custody;
 mod drain;
 mod drain_capture;
+use copy_custody::SameDeviceCopyRootV1;
 mod generated_issue;
 mod generated_preparation;
 mod generated_shells;
@@ -700,6 +702,24 @@ pub trait RuntimeBackendV1 {
 /// conclusive completion; the submission handle remains retained until
 /// [`RuntimeBackendV1::release_submission_v1`].
 pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
+    /// Opt in to journal-aware DeviceLocal-to-HostVisible readback behind an
+    /// exact pending ordinary peer producer on the readback device.
+    ///
+    /// The backend must authenticate the explicit producer event, destination
+    /// allocation and covered read range, retain each pending dependency or an
+    /// authenticated immutable success independently of public events, and
+    /// issue no read until all dependencies succeeded and
+    /// the peer's original owners were restored. Failure or unknown completion
+    /// must not become consumer success. Admission must not acquire child owner
+    /// custody that prevents the peer from progressing. Existing cancellation,
+    /// uncertain-custody and observer-only completion contracts still apply.
+    /// This is not a capability-bit or Worker-protocol authorization.
+    /// Context retains its logical producer until its own reconciliation even
+    /// when the backend already has conclusive success at admission.
+    fn supports_pending_peer_readback_v1(&self) -> bool {
+        false
+    }
+
     fn copy_async_v1(
         &mut self,
         stream: u64,
@@ -973,9 +993,10 @@ pub struct RuntimeCleanupReportV1<E> {
     allocation_journal_records: usize,
     writer_journal_records: usize,
     reader_journal_records: usize,
-    scalar_peer_copy_records: usize,
+    scalar_peer_copy_records: u32,
     // The submission admission bound fits u32; keep shutdown errors inline.
     producer_launch_records: u32,
+    same_device_copy_records: u32,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -1002,6 +1023,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.reader_journal_records == 0
             && self.scalar_peer_copy_records == 0
             && self.producer_launch_records == 0
+            && self.same_device_copy_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -1037,12 +1059,17 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Scalar provenance roots, including backend-entered attempts without a handle.
     /// Completed roots are metadata only; they are removed with their submission.
     pub const fn scalar_peer_copy_records_v1(&self) -> usize {
-        self.scalar_peer_copy_records
+        self.scalar_peer_copy_records as usize
     }
 
     /// Retained producer-aware launch roots, including attempts without a handle.
     pub const fn producer_launch_records_v1(&self) -> usize {
         self.producer_launch_records as usize
+    }
+
+    /// Retained same-device readback roots, including attempts without a handle.
+    pub const fn same_device_copy_records_v1(&self) -> usize {
+        self.same_device_copy_records as usize
     }
 }
 
@@ -1103,6 +1130,7 @@ struct SubmissionRecordV1 {
     scalar_peer_copy: bool,
     directed_peer_copy: bool,
     producer_launch: bool,
+    same_device_copy: bool,
     dependency_retains: usize,
 }
 
@@ -1152,6 +1180,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     backend_submissions: HashSet<u64>,
     scalar_peer_copies: HashMap<RuntimeSubmissionIdV1, ScalarPeerCopyRootV1>,
     producer_launches: HashMap<RuntimeSubmissionIdV1, ProducerLaunchRootV1>,
+    same_device_copies: HashMap<RuntimeSubmissionIdV1, SameDeviceCopyRootV1>,
     generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
     completion_callback_count: usize,
@@ -1355,6 +1384,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_submissions: HashSet::new(),
             scalar_peer_copies: HashMap::new(),
             producer_launches: HashMap::new(),
+            same_device_copies: HashMap::new(),
             completion_callbacks: HashMap::new(),
             completion_callback_count: 0,
             completion_callback_panic_count: 0,
@@ -1397,6 +1427,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self.allocation_admission.is_configured()
             || !self.scalar_peer_copies.is_empty()
             || !self.producer_launches.is_empty()
+            || !self.same_device_copies.is_empty()
             || self.native_pair_reservation.is_some()
     }
 
@@ -1545,6 +1576,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     self.submissions.remove(&id);
                     self.scalar_peer_copies.remove(&id);
                     self.producer_launches.remove(&id);
+                    self.same_device_copies.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
                     debug_assert!(!self.completion_callbacks.contains_key(&id));
                 }
@@ -1671,9 +1703,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .versions
                 .as_ref()
                 .map_or(0, ContextVersionsV1::retained_readers),
-            scalar_peer_copy_records: self.scalar_peer_copies.len(),
+            scalar_peer_copy_records: u32::try_from(self.scalar_peer_copies.len())
+                .expect("bounded scalar-peer-copy registry"),
             producer_launch_records: u32::try_from(self.producer_launches.len())
                 .expect("bounded producer-launch registry"),
+            same_device_copy_records: u32::try_from(self.same_device_copies.len())
+                .expect("bounded same-device-copy registry"),
         }
     }
 
@@ -1733,6 +1768,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         if record.producer_launch {
             let result = self.validate_pending_producer_launch_roots_v1(submission);
+            self.journal_result_v1(result)?;
+        }
+        if self.submissions[&submission].same_device_copy {
+            let result = self.validate_pending_same_device_copy_roots_v1(submission);
             self.journal_result_v1(result)?;
         }
         self.check_operation_custody_v1(submission)?;
@@ -3128,6 +3167,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.submissions.remove(&submission.id);
         self.scalar_peer_copies.remove(&submission.id);
         self.producer_launches.remove(&submission.id);
+        self.same_device_copies.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
         debug_assert!(!self.completion_callbacks.contains_key(&submission.id));
         Ok(())
@@ -3421,7 +3461,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     {
         let prepared =
             self.prepare_context_copy_v1(stream, source, destination, dependencies, None)?;
-        self.submit_prepared_copy_v1(prepared, None)
+        let custody = if self.backend.supports_pending_peer_readback_v1() {
+            self.prepare_same_device_copy_custody_v1(stream, source, destination, dependencies)?
+        } else {
+            None
+        };
+        self.submit_prepared_copy_with_custody_v1(prepared, None, custody)
     }
 
     fn prepare_context_copy_v1(
@@ -3528,7 +3573,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     where
         B: RuntimeAsyncCopyBackendV1,
     {
+        self.submit_prepared_copy_with_custody_v1(prepared, access, None)
+    }
+
+    fn submit_prepared_copy_with_custody_v1<M>(
+        &mut self,
+        prepared: PreparedContextCopyV1,
+        access: Option<ContextGraphReservationV1>,
+        custody: Option<SameDeviceCopyRootV1>,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
         self.require_graph_access(access)?;
+        if access.is_some() && custody.is_some() {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
         self.require_stream_unheld_v1(prepared.stream)?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
@@ -3546,7 +3606,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream,
             stream_record,
             &[journal_destination],
-            None,
+            custody.map(PreparedSubmissionCustodyV1::Copy),
             &[journal_source],
             |backend| {
                 backend.copy_async_v1(
@@ -3580,6 +3640,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         if !record.quiescent && record.producer_launch {
             let result = self.validate_pending_producer_launch_roots_v1(submission.id);
+            self.journal_result_v1(result)?;
+        }
+        if !record.quiescent && record.same_device_copy {
+            let result = self.validate_pending_same_device_copy_roots_v1(submission.id);
             self.journal_result_v1(result)?;
         }
         if record.quiescent || self.retained_directed_success_v1(submission.id) {
@@ -3854,6 +3918,7 @@ mod tests {
     mod async_journal_tests;
     mod completion_settlement_tests;
     mod construction_custody_tests;
+    mod copy_custody_tests;
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
     mod native_retained_pair_tests;
@@ -3986,6 +4051,7 @@ mod tests {
         handle_override: Option<(MockHandleKind, u64)>,
         cancel_before_publication: bool,
         deferred_copies: bool,
+        pending_peer_readback: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
         deferred_kernel_reads: bool,
@@ -4626,6 +4692,10 @@ mod tests {
     }
 
     impl RuntimeAsyncCopyBackendV1 for MockBackend {
+        fn supports_pending_peer_readback_v1(&self) -> bool {
+            self.pending_peer_readback
+        }
+
         fn copy_async_v1(
             &mut self,
             stream: u64,

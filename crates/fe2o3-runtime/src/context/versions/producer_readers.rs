@@ -42,6 +42,7 @@ impl SubmissionProducerReaderMarkerV1 {
 enum ProducerReadDomainV1 {
     DirectedPeer,
     Launch,
+    Copy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,6 +211,9 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         active_index: &mut usize,
         queued_index: &mut usize,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        if self.root.domain == ProducerReadDomainV1::Copy {
+            return self.validate_copy_input_v1(index, active_index, queued_index);
+        }
         let context = self.context;
         let root = self.root;
         let id = self.id;
@@ -227,6 +231,71 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
             queued_index,
             self
         )
+    }
+
+    fn validate_copy_input_v1(
+        &mut self,
+        index: usize,
+        active_index: &mut usize,
+        queued_index: &mut usize,
+    ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        if index != 0 || *active_index != 0 || *queued_index != 0 {
+            return Err(E::InvalidReference);
+        }
+        let input = &self.root.inputs[0];
+        let ProducerReadRequestV1::Active(request) = input.request else {
+            return Err(E::InvalidReference);
+        };
+        let reference = self.root.references[0];
+        let source = input.source;
+        let copy = self
+            .context
+            .same_device_copies
+            .get(&self.id)
+            .ok_or(E::InvalidReference)?;
+        if self.root.requests[0] != request
+            || reference.consumer != self.consumer
+            || !copy.dependencies_held
+            || copy.producer != input.dependency
+            || !producer_dependency_contains_v1(&copy.dependencies, &input.dependency)
+            || copy.source.region != source.region
+            || copy.source.record != source.record
+            || request.producer.key
+                != (ContextWriterKeyV1 {
+                    context_generation: input.dependency.submission.context_generation,
+                    local: input.dependency.submission.local,
+                    kind: ContextWriterKindV1::Submission,
+                })
+            || input.dependency.submission.local >= self.id.local
+            || self.context.allocations.get(&source.region.allocation) != Some(&source.record)
+            || !self
+                .context
+                .backend_allocations
+                .contains(&source.record.backend_allocation)
+            || !self.observe_expected_credit(
+                source.region.allocation,
+                source.record.device,
+                source.record.byte_len,
+            )
+            || self.observe_live(source.region.allocation, &source.record)?
+                != request.read.allocation
+            || request.read.device
+                != enrollment(
+                    source.region.allocation,
+                    source.record.device,
+                    source.record.byte_len,
+                )
+                .device
+            || request.read.byte_extent != source.record.byte_len
+            || request.read.byte_offset != source.region.byte_offset
+            || request.read.byte_len != source.region.byte_len
+            || self.observe_active_lookup(reference)? != request
+        {
+            return Err(E::InvalidReference);
+        }
+        *active_index = 1;
+        self.observe_active_status(reference)
     }
 
     fn reconcile(&mut self) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
@@ -346,6 +415,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         source: ContextReadSourceV1,
         dependencies: &[ScalarPeerDependencyV1],
         launch: Option<&ProducerLaunchRootV1>,
+        copy: Option<&SameDeviceCopyRootV1>,
     ) -> Result<Option<ProducerInputV1>, RuntimeValidationErrorV1> {
         if self.allocations.get(&source.region.allocation) != Some(&source.record)
             || !self
@@ -454,6 +524,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             } else {
                 self.validate_pending_peer_copy_roots_v1(dependency.submission)
             };
+            self.journal_result_v1(result)?;
+        } else if let Some(copy) = copy {
+            let producer = self
+                .scalar_peer_copies
+                .get(&dependency.submission)
+                .filter(|producer| producer.directed.is_none())
+                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+            if dependency != copy.producer
+                || source.region != copy.source.region
+                || source.record != copy.source.record
+                || !producer.covers_input_v1(source)
+            {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
+            let result = self.validate_pending_peer_copy_roots_v1(dependency.submission);
             self.journal_result_v1(result)?;
         } else {
             let producer = self
@@ -612,7 +697,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .try_reserve_exact(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             if let Some(input) =
-                context.prepare_pending_input_v1(root.source, &root.dependencies, None)?
+                context.prepare_pending_input_v1(root.source, &root.dependencies, None, None)?
             {
                 inputs.push(input);
             }
@@ -653,7 +738,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
                 }
                 previous = Some(source.region.allocation);
-                match context.prepare_pending_input_v1(*source, &root.dependencies, Some(root))? {
+                match context.prepare_pending_input_v1(
+                    *source,
+                    &root.dependencies,
+                    Some(root),
+                    None,
+                )? {
                     Some(input) => pending.push(input),
                     None => stable.push(*source),
                 }
@@ -830,12 +920,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.guard_journal_unwind_v1(|context| {
             let result = (|| {
                 let launch = context.producer_launches.contains_key(&id);
+                let copy = context.same_device_copies.contains_key(&id);
                 let versions = context
                     .versions
                     .as_mut()
                     .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
                 if versions.producer_readers.contains_key(&id)
                     || launch != (prepared.root.domain == ProducerReadDomainV1::Launch)
+                    || copy != (prepared.root.domain == ProducerReadDomainV1::Copy)
                     || !launch && versions.submission_readers.contains_key(&id)
                     || versions
                         .submission_writers
@@ -884,7 +976,96 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<Option<ProducerInputRootV1<'_>>, ContextVersionJournalErrorV1> {
+        if self
+            .versions
+            .as_ref()
+            .and_then(|versions| versions.producer_readers.get(&id))
+            .is_some_and(|root| root.domain == ProducerReadDomainV1::Copy)
+        {
+            return self.copy_producer_input_root_v1(id).map(Some);
+        }
+        if self
+            .submissions
+            .get(&id)
+            .is_some_and(|record| record.same_device_copy && !record.quiescent)
+            || self
+                .same_device_copies
+                .get(&id)
+                .is_some_and(|copy| copy.dependencies_held)
+        {
+            return Err(ContextVersionJournalErrorV1::InvalidReference);
+        }
         producer_input_preflight_body!(completion_journal_rust_syntax, self, id)
+    }
+
+    fn copy_producer_input_root_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<ProducerInputRootV1<'_>, ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        self.validate_same_device_copy_custody_v1(id)
+            .map_err(|_| E::InvalidReference)?;
+        let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
+        let root = versions
+            .producer_readers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        let marker = root.marker.ok_or(E::InvalidReference)?;
+        let consumer = ContextWriterKeyV1 {
+            context_generation: id.context_generation,
+            local: id.local,
+            kind: ContextWriterKindV1::Submission,
+        };
+        let writer = versions
+            .submission_writers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        if root.domain != ProducerReadDomainV1::Copy
+            || root.inputs.len() != 1
+            || root.references.len() != 1
+            || root.requests.len() != 1
+            || !root.queued_requests.is_empty()
+            || !root.queued_references.is_empty()
+            || !matches!(root.inputs[0].request, ProducerReadRequestV1::Active(_))
+            || marker != root.complete_marker()
+            || marker.first.consumer != consumer
+            || versions.submission_readers.contains_key(&id)
+            || writer.domain != SubmissionWriterDomainV1::Ordinary
+            || self.submissions.get(&id).is_some_and(|record| {
+                !record.same_device_copy
+                    || record.producer_launch
+                    || record.scalar_peer_copy
+                    || record.directed_peer_copy
+                    || record.journal_read.is_some()
+                    || record.journal_producer_read != Some(marker)
+                    || record.journal_writer != Some(writer.writer)
+            })
+        {
+            return Err(E::InvalidReference);
+        }
+        Ok(ProducerInputRootV1 {
+            versions,
+            root,
+            consumer,
+            launch: false,
+        })
+    }
+
+    pub(super) fn prepare_copy_inputs_v1(
+        &mut self,
+        root: &SameDeviceCopyRootV1,
+    ) -> Result<Option<PreparedProducerReadsV1>, RuntimeValidationErrorV1> {
+        self.guard_journal_unwind_v1(|context| {
+            let mut inputs = Vec::new();
+            inputs
+                .try_reserve_exact(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            let input = context
+                .prepare_pending_input_v1(root.source, &root.dependencies, None, Some(root))?
+                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+            inputs.push(input);
+            context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::Copy)
+        })
     }
 
     pub(super) fn validate_producer_read_v1(

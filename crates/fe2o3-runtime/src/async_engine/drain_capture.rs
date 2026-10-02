@@ -10,6 +10,7 @@ pub enum RuntimeAsyncDrainCaptureAdmissionErrorV1 {
     InvalidTickBudget,
     ReentrantCall,
     ForeignContext,
+    InvalidSources,
     InvalidDestination,
     ReplyCapacity,
     StorageCapacity,
@@ -65,6 +66,48 @@ impl fmt::Display for RuntimeAsyncDrainCaptureAdmissionFailureV1 {
 
 impl Error for RuntimeAsyncDrainCaptureAdmissionFailureV1 {}
 
+/// Rejected group admission returns the exact ordered roster and destination.
+pub struct RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {
+    error: RuntimeAsyncDrainCaptureAdmissionErrorV1,
+    sources: Box<[RuntimeHostCaptureSourceV1]>,
+    destination: Box<[u8]>,
+}
+
+impl RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {
+    pub const fn error(&self) -> RuntimeAsyncDrainCaptureAdmissionErrorV1 {
+        self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuntimeAsyncDrainCaptureAdmissionErrorV1,
+        Box<[RuntimeHostCaptureSourceV1]>,
+        Box<[u8]>,
+    ) {
+        (self.error, self.sources, self.destination)
+    }
+}
+
+impl fmt::Debug for RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeAsyncDrainCaptureGroupAdmissionFailureV1")
+            .field("error", &self.error)
+            .field("range_count", &self.sources.len())
+            .field("byte_len", &self.destination.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl Error for RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {}
+
 /// Drain classification and one owned capture; neither grants execution authority.
 #[derive(Debug)]
 pub struct RuntimeAsyncDrainCaptureReportV1 {
@@ -73,7 +116,7 @@ pub struct RuntimeAsyncDrainCaptureReportV1 {
 }
 
 pub(super) struct PendingCaptureV1 {
-    source: RuntimeHostCaptureSourceV1,
+    sources: CaptureSourcesV1,
     destination: CaptureReservationV1,
     reply: owned::Reply<RuntimeAsyncDrainCaptureReportV1>,
 }
@@ -81,23 +124,23 @@ pub(super) struct PendingCaptureV1 {
 impl PendingCaptureV1 {
     pub(super) fn retain(self) -> CaptureRequestV1 {
         CaptureRequestV1 {
-            source: self.source,
+            sources: self.sources,
             destination: Some(self.destination.retain()),
             reply: self.reply,
         }
     }
 
-    fn reject(self) -> RuntimeAsyncDrainCaptureAdmissionFailureV1 {
-        RuntimeAsyncDrainCaptureAdmissionFailureV1 {
+    fn reject(self) -> CaptureAdmissionFailureV1 {
+        CaptureAdmissionFailureV1 {
             error: RuntimeAsyncDrainCaptureAdmissionErrorV1::AdmissionClosed,
-            source: self.source,
+            sources: self.sources,
             destination: self.destination.into_unadmitted_destination(),
         }
     }
 }
 
 pub(super) struct CaptureRequestV1 {
-    source: RuntimeHostCaptureSourceV1,
+    sources: CaptureSourcesV1,
     destination: Option<RuntimeAsyncCapturedBytesV1>,
     reply: owned::Reply<RuntimeAsyncDrainCaptureReportV1>,
 }
@@ -112,8 +155,14 @@ impl CaptureRequestV1 {
         let Some(mut destination) = self.destination.take() else {
             return;
         };
-        let outcome =
-            context.capture_host_drain_v1(&self.source, destination.as_bytes_mut(), quiescence);
+        let outcome = match &self.sources {
+            CaptureSourcesV1::Single(source) => {
+                context.capture_host_drain_v1(source, destination.as_bytes_mut(), quiescence)
+            }
+            CaptureSourcesV1::Group(sources) => {
+                context.capture_host_drain_group_v1(sources, destination.as_bytes_mut(), quiescence)
+            }
+        };
         if context.is_terminal() {
             drop(destination);
             self.reply
@@ -138,6 +187,33 @@ impl CaptureRequestV1 {
     }
 }
 
+enum CaptureSourcesV1 {
+    Single(RuntimeHostCaptureSourceV1),
+    Group(Box<[RuntimeHostCaptureSourceV1]>),
+}
+
+impl CaptureSourcesV1 {
+    fn as_slice(&self) -> &[RuntimeHostCaptureSourceV1] {
+        match self {
+            Self::Single(source) => std::slice::from_ref(source),
+            Self::Group(sources) => sources,
+        }
+    }
+
+    fn byte_limit(&self) -> usize {
+        match self {
+            Self::Single(_) => MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1,
+            Self::Group(_) => MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_GROUP_BYTES_V1,
+        }
+    }
+}
+
+struct CaptureAdmissionFailureV1 {
+    error: RuntimeAsyncDrainCaptureAdmissionErrorV1,
+    sources: CaptureSourcesV1,
+    destination: Box<[u8]>,
+}
+
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// Closes admission and captures one pre-registered host range after drain.
     ///
@@ -155,24 +231,93 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         RuntimeAsyncCommandFutureV1<RuntimeAsyncDrainCaptureReportV1>,
         RuntimeAsyncDrainCaptureAdmissionFailureV1,
     > {
+        self.begin_capture(max_ticks, CaptureSourcesV1::Single(source), destination)
+            .map_err(|failure| {
+                let CaptureSourcesV1::Single(source) = failure.sources else {
+                    unreachable!("single-range admission preserves its source");
+                };
+                RuntimeAsyncDrainCaptureAdmissionFailureV1 {
+                    error: failure.error,
+                    source,
+                    destination: failure.destination,
+                }
+            })
+    }
+
+    /// Captures a bounded ordered roster into one concatenated owned result.
+    ///
+    /// Each positive registered range occupies exactly its byte length, in
+    /// roster order. The boxed roster and destination must already be allocated;
+    /// their aggregate length is checked before admission closes. All sources
+    /// are revalidated after drain and before the first backend read. Any capture
+    /// error discards the entire result, including an already-copied prefix.
+    /// Quiescence is not operation success: inspect the accepted operations and
+    /// drain counts separately. This does not synchronize concurrently mutating
+    /// external host writers or grant native cleanup authority.
+    #[allow(clippy::result_large_err)]
+    pub fn begin_drain_with_capture_group(
+        &self,
+        max_ticks: usize,
+        sources: Box<[RuntimeHostCaptureSourceV1]>,
+        destination: Box<[u8]>,
+    ) -> Result<
+        RuntimeAsyncCommandFutureV1<RuntimeAsyncDrainCaptureReportV1>,
+        RuntimeAsyncDrainCaptureGroupAdmissionFailureV1,
+    > {
+        self.begin_capture(max_ticks, CaptureSourcesV1::Group(sources), destination)
+            .map_err(|failure| {
+                let CaptureSourcesV1::Group(sources) = failure.sources else {
+                    unreachable!("group admission preserves its source roster");
+                };
+                RuntimeAsyncDrainCaptureGroupAdmissionFailureV1 {
+                    error: failure.error,
+                    sources,
+                    destination: failure.destination,
+                }
+            })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn begin_capture(
+        &self,
+        max_ticks: usize,
+        sources: CaptureSourcesV1,
+        destination: Box<[u8]>,
+    ) -> Result<
+        RuntimeAsyncCommandFutureV1<RuntimeAsyncDrainCaptureReportV1>,
+        CaptureAdmissionFailureV1,
+    > {
         use RuntimeAsyncDrainCaptureAdmissionErrorV1 as AdmissionError;
+        let roster = sources.as_slice();
         let invalid = if self.observer.rejects_async_enqueue() {
             Some(AdmissionError::ReentrantCall)
         } else if max_ticks == 0 || max_ticks > MAX_RUNTIME_ASYNC_DRAIN_TICKS_V1 {
             Some(AdmissionError::InvalidTickBudget)
         } else if self.observer.capture_budget.is_none() {
             Some(AdmissionError::Disabled)
-        } else if !source.belongs_to_context(self.observer.context_generation) {
+        } else if roster.is_empty() || roster.len() > MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_RANGES_V1 {
+            Some(AdmissionError::InvalidSources)
+        } else if roster
+            .iter()
+            .any(|source| !source.belongs_to_context(self.observer.context_generation))
+        {
             Some(AdmissionError::ForeignContext)
-        } else if destination.is_empty() || destination.len() != source.byte_len() {
+        } else if destination.is_empty()
+            || roster
+                .iter()
+                .try_fold(0usize, |sum, source| sum.checked_add(source.byte_len()))
+                != Some(destination.len())
+        {
             Some(AdmissionError::InvalidDestination)
+        } else if destination.len() > sources.byte_limit() {
+            Some(AdmissionError::StorageCapacity)
         } else {
             None
         };
         if let Some(error) = invalid {
-            return Err(RuntimeAsyncDrainCaptureAdmissionFailureV1 {
+            return Err(CaptureAdmissionFailureV1 {
                 error,
-                source,
+                sources,
                 destination,
             });
         }
@@ -184,9 +329,9 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         let destination = match budget.reserve(destination) {
             Ok(destination) => destination,
             Err((_, destination)) => {
-                return Err(RuntimeAsyncDrainCaptureAdmissionFailureV1 {
+                return Err(CaptureAdmissionFailureV1 {
                     error: AdmissionError::StorageCapacity,
-                    source,
+                    sources,
                     destination,
                 });
             }
@@ -194,15 +339,15 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         let (reply, future) = match owned::Reply::budgeted_pair(&self.observer.reply_budget) {
             Ok(pair) => pair,
             Err(_) => {
-                return Err(RuntimeAsyncDrainCaptureAdmissionFailureV1 {
+                return Err(CaptureAdmissionFailureV1 {
                     error: AdmissionError::ReplyCapacity,
-                    source,
+                    sources,
                     destination: destination.into_unadmitted_destination(),
                 });
             }
         };
         let pending = PendingCaptureV1 {
-            source,
+            sources,
             destination,
             reply,
         };

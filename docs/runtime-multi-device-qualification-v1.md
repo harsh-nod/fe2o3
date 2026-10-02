@@ -432,6 +432,78 @@ new CPU tests qualify that routing boundary; no native capture run is added.
 These changes do not qualify compute sharding, pending-peer group drain,
 physical overlap, performance scaling or whole-adapter formal refinement.
 
+## Pending Peer Readback And Capture
+
+`copy_async` can now admit a same-device DeviceLocal `Read` to HostVisible
+`Write` behind an exact pending ordinary native peer event. The read must be
+covered by that peer's destination span. The multi-device backend authenticates
+the event and global/child-local routes using retained metadata, without reading
+detached allocation slots. It reuses the existing cooperative copy owner and
+does not acquire child execution custody until dependencies succeed and the
+peer restores its original owners. Existing staging/dependency bounds,
+cancellation, failure and uncertain-custody rules remain in force. Readback uses
+native D2H into bounded scratch followed by host staging and a HostVisible write;
+this is not a zero-staging copy-performance optimization.
+
+With the version journal enabled, a distinct same-device-copy root retains
+canonical producer identities and the exact producer-read lease independently
+of public events. Backend consumer success is retained until Context observes
+the peer parent and validates the producer lease, including epoch and lineage,
+before committing the output. Other backends do not gain this profile unless
+they explicitly implement the default-false `supports_pending_peer_readback_v1`
+contract. Ordinary pending-reader checks, graph copy admission, scalar peer
+identity and existing kernel authorities are unchanged.
+
+`begin_drain_with_capture_group` accepts one caller-owned boxed roster of up to
+16 registered HostVisible ranges and one exact-size concatenated destination.
+`with_drain_capture_group_byte_capacity` opts into an aggregate budget of at
+most 128 MiB. It replaces, rather than adds to, the existing one-record account;
+the original single-range API and configuration setter retain their 64 MiB
+limits. Rejection returns the exact roster and storage without closing admission.
+After the accepted prefix becomes quiescent, Context revalidates every logical
+source before the first read, then the router validates native host backing.
+Any read error discards the whole result; terminal failure or unwind preserves
+existing poisoning. Result storage remains charged until disposal, including
+when it outlives its future or owner. Quiescence and captured bytes alone do not
+establish successful operations; individual completions must also be checked.
+
+The `gfx942-runtime-pending-peer-capture-smoke` example exercises this path with
+the journal enabled and the same fixed 64 MiB + 37-byte ring partition. Every
+peer and dependent readback is pending before the owner handoff and capture
+cutoff. Public producer events are released before cutoff; exact indexed
+completion callbacks retain separate success evidence. The explicit `--round 0|1`
+option selects one changed-content round per process. Admission closure is
+permanent, and post-`ACQUIRE_VM` device admission is process-lifetime state:
+opening another Context on the same physical devices in that process remains
+unsupported even after native cleanup. Both rounds therefore require separate
+processes; no admission-history reset is used. The witness checks all
+initial device source/sentinel bytes and all final captured output bytes, then
+requires explicit owned shutdown and capture-credit disposal. It does not read
+Context after cutoff, observe the post-copy native counter, or establish
+post-copy source preservation, physical overlap or performance acceptance.
+
+These new adapters have not gained whole-runtime formal refinement. The four
+shared journal observer bodies and all existing proof contracts remain
+unchanged; rebinding their surrounding source identity is not a proof of the
+new same-device-copy or group-capture integration.
+
+The [pending-capture campaign](evidence/dev-multigpu-pending-capture-2026-10-02/README.md)
+passes ten final-source MI300X runs: rounds 0 and 1 on 2/3/5/7 GPUs and the reverse
+seven-GPU ordering. Every run admits all peers/readbacks before cutoff, checks
+their exact success receipts and all 67,108,901 captured bytes, explicitly shuts
+down native resources, and disposes the capture credit. The controller derives
+both complete-payload digests independently. Its local/uploaded/final witness
+SHA-256 is `d2789f83643d64849459c3de77dd33ea47ca98e22d21f4d79d015fba805038bc`.
+All owned processes/files are gone and selected GPU/process baselines restored.
+The two initial rejected hardware campaigns and cleanup receipts are retained.
+
+The complete runtime suite passes 2,036 tests with 32 unchanged hardware ignores;
+all 23 example tests, strict Clippy/no-default checks and 32 source controls pass.
+The previous 1,925-test KFD qualification is reused through exact source, roster,
+executable and authenticated archive identity. It is not a fresh KFD suite.
+Nine source-control files change only 18 SHA literals and seven roster counts;
+all 76 associated proof files remain unchanged, with no new solver qualification.
+
 ## Next Dependencies
 
 The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
@@ -444,10 +516,11 @@ scratch directory are removed. These are correctness observations on a shared
 host, not performance or exclusive-reservation evidence.
 
 The public-authority opt-in and 65-packet witness are implemented as described
-above. Fixed-total transfer sharding now passes on seven selected GPUs. Additional
-pairs, eight-GPU hardware coverage, compute sharding, pending-peer group drain,
-complete native fault coverage, and peer mappings retained across separate logical
-copies remain open. The current route does not qualify a general native runtime pipeline.
+above. Fixed-total transfer sharding and pending peer/readback group drain now
+pass on seven selected GPUs. Additional pairs, eight-GPU hardware coverage,
+compute sharding, same-process device reopen, complete native fault coverage,
+and peer mappings retained across separate logical copies remain open.
+The current route does not qualify a general native runtime pipeline.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed

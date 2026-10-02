@@ -112,6 +112,7 @@ mod ordinary_queue_io;
 use ordinary_queue_io::OrdinaryQueueIoV1;
 mod peer_ancestry;
 mod peer_compute_access;
+mod peer_readback;
 mod persistent_completion;
 mod prepared_cancellation;
 mod prepared_publication;
@@ -13264,6 +13265,10 @@ impl RuntimeCollectiveBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
 }
 
 impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn supports_pending_peer_readback_v1(&self) -> bool {
+        true
+    }
+
     fn copy_async_v1(
         &mut self,
         stream: u64,
@@ -13289,6 +13294,22 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             && destination_route.child == stream_route.child
             && self.children[stream_route.child].native_available
         {
+            if self.pending_native_peer_readback_v1(
+                stream_route,
+                source,
+                source_route,
+                destination,
+                destination_route,
+                dependencies,
+            ) {
+                return self.submit_cooperative_copy(
+                    stream,
+                    source,
+                    destination,
+                    dependencies,
+                    false,
+                );
+            }
             self.require_compute_xgmi_child_available_v1(stream_route.child)?;
             if self.stream_has_pending_cooperative_copy_v1(stream) {
                 return Err(KfdRuntimeBackendV1::rejected(

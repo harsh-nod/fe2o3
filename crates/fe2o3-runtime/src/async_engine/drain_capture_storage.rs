@@ -12,6 +12,7 @@ use fe2o3_resource_accounting::{
 use std::fmt;
 
 pub(super) const MAX_CAPTURE_BYTES_V1: usize = 64 * 1024 * 1024;
+pub(super) const MAX_CAPTURE_GROUP_BYTES_V1: usize = 128 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(super) struct CaptureBudgetV1 {
@@ -20,7 +21,7 @@ pub(super) struct CaptureBudgetV1 {
 
 impl CaptureBudgetV1 {
     pub(super) fn new(capacity: usize) -> Result<Self, ResourceCreditErrorV1> {
-        if capacity > MAX_CAPTURE_BYTES_V1 {
+        if capacity > MAX_CAPTURE_GROUP_BYTES_V1 {
             return Err(ResourceCreditErrorV1::Capacity);
         }
         Ok(Self {
@@ -32,7 +33,7 @@ impl CaptureBudgetV1 {
     }
 
     pub(super) fn used_bytes(&self) -> usize {
-        // Admission bounds this coordinate by MAX_CAPTURE_BYTES_V1.
+        // Admission bounds this coordinate by MAX_CAPTURE_GROUP_BYTES_V1.
         self.account.usage().used.get(ResourceKindV1::ReplyBytes) as usize
     }
 
@@ -171,15 +172,18 @@ mod tests {
 
     #[test]
     fn capture_capacity_and_record_arena_are_bounded() {
-        let budget = CaptureBudgetV1::new(MAX_CAPTURE_BYTES_V1).unwrap();
+        let budget = CaptureBudgetV1::new(MAX_CAPTURE_GROUP_BYTES_V1).unwrap();
         let usage = budget.account.usage();
         assert_eq!(usage.record_capacity, 1);
         assert_eq!(
             usage.capacity,
-            ResourceVectorV1::ZERO.with(ResourceKindV1::ReplyBytes, MAX_CAPTURE_BYTES_V1 as u64)
+            ResourceVectorV1::ZERO.with(
+                ResourceKindV1::ReplyBytes,
+                MAX_CAPTURE_GROUP_BYTES_V1 as u64
+            )
         );
         assert!(matches!(
-            CaptureBudgetV1::new(MAX_CAPTURE_BYTES_V1 + 1),
+            CaptureBudgetV1::new(MAX_CAPTURE_GROUP_BYTES_V1 + 1),
             Err(ResourceCreditErrorV1::Capacity)
         ));
     }

@@ -34,7 +34,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Option<(&[ScalarPeerDependencyV1], &DirectedPeerStateV1)> {
-        if let Some(root) = self.producer_launches.get(&id) {
+        if let Some(root) = self.same_device_copies.get(&id) {
+            Some((&root.dependencies, &root.state))
+        } else if let Some(root) = self.producer_launches.get(&id) {
             Some((&root.dependencies, &root.state))
         } else {
             self.scalar_peer_copies
@@ -50,7 +52,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         id: RuntimeSubmissionIdV1,
     ) -> Option<&mut DirectedPeerStateV1> {
-        if let Some(root) = self.producer_launches.get_mut(&id) {
+        if let Some(root) = self.same_device_copies.get_mut(&id) {
+            Some(&mut root.state)
+        } else if let Some(root) = self.producer_launches.get_mut(&id) {
             Some(&mut root.state)
         } else {
             self.scalar_peer_copies
@@ -127,6 +131,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         requested: RuntimeSubmissionIdV1,
     ) -> Result<CompletionStepV1, RuntimeValidationErrorV1> {
+        if self
+            .submissions
+            .get(&requested)
+            .is_some_and(|record| record.same_device_copy && !record.status.is_terminal())
+        {
+            let result = self.validate_pending_same_device_copy_roots_v1(requested);
+            self.journal_result_v1(result)?;
+        }
         completion_reconciliation_body!(completion_settlement_rust_expr, self, requested, [])
     }
 
