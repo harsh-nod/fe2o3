@@ -36,6 +36,9 @@ struct CompletedDeferredResultV1 {
 #[derive(Debug)]
 struct NativePeerProducerV1 {
     id: u64,
+    stream: u64,
+    dependency_depth: usize,
+    directed: bool,
     source: RoutedHandleV1,
     destination: RoutedHandleV1,
     source_region: BackendMemoryRegionV1,
@@ -129,6 +132,20 @@ impl DeferredComputeRetainsV1 {
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    fn deferred_peer_identity_is_intact_v1(&self, peer: &NativePeerProducerV1) -> bool {
+        matches!(self.submissions.get(&peer.id),
+            Some(RoutedSubmissionV1::CooperativeCopy(copy))
+                if copy.stream == peer.stream
+                    && copy.dependency_depth == peer.dependency_depth
+                    && copy.directed.is_some() == peer.directed
+                    && copy.source == peer.source
+                    && copy.destination == peer.destination
+                    && copy.source_region == peer.source_region
+                    && copy.destination_region == peer.destination_region
+                    && copy.compute_xgmi.is_some())
+            && (!peer.directed || self.directed_identity_is_intact_v1(peer.id))
+    }
+
     #[cfg(test)]
     pub(super) fn assert_deferred_compute_indexes_consistent_v1(&self) {
         let mut expected = DeferredComputeRetainsV1::default();
@@ -320,7 +337,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             matches!(
             self.submissions.get(&dependency.producer_submission),
             Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                if copy.directed.is_none() && copy.compute_xgmi.is_some() && !copy.is_quiescent())
+                if copy.compute_xgmi.is_some() && !copy.is_quiescent()
+                    && (copy.directed.is_none()
+                        || self.compute_xgmi_children.get(copy.destination.child)
+                            == Some(&Some(dependency.producer_submission))))
         });
         if !has_native_peer {
             return Ok(None);
@@ -415,8 +435,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     else {
                         return Err(self.directed_corruption_v1());
                     };
-                    if copy.directed.is_some()
-                        || copy.compute_xgmi.is_none()
+                    if copy.directed.is_some() && !self.directed_identity_is_intact_v1(submission) {
+                        return Err(self.directed_corruption_v1());
+                    }
+                    if copy.compute_xgmi.is_none()
+                        || copy.directed.is_some()
+                            && !copy.is_quiescent()
+                            && self.compute_xgmi_children[copy.destination.child]
+                                != Some(submission)
                         || copy.destination.child != stream.child
                         || matches!(copy.status(), BackendPollV1::Failed { .. })
                         || request
@@ -452,6 +478,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     })?);
                     peers.push(NativePeerProducerV1 {
                         id: submission,
+                        stream: copy.stream,
+                        dependency_depth: copy.dependency_depth,
+                        directed: copy.directed.is_some(),
                         source: copy.source,
                         destination: copy.destination,
                         source_region: copy.source_region,
@@ -762,11 +791,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if root.status == BackendPollV1::Pending
             && (!(1..=MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1).contains(&root.identity.depth)
                 || root.peers.iter().any(|peer| {
-                    peer.id >= id
-                        || !matches!(self.submissions.get(&peer.id),
-                            Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                                if copy.dependency_depth > 0
-                                    && copy.dependency_depth < root.identity.depth)
+                    peer.id == 0
+                        || peer.id >= id
+                        || peer.dependency_depth == 0
+                        || peer.dependency_depth >= root.identity.depth
+                        || !self.deferred_peer_identity_is_intact_v1(peer)
                 }))
         {
             self.children[child].terminal = true;
@@ -802,6 +831,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let child = root.child;
         if let Some(route) = root.route {
             if self.compute_xgmi_child_occupied_v1(child) {
+                self.progress_deferred_directed_blocker_v1(child)?;
                 return Ok(BackendPollV1::Pending);
             }
             let stream = self.streams[&root.stream].local;
@@ -821,13 +851,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             else {
                 return Err(self.directed_corruption_v1());
             };
-            if copy.source != peer.source
-                || copy.destination != peer.destination
-                || copy.source_region != peer.source_region
-                || copy.destination_region != peer.destination_region
-                || copy.directed.is_some()
-                || copy.compute_xgmi.is_none()
-            {
+            if !self.deferred_peer_identity_is_intact_v1(peer) {
                 return Err(self.directed_corruption_v1());
             }
             match copy.status() {
@@ -840,7 +864,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     );
                 }
                 BackendPollV1::Pending => {
-                    selected = Some(peer.id);
+                    selected = Some((peer.id, peer.directed));
                     break;
                 }
                 BackendPollV1::Succeeded => {
@@ -857,8 +881,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 }
             }
         }
-        if let Some(peer) = selected {
-            match self.progress_cooperative_copy(peer) {
+        if let Some((peer, directed)) = selected {
+            let result = if directed {
+                self.progress_retained_directed_peer_v1(peer)
+            } else {
+                self.progress_cooperative_copy(peer)
+            };
+            match result {
                 Ok(_) => return Ok(BackendPollV1::Pending),
                 Err(RuntimeBackendFailureV1::Quiescent(error)) => {
                     return self.quiesce_deferred_compute_v1(id, error);
@@ -867,6 +896,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
         if self.compute_xgmi_child_occupied_v1(child) {
+            self.progress_deferred_directed_blocker_v1(child)?;
             return Ok(BackendPollV1::Pending);
         }
         match self.children[child].require_submission_capacity_v1() {
@@ -964,6 +994,43 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     }
                 }
                 self.quiesce_deferred_compute_v1(id, error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn progress_deferred_directed_blocker_v1(
+        &mut self,
+        child: usize,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(owner) = self.compute_xgmi_children[child] else {
+            return Ok(());
+        };
+        let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&owner) else {
+            return Err(self.directed_corruption_v1());
+        };
+        if copy.directed.is_none() {
+            return Ok(());
+        }
+        if ![copy.source.child, copy.destination.child].contains(&child)
+            || copy.is_quiescent()
+            || copy
+                .compute_xgmi
+                .as_ref()
+                .is_none_or(|root| root.is_quiescent())
+            || !self.directed_identity_is_intact_v1(owner)
+        {
+            return Err(self.directed_corruption_v1());
+        }
+        // The occupied endpoint is a resource blocker, not a success dependency.
+        // One step may release it; child compute still waits until a later call.
+        match self.progress_retained_directed_peer_v1(owner) {
+            Ok(_) => Ok(()),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+                if matches!(self.submissions.get(&owner),
+                    Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.is_quiescent()) =>
+            {
+                Ok(())
             }
             Err(error) => Err(error),
         }

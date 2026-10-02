@@ -241,9 +241,17 @@ adds pending directed peer -> D2H with a separate backend opt-in and final-readb
 progress through exact ancestry and active resource siblings. Ten live cases
 pass, including three-GPU chains/fanout/readbacks in both orders. The late live
 readback round follows bounded seeding, not an independently observed publication
-phase; exact before/after-publication admission has CPU coverage. New native
-peer/compute admission after endpoint extraction remains open. No compute or
-compiler authority is widened, and native ambiguity still fail-stops the router.
+phase; exact before/after-publication readback admission has CPU coverage.
+The [late-admission checkpoint](evidence/dev-multigpu-late-admission-2026-10-02/README.md)
+adds native directed successors and metadata-only deferred compute after an exact
+native directed producer has published and retains its endpoints. A read-only
+stored native-root count distinguishes this from prequeued admission; it does
+not sample current GPU activity or authorize memory access. Four late three-GPU
+chain/fanout cases and two late two-GPU compute chains pass in both orders,
+alongside all ten previous controls. Child occupancy checks remain in force;
+authenticated resource siblings are not added as success dependencies. This is
+bounded profile qualification, not arbitrary mixed-graph admission. No compute
+or compiler authority is widened, and native ambiguity still fail-stops the router.
 The compute witnesses' finite artifact authorities do not supply general application/compiler
 evidence. Physical overlap, native partial-failure isolation, full refinement and
 matched HIP/HSA performance remain separate gates; no overall parity is claimed.

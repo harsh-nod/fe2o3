@@ -13,9 +13,10 @@ use fe2o3_runtime::{
     KfdMultiDeviceRuntimeBackendV1, RuntimeAccessV1, RuntimeAllocationIdV1,
     RuntimeAsyncCurrentThreadOwnedEngineV1, RuntimeAsyncDrainOutcomeV1, RuntimeAsyncEngineConfigV1,
     RuntimeAsyncOwnedDispositionV1, RuntimeAsyncProgressConfigV1, RuntimeAsyncProgressHandleV1,
-    RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeCopyV1, RuntimeMemoryKindV1,
-    RuntimeMemoryRegionV1, RuntimePeerCopyV1, RuntimePollV1, RuntimeStreamIdV1,
-    RuntimeStreamObservationV1, RuntimeSubmissionIdV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeCopyV1, RuntimeDirectedScalarPeerCopyV1,
+    RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimePeerCopyV1, RuntimePollV1,
+    RuntimeStreamIdV1, RuntimeStreamObservationV1, RuntimeSubmissionIdV1, RuntimeSubmissionV1,
+    TypedRuntimeKernelV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -29,7 +30,21 @@ type Handle = RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>;
 type ResultV1<T> = Result<T, String>;
 const WAIT: Duration = Duration::from_secs(30);
 const TICKS: usize = 30_000;
-const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <0xsource-unique-id> <0xdestination-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke [--late-compute] <0xsource-unique-id> <0xdestination-unique-id>";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Options {
+    ids: [u64; 2],
+    late_compute: bool,
+}
+
+fn options(arguments: &[String]) -> ResultV1<Options> {
+    let late_compute = arguments.first().is_some_and(|arg| arg == "--late-compute");
+    Ok(Options {
+        ids: unique_ids(&arguments[usize::from(late_compute)..])?,
+        late_compute,
+    })
+}
 
 struct DeviceRun {
     stream: RuntimeStreamIdV1,
@@ -47,8 +62,40 @@ struct Resources {
     host_output: RuntimeAllocationIdV1,
 }
 
+enum InitialPeer {
+    Ordinary(RuntimeSubmissionV1<RuntimePeerCopyV1>),
+    Directed(RuntimeSubmissionV1<RuntimeDirectedScalarPeerCopyV1>),
+}
+
+impl InitialPeer {
+    fn id(&self) -> RuntimeSubmissionIdV1 {
+        match self {
+            Self::Ordinary(submission) => submission.id(),
+            Self::Directed(submission) => submission.id(),
+        }
+    }
+
+    fn require(&self, context: &Context, status: RuntimeCompletionStatusV1) -> ResultV1<()> {
+        match self {
+            Self::Ordinary(submission) => require(context, submission, status),
+            Self::Directed(submission) => require(context, submission, status),
+        }
+    }
+
+    fn release(self, context: &mut Context) -> ResultV1<()> {
+        match self {
+            Self::Ordinary(submission) => context
+                .release_submission(submission)
+                .map_err(|error| failure("initial-peer-release", error)),
+            Self::Directed(submission) => context
+                .release_submission(submission)
+                .map_err(|error| failure("initial-peer-release", error)),
+        }
+    }
+}
+
 struct Chain {
-    initial_peer: RuntimeSubmissionV1<RuntimePeerCopyV1>,
+    initial_peer: InitialPeer,
     compute: RuntimeSubmissionV1<Arguments>,
     return_peer: RuntimeSubmissionV1<RuntimePeerCopyV1>,
     readback: RuntimeSubmissionV1<RuntimeCopyV1>,
@@ -371,20 +418,77 @@ fn admit_chain(
     context: &mut Context,
     resources: &Resources,
     receipts: &Arc<Mutex<Receipts>>,
+    late_compute: bool,
+    deadline: Instant,
 ) -> ResultV1<Chain> {
     let [source, destination] = &resources.runs;
-    let first = context
-        .peer_copy(
-            resources.initial_peer_stream,
-            region(source.allocations[2], RuntimeAccessV1::Read),
-            region(destination.allocations[2], RuntimeAccessV1::Write),
-            &[],
-        )
-        .map_err(|error| failure("initial-peer", error))?;
-    callback(context, &first, 0, receipts)?;
-    let event = context
-        .record_event(&first)
-        .map_err(|error| failure("initial-peer-event", error))?;
+    if late_compute
+        && (context.backend().retained_compute_xgmi_copies_v1() != 0
+            || context.backend().completed_compute_xgmi_copies_v1() != 0)
+    {
+        return Err(failure(
+            "late-baseline",
+            "no earlier native peer may remain",
+        ));
+    }
+    let (first, event) = if late_compute {
+        let mut first = context
+            .directed_peer_copy_v1(
+                resources.initial_peer_stream,
+                region(source.allocations[2], RuntimeAccessV1::Read),
+                region(destination.allocations[2], RuntimeAccessV1::Write),
+                &[],
+            )
+            .map_err(|error| failure("initial-directed-peer", error))?;
+        callback(context, &first, 0, receipts)?;
+        let event = context
+            .record_event(&first)
+            .map_err(|error| failure("initial-peer-event", error))?;
+        let mut published = false;
+        for _ in 0..TICKS {
+            if Instant::now() >= deadline {
+                break;
+            }
+            let status = context
+                .progress_directed_peer_copy_v1(&mut first)
+                .map_err(|error| failure("initial-peer-publication", error))?;
+            if status != RuntimePollV1::Pending
+                || context.backend().completed_compute_xgmi_copies_v1() != 0
+            {
+                return Err(failure("late-publication-status", status));
+            }
+            match context.backend().retained_compute_xgmi_copies_v1() {
+                0 => std::thread::sleep(Duration::from_micros(50)),
+                1 => {
+                    published = true;
+                    break;
+                }
+                count => return Err(failure("late-retained-count", count)),
+            }
+        }
+        if !published {
+            return Err(failure(
+                "late-publication-deadline",
+                "retained publication not observed",
+            ));
+        }
+        // Only this peer exists. Its retained publication is observed, not GPU activity.
+        (InitialPeer::Directed(first), event)
+    } else {
+        let first = context
+            .peer_copy(
+                resources.initial_peer_stream,
+                region(source.allocations[2], RuntimeAccessV1::Read),
+                region(destination.allocations[2], RuntimeAccessV1::Write),
+                &[],
+            )
+            .map_err(|error| failure("initial-peer", error))?;
+        callback(context, &first, 0, receipts)?;
+        let event = context
+            .record_event(&first)
+            .map_err(|error| failure("initial-peer-event", error))?;
+        (InitialPeer::Ordinary(first), event)
+    };
     let [_, b, c, d] = destination.allocations;
     let arguments =
         Arguments::new(c, b, d).map_err(|error| failure("deferred-arguments", error))?;
@@ -431,7 +535,7 @@ fn admit_chain(
     context
         .release_event(event)
         .map_err(|error| failure("return-event-release", error))?;
-    require(context, &first, RuntimeCompletionStatusV1::Pending)?;
+    first.require(context, RuntimeCompletionStatusV1::Pending)?;
     require(context, &compute, RuntimeCompletionStatusV1::Pending)?;
     require(context, &second, RuntimeCompletionStatusV1::Pending)?;
     require(context, &readback, RuntimeCompletionStatusV1::Pending)?;
@@ -439,6 +543,12 @@ fn admit_chain(
         return Err(failure(
             "admission-native-count",
             "unexpected peer completion",
+        ));
+    }
+    if late_compute && context.backend().retained_compute_xgmi_copies_v1() != 1 {
+        return Err(failure(
+            "late-admission-custody",
+            "initial peer must remain retained",
         ));
     }
     let ids = [first.id(), compute.id(), second.id(), readback.id()];
@@ -451,7 +561,12 @@ fn admit_chain(
     })
 }
 
-fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> ResultV1<String> {
+fn pipeline(
+    engine: &mut Engine,
+    handle: &Handle,
+    resources: Arc<Resources>,
+    late_compute: bool,
+) -> ResultV1<String> {
     let deadline = Instant::now() + WAIT;
     let mut registration = Box::pin(
         handle
@@ -472,7 +587,7 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
         handle,
         deadline,
         "chain-admission",
-        move |context| admit_chain(context, &owned, &observed),
+        move |context| admit_chain(context, &owned, &observed, late_compute, deadline),
     )?;
     let mut complete = false;
     for _ in 0..TICKS {
@@ -520,11 +635,9 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
         deadline,
         "settled-snapshot",
         move |context| {
-            require(
-                context,
-                &chain.initial_peer,
-                RuntimeCompletionStatusV1::Succeeded,
-            )?;
+            chain
+                .initial_peer
+                .require(context, RuntimeCompletionStatusV1::Succeeded)?;
             require(
                 context,
                 &chain.compute,
@@ -544,6 +657,12 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
                 return Err(failure(
                     "native-counter",
                     "exactly two completed native copies required",
+                ));
+            }
+            if late_compute && context.backend().retained_compute_xgmi_copies_v1() != 0 {
+                return Err(failure(
+                    "settled-native-custody",
+                    "native peer remains retained",
                 ));
             }
             for stream in [
@@ -588,9 +707,7 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
             context
                 .release_submission(chain.compute)
                 .map_err(|error| failure("deferred-release", error))?;
-            context
-                .release_submission(chain.initial_peer)
-                .map_err(|error| failure("initial-peer-release", error))?;
+            chain.initial_peer.release(context)?;
             Ok(())
         },
     )?;
@@ -624,8 +741,8 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
     Ok(output_digest)
 }
 
-fn run(ids: [u64; 2]) -> ResultV1<String> {
-    let (context, resources) = setup(ids)?;
+fn run(options: Options) -> ResultV1<String> {
+    let (context, resources) = setup(options.ids)?;
     let config = RuntimeAsyncEngineConfigV1::new(16, 16, 16, 16, Duration::from_micros(50))
         .and_then(|config| config.with_reply_capacity(16))
         .map_err(|error| failure("owner-config", error))?;
@@ -637,7 +754,7 @@ fn run(ids: [u64; 2]) -> ResultV1<String> {
         progress,
     )
     .map_err(|error| failure("owner-open", error))?;
-    let result = pipeline(&mut engine, &handle, resources);
+    let result = pipeline(&mut engine, &handle, resources, options.late_compute);
     let shutdown = engine.shutdown();
     if shutdown.disposition != RuntimeAsyncOwnedDispositionV1::Released
         || shutdown.worker_panicked
@@ -652,12 +769,117 @@ fn run(ids: [u64; 2]) -> ResultV1<String> {
     result
 }
 
+fn report(options: Options, output: &str) -> String {
+    let (schema, admission, compute_admission, progress, retained) = if options.late_compute {
+        (
+            "fe2o3.late-deferred-peer-chain-smoke.v1",
+            "consumer-tail-after-first-native-publication",
+            "deferred-after-first-peer-publication",
+            "first-peer-until-retained-then-final-readback-only",
+            " initial_peer=directed retained_native_at_compute_admission=1 retained_native_counter=0,1,0 publication_observed=true",
+        )
+    } else {
+        (
+            "fe2o3.deferred-peer-chain-smoke.v1",
+            "all-four-before-explicit-progress",
+            "deferred-before-first-peer-completion",
+            "final-readback-stream-only",
+            "",
+        )
+    };
+    format!(
+        "PASS schema={schema} authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} padding_bytes=0 launches=4 setup_launches=3 pipeline_launches=1 peer_copies=2 dependent_readbacks=1 completion_receipts=4 pipeline=peer-deferred-compute-peer-readback admission={admission} compute_admission={compute_admission} progress={progress} public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter=0,2 initial_peer_sentinel=full-byte-pass final_peer_sentinel=full-byte-pass output=full-byte-pass padding=exact-page-extent output_sha256={output} snapshot=settled-host-visible-owner-command host_output_installations=0 journal=enabled retained_results=4 allocations=12 modules=2 streams=5 contexts=1 owners=1 pipeline_host_joins=0 results_release=readback-peer-compute-peer final_drain=completed-only cleanup=owned-shutdown-explicit source_preservation=unobserved physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{retained}",
+        options.ids[0], options.ids[1]
+    )
+}
+
 fn main() -> Result<(), String> {
-    let ids = unique_ids(&std::env::args().skip(1).collect::<Vec<_>>())?;
-    let output = run(ids)?;
-    println!(
-        "PASS schema=fe2o3.deferred-peer-chain-smoke.v1 authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} padding_bytes=0 launches=4 setup_launches=3 pipeline_launches=1 peer_copies=2 dependent_readbacks=1 completion_receipts=4 pipeline=peer-deferred-compute-peer-readback admission=all-four-before-explicit-progress compute_admission=deferred-before-first-peer-completion progress=final-readback-stream-only public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter=0,2 initial_peer_sentinel=full-byte-pass final_peer_sentinel=full-byte-pass output=full-byte-pass padding=exact-page-extent output_sha256={output} snapshot=settled-host-visible-owner-command host_output_installations=0 journal=enabled retained_results=4 allocations=12 modules=2 streams=5 contexts=1 owners=1 pipeline_host_joins=0 results_release=readback-peer-compute-peer final_drain=completed-only cleanup=owned-shutdown-explicit source_preservation=unobserved physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
-        ids[0], ids[1]
-    );
+    let options = options(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let output = run(options)?;
+    println!("{}", report(options, &output));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn late_compute_cli_is_explicit_and_preserves_device_order() {
+        for late_compute in [false, true] {
+            let mut arguments = Vec::new();
+            if late_compute {
+                arguments.push("--late-compute".into());
+            }
+            arguments.extend(["0x2".into(), "0x1".into()]);
+            assert_eq!(
+                options(&arguments).unwrap(),
+                Options {
+                    ids: [2, 1],
+                    late_compute
+                }
+            );
+        }
+        for arguments in [
+            vec!["--late-compute"],
+            vec!["--late-compute", "--late-compute", "0x1", "0x2"],
+            vec!["0x1", "--late-compute", "0x2"],
+            vec!["0x1", "0x2", "--late-compute"],
+            vec!["--late-compute", "0x1", "0x01"],
+            vec!["--late-compute", "0x0", "0x2"],
+        ] {
+            assert!(
+                options(&arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn late_report_preserves_legacy_authority_and_distinguishes_retained_publication() {
+        let digest = digest(&expected_d());
+        let fields = |late_compute| {
+            let text = report(
+                Options {
+                    ids: [2, 1],
+                    late_compute,
+                },
+                &digest,
+            );
+            let pairs = text
+                .split_whitespace()
+                .skip(1)
+                .map(|field| {
+                    let (key, value) = field.split_once('=').unwrap();
+                    (key.to_owned(), value.to_owned())
+                })
+                .collect::<Vec<_>>();
+            let result = pairs
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(pairs.len(), result.len());
+            result
+        };
+        let ordinary = fields(false);
+        let late = fields(true);
+        assert_eq!(ordinary.len(), 42);
+        assert_eq!(late.len(), 46);
+        assert_eq!(ordinary["schema"], "fe2o3.deferred-peer-chain-smoke.v1");
+        assert_eq!(late["schema"], "fe2o3.late-deferred-peer-chain-smoke.v1");
+        assert_eq!(
+            late["compute_admission"],
+            "deferred-after-first-peer-publication"
+        );
+        assert_eq!(late["retained_native_at_compute_admission"], "1");
+        assert_eq!(late["retained_native_counter"], "0,1,0");
+        assert_eq!(late["publication_observed"], "true");
+        assert_eq!(late["initial_peer"], "directed");
+        for (key, value) in &ordinary {
+            if !["schema", "admission", "compute_admission", "progress"].contains(&key.as_str()) {
+                assert_eq!(&late[key], value);
+            }
+        }
+        assert_eq!(late["physical_overlap"], "unmeasured");
+        assert_eq!(late["host_output_installations"], "0");
+    }
 }

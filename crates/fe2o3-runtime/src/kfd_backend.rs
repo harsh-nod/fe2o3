@@ -9263,7 +9263,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 source.byte_len,
             )?)
         } else {
-            self.prepare_compute_xgmi_v1(source_route, source, destination_route, destination)?
+            self.prepare_compute_xgmi_v1(
+                source_route,
+                source,
+                destination_route,
+                destination,
+                directed.is_some(),
+            )?
         };
         let staging_byte_len = if compute_xgmi.is_some() {
             0

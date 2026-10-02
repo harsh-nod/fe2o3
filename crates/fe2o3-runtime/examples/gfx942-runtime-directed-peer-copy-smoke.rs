@@ -21,7 +21,7 @@ type ResultV1<T> = Result<T, String>;
 const BYTES: u64 = 2 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 37;
 const ROUNDS: usize = 2;
 const WAIT: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--fanout] [--readback] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--fanout] [--readback [--late-peer]] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
 
 #[derive(Debug)]
 struct NoCompute;
@@ -38,10 +38,11 @@ struct Options {
     ids: [u64; 3],
     fanout: bool,
     readback: bool,
+    late_peer: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
-    let (mut fanout, mut readback, mut flags) = (false, false, 0);
+    let (mut fanout, mut readback, mut late_peer, mut flags) = (false, false, false, 0);
     for argument in arguments
         .iter()
         .take_while(|argument| argument.starts_with("--"))
@@ -49,12 +50,13 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         match argument.as_str() {
             "--fanout" if !fanout => fanout = true,
             "--readback" if !readback => readback = true,
+            "--late-peer" if !late_peer => late_peer = true,
             _ => return Err(USAGE.into()),
         }
         flags += 1;
     }
     let arguments = &arguments[flags..];
-    if arguments.len() != 3 {
+    if arguments.len() != 3 || (late_peer && !readback) {
         return Err(USAGE.into());
     }
     let mut ids = [0; 3];
@@ -72,6 +74,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         ids,
         fanout,
         readback,
+        late_peer,
     })
 }
 
@@ -255,6 +258,43 @@ fn seed_first(
     Ok(())
 }
 
+fn publish_only_peer(
+    context: &mut Context,
+    first: &mut Peer,
+    deadline: Instant,
+    before: u64,
+) -> ResultV1<()> {
+    if context.backend().retained_compute_xgmi_copies_v1() != 0 {
+        return Err(failure(
+            "publication-baseline",
+            "another native root is retained",
+        ));
+    }
+    loop {
+        if Instant::now() >= deadline {
+            return Err(failure("publication-deadline", first.id()));
+        }
+        if context
+            .progress_directed_peer_copy_v1(first)
+            .map_err(|error| failure("publication-progress", error))?
+            != RuntimePollV1::Pending
+        {
+            return Err(failure(
+                "publication-progress",
+                "peer retired before observation",
+            ));
+        }
+        require_counter(context, before)?;
+        match context.backend().retained_compute_xgmi_copies_v1() {
+            0 => {}
+            // Only this peer has been admitted. The root retains published native
+            // ownership; its hardware fence may already be complete but is not sampled.
+            1 => return Ok(()),
+            count => return Err(failure("publication-root-count", count)),
+        }
+    }
+}
+
 fn tail_seed_steps(fanout: bool) -> usize {
     if fanout { 2 } else { 3 }
 }
@@ -287,7 +327,7 @@ fn seed_tail_for_readback(
         std::thread::sleep(Duration::from_micros(50));
     }
     // Consume the chain dependency, if any, leave gating, and seed the native tail.
-    // The public API exposes Pending and completion counts, not publication state.
+    // This legacy seed does not inspect the retained native-publication diagnostic.
     for _ in 0..tail_seed_steps(fanout) {
         if Instant::now() >= deadline {
             return Err(failure("readback-tail-seed-deadline", second.id()));
@@ -372,6 +412,10 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         let event = context
             .record_event(&first)
             .map_err(|error| failure("first-event", error))?;
+        let deadline = Instant::now() + WAIT;
+        if settings.late_peer {
+            publish_only_peer(context, &mut first, deadline, before)?;
+        }
         let mut second = context
             .directed_peer_copy_v1(
                 devices[2].stream,
@@ -387,6 +431,12 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                 },
             )
             .map_err(|error| failure("second-peer-admission", error))?;
+        if settings.late_peer && context.backend().retained_compute_xgmi_copies_v1() != 1 {
+            return Err(failure(
+                "late-admission",
+                "admission changed retained native roots",
+            ));
+        }
         let second_event = context
             .record_event(&second)
             .map_err(|error| failure("second-event", error))?;
@@ -405,11 +455,10 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
             require_pending(context, copy)?;
         }
         require_counter(context, before)?;
-        let deadline = Instant::now() + WAIT;
         let mut readback: Option<Copy> = None;
         if let Some(stream) = readback_stream {
             if round == 1 {
-                if settings.fanout {
+                if settings.fanout && !settings.late_peer {
                     seed_first(context, &mut first, deadline, before)?;
                 }
                 seed_tail_for_readback(context, &mut second, settings.fanout, deadline, before)?;
@@ -434,7 +483,7 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                 .map_err(|error| failure("first-event-release", error))?;
             readback = Some(copy);
         }
-        if settings.fanout && (!settings.readback || round == 0) {
+        if settings.fanout && !settings.late_peer && (!settings.readback || round == 0) {
             seed_first(context, &mut first, deadline, before)?;
         }
         loop {
@@ -588,21 +637,52 @@ fn run(settings: Options) -> ResultV1<()> {
         .map_err(|error| failure("native-shutdown", error))?;
     drop(ManuallyDrop::into_inner(backend));
     if settings.readback {
-        println!(
-            "PASS schema=fe2o3.directed-peer-readback-smoke.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=4 launches=0 modules=0 completion_receipts=6 readbacks=16 admission=peers-before-progress progress=readback-only-after-seed first_seed={} public_events=released-after-readback-admission-before-tail-drive pre_progress_observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=pending-readback-then-completed-peers cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false d2h_copies=2 readback_admission=before-progress,after-bounded-seed readback_admission_native_counts=0,3 tail_seed_steps={} publication_observed=false readback_sentinels=full-byte-pass",
+        let readback_admission = if settings.late_peer {
+            "before-tail-progress,after-bounded-seed"
+        } else {
+            "before-progress,after-bounded-seed"
+        };
+        let publication_field = if settings.late_peer {
+            "readback_publication_observed"
+        } else {
+            "publication_observed"
+        };
+        let mut evidence = format!(
+            "PASS schema={} authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=4 launches=0 modules=0 completion_receipts=6 readbacks=16 admission={} progress=readback-only-after-seed first_seed={} public_events=released-after-readback-admission-before-tail-drive {}=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=pending-readback-then-completed-peers cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false d2h_copies=2 readback_admission={readback_admission} readback_admission_native_counts=0,3 tail_seed_steps={} {publication_field}=false readback_sentinels=full-byte-pass",
+            if settings.late_peer {
+                "fe2o3.late-directed-peer-readback-smoke.v1"
+            } else {
+                "fe2o3.directed-peer-readback-smoke.v1"
+            },
             if settings.fanout { "fanout" } else { "chain" },
             settings.ids[0],
             settings.ids[1],
             settings.ids[2],
-            if settings.fanout {
+            if settings.late_peer {
+                "second-after-first-publication"
+            } else {
+                "peers-before-progress"
+            },
+            if settings.late_peer {
+                "observed-native-publication"
+            } else if settings.fanout {
                 "two-bounded-steps"
             } else {
                 "none"
+            },
+            if settings.late_peer {
+                "pre_tail_observers"
+            } else {
+                "pre_progress_observers"
             },
             hashes[0],
             hashes[1],
             tail_seed_steps(settings.fanout),
         );
+        if settings.late_peer {
+            evidence.push_str(" first_publication_observed=true retained_at_peer_admission=1");
+        }
+        println!("{evidence}");
     } else {
         println!(
             "PASS schema=fe2o3.directed-peer-copy-smoke.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=3 launches=0 modules=0 completion_receipts=4 readbacks=12 admission=both-before-progress progress=final-directed-peer-only first_seed={} public_events=released-before-progress pre_progress_observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=completed-only cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
@@ -650,6 +730,7 @@ mod tests {
                 ids: [3, 2, 1],
                 fanout: false,
                 readback: false,
+                late_peer: false,
             }
         );
         assert_eq!(
@@ -658,6 +739,7 @@ mod tests {
                 ids: [1, 2, 3],
                 fanout: true,
                 readback: false,
+                late_peer: false,
             }
         );
         for arguments in [
@@ -694,6 +776,7 @@ mod tests {
                     ids: [3, 2, 1],
                     fanout: flags.contains(&"--fanout"),
                     readback: true,
+                    late_peer: false,
                 }
             );
         }
@@ -704,6 +787,42 @@ mod tests {
             vec!["--readback", "0x1", "0x2"],
             vec!["0x1", "--readback", "0x2", "0x3"],
             vec!["--readback", "0x1", "0x1", "0x3"],
+        ] {
+            assert!(parse(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn late_peer_requires_readback_and_accepts_flag_orders() {
+        for flags in [
+            vec!["--late-peer", "--readback"],
+            vec!["--readback", "--late-peer"],
+            vec!["--fanout", "--late-peer", "--readback"],
+            vec!["--readback", "--fanout", "--late-peer"],
+        ] {
+            let mut arguments = flags.clone();
+            arguments.extend(["0x3", "0x2", "0x1"]);
+            assert_eq!(
+                parse(&arguments).unwrap(),
+                Options {
+                    ids: [3, 2, 1],
+                    fanout: flags.contains(&"--fanout"),
+                    readback: true,
+                    late_peer: true,
+                }
+            );
+        }
+        for arguments in [
+            vec!["--late-peer", "0x1", "0x2", "0x3"],
+            vec![
+                "--readback",
+                "--late-peer",
+                "--late-peer",
+                "0x1",
+                "0x2",
+                "0x3",
+            ],
+            vec!["--readback", "0x1", "--late-peer", "0x2", "0x3"],
         ] {
             assert!(parse(&arguments).is_err(), "{arguments:?}");
         }

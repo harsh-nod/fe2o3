@@ -479,12 +479,32 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         self.completed_compute_xgmi_copies
     }
 
+    /// Native peer copies retaining their queue and owners after publication.
+    ///
+    /// This stored observation does not sample a fence or drive progress. The
+    /// hardware transfer may already be complete; the count is neither an
+    /// authority to access its allocations nor evidence of execution overlap.
+    pub fn retained_compute_xgmi_copies_v1(&self) -> usize {
+        self.submissions
+            .values()
+            .filter(|submission| {
+                matches!(submission, RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.compute_xgmi.as_ref().is_some_and(|root| {
+                    matches!(root.route, Route::Native(_))
+                        && matches!(root.phase, Phase::Published | Phase::Ready)
+                        && !root.is_quiescent()
+                }))
+            })
+            .count()
+    }
+
     pub(super) fn prepare_compute_xgmi_v1(
-        &self,
+        &mut self,
         source: RoutedHandleV1,
         source_region: BackendMemoryRegionV1,
         destination: RoutedHandleV1,
         destination_region: BackendMemoryRegionV1,
+        directed: bool,
     ) -> Result<Option<Box<Root>>, Failure> {
         let Some(route) = self
             .compute_xgmi_routes
@@ -495,29 +515,57 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         };
         for (endpoint, region) in [(source, source_region), (destination, destination_region)] {
             let child = &self.children[endpoint.child];
+            let Some(record) = child.allocations.get(&endpoint.local) else {
+                return Ok(None);
+            };
             if !child.peer_visible_device_allocations
-                || !child
-                    .allocations
-                    .get(&endpoint.local)
-                    .is_some_and(|record| {
-                        full_extent(record, region)
-                            && record.sdma_initialized
-                            && matches!(
-                                record.sdma_storage,
-                                KfdRuntimeSdmaStorageV1::Device(_)
-                                    | KfdRuntimeSdmaStorageV1::H2dReady(_)
-                                    | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
-                                    | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
-                            )
-                    })
+                || !full_extent(record, region)
+                || !record.sdma_initialized
             {
                 return Ok(None);
+            }
+            match record.sdma_storage {
+                KfdRuntimeSdmaStorageV1::Device(_)
+                | KfdRuntimeSdmaStorageV1::H2dReady(_)
+                | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                | KfdRuntimeSdmaStorageV1::InitializedStorage(_) => {}
+                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(owner))
+                    if directed =>
+                {
+                    // The caller has already checked overlap ordering. Only the
+                    // exact started directed owner can stand in for a local slot;
+                    // its physical allocations remain exclusively in that root.
+                    self.require_retained_directed_compute_xgmi_endpoint_v1(endpoint, owner)?;
+                }
+                _ => return Ok(None),
             }
         }
         let Some(plan) = Gfx942ComputeXgmiPacketPlanV1::new(source_region.byte_len) else {
             return Ok(None);
         };
         Root::prepare(route, plan).map(Some)
+    }
+
+    fn require_retained_directed_compute_xgmi_endpoint_v1(
+        &mut self,
+        endpoint: RoutedHandleV1,
+        owner: u64,
+    ) -> Result<(), Failure> {
+        let intact = matches!(self.submissions.get(&owner),
+        Some(RoutedSubmissionV1::CooperativeCopy(copy))
+            if copy.directed.is_some()
+                && [copy.source, copy.destination].contains(&endpoint)
+                && copy.phase == CooperativeCopyPhaseV1::Read
+                && copy.compute_xgmi.as_ref().is_some_and(|root| {
+                    matches!(root.phase, Phase::Published | Phase::Ready)
+                        && !root.is_quiescent()
+                }))
+            && self.compute_xgmi_children.get(endpoint.child) == Some(&Some(owner))
+            && self.directed_identity_is_intact_v1(owner);
+        if !intact {
+            return Err(self.directed_corruption_v1());
+        }
+        Ok(())
     }
 
     pub(super) fn compute_xgmi_endpoints_v1(&self, submission: u64) -> Option<[usize; 2]> {

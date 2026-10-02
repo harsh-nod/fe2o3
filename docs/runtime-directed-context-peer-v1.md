@@ -5,6 +5,9 @@ above the [directed scalar backend SPI](runtime-directed-scalar-peer-v1.md) now
 has [bounded integrated native qualification](evidence/dev-multigpu-directed-peer-2026-10-02/README.md)
 for prequeued three-GPU chains and fanout, now extended with
 [dependent D2H qualification](evidence/dev-multigpu-directed-readback-2026-10-02/README.md).
+The [late-admission checkpoint](evidence/dev-multigpu-late-admission-2026-10-02/README.md)
+also qualifies directed peers and compute consumers admitted after an exact
+native producer has published and still retains its physical owners.
 Formal refinement, broader native coverage and performance evidence remain
 separate boundaries.
 
@@ -58,8 +61,32 @@ staging, without reserving child SDMA ahead of the peer. Explicit readback
 progress drives retained directed ancestry and, when necessary, one authenticated
 already-started native resource blocker. A resource sibling's result is not a
 success dependency. Child DMA starts only after the required owners are restored.
-This does not widen application-kernel authority or native peer/compute admission
-after endpoint extraction.
+This readback opt-in does not widen application-kernel authority.
+
+## Late Native Admission
+
+An eligible full-buffer directed successor can retain native transport after an
+exact directed peer extracts its endpoints. The router authenticates the
+in-flight owner, endpoint, pair reservations and directed provenance before
+preparing an empty successor root. It never borrows or clones the parent's
+physical allocations. Existing dependency and shared-source ordering remain
+required; ordinary profiles, partial ranges and absent routes keep their
+existing fallback behavior.
+
+Producer-aware compute can likewise enter metadata-only deferred custody when
+its exact published directed producer owns the destination child. Immutable
+stream/depth/profile/region identities and independent result retains survive
+public event release. The earlier prepublication native-permit path remains
+unchanged. Compute enters the child only after required producers succeed,
+restore their owners and pass the normal child capacity/authority checks.
+An authenticated already-started native resource sibling can be progressed
+without making its result a success dependency.
+
+`retained_compute_xgmi_copies_v1` reports stored native Published/Ready roots
+with retained ownership, without sampling a fence or advancing execution.
+The new witnesses observe a sole first peer's retained publication before
+admitting its successor. This is neither current GPU activity nor overlap,
+completion, allocation-access authority or arbitrary mixed-graph admission.
 
 ## Observation And Progress
 
@@ -112,10 +139,10 @@ panics preserve uncertain custody.
 ## Remaining Qualification
 
 - Broader native directed async/owner integration beyond the recorded witnesses.
-- Native partial-failure disposition and isolation; native admission after
-  endpoint extraction for new directed peers or compute consumers.
-  The latest copy-only witness qualifies both orders of three-GPU chains and
-  fanout, full destination/source checks and exact cleanup, not arbitrary graphs.
+- Native partial-failure disposition and isolation, and broader mixed-graph
+  admission beyond the qualified directed/compute profiles. Late witnesses
+  qualify both orders of three-GPU chains/fanout and two-GPU compute pipelines,
+  with full output and exact cleanup, not arbitrary graphs or kernel authority.
 - Source-bound executable refinement for the changed Context transitions;
   historical model proofs retain their original source and do not prove this
   integration automatically.

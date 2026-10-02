@@ -5,8 +5,10 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod deferred_directed;
 mod directed;
 mod directed_consumer;
+mod late_directed;
 mod lifecycle;
 mod packetized;
 #[path = "../peer_readback/tests.rs"]
