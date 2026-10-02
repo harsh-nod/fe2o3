@@ -11,6 +11,68 @@ fn target_decode() -> StructuralPagedGqaDecodeCandidateV1 {
 }
 
 #[test]
+fn cross_request_page_alias_is_rejected_but_bijections_are_allowed() {
+    let batch = candidate(
+        Qwen3AttentionRoleV1::Target8B,
+        B3PagedDecodeBucketV1::DecodeS8C8192,
+    );
+    for fragmented in [false, true] {
+        let exact = metadata(batch, 0, fragmented);
+        assert!(validate_paged_kv_metadata_v1(batch.profile(), &exact).is_ok());
+        let mut alias = exact.clone();
+        alias.entries[M1_PAGES_PER_REQUEST_V1].physical_page = alias.entries[0].physical_page;
+        assert_eq!(
+            validate_paged_kv_metadata_v1(batch.profile(), &alias),
+            Err(PagedKvMetadataErrorV1::PhysicalPageAlias)
+        );
+        let mut swapped = exact.clone();
+        swapped.entries[0].physical_page = exact.entries[M1_PAGES_PER_REQUEST_V1].physical_page;
+        swapped.entries[M1_PAGES_PER_REQUEST_V1].physical_page = exact.entries[0].physical_page;
+        assert!(validate_paged_kv_metadata_v1(batch.profile(), &swapped).is_ok());
+    }
+}
+
+#[test]
+fn resident_capacity_and_physical_extents_are_exact() {
+    let batch = target_decode();
+    let capacity = M1_CONTEXT_CAPACITY_TOKENS_V1;
+    let active = batch.profile().descriptor().active_tokens;
+    let exact = metadata(batch, capacity - active, true);
+    assert!(validate_paged_kv_metadata_v1(batch.profile(), &exact).is_ok());
+    for pages in [0, exact.physical_pages - 1, exact.physical_pages + 1] {
+        let mut mutated = exact.clone();
+        mutated.physical_pages = pages;
+        assert_eq!(
+            validate_paged_kv_metadata_v1(batch.profile(), &mutated),
+            Err(PagedKvMetadataErrorV1::PhysicalPageCount)
+        );
+    }
+    let mut mutated = exact.clone();
+    mutated.context_capacity_tokens = capacity + 1;
+    assert_eq!(
+        validate_paged_kv_metadata_v1(batch.profile(), &mutated),
+        Err(PagedKvMetadataErrorV1::BucketMismatch)
+    );
+    let mut mutated = exact.clone();
+    mutated.page_tokens = M1_KV_PAGE_TOKENS_V1 + 1;
+    assert_eq!(
+        validate_paged_kv_metadata_v1(batch.profile(), &mutated),
+        Err(PagedKvMetadataErrorV1::BucketMismatch)
+    );
+    let over = metadata(batch, capacity - active + 1, true);
+    assert_eq!(
+        validate_paged_kv_metadata_v1(batch.profile(), &over),
+        Err(PagedKvMetadataErrorV1::ContextBounds)
+    );
+    let mut mutated = exact;
+    mutated.requests[0].resident_tokens += 1;
+    assert_eq!(
+        validate_paged_kv_metadata_v1(batch.profile(), &mutated),
+        Err(PagedKvMetadataErrorV1::ResidentBoundary)
+    );
+}
+
+#[test]
 fn stale_request_generation_page_index_and_order_reject() {
     let candidate = target_decode();
     let exact = metadata(candidate, 18, true);

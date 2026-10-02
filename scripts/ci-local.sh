@@ -145,6 +145,13 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-verifier
   reserved-fe2o3-symbols
 )
+readonly HOST_REFERENCE_EXAMPLES=(
+  rmsnorm_residual_v1
+  qwen3_gqa_prefill_v1
+  qwen3_paged_gqa_decode_v1
+  qwen3_swiglu_v1
+  qwen3_logits_compact_v1
+)
 
 usage() {
   cat <<'EOF'
@@ -163,6 +170,7 @@ Commands:
   format          Check Rust formatting
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
+  host-reference  Validate standalone host-only numerical reference models
   workspace-test  Run every workspace test target; may require ROCm libraries
   rustc-codegen-test  Run backend library and integration tests without dylib replacement
   backend         Build the rustc codegen backend dylib
@@ -681,6 +689,28 @@ run_runtime_release_tests() {
       --features hardware-qualification --lib -- --test-threads=1
 }
 
+run_host_reference_tests() {
+  local example manifest
+  local target="${DEFAULT_CARGO_TARGET_ROOT}/host-reference"
+  for example in "${HOST_REFERENCE_EXAMPLES[@]}"; do
+    manifest="examples/${example}/Cargo.toml"
+    run_step "host-reference-${example}-format" \
+      cargo fmt --manifest-path "${manifest}" -- --check
+    run_step "host-reference-${example}-clippy" \
+      cargo clippy --locked --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- -D warnings
+    run_step "host-reference-${example}-test" \
+      cargo test --locked --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- --test-threads=1
+    run_step "host-reference-${example}-release" \
+      cargo test --locked --release --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- --test-threads=1
+    run_step "host-reference-${example}-doc" \
+      env RUSTDOCFLAGS="-D warnings" \
+        cargo doc --locked --manifest-path "${manifest}" --target-dir "${target}" --no-deps
+  done
+}
+
 run_cpu_tests() {
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
@@ -688,6 +718,7 @@ run_cpu_tests() {
   local -a loader_environment_removals
   local -A selected_cpu_examples=()
   local package
+  run_host_reference_tests
   ensure_production_cargo_fe2o3_driver cpu-tests
   for package in "${CPU_TEST_PACKAGES[@]}"; do
     cargo_args+=(-p "${package}")
@@ -1621,6 +1652,7 @@ main() {
     format) run_format ;;
     check) run_check ;;
     test) run_tests ;;
+    host-reference) run_host_reference_tests ;;
     workspace-test) run_workspace_tests ;;
     rustc-codegen-test) run_rustc_codegen_tests ;;
     backend) run_backend_build ;;

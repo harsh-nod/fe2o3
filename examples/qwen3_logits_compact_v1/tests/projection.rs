@@ -7,6 +7,114 @@ fn draft_decode() -> StructuralLogitsCandidateV1 {
     candidate(Qwen3LogitsRoleV1::Draft06B, B3LogitsBucketV1::DecodeS1C8192)
 }
 
+struct OneHotProjectionSource {
+    hidden: usize,
+    vocabulary: usize,
+    missing_weight: Option<usize>,
+}
+
+impl Bf16ProjectionSourceV1 for OneHotProjectionSource {
+    fn activation_elements(&self) -> usize {
+        self.hidden
+    }
+    fn weight_elements(&self) -> usize {
+        self.hidden * self.vocabulary
+    }
+
+    fn activation(&self, index: usize) -> Option<Bf16V1> {
+        if index >= self.hidden {
+            return None;
+        }
+        Some(Bf16V1::from_bits(if index == self.hidden - 1 {
+            0x3f80
+        } else {
+            0
+        }))
+    }
+
+    fn weight(&self, index: usize) -> Option<Bf16V1> {
+        if index >= self.weight_elements() || self.missing_weight == Some(index) {
+            return None;
+        }
+        let bits = if index % self.hidden != self.hidden - 1 {
+            0
+        } else if index / self.hidden == self.vocabulary - 1 {
+            0x4080 // 4.0
+        } else if index / self.hidden == 17 {
+            0x4040 // 3.0
+        } else {
+            0x3f80 // 1.0
+        };
+        Some(Bf16V1::from_bits(bits))
+    }
+}
+
+#[test]
+fn combined_projection_commits_exact_result_and_rejects_final_source_failure() {
+    let candidate = draft_decode();
+    let profile = candidate.profile().descriptor();
+    assert_eq!(
+        (profile.rows, profile.hidden_size, profile.vocabulary_size),
+        (1, 1024, QWEN3_VOCABULARY_SIZE_V1)
+    );
+    let (binding, expected) = binding(candidate);
+    let mut source = OneHotProjectionSource {
+        hidden: profile.hidden_size,
+        vocabulary: profile.vocabulary_size,
+        missing_weight: None,
+    };
+    assert_eq!(
+        qwen3_project_logit_f64_oracle_v1(candidate, &source, 0, profile.vocabulary_size - 1,)
+            .unwrap(),
+        4.0
+    );
+    let mut output = vec![sentinel(candidate)];
+    let state = qwen3_logits_argmax_compact_reference_v1(
+        candidate,
+        &binding,
+        &expected,
+        &source,
+        &mut output,
+    )
+    .unwrap();
+    assert_eq!(state.records, 1);
+    assert_eq!(state.comparisons, profile.vocabulary_size as u64 - 1);
+    assert_eq!(
+        output,
+        vec![CompactCompletionRecordV1 {
+            schema_version: 1,
+            role: profile.role,
+            bucket: profile.bucket,
+            request: binding.requests[0],
+            epoch: binding.epoch,
+            plan_identity: candidate.plan_identity(),
+            candidate_identity: candidate.candidate_identity(),
+            row: 0,
+            local_token: 0,
+            token_id: u32::try_from(profile.vocabulary_size - 1).unwrap(),
+        }]
+    );
+
+    let last_weight = source.weight_elements() - 1;
+    source.missing_weight = Some(last_weight);
+    output.fill(sentinel(candidate));
+    let before = output.clone();
+    assert_eq!(
+        qwen3_logits_argmax_compact_reference_v1(
+            candidate,
+            &binding,
+            &expected,
+            &source,
+            &mut output,
+        ),
+        Err(LogitsReferenceErrorV1::MissingSourceElement {
+            tensor: LogitsTensorV1::Weight,
+            index: last_weight,
+        })
+    );
+    assert_eq!(output, before);
+}
+
 #[test]
 fn exact_fp32_projection_tracks_independent_f64_oracle() {
     let candidate = draft_decode();

@@ -30,6 +30,27 @@ wrapper-managed package.
 
 ## Generic validation
 
+The standalone numerical reference models have a focused CPU-only lane:
+
+```text
+bash scripts/ci-local.sh host-reference
+```
+
+This also runs from `test`, `generic-core`, and `generic`. It checks formatting,
+strict Clippy, all test targets in debug and release, and strict rustdoc for
+RMSNorm/residual, GQA prefill, paged GQA decode, SwiGLU, and logits/compact
+completion. The standalone manifests are selected explicitly; root workspace
+tests do not include them. All five share a `host-reference` subdirectory of
+the configured Cargo target root, and each test harness runs serially.
+Their tracked lockfiles also participate in `standalone-locks`.
+
+These are bounded host arithmetic and metadata models, not GPU kernels,
+compiler fixtures, or a model inference runtime. Their declared FP32 schedules
+and final BF16 rounding are not a bitwise Hugging Face reference: intermediate
+RMSNorm and attention rounding points can differ. Identity hashes describe
+those host policies and grant no compiler, artifact, or runtime authority.
+Passing this lane does not qualify SIMT/tile tutorial pairs or GPU execution.
+
 This lane does not require ROCm or a GPU:
 
 ```text

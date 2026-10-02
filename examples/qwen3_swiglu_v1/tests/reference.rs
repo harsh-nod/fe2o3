@@ -138,16 +138,20 @@ fn all_preflight_errors_leave_output_unchanged() {
 fn intermediate_overflow_is_fail_closed_and_transactional() {
     let candidate = candidate(Qwen3ModelRoleV1::Draft06B);
     let elements = candidate.profile().resources().elements;
-    let gate = vec![Bf16V1::from_bits(0x7f7f); elements];
-    let up = vec![Bf16V1::from_bits(0x7f7f); elements];
     let initial = vec![Bf16V1::from_bits(0x3f80); elements];
-    let mut output = initial.clone();
-    assert_eq!(
-        swiglu_reference_v1(candidate, &gate, &up, &mut output),
-        Err(SwiGluReferenceErrorV1::NonFiniteIntermediate {
-            index: 0,
-            stage: SwiGluArithmeticStageV1::Product,
-        })
-    );
-    assert_eq!(output, initial);
+    for bad_index in [0, elements - 1] {
+        let mut gate = vec![bf16(1.0); elements];
+        let mut up = vec![bf16(2.0); elements];
+        gate[bad_index] = Bf16V1::from_bits(0x7f7f);
+        up[bad_index] = Bf16V1::from_bits(0x7f7f);
+        let mut output = initial.clone();
+        assert_eq!(
+            swiglu_reference_v1(candidate, &gate, &up, &mut output),
+            Err(SwiGluReferenceErrorV1::NonFiniteIntermediate {
+                index: bad_index,
+                stage: SwiGluArithmeticStageV1::Product,
+            })
+        );
+        assert_eq!(output, initial);
+    }
 }

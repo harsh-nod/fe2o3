@@ -56,6 +56,82 @@ fn differential_case(
 }
 
 #[test]
+fn fragmented_decode_eight_requests_match_contiguous() {
+    differential_case(
+        Qwen3AttentionRoleV1::Draft06B,
+        B3PagedDecodeBucketV1::DecodeS8C8192,
+        1,
+    );
+}
+
+#[test]
+fn paged_leading_underflow_matches_contiguous_for_both_roles_and_key_orders() {
+    for role in [
+        Qwen3AttentionRoleV1::Target8B,
+        Qwen3AttentionRoleV1::Draft06B,
+    ] {
+        let candidate = candidate(role, B3PagedDecodeBucketV1::DecodeS1C8192);
+        let metadata = metadata(candidate, 1, true);
+        let geometry = candidate.profile().descriptor().geometry;
+        let mut fixture = data(candidate, &metadata);
+        fixture.query.fill(Bf16V1::default());
+        for query in fixture.query.chunks_exact_mut(geometry.head_dimension) {
+            query[0] = common::bf16(1.0);
+        }
+        for maximum_key in [0, 1] {
+            for token in 0..2 {
+                for kv_head in 0..geometry.kv_heads {
+                    for feature in 0..geometry.head_dimension {
+                        let key = common::bf16(if feature == 0 && token != maximum_key {
+                            -2048.0
+                        } else {
+                            0.0
+                        });
+                        let value = common::bf16(if token == maximum_key { 3.0 } else { 7.0 });
+                        let physical = common::physical_index(
+                            candidate, &metadata, 0, token, kv_head, feature,
+                        );
+                        let logical = (token * geometry.kv_heads + kv_head)
+                            * geometry.head_dimension
+                            + feature;
+                        fixture.key[physical] = key;
+                        fixture.value[physical] = value;
+                        fixture.contiguous_key[0][logical] = key;
+                        fixture.contiguous_value[0][logical] = value;
+                    }
+                }
+            }
+            let mut output = vec![common::bf16(-9.0); fixture.query.len()];
+            let state = qwen3_paged_gqa_decode_reference_v1(
+                candidate,
+                &metadata,
+                PagedGqaInputV1 {
+                    query: &fixture.query,
+                    key: &fixture.key,
+                    value: &fixture.value,
+                },
+                &mut output,
+            )
+            .unwrap();
+            assert_eq!(state.minimum_denominator, 1.0);
+            assert_eq!(state.maximum_denominator, 1.0);
+            assert_eq!(output, vec![common::bf16(3.0); fixture.query.len()]);
+            let oracle = qwen3_contiguous_gqa_decode_vector_v1(
+                candidate,
+                &metadata.requests[0],
+                0,
+                0,
+                &fixture.query[..geometry.head_dimension],
+                &fixture.contiguous_key[0],
+                &fixture.contiguous_value[0],
+            )
+            .unwrap();
+            assert_eq!(&output[..geometry.head_dimension], oracle.as_slice());
+        }
+    }
+}
+
+#[test]
 fn fragmented_decode_with_partial_final_page_matches_contiguous() {
     differential_case(
         Qwen3AttentionRoleV1::Target8B,

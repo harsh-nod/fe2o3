@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Check exact standalone host-reference selection and shell failure propagation."""
+
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = (
+    "rmsnorm_residual_v1",
+    "qwen3_gqa_prefill_v1",
+    "qwen3_paged_gqa_decode_v1",
+    "qwen3_swiglu_v1",
+    "qwen3_logits_compact_v1",
+)
+HARNESS = r'''
+set -Eeuo pipefail
+source "$1"
+failure="$2"
+run_step() {
+  printf '%s' "$1"
+  shift
+  printf '\t%s' "$@"
+  printf '\n'
+  if [[ "$failure" == "$((++step_count))" ]]; then
+    return 37
+  fi
+}
+step_count=0
+main host-reference
+'''
+
+
+class HostReferenceCiTests(unittest.TestCase):
+    def run_lane(self, root, failure=0):
+        environment = dict(os.environ)
+        environment.update(
+            CARGO_TARGET_DIR=str(root / "target with spaces"),
+            CI_LOG_DIR=str(root / "logs"),
+        )
+        return subprocess.run(
+            ["bash", "-c", HARNESS, "bash", str(ROOT / "scripts/ci-local.sh"), str(failure)],
+            cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15,
+        )
+
+    def expected(self, root):
+        target = str(root / "target with spaces" / "host-reference")
+        result = []
+        for example in EXAMPLES:
+            manifest = f"examples/{example}/Cargo.toml"
+            base = ["--manifest-path", manifest, "--target-dir", target]
+            commands = (
+                ("format", ["cargo", "fmt", "--manifest-path", manifest, "--", "--check"]),
+                ("clippy", ["cargo", "clippy", "--locked", *base,
+                            "--all-targets", "--all-features", "--", "-D", "warnings"]),
+                ("test", ["cargo", "test", "--locked", *base,
+                          "--all-targets", "--all-features", "--", "--test-threads=1"]),
+                ("release", ["cargo", "test", "--locked", "--release", *base,
+                             "--all-targets", "--all-features", "--", "--test-threads=1"]),
+                ("doc", ["env", "RUSTDOCFLAGS=-D warnings", "cargo", "doc",
+                         "--locked", *base, "--no-deps"]),
+            )
+            result.extend([[f"host-reference-{example}-{kind}", *args]
+                           for kind, args in commands])
+        return result
+
+    def test_exact_manifest_commands_and_shared_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_lane(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual([line.split("\t") for line in result.stdout.splitlines()],
+                             self.expected(root))
+
+    def test_every_failing_step_stops_before_the_next_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = self.expected(root)
+            for failure in range(1, len(expected) + 1):
+                with self.subTest(failure=failure):
+                    result = self.run_lane(root, failure)
+                    self.assertEqual(result.returncode, 37, result.stderr)
+                    self.assertEqual([line.split("\t") for line in result.stdout.splitlines()],
+                                     expected[:failure])
+
+
+if __name__ == "__main__":
+    unittest.main()

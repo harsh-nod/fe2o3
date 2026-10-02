@@ -15,6 +15,7 @@ trap cleanup_timeout_test_root EXIT
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
+python3 "${TEST_SCRIPT_DIR}/host-reference-ci.py"
 
 VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
 (
@@ -372,6 +373,17 @@ assert_no_codegen_test_driver() {
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
+assert_host_reference_steps() {
+  local example kind
+  for example in rmsnorm_residual_v1 qwen3_gqa_prefill_v1 \
+    qwen3_paged_gqa_decode_v1 qwen3_swiglu_v1 qwen3_logits_compact_v1; do
+    for kind in format clippy test release doc; do
+      assert_step_count "host-reference-${example}-${kind}" 1 \
+        'CPU lane omitted or duplicated a standalone host-reference step'
+    done
+  done
+}
+
 assert_runtime_release_gate() {
   assert_step_count fe2o3-runtime-release-tests 1 \
     'runtime release tests did not run exactly once'
@@ -645,6 +657,7 @@ assert_source_isa_unit_matrix_gate
 assert_source_isa_characteristic_contract_v2_gate
 assert_source_isa_characteristic_matrix_v2_gate
 run_tests
+assert_host_reference_steps
 assert_no_codegen_test_driver
 assert_runtime_release_gate
 assert_equals \
@@ -811,6 +824,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
+assert_host_reference_steps
 assert_runtime_release_gate
 assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
@@ -1064,6 +1078,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic
+assert_host_reference_steps
 assert_no_codegen_test_driver
 assert_runtime_release_gate
 assert_all_codegen_targets_once
@@ -1083,6 +1098,7 @@ EMPTY_WRAPPER_CPU_INTERSECTION=1
 CARGO_FE2O3_DRIVER_PROFILE=
 reset_mock_production_driver
 run_cpu_tests
+assert_host_reference_steps
 assert_runtime_release_gate
 assert_step_count wrapper-managed-cpu-tests 0 \
   'empty managed CPU intersection still invoked the binding test command'

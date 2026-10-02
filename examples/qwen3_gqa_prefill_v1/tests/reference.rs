@@ -37,6 +37,45 @@ fn deterministic_values(length: usize, seed: u32) -> Vec<Bf16V1> {
 }
 
 #[test]
+fn leading_softmax_underflow_is_allowed_for_both_roles_and_key_orders() {
+    for role in [
+        Qwen3AttentionRoleV1::Target8B,
+        Qwen3AttentionRoleV1::Draft06B,
+    ] {
+        let profile = profile(role);
+        for maximum_key in [0, 1] {
+            let (mut query, mut key, mut value) = zeros(profile);
+            let query_index =
+                fe2o3_qwen3_gqa_prefill_v1::gqa_query_index_v1(profile, 0, 1, 0, 0).unwrap();
+            query[query_index] = bf16(1.0);
+            for token in 0..2 {
+                key[gqa_kv_index_v1(profile, 0, token, 0, 0).unwrap()] =
+                    bf16(if token == maximum_key { 0.0 } else { -2048.0 });
+                for feature in 0..128 {
+                    value[gqa_kv_index_v1(profile, 0, token, 0, feature).unwrap()] =
+                        bf16(if token == maximum_key { 3.0 } else { 7.0 });
+                }
+            }
+            let input = GqaInputV1 {
+                query: &query,
+                key: &key,
+                value: &value,
+            };
+            let coordinate = GqaVectorCoordinateV1 {
+                sequence: 0,
+                query_token: 1,
+                query_head: 0,
+            };
+            let mut output = vec![bf16(-9.0); 128];
+            let denominator =
+                gqa_prefill_reference_vector_v1(profile, input, coordinate, &mut output).unwrap();
+            assert_eq!(denominator, 1.0, "{role:?}, maximum key {maximum_key}");
+            assert_eq!(output, vec![bf16(3.0); 128]);
+        }
+    }
+}
+
+#[test]
 fn quotient_gqa_heads_share_the_exact_kv_values() {
     for role in [
         Qwen3AttentionRoleV1::Target8B,

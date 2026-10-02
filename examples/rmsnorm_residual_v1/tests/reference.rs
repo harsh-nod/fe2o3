@@ -16,6 +16,38 @@ fn profile(
 }
 
 #[test]
+fn last_row_overflow_preserves_both_complete_output_buffers() {
+    let profile = profile(Qwen3ModelRoleV1::Draft06B, B3RmsNormBucketV1::DecodeS8);
+    let elements = profile.resources().activation_elements;
+    let hidden = profile.descriptor().hidden_size;
+    let mut activation = vec![bf16(1.0); elements];
+    let mut residual = vec![bf16(0.0); elements];
+    let weight = vec![bf16(1.0); hidden];
+    activation[elements - 1] = Bf16V1::from_bits(0x7f7f);
+    residual[elements - 1] = Bf16V1::from_bits(0x7f7f);
+    let normalized_before = vec![Bf16V1::from_bits(0x4242); elements];
+    let residual_before = vec![Bf16V1::from_bits(0x4343); elements];
+    let mut normalized = normalized_before.clone();
+    let mut residual_output = residual_before.clone();
+    assert_eq!(
+        rmsnorm_residual_reference_v1(
+            profile,
+            &activation,
+            &residual,
+            &weight,
+            &mut normalized,
+            &mut residual_output,
+        ),
+        Err(RmsNormReferenceErrorV1::NonFiniteIntermediate {
+            row: profile.descriptor().rows - 1,
+            stage: RmsNormArithmeticStageV1::ResidualAdd,
+        })
+    );
+    assert_eq!(normalized, normalized_before);
+    assert_eq!(residual_output, residual_before);
+}
+
+#[test]
 fn zero_and_constant_rows_follow_the_declared_equations() {
     let profile = profile(Qwen3ModelRoleV1::Draft06B, B3RmsNormBucketV1::DecodeS1);
     let elements = profile.resources().activation_elements;

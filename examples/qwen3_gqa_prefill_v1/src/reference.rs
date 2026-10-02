@@ -306,7 +306,7 @@ fn compute_weights_f32(
         }
         *weight_slot = weight;
         denominator += weight;
-        if !denominator.is_finite() || denominator <= 0.0 {
+        if !denominator.is_finite() || denominator < 0.0 {
             return Err(intermediate_error(
                 coordinate,
                 Some(key_token),
