@@ -196,7 +196,7 @@ impl<'s> ExtentDecisionsV1<'_, 's, '_, '_, '_, '_> {
         };
         let mut current = receiver;
         // Stable scalar provenance also follows casts. Metadata equality needs
-        // the stronger whole-value, identical-type copy/move chain below.
+        // an identical-type copy/move or exact whole-slice shared reborrow.
         for _ in 0..64 {
             self.meter.work(16)?;
             let index = current.index() as usize;
@@ -228,15 +228,28 @@ impl<'s> ExtentDecisionsV1<'_, 's, '_, '_, '_, '_> {
             let Some(value) = definition.value else {
                 return Ok(false);
             };
-            let SemanticRvalueKindV1::Use(operand) = value.kind() else {
-                return Ok(false);
+            let source = match value.kind() {
+                SemanticRvalueKindV1::Use(operand) => {
+                    let source = self.operand_local(operand)?;
+                    if operand.ty() != ty {
+                        return Ok(false);
+                    }
+                    source
+                }
+                SemanticRvalueKindV1::Borrow { .. } => {
+                    self.meter.work(16)?;
+                    bf16_nominal_source_algorithms_v1::exact_shared_slice_reborrow_source_v1(
+                        types, function, value,
+                    )
+                }
+                _ => None,
             };
-            let Some(source) = self.operand_local(operand)? else {
-                return Ok(false);
-            };
-            if value.result_type() != ty || operand.ty() != ty {
+            if value.result_type() != ty {
                 return Ok(false);
             }
+            let Some(source) = source else {
+                return Ok(false);
+            };
             current = source;
         }
         Ok(false)

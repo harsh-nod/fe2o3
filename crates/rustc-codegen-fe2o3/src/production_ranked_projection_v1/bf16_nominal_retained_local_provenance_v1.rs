@@ -218,6 +218,17 @@ impl RetainedLocalProvenanceV1 {
                 let stable_source = match assignment.value().kind() {
                     SemanticRvalueKindV1::Use(operand)
                     | SemanticRvalueKindV1::Cast { operand, .. } => simple_operand_local(operand),
+                    SemanticRvalueKindV1::Borrow { .. }
+                        if assignment.destination().ty() == assignment.value().result_type()
+                            && function.locals()[destination].ty()
+                                == assignment.value().result_type() =>
+                    {
+                        bf16_nominal_source_algorithms_v1::exact_shared_slice_reborrow_source_v1(
+                            types,
+                            function,
+                            assignment.value(),
+                        )
+                    }
                     _ => None,
                 };
                 if let Some(source) = stable_source {
