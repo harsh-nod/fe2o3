@@ -221,9 +221,44 @@ fn default_target_entry_keeps_conditional_mixed_continuations_outside_publicatio
         .split_once("pub(crate) fn require_semantic_mir_import(")
         .unwrap()
         .0;
-    assert!(publish.contains("self.lower_production_target(target_budget)?"));
-    assert!(publish.contains(".publish_worker_handoff(compiler_execution)"));
+    assert!(
+        publish
+            .contains("self.publish_mixed_worker_handoff_v53(target_budget, compiler_execution)")
+    );
+    for alternate in [
+        "lower_production_target(",
+        "unwrap_or",
+        "or_else(",
+        "if ",
+        "match ",
+    ] {
+        assert!(
+            !publish.contains(alternate),
+            "publication alternate: {alternate}"
+        );
+    }
     assert!(!publish.contains("conditional_mixed"));
+    let typed = include_str!("production_pipeline_source_mixed_publish_v53.rs")
+        .split_once("pub(crate) fn publish_mixed_worker_handoff_v53(")
+        .unwrap()
+        .1;
+    let mut remaining = typed;
+    for stage in [
+        "FunctionalRefinementVerusRuntimeLeaseV1::open(",
+        "self.with_original_source_mixed_publication_on_account_v28(",
+        "prepared.into_protected(budget)?",
+        "protected.with_executed_composition_v29(",
+        "executed.with_strict_handoff_v53(",
+        "executed.check_strict_handoff_v53(handoff, budget)?",
+        "protected.revalidate(budget)?",
+        "publish_compiler_module_handoff_v3(",
+        "compiler_execution.acquire(",
+        "publish_compiler_execution_receipt_transport_v1(",
+    ] {
+        remaining = remaining.split_once(stage).unwrap().1;
+    }
+    assert!(!typed.contains("unwrap_or") && !typed.contains("or_else("));
+    assert!(!typed.contains("lower_production_target("));
     for route in [
         include_str!("production_pipeline_source_mixed_worklist_v26.rs"),
         include_str!("production_pipeline_source_mixed_pure_cse_v26.rs"),

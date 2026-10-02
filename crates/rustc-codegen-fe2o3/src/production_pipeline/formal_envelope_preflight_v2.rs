@@ -151,19 +151,46 @@ mod tests {
     #[test]
     fn authenticated_geometry_precedes_fresh_formal_candidate_without_fallback() {
         let source = include_str!("../production_pipeline.rs");
-        let body = source
+        let (ordinary, body) = source
             .split_once("    fn admit_formal_memory(\n")
             .unwrap()
             .1
             .split_once("\nimpl FormalMemoryAdmittedProductionCompilation")
             .unwrap()
-            .0;
-        assert!(
-            body.find("authenticated_envelopes(&lowered, &bindings)?")
-                .unwrap()
-                < body.find("::try_admit_for_launch_envelopes_v2(").unwrap()
-        );
-        assert!(!body.contains("::try_admit("));
+            .0
+            .split_once("    fn admit_formal_memory_with_translation_budget_v1(\n")
+            .unwrap();
+        assert!(ordinary.contains("self.admit_formal_memory_with_translation_budget_v1(None)"));
+        assert!(!ordinary.contains("try_admit"));
+        let authenticated = body
+            .find("authenticated_envelopes(&lowered, &bindings)?")
+            .unwrap();
+        assert_eq!(body.matches("authenticated_envelopes(").count(), 1);
+        assert!(authenticated < body.find("match budget {").unwrap());
+        let (bounded, ordinary) = body
+            .split_once("Some(budget) =>")
+            .unwrap()
+            .1
+            .split_once("None =>")
+            .unwrap();
+        for (arm, method, arguments) in [
+            (
+                bounded,
+                "try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(",
+                "(lowered, &envelopes, budget)",
+            ),
+            (
+                ordinary,
+                "try_admit_for_launch_envelopes_v2(",
+                "(lowered, &envelopes)",
+            ),
+        ] {
+            assert_eq!(body.matches(method).count(), 1);
+            assert!(arm.contains("ProductionFormalMemoryOwnerV1::"));
+            assert!(arm.contains(method) && arm.contains(arguments));
+            assert!(authenticated < body.find(method).unwrap());
+        }
+        assert!(!body.contains("try_admit("));
         assert!(!body.contains(".or_else("));
         assert!(!body.contains("unwrap_or"));
         let join = include_str!("formal_envelope_preflight_v2.rs")
