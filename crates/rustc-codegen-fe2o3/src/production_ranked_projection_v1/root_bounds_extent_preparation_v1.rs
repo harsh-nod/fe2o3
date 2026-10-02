@@ -809,6 +809,8 @@ pub(super) mod test_access {
             &SemanticRvalueV1,
             &SemanticPlaceV1,
             &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+            &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+            SemanticProjectionKindV1,
             &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
             &fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1,
             &SemanticTypeShapeV1,

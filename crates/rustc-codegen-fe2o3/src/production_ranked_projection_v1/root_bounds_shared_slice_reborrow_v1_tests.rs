@@ -1,6 +1,95 @@
 // Component-level provenance and extent contracts, not source/GPU admission.
 use super::super::bf16_nominal_source_algorithms_v1::local_provenance_with_resources_v1;
 
+#[test]
+fn shared_slice_reborrow_rejects_malformed_destination_types_in_both_producers() {
+    use super::super::bf16_nominal_source_algorithms_v1::{
+        RetainedLocalProvenanceV1, exact_shared_slice_reborrow_source_v1,
+    };
+    let types = types();
+    for mismatch_local in [false, true] {
+        let base = shared_slice_reborrow_fixture();
+        let mut locals = base.locals().to_vec();
+        let mut blocks = base.blocks().to_vec();
+        let mut statements = blocks[0].statements().to_vec();
+        if mismatch_local {
+            locals[4] = local(238, USIZE, SemanticLocalRoleV1::Temporary);
+        } else {
+            statements[0] = SemanticStatementV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    typed_place(4, USIZE),
+                    SemanticRvalueV1::new(
+                        REFERENCE,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Shared,
+                            place: slice_place(1, None),
+                        },
+                    ),
+                )),
+            );
+        }
+        blocks[0] = block(246, statements, blocks[0].terminator().kind().clone());
+        let function = rebuild(&base, locals, blocks);
+        let inventory = assertion_definition_inventory(&function).unwrap();
+        let SemanticStatementKindV1::Assign(assignment) =
+            function.blocks()[0].statements()[0].kind()
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            exact_shared_slice_reborrow_source_v1(&types, &function, assignment.value()),
+            Some(SemanticLocalIdV1::from_index(1))
+        );
+        let expected = local_provenance_with_resources_v1(
+            &[],
+            &types,
+            &function,
+            &inventory.counts,
+            &inventory.address_escaped,
+            &mut PreparationResourcesV1::unmetered(),
+        )
+        .unwrap();
+        assert_eq!(expected.stable_argument_origins[4], None);
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let mut owned = 0;
+        let mut retained = RetainedLocalProvenanceV1::new();
+        let mut resources = PreparationResourcesV1::new(&mut budget, &mut owned);
+        retained
+            .prepare_into(
+                &[],
+                &types,
+                &function,
+                &inventory.counts,
+                &inventory.address_escaped,
+                &mut resources,
+            )
+            .unwrap();
+        let actual = retained
+            .completed_for(
+                &[],
+                &types,
+                &function,
+                &inventory.counts,
+                &inventory.address_escaped,
+                &resources,
+            )
+            .unwrap();
+        assert_eq!(
+            actual.stable_argument_origins,
+            expected.stable_argument_origins
+        );
+        assert_eq!(actual.allocation_origins, expected.allocation_origins);
+        assert_eq!(actual.allocation_provenance, expected.allocation_provenance);
+        drop(resources);
+        drop(retained);
+        assert_eq!(budget.storage(), owned);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
 fn shared_slice_reborrow_fixture() -> SemanticFunctionDeclV1 {
     let base = fixture(false);
     let mut blocks = base.blocks().to_vec();
@@ -358,7 +447,10 @@ fn shared_slice_reborrow_volatile_read_eligibility_matches_copy_and_preserves_ab
                 if case == 3 {
                     None
                 } else {
-                    Some(SemanticAbiPointeeInfoV1::new(pointee, 0, 4).unwrap())
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(pointee, 0, if case == 2 { 1 } else { 4 })
+                            .unwrap(),
+                    )
                 },
                 None,
             ),

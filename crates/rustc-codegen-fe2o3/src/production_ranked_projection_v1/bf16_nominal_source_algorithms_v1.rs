@@ -49,6 +49,8 @@ pub(super) fn shared_slice_reborrow_frame_v1() -> usize {
         &SemanticRvalueV1,
         &SemanticPlaceV1,
         &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+        &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+        SemanticProjectionKindV1,
         Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>,
         &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
         Option<&SemanticTypeDeclV1>,
