@@ -8663,7 +8663,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Failed)
     }
 
-    /// Advances at most one cooperative host-staging transition.
+    /// Advances at most one cooperative staging or native peer transition.
     ///
     /// Submission and public observers never drive these leaves. Authoritative
     /// DeviceLocal backing uses private child SDMA copies in 64-KiB chunks;
@@ -9238,10 +9238,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 destination_route,
                 source.byte_len,
             )?)
-        } else if directed.is_none() {
-            self.prepare_compute_xgmi_v1(source_route, source, destination_route, destination)?
         } else {
-            None
+            self.prepare_compute_xgmi_v1(source_route, source, destination_route, destination)?
         };
         let staging_byte_len = if compute_xgmi.is_some() {
             0
@@ -13625,7 +13623,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
         };
         if let Some(route) = native_route {
-            if let Some(status) = self.compute_xgmi_stored_observation_v1(route) {
+            if (self.peer_launch_retains.is_empty() || deadline <= Instant::now())
+                && let Some(status) = self.compute_xgmi_stored_observation_v1(route)
+            {
                 return self.observe_peer_launch_result_v1(submission, status, |status| {
                     *status != BackendPollV1::Pending
                 });
@@ -13648,7 +13648,10 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                         Err(error) => return Err(error),
                     }
                 }
-                let result = self.children[route.child].poll_v1(route.local);
+                let result = match self.compute_xgmi_stored_observation_v1(route) {
+                    Some(status) => status,
+                    None => self.children[route.child].poll_v1(route.local),
+                };
                 let status = self.observe_peer_launch_result_v1(submission, result, |status| {
                     *status != BackendPollV1::Pending
                 })?;

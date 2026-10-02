@@ -5,6 +5,8 @@ use super::*;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod directed;
+mod directed_consumer;
 mod lifecycle;
 mod packetized;
 #[path = "../peer_readback/tests.rs"]
@@ -67,8 +69,21 @@ impl Fixture {
         pending_samples: usize,
         child_count: usize,
         byte_len: usize,
-        mut destination_steps: Vec<ScriptedSdmaStepV1>,
+        destination_steps: Vec<ScriptedSdmaStepV1>,
     ) -> Self {
+        let mut child_steps: Vec<_> = (0..child_count).map(|_| Vec::new()).collect();
+        child_steps[1] = destination_steps;
+        Self::with_child_steps(failure, unwind, pending_samples, byte_len, child_steps)
+    }
+
+    fn with_child_steps(
+        failure: Option<Stage>,
+        unwind: bool,
+        pending_samples: usize,
+        byte_len: usize,
+        mut child_steps: Vec<Vec<ScriptedSdmaStepV1>>,
+    ) -> Self {
+        let child_count = child_steps.len();
         let children = (0..child_count)
             .map(|index| {
                 let mut child = KfdRuntimeBackendV1::mock();
@@ -101,11 +116,7 @@ impl Fixture {
             } else {
                 0x17
             };
-            let mut steps = if route.child == 1 {
-                core::mem::take(&mut destination_steps)
-            } else {
-                Vec::new()
-            };
+            let mut steps = core::mem::take(&mut child_steps[route.child]);
             steps.extend([
                 ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
                 ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),

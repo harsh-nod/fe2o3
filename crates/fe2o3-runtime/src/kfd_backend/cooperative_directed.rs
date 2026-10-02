@@ -151,13 +151,19 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return false;
         }
         if copy.is_quiescent() {
-            return copy.dependencies.is_empty() && copy.staging.is_empty();
+            return copy.dependencies.is_empty()
+                && copy.staging.is_empty()
+                && self.directed_native_transport_intact_v1(id, copy);
         }
         if !copy.dependencies.iter().copied().eq(expected)
             || copy.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
             || copy.dependency_cursor > copy.dependencies.len()
             || copy.byte_cursor > copy.staging.len()
-            || copy.staging.len() as u64 != route.source.byte_len
+            || if copy.compute_xgmi.is_some() {
+                !self.directed_native_transport_intact_v1(id, copy)
+            } else {
+                copy.staging.len() as u64 != route.source.byte_len
+            }
             || self
                 .streams
                 .get(&route.stream)
@@ -462,7 +468,8 @@ impl RuntimeDirectedScalarPeerCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
 
     /// Iterative selection visits at most 256 roots of at most 256 dependencies.
     /// One selected step observes/publishes at most one private DMA window,
-    /// copies at most 64 KiB, disposes one owner, or settles one failed copy.
+    /// copies at most 64 KiB of host staging, advances one native XGMI frontier,
+    /// disposes one owner, or settles one failed copy.
     /// Allocator, driver and profiling calls have no hard wall-clock bound.
     fn progress_directed_scalar_peer_copy_v1(
         &mut self,
@@ -521,7 +528,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if !found {
             return Err(self.directed_corruption_v1());
         }
-        if let Some(blocker) = self.directed_private_blocker_v1(selected)? {
+        if let Some(blocker) = self.directed_native_blocker_v1(selected)? {
+            selected = blocker;
+        } else if let Some(blocker) = self.directed_private_blocker_v1(selected)? {
             selected = blocker;
         }
         match self.progress_cooperative_copy_step_v1(selected) {

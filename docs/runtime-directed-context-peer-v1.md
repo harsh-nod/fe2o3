@@ -1,8 +1,10 @@
 # Directed Context Peer Copies
 
-Status: [CPU-qualified development candidate](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
-above the [directed scalar backend SPI](runtime-directed-scalar-peer-v1.md).
-Native, formal-refinement and performance evidence remain separate boundaries.
+Status: the [CPU-qualified Context contract](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
+above the [directed scalar backend SPI](runtime-directed-scalar-peer-v1.md) now
+has [bounded integrated native qualification](evidence/dev-multigpu-directed-peer-2026-10-02/README.md)
+for prequeued three-GPU chains and fanout. Formal refinement, broader native
+coverage and performance evidence remain separate boundaries.
 
 ## Public Contract
 
@@ -10,7 +12,9 @@ Native, formal-refinement and performance evidence remain separate boundaries.
 `RuntimeDirectedScalarPeerCopyBackendV1` implementation and returns the distinct
 `RuntimeDirectedScalarPeerCopyV1` submission marker. Legacy peer copies, ordered
 batches, generated launches and Worker protocols do not acquire this contract.
-Only the native XGMI backend implements the production SPI.
+The separate native XGMI owner and integrated multi-device KFD router implement
+this SPI. The latter retains staging by default; its native-peer opt-in can use
+admitted XGMI routes for initialized, equal full-buffer directed copies.
 
 The entire device/stream/region route and original event-to-producer roster are
 bound before backend entry. Dependencies must belong to this same directed
@@ -82,9 +86,11 @@ panics preserve uncertain custody.
 
 ## Remaining Qualification
 
-- Native qualification of the CPU-tested directed async adapter and owner integration.
-- Native pending-input chains, diamonds, full output/canary checks, cross-stream
-  progress, fault disposition and exact cleanup on admitted GPU pairs.
+- Broader native directed async/owner integration beyond the recorded witnesses.
+- Native partial-failure disposition and isolation; native admission after
+  endpoint extraction and pending directed D2H chaining in the integrated router.
+  The latest copy-only witness qualifies both orders of three-GPU chains and
+  fanout, full destination/source checks and exact cleanup, not arbitrary graphs.
 - Source-bound executable refinement for the changed Context transitions;
   historical model proofs retain their original source and do not prove this
   integration automatically.

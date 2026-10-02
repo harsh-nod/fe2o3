@@ -361,7 +361,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         route: RoutedHandleV1,
         execute: bool,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.compute_xgmi_child_occupied_v1(route.child) {
+        if !execute && self.compute_xgmi_child_occupied_v1(route.child) {
             return Ok(());
         }
         let no_peer_custody = self.peer_launch_retains.ancestries.is_empty();
@@ -404,6 +404,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 } else {
                     self.refresh_peer_launch_gate_v1(owner)?;
                 }
+            }
+            if self.compute_xgmi_child_occupied_v1(route.child) {
+                continue;
             }
             if execute && !Self::child_launch_is_quiescent_v1(&self.children[route.child], id) {
                 match self.children[route.child].poll_v1(id) {

@@ -10,8 +10,11 @@ and completed deferred-result custody. The sharded checkpoints below add
 fixed-total native transfer rings, pending peer/readback group capture and
 finite sharded compute qualified through seven GPUs, including fully prequeued
 compute/peer/readback chains without a host compute join and two changed batches
-inside one live Context. Earlier matched wait-cadence
-measurements remain scoped to their recorded sources, not this whole integration tree.
+inside one live Context. Published `e8cd1388b` also qualifies pending deferred
+compute feeding a downstream native peer on two GPUs in both orders. The latest
+checkpoint adds native directed chains and fanout on three GPUs. Earlier matched
+wait-cadence measurements remain scoped to their recorded sources, not this
+whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
 has recovered. Primary-session SSH reaches MI300X as of 2026-10-02 03:47 UTC;
@@ -27,7 +30,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Two changed live-Context compute/native-peer/readback batches qualified on 2/3/5/7 GPUs; incomplete | Pending deferred-compute continuation, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Live compute/native-peer/readback batches on 2/3/5/7 GPUs, deferred continuation on two and native directed chains/fanout on three; incomplete | Application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -184,20 +187,47 @@ reuse. The separate two-round authority leaves the original one-shot policies
 unchanged and does not assert completion, general application authority, formal
 refinement or performance parity.
 
+The [deferred-continuation checkpoint](evidence/dev-multigpu-deferred-peer-2026-10-02/README.md)
+now qualifies `peer -> deferred compute -> peer -> D2H` on two MI300X GPUs in
+both orders. All four pipeline operations are admitted before explicit progress;
+only the final readback stream drives the chain. Exact events, full Write
+coverage, independently retained producer results and restored native custody
+gate the continuation. The unchanged finite authority is not general compiler
+or application evidence. All 2,096 runtime tests, 43 example tests and 32 source
+controls pass, with 32 unchanged hardware ignores. The prior 1,925 KFD passes
+are authenticated reuse. Owned remote resources were removed and baselines
+restored; this is not native fault, overlap or performance qualification.
+
+The [directed-native checkpoint](evidence/dev-multigpu-directed-peer-2026-10-02/README.md)
+qualifies prequeued three-GPU chains and shared-source fanout in both orders.
+Each copy-only case runs two changed rounds on the same allocations, checks
+every destination and postcopy source byte and observes native counts 0 -> 2 -> 4.
+Shared endpoints serialize without adding sibling success dependencies. The
+copy-only authority denies all kernel launches; existing deferred and live
+compute controls also pass. All six cases complete owned cleanup and restore
+GPU/process baselines. New typed-consumer progress interactions are CPU-scripted,
+not additional GPU arithmetic or physical-overlap evidence.
+
+Final-source qualification passes 2,109 runtime tests, 48 example tests, strict
+Clippy/feature/format checks and all 32 source controls, with the same 32 hardware
+ignores. The unchanged 1,925-test KFD qualification is authenticated reuse.
+The first two rejected attempts remain recorded. No new formal refinement,
+general kernel authority, native-fault or performance acceptance is claimed.
+
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Support an exact pending deferred-compute output feeding a native peer copy,
-   enabling peer -> compute -> peer -> D2H with no intermediate host join.
-   Preserve original launch/custody, checked dependency depth, exact full Write
-   coverage and restoration before extraction; do not widen launch authority.
-2. Integrate one evidence-backed application kernel and native partial-failure
-   qualification. Existing production peer constructors already accept caller
-   authorities; finite fixtures do not supply compiler/effects evidence. The
+1. Integrate one evidence-backed application kernel. Existing production peer
+   constructors already accept caller authorities; finite fixtures do not
+   supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
-   general runtime authority. CPU scripted failures are not a native fault campaign.
+   general runtime authority.
+2. Qualify native partial failures and isolation before broadening execution
+   claims. CPU scripted failures are not a native fault campaign. Post-publication
+   native directed admission and pending directed D2H chaining remain outside
+   the latest increment; partial ranges and absent routes preserve staging.
 3. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all

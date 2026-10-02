@@ -7,6 +7,8 @@ use fe2o3_kfd::{
     Gfx942DirectionalQueuePersistentAllocationV1,
 };
 
+mod directed;
+
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
 #[derive(Clone, Copy, Debug)]
@@ -566,11 +568,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             {
                 return Ok(BackendPollV1::Pending);
             }
-            for (endpoint, region) in [(source, regions[0]), (destination, regions[1])] {
+            let origins = [
+                self.peer_copy_origin_for_leg_v1(submission, PeerCopyLegV1::Read)?,
+                self.peer_copy_origin_for_leg_v1(submission, PeerCopyLegV1::Write)?,
+            ];
+            for ((endpoint, region), origin) in [(source, regions[0]), (destination, regions[1])]
+                .into_iter()
+                .zip(origins)
+            {
                 let child = &self.children[endpoint.child];
                 child.require_live()?;
-                if child.allocation_is_active(endpoint.local)
-                    || child.any_compute_active_v1()
+                if child.peer_access_has_conflict_v1(
+                    endpoint.local,
+                    origin,
+                    PeerAccessPurposeV1::Copy,
+                ) || child.peer_access_has_conflict_v1(
+                    endpoint.local,
+                    origin,
+                    PeerAccessPurposeV1::Reconcile,
+                ) || child.any_compute_active_v1()
                     || !child.active_sdma.is_empty()
                     || child.native_reconciliations.iter().any(Option::is_some)
                 {

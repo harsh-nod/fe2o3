@@ -228,7 +228,17 @@ adds `peer -> deferred compute -> peer -> D2H`, admitted before explicit progres
 and driven from the final readback stream on two GPUs in both orders. Exact
 events, full `Write` outputs, independently retained producer results and
 restored native custody gate the continuation; there is no staged fallback.
-These finite artifact authorities do not supply general application/compiler
+The [directed-native checkpoint](evidence/dev-multigpu-directed-peer-2026-10-02/README.md)
+adds prequeued scalar chains and shared-source fanout on three GPUs in both
+orders, with two changed rounds, full destination and postcopy source checks.
+It uses the production copy-only constructor with a deny-all kernel authority.
+Eligible initialized full-buffer copies use native transport; partial ranges
+and absent routes retain staging. Shared native endpoints serialize without
+creating sibling success dependencies. Exact queued typed-consumer permits and
+consumer-only progress under native custody have scripted CPU coverage. Native
+admission after endpoint extraction and pending directed D2H remain outside this
+increment. No compute or compiler authority is widened.
+The compute witnesses' finite artifact authorities do not supply general application/compiler
 evidence. Physical overlap, native partial-failure isolation, full refinement and
 matched HIP/HSA performance remain separate gates; no overall parity is claimed.
 
