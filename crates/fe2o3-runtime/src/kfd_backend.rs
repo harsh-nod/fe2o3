@@ -608,6 +608,10 @@ enum KfdRuntimeLaunchGateV1 {
     ExactGfx942ShardedVecadd(
         crate::qualification_gfx942_sharded_vecadd_v1::AdmittedGfx942ShardedVecaddQualificationV1,
     ),
+    #[cfg(feature = "hardware-qualification")]
+    ExactGfx942ShardedVecaddRounds(
+        crate::qualification_gfx942_sharded_vecadd_rounds_v1::AdmittedGfx942ShardedVecaddRoundsQualificationV1,
+    ),
     #[cfg(feature = "scale-qualification")]
     ExactGfx942VecaddRepeat(
         crate::qualification_gfx942_vecadd_repeat_v1::AdmittedGfx942VecaddRepeatQualificationV1,
@@ -647,6 +651,10 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942ShardedVecadd(_) => formatter.write_str("ExactGfx942ShardedVecadd"),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942ShardedVecaddRounds(_) => {
+                formatter.write_str("ExactGfx942ShardedVecaddRounds")
+            }
             #[cfg(feature = "scale-qualification")]
             Self::ExactGfx942VecaddRepeat(_) => formatter.write_str("ExactGfx942VecaddRepeat"),
             #[cfg(feature = "hardware-qualification")]
@@ -675,6 +683,10 @@ impl KfdRuntimeLaunchGateV1 {
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942ShardedVecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942ShardedVecaddRounds(admitted) => {
+                admitted.authorizes_kfd_request_v1(request)
+            }
             #[cfg(feature = "scale-qualification")]
             Self::ExactGfx942VecaddRepeat(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]

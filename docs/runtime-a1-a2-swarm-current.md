@@ -9,7 +9,8 @@ public native-peer opt-in, cold copy-only admission, repeated ring reuse
 and completed deferred-result custody. The sharded checkpoints below add
 fixed-total native transfer rings, pending peer/readback group capture and
 finite sharded compute qualified through seven GPUs, including fully prequeued
-compute/peer/readback chains without a host compute join. Earlier matched wait-cadence
+compute/peer/readback chains without a host compute join and two changed batches
+inside one live Context. Earlier matched wait-cadence
 measurements remain scoped to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -26,7 +27,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Fully prequeued finite compute/native-peer/readback chains qualified on 2/3/5/7 GPUs; incomplete | Repeated live-Context batches, broader kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Two changed live-Context compute/native-peer/readback batches qualified on 2/3/5/7 GPUs; incomplete | Pending deferred-compute continuation, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -158,24 +159,50 @@ new tests cover backend ownership and Context completion reconciliation, includi
 per-node journal validation and checked parent ranks. The unchanged 1,925-test
 KFD and kernel-rebuild results are authenticated reuse, not fresh runs. All owned
 remote resources are removed and baselines restored. Whole-adapter refinement,
-general kernel authority, repeated live-Context batches and performance remain open.
+general kernel authority, repeated live-Context batches and performance remained
+open at that checkpoint.
+
+The [live-batch checkpoint](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
+now qualifies two changed-content batches inside one Context and current-thread
+owner. Five MI300X cases cover 2/3/5/7 GPUs and reversed seven-GPU ordering. They
+reuse logical allocations, modules, kernels and streams, refresh every padded
+input byte, admit each complete compute/peer/readback batch in one owner command,
+and release results before the next refresh. Only the final readback streams
+drive the pipeline, and there is one completed-only drain at the end.
+
+All output and padding bytes, both independent digests and native counts
+0 -> N -> 2N pass. The two old queued controls also pass; all seven processes
+deliver 171 exact callbacks. The live snapshot is a bounded settled HostVisible
+read, not a new coherent-capture or capture-credit API. Stable logical handles
+do not independently prove physical mapping identity. Owned remote files are
+removed and GPU/process baselines restored.
+
+Final-source checks pass 2,082 runtime tests, 39 example tests, strict Clippy,
+feature/format checks and all 32 source controls, with the same 32 hardware
+ignores. The prior 1,925 KFD tests and artifact rebuild remain authenticated
+reuse. The separate two-round authority leaves the original one-shot policies
+unchanged and does not assert completion, general application authority, formal
+refinement or performance parity.
 
 The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
 campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Qualify changed compute/transfer batches inside one live Context, reusing
-   allocations and streams before its final cutoff. Same-process reopen is a
-   separate device/VM ownership redesign, not a prerequisite for iterative work;
-   never reset process-lifetime admission history to make it appear supported.
-2. Add application kernel authority and native partial-failure qualification.
-   Existing production peer constructors already accept caller authorities;
-   finite fixtures do not supply general compiler/effects evidence. CPU scripted
-   failures are not a native fault campaign.
-3. Add eight-GPU coverage when every device is free, then matched HIP/HSA scaling
-   and overlap measurements. Complete-output sharding now passes, but no timing
-   speedup follows. A1/A2 remain parked and incomplete.
+1. Support an exact pending deferred-compute output feeding a native peer copy,
+   enabling peer -> compute -> peer -> D2H with no intermediate host join.
+   Preserve original launch/custody, checked dependency depth, exact full Write
+   coverage and restoration before extraction; do not widen launch authority.
+2. Integrate one evidence-backed application kernel and native partial-failure
+   qualification. Existing production peer constructors already accept caller
+   authorities; finite fixtures do not supply compiler/effects evidence. The
+   generated binding does not ship a concrete production proof backend or grant
+   general runtime authority. CPU scripted failures are not a native fault campaign.
+3. Defer same-process reopen, eight-GPU coverage and matched performance until
+   those functional gates. Reopen is a separate device/VM ownership redesign;
+   never reset process-lifetime admission history. Use eight GPUs only when all
+   are free. No timing speedup follows from these correctness runs, and A1/A2
+   remain parked and incomplete.
 
 ## Earlier Multi-GPU Checkpoints
 

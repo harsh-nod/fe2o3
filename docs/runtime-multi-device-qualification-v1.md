@@ -1,8 +1,8 @@
 # Multi-Device Runtime Qualification
 
-The current [queued-compute checkpoint](evidence/dev-multigpu-compute-peer-2026-10-02/README.md)
-qualifies finite sharded compute -> native peer -> D2H/group capture without a
-host compute join on 2/3/5/7 MI300X GPUs. Reusable live-Context batches, broader
+The current [live-batch checkpoint](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
+qualifies two changed finite sharded compute -> native peer -> D2H batches in
+one live Context on 2/3/5/7 MI300X GPUs, without a host compute join. Broader
 kernel authority, native fault campaigns and performance remain open. Earlier
 sections below retain their original example and checkpoint scopes.
 
@@ -635,6 +635,59 @@ invocation proof does not qualify the new per-node validation adapter.
 This is finite trusted-artifact correctness, not whole-adapter refinement,
 physical overlap, performance parity or repeated work inside one live Context.
 
+## Live Context Batches
+
+`open_gfx942_sharded_vecadd_rounds_peer_qualification_v1` adds an independent
+two-authorization policy, composing the unchanged round-0 and round-1 one-shot
+gates. It accepts only the same finite vecadd artifact and recipes, with a
+distinct policy signature. A mutex serializes phase and A/B/C identity checks
+with inner acceptance. Rejection does not consume a phase; acceptance cannot
+be rolled back, and poisoned or exhausted authorities deny further launches.
+Two authorizations are not evidence of two successful GPU executions.
+
+The `gfx942-runtime-live-sharded-vecadd-smoke` example retains one Context,
+current-thread owner, module/kernel set, logical allocations and streams. Before
+each batch it refreshes all padded A/B/C inputs and incoming sentinels, preserving
+the compute inputs' authenticated upload digests. Each batch admits all compute,
+native peer and dependent D2H submissions in one bounded owner command. Only
+readback streams are registered for pipeline progress.
+
+After original submissions actually succeed, one owner command checks all stream
+results and gathers at most 286,720 bytes from settled HostVisible allocations.
+Partial snapshots are discarded on error. This is serialized settled reading,
+not a new coherent-capture API or drain-capture byte-credit qualification.
+Independent logical and padded-output digests cover every byte in both changed
+rounds; no expected computed output is installed from the host.
+
+Each batch releases readback, peer and compute results before the next refresh.
+Completed command futures are dropped to refund reply credits. The example
+deliberately expires an observation before driving each fresh owner command,
+then resumes that same future without re-enqueueing. This tests command-wait
+resumption, not a GPU timeout or hard preemption of an executing Context command.
+There are no intermediate cutoffs and only one final completed-only drain.
+
+```bash
+cargo +nightly-2026-04-03 run --locked --offline -p fe2o3-runtime \
+  --no-default-features --features hardware-qualification \
+  --example gfx942-runtime-live-sharded-vecadd-smoke -- \
+  "$GPU0_UID" "$GPU1_UID"
+```
+
+The CLI accepts two to eight explicit distinct UIDs, in shard order. Stable
+logical handles do not prove physical mapping identity. The finite authority
+does not supply a general application/compiler authority or machine-code proof.
+Same-process device reopen, arbitrary dependency graphs, source preservation
+after peer transfer, physical overlap and performance remain separate gates.
+
+The [live-batch campaign](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
+passes five two-round processes on 2/3/5/7 GPUs and reversed seven-GPU ordering,
+plus two existing queued controls. It checks every logical/padding byte, both
+independent digests, 0 -> N -> 2N native counts in the live cases, 171 exact
+callbacks overall, and explicit owned cleanup. All 2,082 runtime and 39 example
+tests pass with 32 unchanged hardware ignores; strict Clippy/feature/format
+checks and all 32 source controls pass. The prior KFD suite and artifact rebuild
+are authenticated reuse, not new executions or formal refinement.
+
 ## Next Dependencies
 
 The [packetized campaign](evidence/dev-multigpu-packetized-2026-10-02/README.md)
@@ -649,16 +702,19 @@ host, not performance or exclusive-reservation evidence.
 The public-authority opt-in and 65-packet witness are implemented as described
 above. Fixed-total transfer sharding and pending peer/readback group drain now
 pass on seven selected GPUs. Additional pairs, eight-GPU hardware coverage,
-broader compute sharding, reusable live-Context batches, complete native fault
+broader application compute sharding, complete native fault
 coverage, and peer mappings retained across separate logical copies remain open.
 The current route does not qualify a general native runtime pipeline.
 
-Prioritize repeated changed-content compute/transfer batches in one live Context,
-using the now-qualified exact compute-producer-to-native-peer admission profile.
-Same-process device reopen remains unsupported, but is
-a separate device/VM ownership redesign rather than a prerequisite for useful
-iterative workloads. General application kernels still require an appropriate
-compiler/effects authority; the finite sharded policy does not supply it.
+Prioritize an exact pending deferred-compute output feeding a native peer copy,
+then an evidence-backed application kernel through the existing production
+constructor. The native-producer continuation and repeated live batches are
+qualified above; pending Deferred producers remain outside that peer profile.
+Same-process device reopen is a separate device/VM ownership redesign, not a
+prerequisite for useful iterative workloads. General application kernels still
+require compiler/effects evidence; neither finite qualification policy nor the
+generated binding supplies a concrete production proof backend or general
+runtime authority. Defer reopen and performance work behind those functional gaps.
 
 The default two-GPU witness drains and validates the copy before launching
 either consumer. The additional producer-aware path now queues an exact typed

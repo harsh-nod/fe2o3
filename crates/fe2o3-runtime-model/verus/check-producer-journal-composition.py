@@ -16,9 +16,9 @@ V = Path("crates/fe2o3-runtime-model/verus")
 PROOF = V / "context_producer_journal_composition_v1.rs"
 ENROLLMENT = Path("crates/fe2o3-runtime-model/src/context_version_journal/enrollment_declarations.rs")
 HELPERS = {
-    "check-producer-journal-observers.py": "f1bdd391fe9788abbe8bbd18bcabfd876797f257dc9a39831e42d49d534731ae",
-    "check-producer-input-validate.py": "6d7e692fe8e392e925eaeb82d7adcc0ceeddca3defe45cd0e0eebdb89d64a023",
-    "check-producer-input-composition.py": "c50d0f8b5276871da6f0ff036d93c6e2585ee59921c55cddf07e2906997017e8",
+    "check-producer-journal-observers.py": "23954d89871be9f676c2eb2d69fb068749569df56a0835c351c2457b98013a75",
+    "check-producer-input-validate.py": "9dfebf639e18a027191f7f86ff1e8c1cf8bce0b3a1accaa6a6da405f991e5455",
+    "check-producer-input-composition.py": "f86b1db0a5692c732c7a66ebb4a1695d10ef0cf2afad995a00ce4a879e3e4b52",
 }
 PROOF_SHA = "cae1577d6f5551eb6f541d245b97fc0fdf324505e79a4bb18eaf022976dd8f4e"
 EXPECTED_VERIFIED = None

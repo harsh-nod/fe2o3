@@ -76,6 +76,19 @@ fn admit_sharded_vecadd_v1(
     })
 }
 
+fn admit_sharded_vecadd_rounds_devices_v1(
+    unique_ids: &[u64],
+) -> Result<Vec<(u64, KfdRuntimeLaunchGateV1)>, KfdRuntimeBackendErrorV1> {
+    admit_indexed_qualification_devices_v1(unique_ids, 0, |count, index, _| {
+        crate::qualification_gfx942_sharded_vecadd_rounds_v1::admit_gfx942_sharded_vecadd_rounds_qualification_v1(count, index)
+            .map(KfdRuntimeLaunchGateV1::ExactGfx942ShardedVecaddRounds)
+            .map_err(|error| KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                error.to_string(),
+            ))
+    })
+}
+
 pub(super) fn validate_qualification_devices_v1(
     unique_ids: &[u64],
 ) -> Result<(), KfdRuntimeBackendErrorV1> {
@@ -97,6 +110,25 @@ pub(super) fn validate_qualification_devices_v1(
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    /// Opens two exact changed-content rounds per indexed child in one live backend.
+    ///
+    /// Both recipe closures and the complete ordered UID roster are validated
+    /// before native admission. Each child owns an independent, irreversible
+    /// two-authorization gate which latches its original A/B/C allocation IDs.
+    /// The caller must settle and release the first batch, then refresh every
+    /// padded input byte before the second. Authorization is not completion.
+    ///
+    /// PUBLIC DeviceLocal allocation and native-peer routing use the existing
+    /// opt-in policy, including exact pending producer-aware compute events.
+    /// Existing constructors, one-shot gates and general launch authority are
+    /// unchanged. No live gate replacement or reset is exposed.
+    pub fn open_gfx942_sharded_vecadd_rounds_peer_qualification_v1(
+        unique_ids: &[u64],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let gates = admit_sharded_vecadd_rounds_devices_v1(unique_ids)?;
+        Self::open_default_with_gate_policy_v1(gates, true)
+    }
+
     /// Opens independent one-shot shards of the finite vecadd qualification workload.
     ///
     /// The ordered two-to-eight-device UID roster and every indexed recipe for
@@ -186,3 +218,6 @@ mod tests;
 
 #[cfg(test)]
 mod sharded_tests;
+
+#[cfg(test)]
+mod sharded_rounds_tests;

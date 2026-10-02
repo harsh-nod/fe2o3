@@ -19,6 +19,8 @@ pub mod qualification_gfx942_mixed_duration_v1;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_r57_n3_v1;
 #[cfg(feature = "hardware-qualification")]
+pub mod qualification_gfx942_sharded_vecadd_rounds_v1;
+#[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_sharded_vecadd_v1;
 #[cfg(feature = "scale-qualification")]
 pub mod qualification_gfx942_vecadd_repeat_v1;
