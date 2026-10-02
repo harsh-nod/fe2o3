@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "ee6c785fff697e6e376b68456cf02014642ed587",
-      "tree": "53240b49721d1a0ecdc1cd77fb26f7dc0e8df957"
+      "commit": "330688dfd436a3812a7644b5c75e1dcdd4e806fb",
+      "tree": "8d2175f9c26fe5beac301805c9661e2be110dd62"
     },
     "status": "pending",
     "lessons": [
@@ -1291,6 +1291,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 5,
+            "kind": "kernel",
+            "label": "Current source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 2384,
+            "displayedSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+            "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
+            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
+            "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -1551,6 +1568,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 7,
+            "kind": "kernel",
+            "label": "Scalar source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 1818,
+            "displayedSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+            "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
+            "sourceCommit": "6399ee2cf8456c6237a89d5507f50c1872602269",
+            "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -2158,6 +2192,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 5,
+            "kind": "kernel",
+            "label": "Current source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 7332,
+            "displayedSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
+            "sourcePath": "examples/moe_top2_v1/src/kernel.rs",
+            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
+            "sourceSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -11788,12 +11839,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-scalar-gemm:scalar_gemm_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-scalar-gemm",
+                "kernelSymbol": "scalar_gemm_v1"
+              },
+              "selectionSha256": "9cb82468ffac95c6f1bb919760410a34612a9e350f209b683723d2c93e552bb3",
+              "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
+              "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+              "functionUtf8Offset": 673
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11884,12 +11946,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-wave64-collectives:wave64_collectives_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-wave64-collectives",
+                "kernelSymbol": "wave64_collectives_v1"
+              },
+              "selectionSha256": "825b451738beaa2537190ebda99033f5324181bb27d09647fa6c71e0bda8100f",
+              "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
+              "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+              "functionUtf8Offset": 842
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -15371,6 +15444,87 @@
         "negativeCases": [],
         "bindingStatus": "source-driver-contract",
         "reason": "The exact whole-file source-driver case binds this separate mixed implementation identity only. Blocked and striped are distinct diagnostic distributions, not SIMT/tile equivalence or native qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 1217,
+        "kernelSymbol": "candidate_precedes_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 1493,
+        "kernelSymbol": "select_top2_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 2262,
+        "kernelSymbol": "logits_are_finite_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 2491,
+        "kernelSymbol": "write_value_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 3605,
+        "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The inventory source selector does not yet admit derive attributes and type declarations in the selected module closure; no source-selection association or execution qualification is claimed."
+      },
+      {
+        "lessonId": "reductions-scans",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 842,
+        "kernelSymbol": "wave64_collectives_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-wave64-collectives:wave64_collectives_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "gemm-tiling",
+        "tabOrdinal": 7,
+        "functionUtf8Offset": 673,
+        "kernelSymbol": "scalar_gemm_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-scalar-gemm:scalar_gemm_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
       }
     ]
   }

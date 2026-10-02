@@ -469,8 +469,8 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         before = copy.deepcopy(document)
         report = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
         self.assertEqual(document, before)
-        self.assertEqual(report["sourceBoundVariantCount"], 18)
-        self.assertEqual(report["pendingVariantCount"], 108)
+        self.assertEqual(report["sourceBoundVariantCount"], 20)
+        self.assertEqual(report["pendingVariantCount"], 106)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertFalse(report["runtimeCensusValidated"])
         self.assertFalse(report["inventoryComplete"])
@@ -1142,7 +1142,7 @@ class RowSourceBindingTests(unittest.TestCase):
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
         self.assertEqual(report["knownKernelIdentityCount"], 62)
-        self.assertEqual(report["sourceBoundVariantCount"], 18)
+        self.assertEqual(report["sourceBoundVariantCount"], 20)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertFalse(report["inventoryComplete"])
         self.assertIsNone(report["requiredPairCount"])
@@ -1269,6 +1269,10 @@ class RowSourceBindingTests(unittest.TestCase):
 load_tests = runpy.run_path(str(Path(__file__).with_name("_tutorial_exact_display_join_tests.py")))[
     "make_loader"
 ](FixtureBindingTests, ROOT)
+
+load_tests = runpy.run_path(str(Path(__file__).with_name("_tutorial_current_source_association_tests.py")))[
+    "make_loader"
+](FixtureBindingTests, ROOT, load_tests)
 
 
 if __name__ == "__main__":
