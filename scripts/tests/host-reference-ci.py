@@ -30,7 +30,7 @@ run_step() {
   fi
 }
 step_count=0
-main host-reference
+main "$3"
 '''
 
 
@@ -42,14 +42,16 @@ class HostReferenceCiTests(unittest.TestCase):
         self.assertLess(proof_job.index("run: examples/row_softmax_v1/run-verus.sh"),
                         proof_job.index("run: sh examples/qwen3_rope_kv_v1/run-verus.sh"))
 
-    def run_lane(self, root, failure=0):
+    def run_lane(self, root, failure=0, lane="host-reference"):
         environment = dict(os.environ)
         environment.update(
             CARGO_TARGET_DIR=str(root / "target with spaces"),
             CI_LOG_DIR=str(root / "logs"),
+            VERUS="/opt/verus/reference",
+            FE2O3_RUNTIME_MODEL_VERUS="/opt/verus/runtime-model",
         )
         return subprocess.run(
-            ["bash", "-c", HARNESS, "bash", str(ROOT / "scripts/ci-local.sh"), str(failure)],
+            ["bash", "-c", HARNESS, "bash", str(ROOT / "scripts/ci-local.sh"), str(failure), lane],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15,
         )
 
@@ -92,6 +94,27 @@ class HostReferenceCiTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 37, result.stderr)
                     self.assertEqual([line.split("\t") for line in result.stdout.splitlines()],
                                      expected[:failure])
+
+    def test_verus_exact_selection_and_every_failure_stops_the_lane(self):
+        expected = [
+            ["runtime-model-verus", "env", "VERUS=/opt/verus/runtime-model",
+             str(ROOT / "crates/fe2o3-runtime-model/verus/verify-verus.sh")],
+            ["verus-fixtures", "env", "VERUS=/opt/verus/reference",
+             str(ROOT / "examples/verus_vecadd/run-verus.sh"), "--require"],
+            ["scalar-gemm-verus", "env", "VERUS=/opt/verus/reference",
+             str(ROOT / "examples/scalar_gemm_v1/run-verus.sh"), "--require"],
+            ["mir-pliron-per-compilation-verus", "env", "VERUS=/opt/verus/reference",
+             str(ROOT / "scripts/test-mir-pliron-per-compilation-verus.sh")],
+            ["qwen3-rope-kv-verus", "env", "VERUS=/opt/verus/reference", "sh",
+             str(ROOT / "examples/qwen3_rope_kv_v1/run-verus.sh")],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for failure in range(len(expected) + 1):
+                with self.subTest(failure=failure):
+                    result = self.run_lane(Path(directory), failure, "verus")
+                    self.assertEqual(result.returncode, 37 if failure else 0, result.stderr)
+                    self.assertEqual([line.split("\t") for line in result.stdout.splitlines()],
+                                     expected[:failure] if failure else expected)
 
 
 if __name__ == "__main__":

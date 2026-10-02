@@ -29,10 +29,10 @@ VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
     VERUS=/opt/verus/mir-pliron \
     run_verus
 )
-[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 4 ]]
+[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 5 ]]
 rg -F $'runtime-model-verus\tenv VERUS=/opt/verus/runtime-model ' \
   "${VERUS_DISPATCH_LOG}" >/dev/null
-for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus; do
+for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus qwen3-rope-kv-verus; do
   rg -F "${step}"$'\tenv VERUS=/opt/verus/mir-pliron ' \
     "${VERUS_DISPATCH_LOG}" >/dev/null
 done

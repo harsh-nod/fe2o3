@@ -98,7 +98,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(generic.count("run: scripts/ci-local.sh generic-core"), 1)
         self.assertIn("    timeout-minutes: 90\n", generic)
         self.assertIn("    timeout-minutes: 15\n", host)
-        self.assertIn("run: examples/row_softmax_v1/run-verus.sh", job(self.row, "proof-contract"))
+        proof = job(self.row, "proof-contract")
+        for command in ("run: examples/row_softmax_v1/run-verus.sh",
+                        "run: sh examples/qwen3_rope_kv_v1/run-verus.sh"):
+            self.assertEqual(proof.count(command), 1)
+        self.assertNotIn("continue-on-error:", proof)
+        self.assertNotIn("if:", proof)
         for command in (
             "cargo fmt --manifest-path examples/row_softmax_v1/Cargo.toml",
             "run: cargo build --locked -p cargo-fe2o3",

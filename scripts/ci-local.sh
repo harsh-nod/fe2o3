@@ -1131,6 +1131,9 @@ run_verus() {
   run_step mir-pliron-per-compilation-verus \
     env VERUS="${default_verus}" \
       "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
+  run_step qwen3-rope-kv-verus \
+    env VERUS="${default_verus}" \
+      sh "${REPO_ROOT}/examples/qwen3_rope_kv_v1/run-verus.sh"
 }
 
 run_authority_launcher_tests() {
