@@ -658,21 +658,22 @@ fn storage_verifier_single_scalar_all_work_cutoffs_follow_declared_debits() {
             prefix += debit;
         }
         let mut work = Work::new(limit);
-        let mut budget = Budget::new(&mut work, 100_000);
-        budget.reserve_storage(FLOOR).unwrap();
-        let rows = [scalar(ScalarType::U64, 8, 8)];
-        let result = check_storage_layouts_v1(&rows, LIMITS, &mut budget);
-        assert_eq!(budget.work(), prefix);
-        assert_eq!(budget.storage(), FLOOR);
-        match denied {
-            Some(actual) => assert!(
-                matches!(result, Err(StorageLayoutErrorV1::Resource(ResourceError::Work(error))) if error.actual() == actual && error.limit() == limit)
-            ),
-            None => {
-                result.unwrap();
+        {
+            let mut budget = Budget::new(&mut work, 100_000);
+            budget.reserve_storage(FLOOR).unwrap();
+            let rows = [scalar(ScalarType::U64, 8, 8)];
+            let result = check_storage_layouts_v1(&rows, LIMITS, &mut budget);
+            assert_eq!(budget.work(), prefix);
+            assert_eq!(budget.storage(), FLOOR);
+            match denied {
+                Some(actual) => assert!(
+                    matches!(result, Err(StorageLayoutErrorV1::Resource(ResourceError::Work(error))) if error.actual() == actual && error.limit() == limit)
+                ),
+                None => {
+                    result.unwrap();
+                }
             }
         }
-        drop(budget);
         assert_eq!(work.failed_work(), denied);
     }
 }
@@ -710,14 +711,15 @@ fn storage_verifier_prior_ledger_denials_are_not_reset_by_cleanup() {
         FLOOR + expected_headers() + size_of::<u8>() + size_of::<Frame>() + size_of::<usize>();
     let mut work = Work::new(15);
     assert!(work.charge_work(16).is_err());
-    let mut budget = Budget::new(&mut work, peak);
-    budget.reserve_storage(FLOOR).unwrap();
-    assert!(budget.reserve_storage(peak).is_err());
-    let rows = [scalar(ScalarType::U64, 8, 8)];
-    check_storage_layouts_v1(&rows, LIMITS, &mut budget).unwrap();
-    assert_eq!(budget.storage(), FLOOR);
-    assert_eq!(budget.failed_storage(), Some(FLOOR + peak));
-    drop(budget);
+    {
+        let mut budget = Budget::new(&mut work, peak);
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(budget.reserve_storage(peak).is_err());
+        let rows = [scalar(ScalarType::U64, 8, 8)];
+        check_storage_layouts_v1(&rows, LIMITS, &mut budget).unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+        assert_eq!(budget.failed_storage(), Some(FLOOR + peak));
+    }
     assert_eq!(work.failed_work(), Some(16));
 }
 

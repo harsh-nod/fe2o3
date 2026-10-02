@@ -42,13 +42,14 @@ fn replace_without_restoring<'work>(
 ) -> Result<(), LocalFrameErrorV1> {
     let full = budget.storage();
     let slot = budget as *const Budget<'_>;
-    let mut other: Budget<'work> = foreign;
-    other.reserve_storage(full)?;
-    std::mem::swap(budget, &mut other);
-    assert_eq!(budget as *const Budget<'_>, slot);
-    // This HRTB callback cannot export the displaced Budget. Dropping its
-    // wrapper does not grant the classifier access to either Work reference.
-    drop(other);
+    {
+        let mut other: Budget<'work> = foreign;
+        other.reserve_storage(full)?;
+        std::mem::swap(budget, &mut other);
+        assert_eq!(budget as *const Budget<'_>, slot);
+        // This HRTB callback cannot export the displaced Budget. Ending its
+        // wrapper's scope does not grant access to either Work reference.
+    }
     match mode {
         0 => Ok(()),
         1 => Err(refusal(99, None, LocalFrameRefusalReasonV1::Index)),
@@ -130,32 +131,33 @@ fn chain_entry_and_foreign_getter_have_isolated_work_first_boundaries() {
     let header_total = FLOOR + chain_header_bytes();
     for limit in [3, 4] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
-        let mut budget = Budget::new(&mut work, header_total - 1);
-        budget.reserve_storage(FLOOR).unwrap();
-        let mut entered = false;
-        let result =
-            with_checked_local_frame_chain_function_v1(verified, 0, &mut budget, |_, _| {
-                entered = true;
-                Ok(())
-            });
-        assert!(!entered);
-        if limit == 3 {
-            assert!(matches!(result,
-                Err(LocalFrameErrorV1::Resource(ResourceError::Work(error)))
-                    if error.actual() == 4 && error.limit() == 3
-            ));
-            assert_eq!(budget.work(), 0);
-            assert_eq!(budget.failed_storage(), None);
-        } else {
-            assert!(matches!(result,
-                Err(LocalFrameErrorV1::Resource(ResourceError::Storage(error)))
-                    if error.actual() == header_total && error.limit() == header_total - 1
-            ));
-            assert_eq!(budget.work(), 4);
-            assert_eq!(budget.failed_storage(), Some(header_total));
+        {
+            let mut budget = Budget::new(&mut work, header_total - 1);
+            budget.reserve_storage(FLOOR).unwrap();
+            let mut entered = false;
+            let result =
+                with_checked_local_frame_chain_function_v1(verified, 0, &mut budget, |_, _| {
+                    entered = true;
+                    Ok(())
+                });
+            assert!(!entered);
+            if limit == 3 {
+                assert!(matches!(result,
+                    Err(LocalFrameErrorV1::Resource(ResourceError::Work(error)))
+                        if error.actual() == 4 && error.limit() == 3
+                ));
+                assert_eq!(budget.work(), 0);
+                assert_eq!(budget.failed_storage(), None);
+            } else {
+                assert!(matches!(result,
+                    Err(LocalFrameErrorV1::Resource(ResourceError::Storage(error)))
+                        if error.actual() == header_total && error.limit() == header_total - 1
+                ));
+                assert_eq!(budget.work(), 4);
+                assert_eq!(budget.failed_storage(), Some(header_total));
+            }
+            assert_eq!((budget.storage(), budget.peak_storage()), (FLOOR, FLOOR));
         }
-        assert_eq!((budget.storage(), budget.peak_storage()), (FLOOR, FLOOR));
-        drop(budget);
         assert_eq!(work.work(), if limit == 3 { 0 } else { 4 });
         assert_eq!(work.failed_work(), if limit == 3 { Some(4) } else { None });
     }
@@ -167,25 +169,26 @@ fn chain_entry_and_foreign_getter_have_isolated_work_first_boundaries() {
         let original_prefix = budget.work();
         for limit in [4, 5] {
             let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(limit);
-            let mut foreign = Budget::new(&mut foreign_work, full);
-            foreign.reserve_storage(full).unwrap();
-            let result = checked.control(&mut foreign);
-            if limit == 4 {
-                assert!(matches!(result,
-                    Err(LocalFrameErrorV1::Resource(ResourceError::Work(error)))
-                        if error.actual() == 5 && error.limit() == 4
-                ));
-            } else {
-                assert!(matches!(
-                    result,
-                    Err(LocalFrameErrorV1::Resource(ResourceError::Accounting))
-                ));
-            }
             let accepted = if limit == 4 { 0 } else { 5 };
-            assert_eq!(foreign.work(), accepted);
-            assert_eq!((foreign.storage(), foreign.peak_storage()), (full, full));
-            assert_eq!(foreign.failed_storage(), None);
-            drop(foreign);
+            {
+                let mut foreign = Budget::new(&mut foreign_work, full);
+                foreign.reserve_storage(full).unwrap();
+                let result = checked.control(&mut foreign);
+                if limit == 4 {
+                    assert!(matches!(result,
+                        Err(LocalFrameErrorV1::Resource(ResourceError::Work(error)))
+                            if error.actual() == 5 && error.limit() == 4
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(LocalFrameErrorV1::Resource(ResourceError::Accounting))
+                    ));
+                }
+                assert_eq!(foreign.work(), accepted);
+                assert_eq!((foreign.storage(), foreign.peak_storage()), (full, full));
+                assert_eq!(foreign.failed_storage(), None);
+            }
             assert_eq!(foreign_work.work(), accepted);
             assert_eq!(
                 foreign_work.failed_work(),
