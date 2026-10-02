@@ -210,10 +210,9 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092",
     "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
 )];
-// The complete workspace tree includes the reviewed generic typed-entry changes
-// in 54585b104 and nested fixture lockfile synchronization in ce7bed431.
+// Pin the complete reviewed crate, including fixture sources and lockfiles.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "5ace7cfc4e877611a1e1f28ff3b23633ab771c0baf66a39055479c1e724cc65b";
+    "8571bfcc59beeb4f8d665059fd755883063984f849c8bf220e5082fa241a82a1";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
