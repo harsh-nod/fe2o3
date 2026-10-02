@@ -32,6 +32,8 @@ fn constructed_public_sdma_allocation_returns_native_public_owner_and_refunds() 
         );
         assert_eq!(buffer.requested_bytes(), bytes);
         assert_eq!(buffer.physical_bytes(), bytes.next_multiple_of(4096));
+        assert!(!buffer.initialized_range_is_known(0, bytes));
+        assert!(buffer.certified_full_host_content_sha256(bytes).is_none());
         assert!(buffer.belongs_to(f.parent.key));
         assert_eq!(buffer.pool_generation(), 1);
         assert!(f.custody.is_none() && !f.parent.poisoned);
@@ -62,6 +64,36 @@ fn constructed_public_sdma_allocation_returns_native_public_owner_and_refunds() 
         f.release(buffer);
         f.shutdown();
     }
+}
+
+#[test]
+fn constructed_public_sdma_allocation_preserves_private_public_private_profiles() {
+    let mut f = AllocationParent::new();
+    let mut buffers = Vec::new();
+    for public in [false, true, false] {
+        let buffer = if public {
+            allocate_public(&mut f, 17).unwrap()
+        } else {
+            f.allocate(false, 17).unwrap()
+        };
+        let flags = if public {
+            fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC
+        } else {
+            fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL
+        };
+        assert_eq!(buffer.device_allocation_flags_v1(), Some(flags.bits()));
+        assert_eq!(buffer.requested_bytes(), 17);
+        assert_eq!(buffer.physical_bytes(), 4096);
+        assert!(!buffer.initialized_range_is_known(0, 17));
+        assert!(buffer.certified_full_host_content_sha256(17).is_none());
+        assert!(buffer.belongs_to(f.parent.key));
+        buffers.push(buffer);
+    }
+    assert_eq!(f.outstanding, 3);
+    for buffer in buffers {
+        f.release(buffer);
+    }
+    f.shutdown();
 }
 
 #[test]

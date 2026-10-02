@@ -34,10 +34,14 @@ impl DetachedCertificate {
 
 pub(super) struct TransferRoot {
     inputs: [Option<Gfx942FixedDispatchDataV1>; 2],
-    buffers: [Option<ComputeXgmiBufferV1>; 2],
-    rosters: [Option<Box<[u32]>>; 2],
     outputs: [Option<Gfx942FixedDispatchDataV1>; 2],
     certificates: [DetachedCertificate; 2],
+    core: TransferCore,
+}
+
+pub(super) struct TransferCore {
+    pub(super) buffers: [Option<ComputeXgmiBufferV1>; 2],
+    pub(super) rosters: [Option<Box<[u32]>>; 2],
     copy: ComputeXgmiCopyCustodyV1,
     progress: Progress,
     bytes: u32,
@@ -97,16 +101,42 @@ impl TransferRoot {
             let DispatchDataInputStorageV1::Device(lease) = data.into_parts().storage else {
                 std::process::abort();
             };
-            self.buffers[index] = Some(ComputeXgmiBufferV1::new(
+            self.core.buffers[index] = Some(ComputeXgmiBufferV1::new(
                 lease,
-                self.rosters[index]
+                self.core.rosters[index]
                     .take()
                     .unwrap_or_else(|| std::process::abort()),
             ));
         }
     }
 
-    fn run(
+    fn prepare_outputs(&mut self) {
+        for index in 0..2 {
+            let local = self.core.buffers[index]
+                .as_mut()
+                .and_then(ComputeXgmiBufferV1::take_local)
+                .unwrap_or_else(|| std::process::abort());
+            // A complete copy establishes initialization, not an authenticated digest.
+            self.outputs[index] = Some(Gfx942FixedDispatchDataV1::initialized_storage(local));
+        }
+    }
+}
+
+impl TransferCore {
+    pub(super) fn new(roster: [u32; 2], bytes: u32) -> Self {
+        Self {
+            buffers: [None, None],
+            rosters: [
+                Some(Vec::from(roster).into_boxed_slice()),
+                Some(Vec::from(roster).into_boxed_slice()),
+            ],
+            copy: Default::default(),
+            progress: Default::default(),
+            bytes,
+        }
+    }
+
+    pub(super) fn run(
         &mut self,
         source: &mut SharedGttMemorySessionV1,
         destination: &mut SharedGttMemorySessionV1,
@@ -192,17 +222,6 @@ impl TransferRoot {
             Ok(())
         })
     }
-
-    fn prepare_outputs(&mut self) {
-        for index in 0..2 {
-            let local = self.buffers[index]
-                .as_mut()
-                .and_then(ComputeXgmiBufferV1::take_local)
-                .unwrap_or_else(|| std::process::abort());
-            // A complete copy establishes initialization, not an authenticated digest.
-            self.outputs[index] = Some(Gfx942FixedDispatchDataV1::initialized_storage(local));
-        }
-    }
 }
 
 fn require_data(
@@ -248,7 +267,10 @@ fn require_data(
     Ok(data.layout().requested_bytes())
 }
 
-fn exact_extent(source: u64, destination: u64) -> Result<u32, ComputeAqlQueueSessionErrorV1> {
+pub(super) fn exact_extent(
+    source: u64,
+    destination: u64,
+) -> Result<u32, ComputeAqlQueueSessionErrorV1> {
     if source == 0
         || source != destination
         || source > u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)
@@ -281,6 +303,7 @@ impl Gfx942ComputeXgmiQueueV1 {
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.transfer.is_some()
+            || self.persistent_transfer.is_some()
             || !attachment_matches(source, destination, self.attachment)
             || self.queue.route() != self.attachment.route
             || self
@@ -318,19 +341,12 @@ impl Gfx942ComputeXgmiQueueV1 {
             DetachedCertificate::capture(destination, destination_ordinal),
         ];
         let roster = self.attachment.route.canonical_mapping_gpu_ids();
-        let rosters = [
-            Some(Vec::from(roster).into_boxed_slice()),
-            Some(Vec::from(roster).into_boxed_slice()),
-        ];
+        let core = TransferCore::new(roster, bytes);
         self.transfer = Some(TransferRoot {
             inputs: [source_data.take(), destination_data.take()],
-            buffers: [None, None],
-            rosters,
             outputs: [None, None],
             certificates,
-            copy: Default::default(),
-            progress: Default::default(),
-            bytes,
+            core,
         });
         let root = self
             .transfer
@@ -345,7 +361,8 @@ impl Gfx942ComputeXgmiQueueV1 {
                 |sessions| {
                     root.prepare();
                     let (source, destination) = sessions.memories();
-                    root.run(source, destination, &mut self.queue, timeout)
+                    root.core
+                        .run(source, destination, &mut self.queue, timeout)
                         .map_err(|error| Failure {
                             error,
                             terminal: true,
@@ -502,16 +519,12 @@ mod tests {
             .map(|input| input.as_ref().unwrap().sdma_storage_identity());
         let mut root = TransferRoot {
             inputs,
-            buffers: [None, None],
-            rosters: [Some(Box::from([7, 9])), Some(Box::from([7, 9]))],
             outputs: [None, None],
             certificates: [
                 DetachedCertificate::capture(&session, 0),
                 DetachedCertificate::capture(&session, 0),
             ],
-            copy: Default::default(),
-            progress: Default::default(),
-            bytes: 4096,
+            core: TransferCore::new([7, 9], 4096),
         };
         root.prepare();
         assert!(root.inputs.iter().all(Option::is_none));

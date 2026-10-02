@@ -158,27 +158,52 @@ allocation creation. Ordinary constructors retain private allocations, and
 HostVisible behavior is unchanged. Pooled checkout matches exact allocation
 flags as well as kind, extent and alignment; private and PUBLIC leases cannot
 be substituted or relabeled. Both classes use the existing shared accounting
-and capacity classification. This constructor still uses host-staged peer
-copies: PUBLIC backing alone is not native transfer authority.
+and capacity classification. This constructor also admits directional XGMI routes
+from the checked devices before their compute sessions consume those admissions.
+Ordinary constructors do not enable this route.
 
-## Next Dependencies
+## Persistent Native Route
 
 R57 DeviceLocal launches use persistent SDMA allocations, not recycled
-fixed-dispatch DATA. Runtime native peer routing therefore still needs a
-persistent-owner adapter. It must preserve directional attachment, allocation
-identity and pool generation, copy only the full logical extent, and leave each
-pooled physical extent unchanged. Producer release alone does not retire all
-retained compute caches; both endpoints must release those references before
-mapping transitions. The first route can use an ephemeral peer queue inside
-the existing cooperative-copy submission, retiring it before publishing success.
-Errors after native effects must retain both owners and poison both children,
-not fall back to staging.
+fixed-dispatch DATA. The new
+`Gfx942ComputeXgmiQueueV1::copy_persistent_data_full_extent_with_peer_v1`
+retains the original persistent owners, directional attachments, identities and
+pool generations. It copies equal complete logical extents up to `0x003f_ffe0`
+bytes, while preserving independently sized physical pool extents. Both buffers
+must already be fully initialized PUBLIC storage with retired use frontiers.
+The shared rooted mapping/copy/remapping sequence restores both VM models before
+restoring either persistent output. This is not a demote/re-promote conversion.
 
-The planned native witness runs `A+B -> C` on each GPU, releases both producers,
+The opt-in runtime selects this transport only for ordinary, full-range,
+single-packet DeviceLocal copies between distinct children whose persistent
+storage is already initialized and normalizable at admission. Submission preserves
+the existing stream, dependency, event and allocation-retain indexes and reserves
+restoration shells, but no host payload staging or SDMA scratch. Uninitialized,
+demoted, in-flight, partial, directed and larger copies retain host staging.
+Poll and wait do not advance a native copy.
+
+Once dependencies succeed, both children must be physically quiescent. Existing
+cache-release operations retire all retained compute references; unrelated dirty
+materialized caches may be reconciled by those existing release operations.
+The selected endpoints cannot have materialized dirty extents. Dirty persistent
+SDMA shadows are allowed and are not downloaded for the transfer. After checking
+both normalized storage slots, the submission roots both owners, creates an
+ephemeral peer queue, copies, retires the queue and restores both allocations.
+Success is published only after restoration. Any uncertain error or unwind
+poisons both children and retains the occupied root, without staged fallback.
+
+This development profile currently performs the native step synchronously, with
+a 30-second completion wait. A drain deadline is checked between steps, not inside
+this wait. It does not yet establish asynchronous native peer-copy progress or
+hard deadline behavior. The qualification-only completion counter increases only
+after an actual native transfer, queue retirement and both restorations succeed;
+scripted CPU execution does not increase it.
+
+The new `gfx942-runtime-compute-xgmi-smoke` witness runs `A+B -> C` on each GPU, releases both producers,
 overwrites the destination's existing C allocation with a full-buffer `-1.0`
 sentinel, and verifies that sentinel before the peer copy. Copying the source C
 back into that same destination allocation must restore every expected byte;
-the destination then runs its existing `C+B -> D` second phase. This preserves
+both children then run their existing `C+B -> D` second phase. This preserves
 the authority's exact local C/B identities while ensuring a no-op copy fails.
 Transfer completion must dirty the destination shadow, clear both its content
 digest and last-host-write evidence, and restore initialized native custody.
@@ -187,8 +212,36 @@ qualification constructor supplies PUBLIC backing explicitly. The direct
 fixed-dispatch initializer was already PUBLIC. Neither path retags private
 allocations.
 
-Async submission custody, runtime routing and dependency readiness follow the
-typed data transition; host-staged transfers remain the fallback.
+The witness checks the native completion counter changes from zero to one and
+performs 13 full-buffer readbacks before explicit logical and native shutdown.
+It is implemented but has not run on GPUs. The latest SSH attempt failed hostname
+resolution before executing a remote command; no current device pair is admitted.
+
+```sh
+cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
+  --features hardware-qualification --example gfx942-runtime-compute-xgmi-smoke \
+  -- 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
+```
+
+Run only after fresh shared-host endpoint admission. This command is a correctness
+witness, not a performance benchmark or an independently verified machine-code
+refinement. No new formal-verification claim follows from existing source guards.
+
+Final-source CPU testing passes 12 scripted runtime route tests, two example
+tests, and the focused KFD initialization, transfer, paired-restoration and
+allocation-policy regressions. The full runtime run records 1,941 passes,
+three unchanged baseline socket-inspection permission failures and 32 ignores;
+the broad KFD suite remains incomplete. All 32 source-control commands pass,
+with 76 associated executable proof files unchanged. Strict combined Clippy
+passes and the runnable witness builds; neither is a hardware result. The
+[persistent runtime CPU packet](evidence/dev-compute-xgmi-persistent-cpu-2026-10-02/README.md)
+records exact commands, rosters, executable identities and coverage limits.
+
+## Next Dependencies
+
+Native hardware qualification, complete composed native fault coverage,
+asynchronous transfer custody, persistent peer mappings and multi-packet copies
+remain open. The current route does not qualify a general native runtime pipeline.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

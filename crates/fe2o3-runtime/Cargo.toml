@@ -31,6 +31,10 @@ required-features = ["hardware-diagnostic"]
 name = "gfx942-runtime-multi-device-smoke"
 required-features = ["hardware-qualification"]
 
+[[example]]
+name = "gfx942-runtime-compute-xgmi-smoke"
+required-features = ["hardware-qualification"]
+
 [[bin]]
 name = "fe2o3-runtime-kfd-worker-v5-qualification"
 path = "src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs"

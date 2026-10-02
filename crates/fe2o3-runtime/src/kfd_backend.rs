@@ -124,6 +124,7 @@ use compute_peer_gate::{
 };
 mod cooperative_sdma;
 use cooperative_sdma::CooperativeSdmaLeafV1;
+mod compute_xgmi;
 mod cooperative_directed;
 mod native_reconcile;
 use native_reconcile::NativeReconciliationV1;
@@ -6972,6 +6973,7 @@ enum CooperativeCopyPhaseV1 {
 #[derive(Debug)]
 struct CooperativeCopySubmissionV1 {
     directed: Option<cooperative_directed::Root>,
+    compute_xgmi: Option<Box<compute_xgmi::Root>>,
     stream: u64,
     prior_stream_submission: Option<u64>,
     source: RoutedHandleV1,
@@ -6989,6 +6991,14 @@ struct CooperativeCopySubmissionV1 {
 }
 
 impl CooperativeCopySubmissionV1 {
+    fn staging_byte_len(&self) -> u64 {
+        if self.compute_xgmi.is_some() {
+            0
+        } else {
+            self.source_region.byte_len
+        }
+    }
+
     const fn status(&self) -> BackendPollV1 {
         match self.phase {
             CooperativeCopyPhaseV1::Succeeded => BackendPollV1::Succeeded,
@@ -7018,15 +7028,18 @@ impl CooperativeCopySubmissionV1 {
 /// queue, satisfying KFD's process-wide no-queue XNACK barrier. Dispatches on
 /// different children can execute independently. Live same-device copies use
 /// the selected child's native SDMA path. Peer copies use a bounded,
-/// explicitly flush-driven host staging state machine; poll and deadline wait
-/// only observe stored state. Native XGMI is exposed only by
-/// [`KfdNativeXgmiRuntimeBackendV1`]. Mixed native/cooperative work is rejected
+/// explicitly flush-driven state machine; poll and deadline wait only observe
+/// stored state. The peer-visible qualification constructor enables bounded
+/// native XGMI transfers of complete persistent allocations; other copies use
+/// host staging. Mixed native/cooperative work is rejected
 /// while either domain remains live on one logical stream.
 #[must_use = "multi-device KFD backends must remain owned through quiescence"]
 pub struct KfdMultiDeviceRuntimeBackendV1 {
     children: Vec<KfdRuntimeBackendV1>,
     device_children: HashMap<u64, usize>,
     request_policy: multi_admission::MultiRequestPolicyV1,
+    compute_xgmi_routes: HashMap<(usize, usize), compute_xgmi::Route>,
+    completed_compute_xgmi_copies: u64,
     terminal: bool,
     next_handle: u64,
     streams: HashMap<u64, RoutedHandleV1>,
@@ -7963,6 +7976,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             children,
             device_children,
             request_policy,
+            compute_xgmi_routes: HashMap::new(),
+            completed_compute_xgmi_copies: 0,
             terminal: false,
             next_handle: 1,
             streams: HashMap::new(),
@@ -8385,11 +8400,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     .is_none_or(|leaf| leaf.is_quiescent(&self.children[leaf.child()])),
                 "cooperative SDMA custody remains live"
             );
+            assert!(
+                copy.compute_xgmi
+                    .as_ref()
+                    .is_none_or(|root| root.is_quiescent()),
+                "compute-XGMI custody remains live"
+            );
             copy.phase = phase;
             let staging = core::mem::take(&mut copy.staging);
             let released_staging_bytes = u64::try_from(staging.len())
                 .expect("cooperative staging length was admitted as u64");
-            debug_assert_eq!(released_staging_bytes, copy.source_region.byte_len);
+            debug_assert_eq!(released_staging_bytes, copy.staging_byte_len());
             let released_scratch = if copy.sdma_leaf.is_none() {
                 core::mem::take(&mut copy.scratch_byte_len)
             } else {
@@ -8467,10 +8488,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             assert!(copy.dependency_cursor <= copy.dependencies.len());
             assert_eq!(
                 u64::try_from(copy.staging.len()).unwrap(),
-                copy.source_region.byte_len
+                copy.staging_byte_len()
             );
             expected_staging_bytes = expected_staging_bytes
-                .checked_add(copy.source_region.byte_len)
+                .checked_add(copy.staging_byte_len())
                 .and_then(|total| total.checked_add(copy.scratch_byte_len))
                 .unwrap();
             expected_allocation_owners
@@ -8639,6 +8660,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.check_directed_if_present_v1(submission)?;
+        let peer_endpoints = self.compute_xgmi_endpoints_v1(submission);
         let endpoint = match self.submissions.get(&submission) {
             Some(RoutedSubmissionV1::CooperativeCopy(copy)) => match copy.phase {
                 CooperativeCopyPhaseV1::Read => Some(copy.source.child),
@@ -8653,13 +8675,18 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         match result {
             Ok(result @ Err(RuntimeBackendFailureV1::Terminal(_))) => {
                 self.terminal = true;
+                if let Some(endpoints) = peer_endpoints {
+                    self.poison_compute_xgmi_children_v1(endpoints);
+                }
                 result
             }
             Ok(result) => result,
             Err(payload) => {
                 self.terminal = true;
                 sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
-                    if let Some(child) = endpoint {
+                    if let Some(endpoints) = peer_endpoints {
+                        self.poison_compute_xgmi_children_v1(endpoints);
+                    } else if let Some(child) = endpoint {
                         self.children[child].poison_terminal_v1();
                     }
                 })
@@ -8685,6 +8712,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 ));
             }
         };
+
+        if phase == CooperativeCopyPhaseV1::Read
+            && self.compute_xgmi_endpoints_v1(submission).is_some()
+        {
+            return self.progress_compute_xgmi_v1(submission);
+        }
 
         if matches!(
             phase,
@@ -9089,10 +9122,21 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
 
-        let scratch_byte_len = if [source_route, destination_route].into_iter().any(|route| {
-            let child = &self.children[route.child];
-            child.native_available
-        }) {
+        let compute_xgmi = if directed.is_none() {
+            self.prepare_compute_xgmi_v1(source_route, source, destination_route, destination)?
+        } else {
+            None
+        };
+        let staging_byte_len = if compute_xgmi.is_some() {
+            0
+        } else {
+            source.byte_len
+        };
+        let scratch_byte_len = if compute_xgmi.is_none()
+            && [source_route, destination_route].into_iter().any(|route| {
+                let child = &self.children[route.child];
+                child.native_available
+            }) {
             source.byte_len.min(COOPERATIVE_COPY_CHUNK_BYTES_V1 as u64)
         } else {
             0
@@ -9100,7 +9144,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
         let next_cooperative_staging_bytes = self
             .cooperative_staging_bytes
-            .checked_add(source.byte_len)
+            .checked_add(staging_byte_len)
             .and_then(|total| total.checked_add(scratch_byte_len))
             .filter(|total| *total <= self.cooperative_staging_limit_bytes)
             .ok_or_else(|| {
@@ -9209,7 +9253,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             &mut self.submissions,
             "multi-device copy submission route allocation failed",
         )?;
-        let staging = try_zeroed_staging_v1(len)?;
+        let staging = try_zeroed_staging_v1(if compute_xgmi.is_some() { 0 } else { len })?;
         let copy_shell = try_uninit_box_v1().map_err(|()| {
             KfdRuntimeBackendV1::capacity("cooperative copy owner allocation failed")
         })?;
@@ -9266,6 +9310,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 copy_shell,
                 CooperativeCopySubmissionV1 {
                     directed,
+                    compute_xgmi,
                     stream,
                     prior_stream_submission: stream_tail,
                     source: source_route,

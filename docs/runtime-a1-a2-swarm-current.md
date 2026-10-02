@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-Local qualification snapshot: 2026-10-01 UTC.
+Local qualification snapshot: 2026-10-02 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 2026-10-01: the issue remained Open. Both runtime branch refs now include signed
 commit `0dcf69d36`: concrete producer-journal composition, the shared native
@@ -11,8 +11,9 @@ ingress, and repaired source-guard bindings. Earlier combined CPU regression
 and matched wait-cadence measurements remain scoped to their recorded sources;
 they are not qualification of this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
-records the accepted components without closing any milestone. GitHub and MI300X
-SSH access have recovered; access alone does not qualify a hardware run.
+records the accepted components without closing any milestone. GitHub access
+has recovered. The latest MI300X SSH attempts fail at hostname resolution,
+before remote execution; no current GPU pair is admitted.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -21,7 +22,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Current priority, incomplete | Qualify multi-device compute with staged transfers first; unified compute/XGMI, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A3: local multi-GPU | Current priority, incomplete | Qualify the implemented compute/XGMI route on two GPUs; asynchronous peer progress, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -39,15 +40,16 @@ campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Qualify the existing compute router on two currently idle MI300X devices:
-   publish exact typed vecadd on both before waiting, verify both outputs,
-   copy computed bytes between devices, verify the complete destination and
-   explicitly retire logical and native resources.
-2. Exercise retained multi-device async group drain and shutdown, including
+1. Qualify the implemented compute/XGMI pipeline on two freshly admitted free
+   MI300X devices: produce on both, overwrite the destination with a distinct
+   sentinel, copy natively into that same allocation, consume on both devices,
+   verify every byte and explicitly retire logical and native resources.
+2. Complete composed native fault tests and asynchronous peer progress, then
+   exercise retained multi-device async group drain and shutdown, including
    pending, failed and uncertain outcomes. Reuse the existing current-thread
    owner and drain API; do not create a second orchestration interface.
-3. Compose compute and native XGMI under compatible VM/session ownership, then
-   qualify dependency-driven peer-to-compute pipelines and additional devices.
+3. Qualify dependency-driven peer-to-compute pipelines and additional device
+   pairs, without relaxing the existing exact launch authorities.
 4. Add real workload partitioning, partial-failure campaigns and matched scaling
    measurements only after the complete-output execution path passes.
 
@@ -83,10 +85,9 @@ The next implementation now provides a bounded synchronous native transfer of
 fully initialized, equal-extent PUBLIC fixed-dispatch DATA within those compute
 VMs, plus explicit PUBLIC SDMA allocation/pooling and an opt-in R57 peer
 qualification constructor. Ordinary allocation defaults and exact launch
-authorities are unchanged. Runtime-produced persistent SDMA buffers still need
-their own adapter and cooperative-copy routing; this is not yet a working native
-runtime peer pipeline. The next adapter must preserve logical versus pooled
-physical extents and retire retained compute references on both children.
+authorities are unchanged. That checkpoint (`f97257ed8`, now pushed to both
+repositories) did not include the persistent SDMA adapter or runtime native
+peer-copy routing. Its focused checks do not qualify a native runtime pipeline.
 All 32 source-CI commands pass on this increment, with hash metadata updated
 and 75 associated executable proof files unchanged. No new formal verification
 claim follows. Final-source focused checks pass 19 compute-XGMI, seven paired
@@ -99,6 +100,37 @@ full runtime suite is not qualified in this environment. The
 keeps these outcomes distinct from incomplete native and broad KFD acceptance.
 The latest read-only hardware attempt failed at SSH hostname resolution before
 any remote command; no workload or scratch was created.
+
+The current increment implements that persistent adapter and connects it to the
+existing cooperative-copy ledger in the opt-in peer qualification profile. It
+preserves original owners, generations and independent physical pool extents;
+restores both VM models before returning either persistent owner; and publishes
+runtime success only after peer queue retirement and both allocation restorations.
+Uninitialized, demoted, in-flight, partial, directed and larger copies retain
+host staging. A native transfer reserves no host payload staging. Quiescent cache
+release may still reconcile unrelated materialized outputs through existing code.
+
+The native step is synchronous inside flush/drain with a 30-second completion
+wait, not asynchronous peer-copy execution or hard drain-deadline support. The
+new two-GPU smoke checks a native completion counter, sentinel replacement,
+unchanged source, both independent R57 consumer launches and explicit cleanup.
+The witness is implemented but has not executed on hardware. Composed native
+mapping/publication fault coverage, asynchronous custody, multi-packet transfers,
+additional device pairs and matched performance remain open. Existing proof
+bindings do not verify this new native route. A3 and every other milestone remain
+incomplete.
+
+Final-source CPU checks pass all 12 new runtime route tests and both example
+tests. The full runtime run has 1,941 passes, the same three baseline
+socket-inspection permission failures and 32 existing ignores; it is not a
+full-suite pass. Focused KFD runs pass 63 initialization, 25 compute-XGMI,
+seven paired-restoration, six PUBLIC-SDMA and one ordinary allocation test.
+These overlapping filters do not replace a full KFD run. All 32 source-control
+commands pass with 76 associated executable proof files unchanged. Strict
+combined all-feature Clippy passes, and the runnable GPU witness builds.
+The no-default check passes with one feature-specific dead-code warning. The
+[persistent runtime CPU packet](evidence/dev-compute-xgmi-persistent-cpu-2026-10-02/README.md)
+retains the earlier rejected guard/formatting checks and the corrected outcomes.
 
 ## Latest Qualification
 

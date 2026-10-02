@@ -5,6 +5,8 @@ use super::*;
 use crate::sdma::{Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1};
 use crate::topology::Gfx942XgmiRouteV1;
 
+#[path = "compute_xgmi/persistent.rs"]
+mod persistent;
 #[path = "compute_xgmi/transfer.rs"]
 mod transfer;
 
@@ -66,11 +68,12 @@ pub struct Gfx942ComputeXgmiQueueV1 {
     attachment: Attachment,
     queue: Gfx942NativeXgmiSdmaQueueV1,
     transfer: Option<transfer::TransferRoot>,
+    persistent_transfer: Option<Box<persistent::TransferRoot>>,
 }
 
 impl Drop for Gfx942ComputeXgmiQueueV1 {
     fn drop(&mut self) {
-        if self.transfer.is_some() {
+        if self.transfer.is_some() || self.persistent_transfer.is_some() {
             std::process::abort();
         }
     }
@@ -360,6 +363,7 @@ impl ComputeAqlQueueSessionV1 {
                     attachment,
                     queue,
                     transfer: None,
+                    persistent_transfer: None,
                 })
             }
             Err(failure) => {
@@ -379,6 +383,7 @@ impl ComputeAqlQueueSessionV1 {
         queue: &mut Gfx942ComputeXgmiQueueV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if queue.transfer.is_some()
+            || queue.persistent_transfer.is_some()
             || !attachment_matches(self, peer, queue.attachment)
             || queue.queue.route() != queue.attachment.route
             || queue

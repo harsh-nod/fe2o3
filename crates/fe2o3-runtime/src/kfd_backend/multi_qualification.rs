@@ -101,12 +101,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     /// This opt-in selects genuine KFD PUBLIC allocations before any child
     /// queue or allocation exists. Private and PUBLIC cached buffers remain
     /// separate; HostVisible storage and the existing launch policies are
-    /// unchanged. PUBLIC backing is a prerequisite, not authority, for native
-    /// peer transfer: this constructor does not enable XGMI copy routing.
+    /// unchanged. Equal complete persistent allocations within one native copy
+    /// packet use XGMI after dependency resolution and endpoint quiescence.
+    /// Other copies retain the ordinary bounded host-staging path.
+    /// This development profile executes each native transfer synchronously in
+    /// flush/drain, with a 30-second completion wait. Drain checks its deadline
+    /// between steps, not within this transfer; poll and wait remain observers.
     pub fn open_gfx942_r57_n3_peer_qualification_v2(
         unique_ids: &[u64],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let mut backend = Self::open_gfx942_r57_n3_qualification_v2(unique_ids)?;
+        backend.admit_compute_xgmi_routes_v1()?;
         for child in &mut backend.children {
             child.peer_visible_device_allocations = true;
         }

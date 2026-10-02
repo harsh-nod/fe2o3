@@ -34,8 +34,8 @@ PROOF_PINS = {
     BODY: "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
 }
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "fc65ba04e753a104dc62c2a1a0f745829a9b43fd548075a38ca5236e69f8c1e8",
-    "check-producer-input-fold.py": "16520f6dd281fc985914326a7e8cdd12157e490dcc34d3ab957bf177d669a0cb",
+    "check-producer-input-validate.py": "2ea590120cbdaa88d2369f21bd63bec1ebad8aac01f3e1d2f877bc680cc4fc7b",
+    "check-producer-input-fold.py": "e62ba0cdf8914b133d8408fb496b9a0949cbec087dbec5ab069c853d9bc1c1bd",
 }
 EXPECTED_VERIFIED = None  # Changed closure: predecessor 64 is not inherited.
 MUTANT_COUNT = 21
@@ -108,7 +108,7 @@ def audit(sources):
     schemas = {path: sources[path] for path in leaf.DECLARATIONS}
     need(set(sources) == set(implementation) | set(schemas) | set(FILES),
          "exact complete runtime/schema and composition source roster")
-    need(len(implementation) == 333 and len(schemas) == 5
+    need(len(implementation) == 335 and len(schemas) == 5
          and leaf.tree_hash({**implementation, **schemas}) == leaf.SOURCE_TREE_SHA,
          "exact complete native/schema binding")
     need(all(sha(sources[path]) == digest for path, digest in PROOF_PINS.items()),

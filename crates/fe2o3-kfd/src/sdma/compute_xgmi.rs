@@ -2,6 +2,63 @@
 
 use super::*;
 
+impl Gfx942SdmaBufferV1 {
+    #[cfg(test)]
+    pub(crate) fn compute_xgmi_fixture_v1(
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        owner: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        initialized_prefix: u64,
+    ) -> Self {
+        Self {
+            storage: Gfx942SdmaBufferStorageV1::Device(lease),
+            owner,
+            pool_generation: generation,
+            logical_bytes,
+            host_content_certificate: None,
+            initialized_prefix,
+        }
+    }
+
+    pub(crate) fn restore_compute_xgmi_local_v1(
+        local: &mut Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>,
+        metadata: &mut Option<Gfx942SdmaBufferCleanupMetadataV1>,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        let lease = local.as_ref().ok_or(Gfx942SdmaErrorV1::Contract(
+            "missing persistent compute-XGMI local mapping",
+        ))?;
+        let retained = metadata.as_ref().ok_or(Gfx942SdmaErrorV1::Contract(
+            "missing persistent compute-XGMI buffer metadata",
+        ))?;
+        if retained.identity != Gfx942SdmaBufferStorageIdentityV1::Device(lease.storage_identity())
+            || retained.physical_bytes != lease.layout().requested_bytes()
+            || retained.physical_alignment != lease.layout().alignment()
+            || retained.logical_bytes == 0
+            || retained.logical_bytes > retained.physical_bytes
+            || retained.initialized_prefix != retained.logical_bytes
+            || retained.host_content_certificate.is_some()
+            || lease.layout().uapi_flags()
+                != fe2o3_kfd_uapi::KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "persistent compute-XGMI buffer restoration mismatch",
+            ));
+        }
+        let retained = metadata.take().unwrap_or_else(|| std::process::abort());
+        Ok(Self {
+            storage: Gfx942SdmaBufferStorageV1::Device(
+                local.take().unwrap_or_else(|| std::process::abort()),
+            ),
+            owner: retained.owner,
+            pool_generation: retained.pool_generation,
+            logical_bytes: retained.logical_bytes,
+            host_content_certificate: None,
+            initialized_prefix: retained.initialized_prefix,
+        })
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ComputeXgmiCopyCustodyV1 {
     pub(crate) ticket: Option<Gfx942SdmaCopyTicketV1>,

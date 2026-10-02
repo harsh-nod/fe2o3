@@ -875,7 +875,23 @@ fn device_allocation_insertion_production_wiring_preserves_uninitialized_custody
         .find("self.lease = AllocationLeaseV1::Mapped(lease.retag())")
         .unwrap();
     assert!(allocate < root && root < map && map < promote);
-    assert!(source.contains("KfdAllocMemoryFlags::DEVICE_LOCAL,"));
+    let constructor = source
+        .split("pub(super) fn new() -> Self {")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(constructor.contains("flags: KfdAllocMemoryFlags::DEVICE_LOCAL,"));
+    let public_constructor = source
+        .split("pub(super) fn new_public_v1() -> Self {")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(public_constructor.contains("flags: KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,"));
+    assert!(public_constructor.contains("..Self::new()"));
     assert!(source.contains("&mut self.native_started"));
     assert!(source.contains("engine.terminal_device_initialization.is_some()"));
     assert!(source.contains(".retain_allocation(self)"));
@@ -906,6 +922,49 @@ fn device_allocation_insertion_production_wiring_preserves_uninitialized_custody
     assert!(settled.contains("DataInsertionIndexV1::HoleOrAppend"));
     assert!(settled.contains("(requested_bytes, alignment)"));
     let shared = include_str!("../../shared_memory.rs");
+    let custody = shared
+        .split("impl DeviceAllocationCustodyV1 {")
+        .nth(1)
+        .unwrap();
+    let wrapper = custody
+        .split("pub(crate) fn new() -> Self {")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(wrapper.contains("Self(device_allocation::DeviceAllocationCustodyV1::new())"));
+    let public_wrapper = custody
+        .split("pub(crate) fn new_public_v1() -> Self {")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(
+        public_wrapper
+            .contains("Self(device_allocation::DeviceAllocationCustodyV1::new_public_v1())")
+    );
+    let sdma = include_str!("../sdma_allocation.rs")
+        .split("impl SdmaAllocationCustodyV1 {")
+        .nth(1)
+        .unwrap();
+    let private_request = sdma
+        .split("SdmaAllocationRequestV1::Device { bytes, alignment } => Self::Device {")
+        .nth(1)
+        .unwrap()
+        .split("\n            }")
+        .next()
+        .unwrap();
+    assert!(private_request.contains("allocation: DeviceAllocationCustodyV1::new(),"));
+    let public_request = sdma
+        .split("SdmaAllocationRequestV1::PublicDevice { bytes, alignment } => Self::Device {")
+        .nth(1)
+        .unwrap()
+        .split("\n            }")
+        .next()
+        .unwrap();
+    assert!(public_request.contains("allocation: DeviceAllocationCustodyV1::new_public_v1(),"));
     for (name, signature, marker) in [
         (
             "prepare_device_allocation_in_place",
@@ -942,13 +1001,27 @@ fn device_allocation_insertion_production_wiring_preserves_uninitialized_custody
             .unwrap()
             < body.find("settled.into_result()").unwrap()
     );
+    for selected in [
+        constructor,
+        wrapper,
+        private_request,
+        adapter,
+        settled,
+        body,
+    ] {
+        for forbidden in ["DEVICE_LOCAL_PUBLIC", "new_public_v1", "PublicDevice"] {
+            assert!(
+                !selected.contains(forbidden),
+                "ordinary allocation-only path introduced {forbidden}"
+            );
+        }
+    }
     for selected in [source, adapter, body] {
         for forbidden in [
             ".map_device_memory(",
             "with_live_queue_memory_model",
             "initialize_v1",
             "copy_from_slice",
-            "DEVICE_LOCAL_PUBLIC",
             "Box::new",
             "to_vec()",
             "DeviceInitializedContent",

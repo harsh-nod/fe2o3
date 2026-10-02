@@ -1333,6 +1333,50 @@ impl Gfx942PersistentDeviceAllocationV1 {
         Gfx942PersistentUseErrorV1,
     > {
         use crate::persistent_compute::Gfx942PersistentComputeStorageIneligibilityV1 as Ineligible;
+        let full = self.preflight_initialized_logical_storage(
+            queue,
+            generation,
+            logical_bytes,
+            physical_bytes,
+        )?;
+        // Scope and custody must be valid before any clean fallback is offered.
+        Ok(if logical_bytes != physical_bytes {
+            Some(Ineligible::PartialExtent)
+        } else if !full {
+            Some(Ineligible::IncompleteInitialization)
+        } else {
+            None
+        })
+    }
+
+    pub(crate) fn preflight_initialized_storage_for_xgmi(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        physical_bytes: u64,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        if !self.preflight_initialized_logical_storage(
+            queue,
+            generation,
+            logical_bytes,
+            physical_bytes,
+        )? || self.local_native_for_sdma().is_none_or(|lease| {
+            lease.layout().uapi_flags()
+                != fe2o3_kfd_uapi::KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
+        }) {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        }
+        Ok(())
+    }
+
+    fn preflight_initialized_logical_storage(
+        &self,
+        queue: QueueKeyV1,
+        generation: u64,
+        logical_bytes: u64,
+        physical_bytes: u64,
+    ) -> Result<bool, Gfx942PersistentUseErrorV1> {
         if self.quarantine.is_some() {
             return Err(Gfx942PersistentUseErrorV1::Quarantined);
         }
@@ -1356,17 +1400,9 @@ impl Gfx942PersistentDeviceAllocationV1 {
         }) {
             return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
         }
-        let full = backing
+        backing
             .full_initialization_in_scope(queue, generation, logical_bytes)
-            .ok_or(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration)?;
-        // Scope and custody must be valid before any clean fallback is offered.
-        Ok(if logical_bytes != physical_bytes {
-            Some(Ineligible::PartialExtent)
-        } else if !full {
-            Some(Ineligible::IncompleteInitialization)
-        } else {
-            None
-        })
+            .ok_or(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration)
     }
 
     pub(crate) fn local_native_for_sdma(

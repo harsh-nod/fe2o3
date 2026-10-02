@@ -24,7 +24,7 @@ PROOF = V / "retained_pair_post_catch_v1.rs"
 FILES = [PROOF, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "ea5343c29c7c990b0a86ea03c93286b306d892bc260230a49c56641e7752d53c"
+SOURCE_TREE_SHA = "85d8fda23dc46af7993a19ba4c3a863728518c67a3055a411ff3b2a62eecda38"
 PROOF_SHA = "943963c9a992594541382ba163cc178a6425655bc69d0d1e987a8d88d6327e80"
 # Measured by the full, unfiltered development discovery on the reviewed source.
 EXPECTED_VERIFIED = 14
