@@ -36,6 +36,19 @@ impl CanonicalKernelIrVerificationResourceBudgetV1<'_> {
     ///         100, 4096, |view| Ok(view));
     /// }
     /// ```
+    /// ```compile_fail
+    /// use fe2o3_kernel_ir::{
+    ///     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    ///     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    ///     CanonicalKernelIrWorkBudgetV1 as Work,
+    /// };
+    /// fn move_out(budget: &mut Budget<'_>, replacement_work: &'static mut Work) {
+    ///     let _view = budget.with_bounded_scratch_v1::<_, Resource>(
+    ///         100, 4096, |view| {
+    ///             Ok(std::mem::replace(view, Budget::new(replacement_work, 0)))
+    ///         });
+    /// }
+    /// ```
     pub fn with_bounded_scratch_v1<T, E: From<CanonicalKernelIrVerificationResourceErrorV1>>(
         &mut self,
         work_allowance: usize,

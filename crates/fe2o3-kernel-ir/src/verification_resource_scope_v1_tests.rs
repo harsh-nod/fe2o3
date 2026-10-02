@@ -98,7 +98,7 @@ fn nested_queries_preserve_parent_frame_and_effective_limits() {
             assert_eq!(outer.storage(), floor);
             assert!(outer.charge_work(1).is_err());
             assert!(matches!(
-                outer.with_bounded_scratch_v1::<_, Resource>(1000, 10000, |_| panic!(
+                outer.with_bounded_scratch_v1::<(), Resource>(1000, 10000, |_| panic!(
                     "unpaid nested callback"
                 )),
                 Err(Resource::Work(_))
@@ -162,26 +162,48 @@ fn callback_error_and_unwind_restore_original_limits_and_scratch() {
 
 #[test]
 fn replacement_refuses_and_cleans_only_the_original_account() {
-    let mut original = Work::new(1000);
-    let mut budget = Budget::new(&mut original, 10000);
-    // As in owned-ledger replacement tests, the replacement must outlive every
-    // possible callback borrow. Production scopes allocate no accounting state.
-    let mut foreign = Budget::new(Box::leak(Box::new(Work::new(2000))), 10000);
-    foreign.charge_work(41).unwrap();
-    foreign.reserve_storage(53).unwrap();
-    budget.reserve_storage(31).unwrap();
-    let result = budget.with_bounded_scratch_v1::<_, Resource>(ENTRY + 5, FRAME + 7, |scope| {
-        scope.charge_work(5)?;
-        scope.reserve_storage(7)?;
-        *scope = foreign;
-        assert_eq!(scope.storage(), 53);
-        assert_eq!(scope.work(), 41);
-        Ok(())
-    });
-    assert_eq!(result, Err(Resource::Accounting));
-    assert_eq!(budget.storage(), 31);
-    assert_eq!(budget.work(), ENTRY + 5);
-    assert_eq!(budget.work_limit_v1(), 1000);
+    for exit in 0..3 {
+        let mut original = Work::new(1000);
+        let mut budget = Budget::new(&mut original, 10000);
+        // As in owned-ledger tests, the replacement must outlive every callback
+        // borrow. Production scopes allocate no accounting state.
+        let mut foreign = Budget::new(Box::leak(Box::new(Work::new(2000))), 10000);
+        foreign.charge_work(41).unwrap();
+        foreign.reserve_storage(53).unwrap();
+        budget.reserve_storage(31).unwrap();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            budget.with_bounded_scratch_v1::<(), Resource>(ENTRY + 5, FRAME + 7, |scope| {
+                scope.charge_work(3)?;
+                scope.reserve_storage(3)?;
+                let mut moved = std::mem::replace(scope, foreign);
+                moved.charge_work(2)?;
+                moved.reserve_storage(4)?;
+                assert!(moved.charge_work(1).is_err());
+                assert!(moved.reserve_storage(1).is_err());
+                assert!(moved.release_storage(8).is_err());
+                assert_eq!(scope.storage(), 53);
+                assert_eq!(scope.work(), 41);
+                match exit {
+                    0 => Ok(()),
+                    1 => Err(Resource::Arithmetic),
+                    _ => std::panic::panic_any(29_u32),
+                }
+            })
+        }));
+        if exit == 2 {
+            assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 29);
+        } else {
+            assert_eq!(result.unwrap(), Err(Resource::Accounting));
+        }
+        assert_eq!(budget.storage(), 31);
+        assert_eq!(budget.work(), ENTRY + 5);
+        assert_eq!(budget.peak_storage(), 31 + FRAME + 7);
+        assert_eq!(budget.failed_work(), Some(ENTRY + 6));
+        assert_eq!(budget.failed_storage(), Some(31 + FRAME + 8));
+        assert_eq!(budget.work_limit_v1(), 1000);
+        budget.charge_work(100).unwrap();
+        exercise(&mut budget, ENTRY + 5, FRAME + 7).unwrap();
+    }
 }
 
 #[test]
