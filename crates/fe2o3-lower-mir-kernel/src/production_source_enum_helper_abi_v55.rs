@@ -83,3 +83,43 @@ fn check_source_enum_helper_parameter_v55(
     result?;
     Ok(true)
 }
+
+fn source_enum_helper_return_types_v55(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    node: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Option<Vec<Type>>, ProductionSemanticKirErrorV1> {
+    plan.check_owner(plan.instances, budget)?;
+    if !source_node_contains_enum_v55(plan, node, &mut 0, 0, budget)? {
+        return Ok(None);
+    }
+    budget.source_reference_charge_v29(plan, 12)?;
+    let row = plan
+        .instances
+        .instance(instance)
+        .ok_or_else(execution_call_error_v29)?;
+    let incoming = plan
+        .instances
+        .incoming(instance)
+        .ok_or_else(execution_call_error_v29)?;
+    let function = row.declaration();
+    let abi = function.abi();
+    if instance == plan.instances.root()
+        || incoming.child() != Some(instance)
+        || function.role() != SemanticFunctionRoleV1::InternalHelper
+        || function.export().is_some()
+        || plan.returns.get(instance.index()) != Some(&Some(node))
+        || plan.instances.instance_reachable(instance) != Some(true)
+        || plan.instances.instance_may_return(instance) != Some(true)
+        || plan.nodes[node].ty != abi.source_output_type()
+        || abi.return_value().ty() != abi.source_output_type()
+        || abi.return_value().adjusted().is_some()
+        || abi.return_value().pointee_override().is_some()
+    {
+        return Err(execution_call_error_v29());
+    }
+    // The original admitted ABI is unchanged. The expanded call returns the
+    // exact captured logical carrier, not a packed external-kernel value.
+    source_reference_node_types_v29(plan, node, budget).map(Some)
+}
