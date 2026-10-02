@@ -690,6 +690,10 @@ done
   printf '%s\n' 'raw CPU tests omitted the computed ordinary example package' >&2
   exit 1
 }
+[[ " ${cpu_command} " == *" -p fe2o3-protected-service-profile "* ]] || {
+  printf '%s\n' 'raw CPU tests omitted protected-service startup and refusal regressions' >&2
+  exit 1
+}
 if [[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; then
   printf '%s\n' 'raw CPU tests restored the deleted scalar runtime lane' >&2
   exit 1

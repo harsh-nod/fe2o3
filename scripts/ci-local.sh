@@ -124,6 +124,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-process-identity
   fe2o3-profiler-protocol
   fe2o3-proof-contracts
+  fe2o3-protected-service-profile
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-service-host
