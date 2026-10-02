@@ -86,6 +86,10 @@ impl CanonicalKernelIrWorkBudgetV1 {
     pub const fn limit(&self) -> usize {
         self.limit
     }
+
+    pub(crate) fn replace_limit(&mut self, limit: usize) -> usize {
+        std::mem::replace(&mut self.limit, limit)
+    }
 }
 
 #[cfg(test)]

@@ -29,6 +29,17 @@ impl WindowState {
     pub(super) fn ceiling(&self) -> usize {
         self.ceiling.load(Ordering::Relaxed)
     }
+
+    pub(super) const fn bounded(floor: usize, ceiling: usize) -> Self {
+        Self {
+            floor: AtomicUsize::new(floor),
+            ceiling: AtomicUsize::new(ceiling),
+        }
+    }
+
+    pub(super) fn protect_floor(&self, floor: usize) {
+        self.floor.store(floor, Ordering::Relaxed);
+    }
 }
 
 struct Restore<'a> {
