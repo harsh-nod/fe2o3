@@ -7036,6 +7036,11 @@ struct CooperativeCopySubmissionV1 {
     byte_cursor: usize,
 }
 
+enum CooperativeCopyProfileV1 {
+    Scalar(Option<cooperative_directed::Root>),
+    Segments(Arc<fe2o3_kfd::Gfx942ComputeXgmiSegmentsPlanV1>),
+}
+
 impl CooperativeCopySubmissionV1 {
     fn staging_byte_len(&self) -> u64 {
         if self.compute_xgmi.is_some() {
@@ -9039,8 +9044,31 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         destination: BackendMemoryRegionV1,
         dependencies: &[u64],
         require_distinct_devices: bool,
-        mut directed: Option<cooperative_directed::Root>,
+        directed: Option<cooperative_directed::Root>,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.submit_cooperative_copy_transport_v1(
+            stream,
+            source,
+            destination,
+            dependencies,
+            require_distinct_devices,
+            CooperativeCopyProfileV1::Scalar(directed),
+        )
+    }
+
+    fn submit_cooperative_copy_transport_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+        require_distinct_devices: bool,
+        profile: CooperativeCopyProfileV1,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let (mut directed, segments) = match profile {
+            CooperativeCopyProfileV1::Scalar(directed) => (directed, None),
+            CooperativeCopyProfileV1::Segments(plan) => (None, Some(plan)),
+        };
         self.require_live()?;
         self.require_submission_capacity_v1()?;
         let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
@@ -9058,8 +9086,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let distinct_devices = source_route.child != destination_route.child;
         if distinct_devices != require_distinct_devices
             || destination_route.child != stream_route.child
-            || source.byte_len != destination.byte_len
+            || (segments.is_none() && source.byte_len != destination.byte_len)
             || source.byte_len == 0
+            || destination.byte_len == 0
             || source.byte_offset.checked_add(source.byte_len).is_none()
             || destination
                 .byte_offset
@@ -9076,7 +9105,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "cooperative copy requires equal nonzero ranges, valid access, and a destination stream",
+                "cooperative copy requires valid nonzero envelopes, scalar equal lengths, valid access, and a destination stream",
             ));
         }
         if self.stream_has_native_submission_v1(stream) {
@@ -9104,7 +9133,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if directed.is_none() {
             self.admit_directed_owner_capacity_v1([source_route, destination_route], false)?;
         }
-        let compute_producer = if directed.is_none() {
+        let compute_producer = if directed.is_none() && segments.is_none() {
             self.prepare_compute_peer_v1(
                 source_route,
                 source,
@@ -9291,7 +9320,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
 
-        let compute_xgmi = if let Some(producer) = &compute_producer {
+        let compute_xgmi = if let Some(plan) = segments {
+            Some(self.prepare_compute_xgmi_segments_v1(
+                source_route,
+                source,
+                destination_route,
+                destination,
+                plan,
+            )?)
+        } else if let Some(producer) = &compute_producer {
             Some(self.prepare_compute_xgmi_plan_v1(
                 source_route,
                 destination_route,

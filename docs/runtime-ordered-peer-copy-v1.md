@@ -8,10 +8,11 @@ allocation, and 1 through 4096 ordered descriptors. Each descriptor contains
 source-relative offset, destination-relative offset, and nonzero length. The
 source and destination bounding envelopes may have different lengths.
 
-The facade validates the complete list before backend entry. The KFD adapter
-also validates the complete list against allocation extents, endpoint access,
-device/stream binding and the native linear packet limit. No large-segment
-splitting is implicit. Order and duplicates are preserved. Destination overlaps
+The facade validates the complete list before backend entry. The copy-only KFD
+adapter also validates the complete list against allocation extents, endpoint
+access, device/stream binding and the native linear packet limit; it does not
+split large segments. The unified compute/XGMI adapter described below uses
+bounded packet splitting within each segment. Order and duplicates are preserved. Destination overlaps
 use serial last-writer-wins semantics; untouched bytes must remain unchanged.
 This is not an atomic transaction: failure can leave an applied prefix.
 
@@ -67,7 +68,54 @@ observer-drop progress, descriptor order/duplicates and background owner-thread
 completion. These mock-backed tests are not a new native or formal-refinement
 qualification.
 
-## Native Execution
+## Unified Compute and XGMI Backend
+
+`KfdMultiDeviceRuntimeBackendV1` implements the same local segment SPI for settled,
+initialized PUBLIC DeviceLocal owners on an explicitly admitted native route.
+Unsupported routes or pending compute producers are rejected without silently
+falling back to host staging. The original copy-only backend remains available.
+
+The immutable lower `Gfx942ComputeXgmiSegmentsPlanV1` checks both original logical
+allocation extents, unequal bounding envelopes, every descriptor and every packet
+plan before owner extraction. Each of at most 4096 descriptors has at most 4096
+linear packets. The implementation retains checked windows and nested cursors,
+not a flattened descriptor-by-packet allocation.
+
+One native queue, mapping pair, and pair of original allocation owners remain
+retained for the whole list. Completing a packet or descriptor does not return
+owners to the caller. Observation does not publish later work; explicit native
+progress publishes at most one next packet. Only final successful currentness,
+queue retirement and owner restoration settle the logical result and event.
+Publication makes cancellation irreversible. A failure can leave an applied
+prefix and retains terminal custody, never partial successful output.
+
+The Context journal and owned async engine keep their whole-list result and
+reservation rules. Pending list outputs are not scalar producer coverage: gaps
+inside an envelope may be untouched. Deferred scalar compute and pending native
+readback reject these inputs explicitly. Completed events may use ordinary
+terminal-control paths, but mixing a list into the deferred scalar-producer
+profile is unsupported. A distinct list producer record and reconciliation path
+remain necessary for prequeued compute/list/compute/readback dataflow.
+
+The lower adapter reuses the existing R74 cursor and shared checked-window and
+packet arithmetic. This is not a formal refinement proof of the new nested
+composition, DMA effects, native owners or runtime adapter. The
+`gfx942-runtime-unified-segments-smoke` example exercises this path without loading
+or launching kernels, using the unchanged finite qualification constructor.
+Its assertions cover cancellation, immutable descriptors, whole-list events,
+full source/destination bytes and explicit owned shutdown. Correctness evidence
+does not establish throughput, physical overlap, or arbitrary kernel authority.
+
+The [unified segment checkpoint](evidence/dev-unified-peer-segments-2026-10-02/README.md)
+passes ten MI300X cases in both directions: 1, 4, 65 and 4096 descriptors, plus
+three descriptors spanning five packets. Full logical bytes and guards,
+immutable descriptor capture, whole-list events, cancellation boundaries and
+explicit cleanup pass. Fresh qualification also passes 1943 KFD tests, 2227
+runtime tests (32 existing hardware ignores), 16 example tests, 114 doctests,
+strict Clippy and all 32 source controls. The shared packet/window arithmetic
+campaigns pass; the new nested adapter composition remains outside their proofs.
+
+## Copy Only Native Execution
 
 The gfx942 XGMI adapter uses existing native batch-scope APIs. It submits one
 segment, waits for that exact singleton ticket, recovers the same mapping pair,

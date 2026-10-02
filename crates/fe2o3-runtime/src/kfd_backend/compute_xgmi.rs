@@ -4,10 +4,11 @@ use super::*;
 use fe2o3_kfd::{
     Gfx942ComputeXgmiCopyWindowV1, Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiProgressV1,
     Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1,
-    Gfx942DirectionalQueuePersistentAllocationV1,
+    Gfx942ComputeXgmiSegmentsPlanV1, Gfx942DirectionalQueuePersistentAllocationV1,
 };
 
 mod directed;
+mod segments;
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
@@ -56,6 +57,7 @@ pub(super) enum Stage {
     Create,
     Copy,
     NextPacket,
+    NextSegment,
     Poll,
     Finish,
     Retire,
@@ -79,6 +81,7 @@ enum Progress {
 pub(super) struct Root {
     route: Route,
     window: Gfx942ComputeXgmiCopyWindowV1,
+    segments: Option<Arc<Gfx942ComputeXgmiSegmentsPlanV1>>,
     phase: Phase,
     creation: Gfx942ComputeXgmiQueueCreationRootV1,
     queue: Option<Gfx942ComputeXgmiQueueV1>,
@@ -96,6 +99,10 @@ pub(super) struct Root {
     packet_index: usize,
     #[cfg(test)]
     between_packets: bool,
+    #[cfg(test)]
+    segment_index: usize,
+    #[cfg(test)]
+    between_segments: bool,
 }
 
 impl fmt::Debug for Root {
@@ -103,6 +110,16 @@ impl fmt::Debug for Root {
         f.debug_struct("ComputeXgmiRoot")
             .field("route", &self.route)
             .field("window", &self.window)
+            .field(
+                "segments",
+                &self.segments.as_ref().map(|plan| {
+                    (
+                        plan.windows().len(),
+                        plan.packet_count(),
+                        plan.total_bytes(),
+                    )
+                }),
+            )
             .field("phase", &self.phase)
             .field("creation_vacant", &self.creation.is_vacant())
             .field("queue", &self.queue.is_some())
@@ -128,6 +145,21 @@ fn terminal(detail: impl Into<String>) -> Failure {
 
 impl Root {
     fn prepare(route: Route, window: Gfx942ComputeXgmiCopyWindowV1) -> Result<Box<Self>, Failure> {
+        Self::prepare_profile(route, window, None)
+    }
+
+    fn prepare_segments(
+        route: Route,
+        segments: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) -> Result<Box<Self>, Failure> {
+        Self::prepare_profile(route, segments.windows()[0], Some(segments))
+    }
+
+    fn prepare_profile(
+        route: Route,
+        window: Gfx942ComputeXgmiCopyWindowV1,
+        segments: Option<Arc<Gfx942ComputeXgmiSegmentsPlanV1>>,
+    ) -> Result<Box<Self>, Failure> {
         let capacity = || KfdRuntimeBackendV1::capacity("compute-XGMI owner allocation failed");
         let root = try_uninit_box_v1().map_err(|()| capacity())?;
         let shells = [
@@ -145,7 +177,16 @@ impl Root {
             };
             let stages = samples
                 .checked_add(2)
-                .and_then(|per_packet| per_packet.checked_mul(window.plan().count()))
+                .and_then(|per_packet| {
+                    per_packet.checked_mul(
+                        segments
+                            .as_ref()
+                            .map_or(window.plan().count(), |plan| plan.packet_count()),
+                    )
+                })
+                .and_then(|stages| {
+                    stages.checked_add(segments.as_ref().map_or(0, |plan| plan.windows().len()))
+                })
                 .and_then(|stages| stages.checked_add(4))
                 .ok_or_else(capacity)?;
             trace.try_reserve_exact(stages).map_err(|_| capacity())?;
@@ -156,6 +197,7 @@ impl Root {
             Self {
                 route,
                 window,
+                segments,
                 phase: Phase::Prepared,
                 creation: Gfx942ComputeXgmiQueueCreationRootV1::new(),
                 queue: None,
@@ -178,6 +220,10 @@ impl Root {
                 packet_index: 0,
                 #[cfg(test)]
                 between_packets: false,
+                #[cfg(test)]
+                segment_index: 0,
+                #[cfg(test)]
+                between_segments: false,
             },
         ))
     }
@@ -191,7 +237,11 @@ impl Root {
     }
 
     pub(super) fn matches_window(&self, window: Gfx942ComputeXgmiCopyWindowV1) -> bool {
-        self.window == window
+        self.segments.is_none() && self.window == window
+    }
+
+    pub(super) fn is_segmented(&self) -> bool {
+        self.segments.is_some()
     }
 
     fn matches_regions(
@@ -201,6 +251,14 @@ impl Root {
         destination: &AllocationRecordV1,
         destination_region: BackendMemoryRegionV1,
     ) -> bool {
+        if let Some(plan) = &self.segments {
+            return plan.source_logical_bytes() == source.bytes.len() as u64
+                && plan.destination_logical_bytes() == destination.bytes.len() as u64
+                && plan.source_offset() == source_region.byte_offset
+                && plan.source_len() == source_region.byte_len
+                && plan.destination_offset() == destination_region.byte_offset
+                && plan.destination_len() == destination_region.byte_len;
+        }
         source_region.byte_len == destination_region.byte_len
             && Gfx942ComputeXgmiCopyWindowV1::new(
                 source.bytes.len() as u64,
@@ -209,6 +267,14 @@ impl Root {
                 destination_region.byte_offset,
                 source_region.byte_len,
             ) == Some(self.window)
+    }
+
+    fn accepts_region(&self, record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+        if self.segments.is_some() {
+            checked_envelope(record, region)
+        } else {
+            checked_region(record, region)
+        }
     }
 
     fn accepts(&self, owner: &DirectionalSdmaDeviceOwnerV1) -> bool {
@@ -278,6 +344,20 @@ impl Root {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn script_copy_window(&mut self, window: Gfx942ComputeXgmiCopyWindowV1) {
+        let [source, destination] = &mut self.scripted_owners;
+        let source_offset = window.source_offset() as usize;
+        let destination_offset = window.destination_offset() as usize;
+        let bytes = window.bytes() as usize;
+        destination.as_mut().unwrap().scripted_bytes_mut().unwrap()
+            [destination_offset..destination_offset + bytes]
+            .copy_from_slice(
+                &source.as_ref().unwrap().scripted_bytes().unwrap()
+                    [source_offset..source_offset + bytes],
+            );
+    }
+
     fn progress(
         &mut self,
         source: &mut KfdRuntimeBackendV1,
@@ -297,6 +377,22 @@ impl Root {
                         Ok(Progress::Changed)
                     }
                     Phase::Published => {
+                        if self.between_segments {
+                            self.script_step(Stage::NextSegment)?;
+                            self.segment_index += 1;
+                            self.packet_index = 0;
+                            self.packet_plan = self.segments.as_ref().unwrap().windows()
+                                [self.segment_index]
+                                .plan();
+                            self.pending_samples = match self.route {
+                                Route::Scripted {
+                                    pending_samples, ..
+                                } => pending_samples,
+                                Route::Native(_) => unreachable!(),
+                            };
+                            self.between_segments = false;
+                            return Ok(Progress::Changed);
+                        }
                         if self.between_packets {
                             self.script_step(Stage::NextPacket)?;
                             self.packet_index += 1;
@@ -317,22 +413,23 @@ impl Root {
                         if self.packet_index + 1 < self.packet_plan.count() {
                             self.between_packets = true;
                         } else {
-                            self.phase = Phase::Ready;
+                            if let Some(plan) = &self.segments {
+                                let window = plan.windows()[self.segment_index];
+                                self.between_segments =
+                                    self.segment_index + 1 < plan.windows().len();
+                                self.script_copy_window(window);
+                            }
+                            if !self.between_segments {
+                                self.phase = Phase::Ready;
+                            }
                         }
                         Ok(Progress::Changed)
                     }
                     Phase::Ready => {
                         self.script_step(Stage::Finish)?;
-                        let [source, destination] = &mut self.scripted_owners;
-                        let source_offset = self.window.source_offset() as usize;
-                        let destination_offset = self.window.destination_offset() as usize;
-                        let bytes = self.window.bytes() as usize;
-                        destination.as_mut().unwrap().scripted_bytes_mut().unwrap()
-                            [destination_offset..destination_offset + bytes]
-                            .copy_from_slice(
-                                &source.as_ref().unwrap().scripted_bytes().unwrap()
-                                    [source_offset..source_offset + bytes],
-                            );
+                        if self.segments.is_none() {
+                            self.script_copy_window(self.window);
+                        }
                         self.script_step(Stage::Retire)?;
                         self.script_step(Stage::Restore)?;
                         self.phase = Phase::Retired;
@@ -362,17 +459,25 @@ impl Root {
                         })?,
                 );
                 let [source_owner, destination_owner] = &mut self.owners;
-                self.queue
-                    .as_mut()
-                    .unwrap_or_else(|| std::process::abort())
-                    .begin_persistent_data_range_with_peer_v1(
+                let queue = self.queue.as_mut().unwrap_or_else(|| std::process::abort());
+                let begin = if let Some(plan) = &self.segments {
+                    queue.begin_persistent_data_segments_with_peer_v1(
+                        source,
+                        destination,
+                        source_owner,
+                        destination_owner,
+                        Arc::clone(plan),
+                    )
+                } else {
+                    queue.begin_persistent_data_range_with_peer_v1(
                         source,
                         destination,
                         source_owner,
                         destination_owner,
                         self.window,
                     )
-                    .map_err(|error| terminal(format!("compute-XGMI publication: {error}")))?;
+                };
+                begin.map_err(|error| terminal(format!("compute-XGMI publication: {error}")))?;
                 self.phase = Phase::Published;
                 Ok(Progress::Changed)
             }
@@ -437,10 +542,14 @@ pub(super) fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegi
 }
 
 pub(super) fn checked_region(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+    checked_envelope(record, region)
+        && Gfx942ComputeXgmiPacketPlanV1::new(region.byte_len).is_some()
+}
+
+fn checked_envelope(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
     record.kind == RuntimeMemoryKindV1::DeviceLocal
         && record.sdma_backed
         && region.byte_len != 0
-        && Gfx942ComputeXgmiPacketPlanV1::new(region.byte_len).is_some()
         && region
             .byte_offset
             .checked_add(region.byte_len)
@@ -702,7 +811,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 if record.persistent_storage_restore.is_some() {
                     return Ok(BackendPollV1::Pending);
                 }
-                if !checked_region(record, region) || !record.sdma_initialized {
+                let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
+                else {
+                    unreachable!()
+                };
+                if !copy
+                    .compute_xgmi
+                    .as_ref()
+                    .unwrap()
+                    .accepts_region(record, region)
+                    || !record.sdma_initialized
+                {
                     return Ok(self.fail_cooperative_copy(submission));
                 }
             }
@@ -750,7 +869,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 let record = &child.allocations[&endpoint.local];
                 let accepted = matches!(&record.sdma_storage,
                     KfdRuntimeSdmaStorageV1::Device(owner) if root.accepts(owner));
-                checked_region(record, region) && record.sdma_initialized && accepted
+                root.accepts_region(record, region) && record.sdma_initialized && accepted
             });
             if !slots_ready {
                 return Ok(self.fail_cooperative_copy(submission));

@@ -143,7 +143,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     && copy.destination == peer.destination
                     && copy.source_region == peer.source_region
                     && copy.destination_region == peer.destination_region
-                    && copy.compute_xgmi.is_some())
+                    && copy.compute_xgmi.as_ref().is_some_and(|root| !root.is_segmented()))
             && (!peer.directed || self.directed_identity_is_intact_v1(peer.id))
             && peer
                 .frame
@@ -349,6 +349,19 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         });
         if !has_native_peer {
             return Ok(None);
+        }
+        if request.dependencies.iter().any(|dependency| {
+            matches!(self.submissions.get(&dependency.producer_submission),
+                Some(RoutedSubmissionV1::CooperativeCopy(copy))
+                    if copy.compute_xgmi.as_ref().is_some_and(|root| root.is_segmented()))
+        }) {
+            // A list envelope includes gaps and is not one scalar producer write.
+            // Completed lists can use ordinary terminal controls, but mixing a
+            // list into this deferred scalar-producer profile is unsupported.
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "deferred compute requires scalar peer provenance, not a segmented envelope",
+            ));
         }
         self.require_no_deferred_stream_v1(request.stream)?;
         let stream = Self::route(

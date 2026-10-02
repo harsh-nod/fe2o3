@@ -3,12 +3,14 @@
 use super::*;
 use crate::persistent_allocation::{detach_sdma_buffer_pair_v1, restore_sdma_buffer_pair_v1};
 use crate::sdma::{
-    Gfx942ComputeXgmiCopyWindowV1, Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1,
+    Gfx942ComputeXgmiCopyWindowV1, Gfx942ComputeXgmiSegmentsPlanV1,
+    Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1,
 };
 use crate::shared_memory::{
     ComputeXgmiBufferV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "persistent_composed_tests.rs"]
@@ -33,11 +35,53 @@ enum Phase {
     Terminal,
 }
 
+enum CopyPlan {
+    Window(Option<Gfx942ComputeXgmiCopyWindowV1>),
+    Segments(Arc<Gfx942ComputeXgmiSegmentsPlanV1>),
+}
+
+impl CopyPlan {
+    fn admit(
+        self,
+        roster: [u32; 2],
+        source_bytes: u64,
+        destination_bytes: u64,
+    ) -> Result<transfer::TransferCore, ComputeAqlQueueSessionErrorV1> {
+        match self {
+            Self::Window(window) => Ok(transfer::TransferCore::with_window(
+                roster,
+                admit_window(source_bytes, destination_bytes, window)?,
+            )),
+            Self::Segments(plan) => {
+                if plan.source_logical_bytes() != source_bytes
+                    || plan.destination_logical_bytes() != destination_bytes
+                {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "compute-XGMI segments logical extents changed",
+                    ));
+                }
+                Ok(transfer::TransferCore::with_segments(roster, plan))
+            }
+        }
+    }
+}
+
 impl TransferRoot {
+    #[cfg(test)]
     fn new(
         certificates: [Gfx942PersistentDirectionalSdmaAttachmentV1; 2],
         roster: [u32; 2],
         window: Gfx942ComputeXgmiCopyWindowV1,
+    ) -> Self {
+        Self::with_core(
+            certificates,
+            transfer::TransferCore::with_window(roster, window),
+        )
+    }
+
+    fn with_core(
+        certificates: [Gfx942PersistentDirectionalSdmaAttachmentV1; 2],
+        core: transfer::TransferCore,
     ) -> Self {
         Self {
             phase: Phase::Admitted,
@@ -46,7 +90,7 @@ impl TransferRoot {
             sdma: [None, None],
             metadata: [None, None],
             locals: [None, None],
-            core: transfer::TransferCore::with_window(roster, window),
+            core,
         }
     }
 
@@ -472,7 +516,7 @@ impl Gfx942ComputeXgmiQueueV1 {
         destination: &ComputeAqlQueueSessionV1,
         source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
         destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
-        window: Option<Gfx942ComputeXgmiCopyWindowV1>,
+        plan: CopyPlan,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.persistent_transfer.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -494,14 +538,17 @@ impl Gfx942ComputeXgmiQueueV1 {
                 ))?;
         let source_bytes = require_allocation(source, source_allocation)?;
         let destination_bytes = require_allocation(destination, destination_allocation)?;
-        let window = admit_window(source_bytes, destination_bytes, window)?;
-        self.persistent_transfer = Some(Box::new(TransferRoot::new(
+        let core = plan.admit(
+            self.attachment.route.canonical_mapping_gpu_ids(),
+            source_bytes,
+            destination_bytes,
+        )?;
+        self.persistent_transfer = Some(Box::new(TransferRoot::with_core(
             [
                 source_allocation.attachment,
                 destination_allocation.attachment,
             ],
-            self.attachment.route.canonical_mapping_gpu_ids(),
-            window,
+            core,
         )));
         let root = self
             .persistent_transfer
@@ -570,7 +617,13 @@ impl Gfx942ComputeXgmiQueueV1 {
         window: Option<Gfx942ComputeXgmiCopyWindowV1>,
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.admit_persistent_transfer(source, destination, source_data, destination_data, window)?;
+        self.admit_persistent_transfer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            CopyPlan::Window(window),
+        )?;
         let root = self
             .persistent_transfer
             .as_mut()
@@ -616,7 +669,7 @@ impl Gfx942ComputeXgmiQueueV1 {
             destination,
             source_data,
             destination_data,
-            None,
+            CopyPlan::Window(None),
         )
     }
 
@@ -639,7 +692,34 @@ impl Gfx942ComputeXgmiQueueV1 {
             destination,
             source_data,
             destination_data,
-            Some(window),
+            CopyPlan::Window(Some(window)),
+        )
+    }
+
+    /// Publishes an immutable ordered list using one queue and one mapping pair.
+    ///
+    /// The entire plan is checked against both actual logical owner lengths
+    /// before extraction. Every descriptor, including duplicates and overlapping
+    /// destination writes, completes in list order. Poll never publishes a later
+    /// packet or segment; explicit progress publishes at most one packet per call.
+    /// Ready and finish apply only to the complete list. Both original owners,
+    /// physical extents, attachments, and model-retake obligations are retained
+    /// throughout. A failure may leave an applied prefix; every admitted error or
+    /// unwind is terminal and retains all custody here, without partial outputs.
+    pub fn begin_persistent_data_segments_with_peer_v1(
+        &mut self,
+        source: &mut ComputeAqlQueueSessionV1,
+        destination: &mut ComputeAqlQueueSessionV1,
+        source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
+        plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.begin_persistent_data_with_peer(
+            source,
+            destination,
+            source_data,
+            destination_data,
+            CopyPlan::Segments(plan),
         )
     }
 
@@ -649,9 +729,9 @@ impl Gfx942ComputeXgmiQueueV1 {
         destination: &mut ComputeAqlQueueSessionV1,
         source_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
         destination_data: &mut Option<Gfx942DirectionalQueuePersistentAllocationV1>,
-        window: Option<Gfx942ComputeXgmiCopyWindowV1>,
+        plan: CopyPlan,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.admit_persistent_transfer(source, destination, source_data, destination_data, window)?;
+        self.admit_persistent_transfer(source, destination, source_data, destination_data, plan)?;
         let root = self
             .persistent_transfer
             .as_mut()

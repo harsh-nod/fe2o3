@@ -1,10 +1,16 @@
 # Multi-Device Runtime Qualification
 
-The current [live-batch checkpoint](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
+The [live-batch checkpoint](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
 qualifies two changed finite sharded compute -> native peer -> D2H batches in
-one live Context on 2/3/5/7 MI300X GPUs, without a host compute join. Broader
-kernel authority, native fault campaigns and performance remain open. Earlier
-sections below retain their original example and checkpoint scopes.
+one live Context on 2/3/5/7 MI300X GPUs, without a host compute join. The newer
+[unified segment checkpoint](evidence/dev-unified-peer-segments-2026-10-02/README.md)
+adds ordered segmented native copies to the same compute/XGMI backend for
+settled initialized PUBLIC owners. Ten two-GPU cases pass, including 4096
+descriptors and packet-spanning segments in both directions. A single native
+queue and mapping pair remain retained until whole-list completion. Pending
+compute/list/compute provenance, broader kernel authority, native fault campaigns
+and performance remain open. Earlier sections below retain their original
+example and checkpoint scopes.
 
 ## Scope
 

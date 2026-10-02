@@ -4,11 +4,12 @@ use super::*;
 use crate::queue::dispatch_binding::{DispatchDataInputStorageV1, DispatchDataStorageRefV1};
 use crate::sdma::{
     ComputeXgmiCopyCustodyV1, Gfx942ComputeXgmiCopyPacketV1, Gfx942ComputeXgmiCopyWindowV1,
-    Gfx942ComputeXgmiPacketPlanV1,
+    Gfx942ComputeXgmiPacketPlanV1, Gfx942ComputeXgmiSegmentsPlanV1,
 };
 use crate::shared_memory::{ComputeXgmiBufferV1, Gfx942XgmiMappedDeviceMemoryV1};
 use fe2o3_runtime_model::{OrderedPeerCopyActionV1 as CopyAction, OrderedPeerCopyCursorV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::Arc;
 
 struct DetachedCertificate {
     generation: Option<u64>,
@@ -50,6 +51,12 @@ pub(super) struct TransferCore {
     progress: Progress,
     window: Gfx942ComputeXgmiCopyWindowV1,
     packet: Gfx942ComputeXgmiCopyPacketV1,
+    cursor: OrderedPeerCopyCursorV1,
+    segments: Option<SegmentProgress>,
+}
+
+struct SegmentProgress {
+    plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
     cursor: OrderedPeerCopyCursorV1,
 }
 
@@ -291,7 +298,21 @@ impl TransferCore {
             cursor: OrderedPeerCopyCursorV1::new(window.plan().count())
                 .unwrap_or_else(|| std::process::abort()),
             window,
+            segments: None,
         }
+    }
+
+    pub(super) fn with_segments(
+        roster: [u32; 2],
+        plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) -> Self {
+        let mut core = Self::with_window(roster, plan.windows()[0]);
+        core.segments = Some(SegmentProgress {
+            cursor: OrderedPeerCopyCursorV1::new(plan.windows().len())
+                .unwrap_or_else(|| std::process::abort()),
+            plan,
+        });
+        core
     }
 
     pub(super) fn run(
@@ -358,10 +379,13 @@ impl TransferCore {
         &mut self,
         io: &mut impl TransferIo,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.segment_step(CopyAction::Open)?;
+        self.segment_step(CopyAction::Publish)?;
         self.cursor_step(CopyAction::Open)?;
         self.cursor_step(CopyAction::Publish)?;
         self.run_steps(io, Duration::ZERO, &STEPS[..BEGIN_STEP_COUNT])?;
-        self.cursor_step(CopyAction::Close)
+        self.cursor_step(CopyAction::Close)?;
+        self.segment_step(CopyAction::Close)
     }
 
     pub(super) fn poll(
@@ -406,6 +430,19 @@ impl TransferCore {
 
     fn all_packets_completed(&self) -> bool {
         self.cursor.completed() == self.cursor.count()
+            && self
+                .segments
+                .as_ref()
+                .is_none_or(|segments| segments.cursor.completed() == segments.cursor.count())
+    }
+
+    fn segment_step(&mut self, action: CopyAction) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if let Some(segments) = &mut self.segments {
+            segments.cursor = segments.cursor.transition(action).ok_or(
+                ComputeAqlQueueSessionErrorV1::Contract("compute-XGMI segment cursor"),
+            )?;
+        }
+        Ok(())
     }
 
     fn complete_packet(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -413,6 +450,14 @@ impl TransferCore {
         self.cursor_step(CopyAction::Complete {
             segment: self.cursor.completed(),
         })?;
+        if self.cursor.completed() == self.cursor.count()
+            && let Some(segments) = &self.segments
+        {
+            let segment = segments.cursor.completed();
+            self.segment_step(CopyAction::Open)?;
+            self.segment_step(CopyAction::Complete { segment })?;
+            self.segment_step(CopyAction::Close)?;
+        }
         self.progress.completed = Some(Step::Wait);
         Ok(())
     }
@@ -426,9 +471,35 @@ impl TransferCore {
                 "compute-XGMI next packet phase",
             ));
         }
-        let next = self.window.packet(self.cursor.completed() as usize).ok_or(
-            ComputeAqlQueueSessionErrorV1::Contract("compute-XGMI next packet extent"),
-        )?;
+        let next_window = if self.cursor.completed() == self.cursor.count() {
+            let segments =
+                self.segments
+                    .as_ref()
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "compute-XGMI missing next segment",
+                    ))?;
+            Some(
+                *segments
+                    .plan
+                    .windows()
+                    .get(segments.cursor.completed() as usize)
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "compute-XGMI next segment extent",
+                    ))?,
+            )
+        } else {
+            None
+        };
+        let next = next_window
+            .unwrap_or(self.window)
+            .packet(if next_window.is_some() {
+                0
+            } else {
+                self.cursor.completed() as usize
+            })
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute-XGMI next packet extent",
+            ))?;
         let [source, destination] = &mut self.buffers;
         restore_completed_mappings(
             &mut self.copy,
@@ -440,6 +511,14 @@ impl TransferCore {
         )?;
         // Only the exact completed packet gives both mappings back to this root.
         self.copy.ticket = None;
+        if let Some(window) = next_window {
+            self.cursor_step(CopyAction::Succeed)?;
+            self.window = window;
+            self.cursor = OrderedPeerCopyCursorV1::new(window.plan().count())
+                .unwrap_or_else(|| std::process::abort());
+            self.segment_step(CopyAction::Open)?;
+            self.segment_step(CopyAction::Publish)?;
+        }
         self.packet = next;
         self.cursor_step(CopyAction::Open)?;
         self.cursor_step(CopyAction::Publish)?;
@@ -448,7 +527,11 @@ impl TransferCore {
             Duration::ZERO,
             &STEPS[BEGIN_STEP_COUNT - 1..BEGIN_STEP_COUNT],
         )?;
-        self.cursor_step(CopyAction::Close)
+        self.cursor_step(CopyAction::Close)?;
+        if next_window.is_some() {
+            self.segment_step(CopyAction::Close)?;
+        }
+        Ok(())
     }
 
     pub(super) fn progress_with(
@@ -518,7 +601,8 @@ impl TransferCore {
                 .unwrap_or_else(|| std::process::abort()),
         )?;
         self.run_steps(io, Duration::ZERO, &STEPS[FINISH_STEP_START..])?;
-        self.cursor_step(CopyAction::Succeed)
+        self.cursor_step(CopyAction::Succeed)?;
+        self.segment_step(CopyAction::Succeed)
     }
 
     fn run_steps(

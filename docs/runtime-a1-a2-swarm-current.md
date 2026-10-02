@@ -37,7 +37,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; ordinary generated argument API CPU-qualified; incomplete | Native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; unified settled-owner segment lists qualified on two GPUs; ordinary generated argument API CPU-qualified; incomplete | Pending whole-list producer provenance, native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -282,16 +282,28 @@ checks complete computed/guard bytes, 136 callbacks, 60 native copies and owned
 cleanup. Fresh CPU qualification passes 2,198 runtime tests (32 existing ignores)
 and 13 witness tests. This closes that finite native gate, not A3 or parity.
 
-The remaining practical multi-GPU priority order is:
+The [unified segment checkpoint](evidence/dev-unified-peer-segments-2026-10-02/README.md)
+now joins the existing ordered-segment API to the compute/XGMI backend. It
+prevalidates an immutable list and retains one native queue, mapping pair and
+original owner pair through final completion. Ten MI300X cases pass on GPUs 6/7
+in both directions, covering 1/4/65/4096 descriptors and packet-spanning segments.
+Full logical bytes, ordered overwrites, cancellation boundaries, whole-list
+events and explicit cleanup pass. This removes per-descriptor setup inside one
+logical list, but does not establish a measured speedup or pending producer
+composition. Fresh checks pass 1943 KFD tests, 2227 runtime tests (32 existing
+hardware ignores), 16 example tests, 114 doctests, strict Clippy and all 32 source
+controls. Shared arithmetic proofs pass; whole-adapter refinement remains open.
 
-1. Use the CPU-qualified ordinary generated Context argument API for supported
-   scalar/slice arguments. The [qualification packet](evidence/dev-context-arguments-2026-10-02/README.md)
-   checks real-host encoding, admission failures and a scripted two-device
-   pipeline. It removes manual ABI packing, not private generated-storage or
-   execution-authority boundaries. First qualify its encoding on an exact
-   admitted native kernel without changing that kernel's policy. This is not
-   generated Rust execution or compiler refinement. Production use still needs
-   item 2. See [Context arguments](runtime-context-arguments-v1.md).
+The expedited practical multi-GPU priority order is:
+
+1. Add distinct whole-list pending producer provenance and completion
+   reconciliation. Do not relabel a segmented envelope as a scalar copy: its
+   gaps and ordered overwrites have different semantics. Qualify a fully
+   prequeued compute -> overlapping segment list -> compute -> peer/readback
+   chain driven only by final streams, with released public events, full-byte
+   guards and retained custody on later-segment failure. Existing settled-owner
+   segment lists and scalar pending-producer pipelines remain separate accepted
+   capabilities until that bridge is implemented.
 2. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
@@ -299,7 +311,11 @@ The remaining practical multi-GPU priority order is:
    general runtime authority. The [local integer refinement component](gfx942-local-integer-refinement-v1.md)
    adds shared-body unsigned-add arithmetic and a conditional MIR/KIR/machine
    obligation. Retained local-to-SSA and SSA-to-register correspondence,
-   LLVM/CFG/ABI/effect composition and application authority remain open.
+   LLVM/CFG/ABI/effect composition and application authority remain open. The
+   CPU-qualified [Context argument API](runtime-context-arguments-v1.md) removes
+   manual scalar/slice ABI packing, not storage or authority boundaries. Its
+   native encoding qualification can use an exact existing admitted kernel;
+   that does not substitute for this production evidence provider.
 3. Qualify native partial failures and isolation before broadening execution
    claims. CPU scripted failures are not a native fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's

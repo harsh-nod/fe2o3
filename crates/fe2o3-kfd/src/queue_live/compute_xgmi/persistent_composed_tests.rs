@@ -18,6 +18,9 @@ use crate::shared_memory::{
 #[path = "persistent_subrange_tests.rs"]
 mod subrange_tests;
 
+#[path = "persistent_segments_tests.rs"]
+mod segments_tests;
+
 const LOGICAL_BYTES: u32 = 2048;
 const PHYSICAL_BYTES: [usize; 2] = [4096, 8192];
 const GPU_IDS: [u32; 2] = [1001, 1002];

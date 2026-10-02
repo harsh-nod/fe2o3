@@ -16,6 +16,7 @@ mod peer_readback;
 #[path = "../progress_quantum_tests.rs"]
 mod progress_quantum;
 mod queued_consumer;
+mod segments;
 mod sharded;
 mod subranges;
 

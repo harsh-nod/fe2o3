@@ -68,6 +68,18 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             else {
                 continue;
             };
+            if copy.status() == BackendPollV1::Pending
+                && copy.destination == source_route
+                && copy
+                    .compute_xgmi
+                    .as_ref()
+                    .is_some_and(|root| root.is_segmented())
+            {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "pending readback requires scalar peer provenance, not a segmented envelope",
+                ));
+            }
             if copy.directed.is_some() {
                 if !self.supports_pending_directed_peer_readback_v1() {
                     continue;
