@@ -40,6 +40,23 @@ queue or lifecycle transition, primitive, scope/order pair, failure event,
 cancellation outcome, or progress assumption is absent from its named,
 versioned model.
 
+### Current implementation boundary
+
+The [service model](../crates/fe2o3-service-model/README.md) implements bounded
+descriptive identities, states, relations, and invariant checks. The
+[host adapter](../crates/fe2o3-service-host/README.md) adds borrow-retaining
+descriptions and checked ownership of real KFD allocations and finite batches
+on a retained queue. A retained hardware queue is not a resident device task
+scheduler. Neither crate establishes this document's complete P1-P5 exit gates.
+The dispatch dialect's service records likewise grant no execution authority.
+
+Production runtime work follows the pure-Rust KFD boundary in
+[issue #137](https://github.com/harsh-nod/fe2o3/issues/137), composing
+`fe2o3-runtime` and `fe2o3-kfd`. HIP/HSA observations may be explicitly labeled
+comparison oracles; they are not a production service runtime dependency.
+Both service crates participate in the existing generic CPU test package list.
+Those tests validate scoped host/model behavior, not persistent GPU execution.
+
 ## Architecture Decision
 
 Fusion and persistence are orthogonal plan dimensions:
@@ -549,7 +566,12 @@ its named `FailureModelId`:
 | Policy | Required statement |
 |---|---|
 | `at_most_once` | For each accepted task, at most one handler execution owns a valid lease and at most one terminal outcome is published. Loss or a failed/indeterminate outcome is allowed only where the named failure model says so. |
-| `exactly_once` | For each accepted, non-cancelled task covered by the admitted execution and failure preconditions, exactly one handler execution and one allowed visible terminal completion occur. Cancellation has exactly one policy-defined terminal outcome. |
+| `exactly_once` | Every prefix retains each covered accepted task as pending or uniquely terminal, with no duplicate execution or terminal outcome. In a completed or successfully drained covered history, each non-cancelled task has exactly one handler execution and allowed visible terminal completion; cancellation has one policy-defined terminal outcome. |
+
+Pending tasks on a finite prefix or non-progressing infinite trace do not
+violate accounting safety. Eventual execution, completion, cancellation, or
+drain additionally requires the explicit progress contract and T10; delivery
+policy alone supplies no liveness theorem.
 
 `exactly_once` is not an unconditional physical-fault or process-crash claim.
 Watchdog timeout, device reset, stream destruction, context loss, process exit,
@@ -717,10 +739,13 @@ memory accesses does not imply this theorem.
 
 ### T4 Task accounting
 
-For every accepted task in the admitted failure model, the projected history
-satisfies exactly its declared `at_most_once` or `exactly_once` statement and
-excludes duplicate terminal records, lost covered tasks, lease duplication,
-and generation confusion. This theorem does not imply handler correctness.
+For every finite prefix, covered accepted tasks are conserved as pending or
+uniquely terminal according to the declared delivery and failure policy.
+Duplicate terminal records, discarded covered task records, duplicate leases,
+and generation confusion are excluded. Completed or successfully drained
+histories additionally satisfy the policy's terminal cardinality. Eventual
+completion belongs to T10, not this safety theorem; handler correctness is
+independent.
 
 ### T5 Dependency ordering
 
@@ -941,8 +966,9 @@ status. Candidate entries include:
   receipt checkers at their reported statuses;
 - AMD architecture semantics, target primitive contracts, resource and origin
   validators, and the exact artifact boundary they cover;
-- HSA/ROCm runtime, driver, firmware, physical GPU, cooperative-launch, cache,
-  watchdog, timeout, reset, and host visibility contracts;
+- the exact fe2o3 runtime/KFD adapter, Linux amdgpu/KFD driver, firmware, physical
+  GPU, cooperative-launch, cache, watchdog, timeout, reset, and host visibility
+  contracts;
 - target scheduling, residency, atomic forward-progress, fairness, host service,
   and environmental assumptions used by `service_progress`;
 - external handler/library/intrinsic contracts and each unsupported
@@ -972,6 +998,8 @@ Entry dependencies:
   ABI binding, and asynchronous borrow retention;
 - #134 D5 supplies brands, typestate, region permissions, epoch semantics, and
   controlled destruction.
+- Issue #137 supplies the applicable direct-KFD runtime ownership boundary;
+  it does not by itself supply a resident scheduler or progress contract.
 
 Exit gate:
 
@@ -1131,6 +1159,9 @@ The following remain explicit blockers or external work packages:
 - Issue #107 or a generalized successor must cover exact persistent atomics,
   scopes, fences, availability/visibility operations, waits, barriers,
   branches, resource metadata, object, and ISA behavior.
+- Issue #137's direct-KFD allocation, queue, completion, and failure contracts
+  must cover each admitted service operation without importing HIP/HSA runtime
+  dependencies.
 - Issues #122-#125 must supply the bounded FlashAttention and MoE semantics,
   handler contracts, numerical policies, and evidence consumed by composition.
 - A reviewed gfx942 AMD memory/progress/runtime/failure contract and exact
