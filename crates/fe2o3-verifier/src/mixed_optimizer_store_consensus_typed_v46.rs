@@ -668,7 +668,11 @@ fn emit_models<R: ByteAllocationResolverV30>(
         .map_err(|error| {
             out.source_section_error(error, "typed forwarding input byte functions")
         })?;
-        after.emit(output_namespace, out).map_err(|error| {
+        match emitted_input {
+            Some(index) => index.emit_output_reusing_scalar_bodies(&after, output_namespace, out),
+            None => after.emit(output_namespace, out),
+        }
+        .map_err(|error| {
             out.source_section_error(error, "typed forwarding output byte functions")
         })?;
         for ordinal in row.operations.clone() {

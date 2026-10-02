@@ -2,7 +2,7 @@
 //! retained source/endpoint resolver; static MIR frames are not allocations.
 use super::byte_memory_v30::{ByteMemoryContextNamesV30, ByteMemoryStateNamesV30};
 use super::index_byte_operations_v37::IndexByteOperationV37;
-use super::original_scalar_v30::CanonicalByteScalarV30;
+use super::original_scalar_v30::{CanonicalByteScalarBodyV55, CanonicalByteScalarV30};
 use super::pointer_byte_operations_v30::{
     PointerByteEffectV30, PointerByteOperationV30, pointer_space, scalar_bytes,
 };
@@ -91,6 +91,20 @@ enum ByteOperationV30<'inventory, 'owner> {
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
     Trap(TrapByteOperationV40),
+}
+
+#[derive(Clone, Copy)]
+enum ScalarBodyEmissionV55 {
+    Inline,
+    Define,
+    Reuse,
+}
+
+#[derive(Clone, Copy)]
+enum ScalarBodiesV55<'a> {
+    Inline,
+    Define,
+    Reuse(&'a [bool]),
 }
 
 /// Complete supported operation census over the exact retained Inventory.
@@ -396,15 +410,34 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
     }
 
     pub(super) fn emit(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
-        let result = self.emit_checked(namespace, out);
+        self.emit_with_scalar_bodies(namespace, ScalarBodiesV55::Inline, out)
+    }
+
+    fn emit_with_scalar_bodies(
+        &self,
+        namespace: usize,
+        bodies: ScalarBodiesV55<'_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        let result = self.emit_checked(namespace, bodies, out);
         if let Err(Error::Resource(error)) = &result {
             self.failure.set(Some(*error));
         }
         result
     }
 
-    fn emit_checked(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    fn emit_checked(
+        &self,
+        namespace: usize,
+        bodies: ScalarBodiesV55<'_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
         self.check(out)?;
+        if let ScalarBodiesV55::Reuse(rows) = bodies
+            && rows.len() != self.operations.len()
+        {
+            return Err(mismatch());
+        }
         let function = &self.inventory.functions()[self.function.0 as usize];
         emit!(
             out,
@@ -418,9 +451,11 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             out,
         )?;
         emit!(out, " }}\n");
-        for plan in &self.operations {
+        for (offset, plan) in self.operations.iter().enumerate() {
             out.budget.charge_work(1)?;
-            if let ByteOperationV30::Scalar(scalar) = plan {
+            if let ByteOperationV30::Scalar(scalar) = plan
+                && !matches!(bodies, ScalarBodiesV55::Reuse(rows) if rows[offset])
+            {
                 scalar.emit_definition(namespace, out)?;
             }
         }
@@ -431,7 +466,14 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 .start
                 .checked_add(offset)
                 .ok_or(Resource::Arithmetic)?;
-            self.emit_operation(namespace, operation, plan, out)?;
+            let body = match bodies {
+                ScalarBodiesV55::Define if matches!(plan, ByteOperationV30::Scalar(_)) => {
+                    ScalarBodyEmissionV55::Define
+                }
+                ScalarBodiesV55::Reuse(rows) if rows[offset] => ScalarBodyEmissionV55::Reuse,
+                _ => ScalarBodyEmissionV55::Inline,
+            };
+            self.emit_operation(namespace, operation, plan, body, out)?;
         }
         for block in function.blocks.clone() {
             control::emit_block(self, namespace, block, out)?;
@@ -528,6 +570,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         namespace: usize,
         operation: usize,
         plan: &ByteOperationV30<'_, '_>,
+        body: ScalarBodyEmissionV55,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
         let row = &self.inventory.operations()[operation];
@@ -541,6 +584,28 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             coordinate.operation
         );
         emit!(out, " {{ byte_refused_v55(s, operation) }} else {{\n");
+        match body {
+            ScalarBodyEmissionV55::Inline => {}
+            ScalarBodyEmissionV55::Define | ScalarBodyEmissionV55::Reuse => {
+                if !matches!(plan, ByteOperationV30::Scalar(_)) {
+                    return Err(mismatch());
+                }
+                emit!(
+                    out,
+                    " byte_scalar_body_{namespace}_{operation}_v55(s, little_endian)\n }}\n}}\n"
+                );
+                if matches!(body, ScalarBodyEmissionV55::Reuse) {
+                    return Ok(());
+                }
+                emit!(
+                    out,
+                    "open spec fn byte_scalar_body_{namespace}_{operation}_v55(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n",
+                    coordinate.block.function.0,
+                    coordinate.block.block,
+                    coordinate.operation
+                );
+            }
+        }
         let before = ByteMemoryStateNamesV30 {
             values: "s.values",
             memory: "s.memory",
@@ -685,8 +750,11 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         };
         emit!(
             out,
-            ";\n let state = MemoryStateV30 {{ pc: {pc}, values, memory, generations, frames, valid }}; byte_result_v55(s, state, operation, effect)\n }}\n}}\n"
+            ";\n let state = MemoryStateV30 {{ pc: {pc}, values, memory, generations, frames, valid }}; byte_result_v55(s, state, operation, effect)\n }}\n"
         );
+        if matches!(body, ScalarBodyEmissionV55::Inline) {
+            emit!(out, "}}\n");
+        }
         Ok(())
     }
 

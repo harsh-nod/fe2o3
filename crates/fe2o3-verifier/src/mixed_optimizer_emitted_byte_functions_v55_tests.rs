@@ -78,6 +78,194 @@ fn emitted_byte_functions_reuse_exact_memory_and_control_models_with_resource_bo
     });
 }
 
+fn scalar_reuse_module_v55(changed: bool, count: u32) -> Module {
+    let mut module = Module::new("scalar-body-output-sharing");
+    for function in 0..2 {
+        let mut block = BasicBlock::new(BlockId(0));
+        for operation in 0..count {
+            block.operations.push(KirOperation::effect_free(
+                ValueDef::new(ValueId(operation), Type::Scalar(ScalarType::U32)),
+                OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(
+                    operation + u32::from(changed && operation == count / 2),
+                )),
+            ));
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(KirFunction::internal_helper(
+            format!("body{function}"),
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+    }
+    module
+}
+
+#[test]
+fn emitted_scalar_bodies_keep_output_predicates_and_exact_changed_operations() {
+    let count = 16;
+    with_inventory(
+        &scalar_reuse_module_v55(false, count),
+        |input, physical, input_floor| {
+            with_inventory(
+                &scalar_reuse_module_v55(true, count),
+                |output, output_physical, output_floor| {
+                    let allocations = NoAllocations(input.owner());
+                    let output_allocations = NoAllocations(output.owner());
+                    let context = ByteContext::native(FormalIndexWidth::Bits64);
+                    let emit = |out: &mut Writer<'_, '_>| {
+                        let mut emitted = EmittedByteFunctionsV55::new(
+                            input,
+                            physical,
+                            &allocations,
+                            context,
+                            out,
+                        )?;
+                        for function in 0..2 {
+                            let model = ByteFunctionV30::derive(
+                                input,
+                                physical,
+                                Function(function),
+                                context,
+                                &allocations,
+                                out,
+                            )?;
+                            emitted.emit(&model, 50 + function as usize, out)?;
+                        }
+                        emit!(out, "mod output {{\nuse super::*;\n");
+                        for function in 0..2 {
+                            let model = ByteFunctionV30::derive(
+                                output,
+                                output_physical,
+                                Function(function),
+                                context,
+                                &output_allocations,
+                                out,
+                            )?;
+                            emitted.emit_output_reusing_scalar_bodies(
+                                &model,
+                                function as usize * 2 + 1,
+                                out,
+                            )?;
+                        }
+                        emit!(out, "}}\n");
+                        Ok(())
+                    };
+                    let floor = input_floor + output_floor;
+                    let measured = run(floor, LIMIT, LIMIT, emit);
+                    let source = measured.0.unwrap();
+                    let output_text = source.split_once("mod output {").unwrap().1;
+                    assert_eq!(
+                        source.matches("open spec fn byte_scalar_body_").count(),
+                        2 * count as usize
+                    );
+                    assert_eq!(
+                        output_text.matches("use super::byte_scalar_body_").count(),
+                        2 * (count as usize - 1)
+                    );
+                    assert_eq!(
+                        output_text.matches("open spec fn byte_operation_").count(),
+                        2 * count as usize
+                    );
+                    assert_eq!(
+                        output_text
+                            .matches("open spec fn original_canonical_byte_scalar_trace_")
+                            .count(),
+                        2
+                    );
+                    for function in 0..2 {
+                        let namespace = function * 2 + 1;
+                        assert!(output_text.contains(&format!(
+                            "s.pc != {function} || !byte_inputs_{namespace}_v55(s, little_endian)"
+                        )));
+                        let changed = function * count as usize + count as usize / 2;
+                        assert!(
+                            !output_text.contains(&format!(
+                                " as byte_scalar_body_{namespace}_{changed}_v55;"
+                            ))
+                        );
+                    }
+                    assert!(!source.contains("assume("));
+                    let exact = run(floor, measured.1, measured.2, emit);
+                    assert_eq!(exact.0.unwrap(), source);
+                    assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+                    assert!(matches!(
+                        run(floor, measured.1 - 1, measured.2, emit).0,
+                        Err(Error::Resource(Resource::Work(_)))
+                    ));
+                    assert!(matches!(
+                        run(floor, measured.1, measured.2 - 1, emit).0,
+                        Err(Error::Resource(Resource::Storage(_)))
+                    ));
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn emitted_scalar_bodies_refuse_missing_width_and_sticky_foreign_ledger() {
+    with_inventory(
+        &scalar_reuse_module_v55(false, 2),
+        |inventory, physical, floor| {
+            run(floor, LIMIT, LIMIT, |out| {
+                let allocations = NoAllocations(inventory.owner());
+                let context = ByteContext::native(FormalIndexWidth::Bits64);
+                let mut emitted =
+                    EmittedByteFunctionsV55::new(inventory, physical, &allocations, context, out)?;
+                let model = ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    context,
+                    &allocations,
+                    out,
+                )?;
+                assert!(matches!(
+                    emitted.emit_output_reusing_scalar_bodies(&model, 1, out),
+                    Err(Error::Statement(_))
+                ));
+                assert!(out.text.is_empty());
+                emitted.emit(&model, 50, out)?;
+                let wrong_width = ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    ByteContext::native(FormalIndexWidth::Bits32),
+                    &allocations,
+                    out,
+                )?;
+                let bytes = out.text.len();
+                assert!(matches!(
+                    emitted.emit_output_reusing_scalar_bodies(&wrong_width, 1, out),
+                    Err(Error::Statement(_))
+                ));
+                assert_eq!(out.text.len(), bytes);
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, LIMIT);
+                budget.reserve_storage(out.budget.storage())?;
+                let mut foreign = Writer::new(&mut budget)?;
+                assert!(matches!(
+                    emitted.emit_output_reusing_scalar_bodies(&model, 1, &mut foreign),
+                    Err(Error::Resource(Resource::Accounting))
+                ));
+                assert_eq!(foreign.budget.work(), 0);
+                assert!(foreign.text.is_empty());
+                let work = out.budget.work();
+                assert!(matches!(
+                    emitted.emit_output_reusing_scalar_bodies(&model, 1, out),
+                    Err(Error::Resource(Resource::Accounting))
+                ));
+                assert_eq!(out.budget.work(), work);
+                assert_eq!(out.text.len(), bytes);
+                Ok(())
+            })
+            .0
+            .unwrap();
+        },
+    );
+}
+
 #[test]
 fn emitted_byte_functions_keep_large_complete_census_without_duplicate_interpreters() {
     let count = 1024_u32;
