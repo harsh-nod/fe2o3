@@ -20,7 +20,10 @@ owner lengths. Subsequent checkpoints qualify pending-compute source windows,
 ordered destination gathers, and gathered-frame compute consumers on three and
 four GPUs with final-readback-only progress. Late gathered consumers now also
 pass after observed retained native publication, with final-readback-only
-progress after seeding. Earlier matched wait-cadence measurements remain scoped
+progress after seeding. Ordered segment lists now also bridge an exact pending
+compute producer to prequeued or late full-frame compute/D2H consumers on two
+GPUs, including overlapping lists of up to 4096 descriptors. Earlier matched
+wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -37,7 +40,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; unified settled-owner segment lists qualified on two GPUs; ordinary generated argument API CPU-qualified; incomplete | Pending whole-list producer provenance, native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-owner and pending-compute segment-list composition qualified on two GPUs; ordinary generated argument API CPU-qualified; incomplete | Broader segment-list composition, native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -294,16 +297,28 @@ composition. Fresh checks pass 1943 KFD tests, 2227 runtime tests (32 existing
 hardware ignores), 16 example tests, 114 doctests, strict Clippy and all 32 source
 controls. Shared arithmetic proofs pass; whole-adapter refinement remains open.
 
+The [pending-list checkpoint](evidence/dev-pending-peer-segments-2026-10-02/README.md)
+adds distinct whole-list provenance without treating an envelope as scalar
+produced coverage. Fourteen MI300X cases pass in both directions: fully queued
+compute -> overlapping list -> compute -> scalar peer -> D2H at 4/65/4096
+descriptors, late consumers after retained publication, direct full-frame D2H,
+and settled-list regressions. Public events are released after dependent
+admission and only the final stream drives a prequeued chain. Full-byte oracles,
+initialized destination complements, callbacks, custody and owned cleanup pass.
+Fresh checks pass 2245 runtime tests (32 unchanged hardware ignores), 21 example
+tests, 61 runtime doctests, strict Clippy and all 32 source controls. The lower
+KFD crate and 76 referenced proof files are unchanged; neither its previous
+1943-test suite nor a solver was rerun. This qualifies the narrow pending source
+profile, not general application authority, native faults or performance.
+
 The expedited practical multi-GPU priority order is:
 
-1. Add distinct whole-list pending producer provenance and completion
-   reconciliation. Do not relabel a segmented envelope as a scalar copy: its
-   gaps and ordered overwrites have different semantics. Qualify a fully
-   prequeued compute -> overlapping segment list -> compute -> peer/readback
-   chain driven only by final streams, with released public events, full-byte
-   guards and retained custody on later-segment failure. Existing settled-owner
-   segment lists and scalar pending-producer pipelines remain separate accepted
-   capabilities until that bridge is implemented.
+1. Broaden the accepted whole-list composition profile to standalone
+   settled-source lists feeding prequeued frame consumers, then list writes
+   behind an exact pending destination writer. Preserve immutable list identity,
+   initialized complements and source/whole-destination reservations; do not
+   relabel an envelope as scalar coverage. Qualify two ordered lists across
+   three GPUs with overlaps, holes, released events and final-stream-only D2H.
 2. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The

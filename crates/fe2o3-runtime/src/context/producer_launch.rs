@@ -49,6 +49,10 @@ pub(super) enum PreparedSubmissionCustodyV1 {
     Peer(PreparedPeerSubmissionV1),
     Launch(ProducerLaunchRootV1),
     Copy(SameDeviceCopyRootV1),
+    Segments {
+        mechanism: PeerTransferMechanismV1,
+        root: SegmentedPeerCopyRootV1,
+    },
 }
 
 pub(super) struct ProducerLaunchRootV1 {
@@ -218,6 +222,25 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(invalid);
         }
         let record = self.submissions.get(&parent).ok_or(invalid)?;
+        if let Some(root) = self.segmented_peer_copies.get(&parent) {
+            if !record.segmented_peer_copy
+                || record.same_device_copy
+                || record.producer_launch
+                || record.scalar_peer_copy
+                || record.directed_peer_copy
+                || self.same_device_copies.contains_key(&parent)
+                || self.producer_launches.contains_key(&parent)
+                || self.scalar_peer_copies.contains_key(&parent)
+                || root.state.depth == 0
+                || root.state.depth >= child_depth
+            {
+                return Err(invalid);
+            }
+            return Ok(());
+        }
+        if record.segmented_peer_copy {
+            return Err(invalid);
+        }
         // Read only declared ranks here: recursive validation must strictly descend.
         let depth = match (
             self.same_device_copies.get(&parent),
@@ -274,6 +297,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<usize, RuntimeValidationErrorV1> {
+        if let Some(parent) = self.segmented_peer_copies.get(&id) {
+            self.validate_segmented_peer_custody_v1(id)?;
+            return Ok(parent.state.depth);
+        }
         if let Some(parent) = self.same_device_copies.get(&id) {
             self.validate_same_device_copy_custody_v1(id)?;
             if self.submissions.get(&id).is_some_and(|record| {
@@ -302,6 +329,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<usize, RuntimeValidationErrorV1> {
+        if let Some(parent) = self.segmented_peer_copies.get(&id) {
+            self.validate_segmented_peer_custody_v1(id)?;
+            return Ok(parent.state.depth);
+        }
         let record = self
             .submissions
             .get(&id)
@@ -631,7 +662,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let result = self
             .validate_scalar_peer_custody_v1(id)
             .and_then(|()| self.validate_producer_launch_custody_v1(id))
-            .and_then(|()| self.validate_same_device_copy_custody_v1(id));
+            .and_then(|()| self.validate_same_device_copy_custody_v1(id))
+            .and_then(|()| self.validate_segmented_peer_custody_v1(id));
         if result.is_err() {
             self.quarantine_after_async_command_panic_v1();
         }
@@ -645,6 +677,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.check_operation_custody_v1(id)?;
         self.release_scalar_peer_dependencies_v1(id)?;
         self.release_same_device_copy_dependencies_v1(id);
+        self.release_segmented_peer_dependencies_v1(id);
         if let Some(root) = self.producer_launches.get_mut(&id)
             && root.dependencies_held
         {

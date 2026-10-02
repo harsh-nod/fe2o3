@@ -59,6 +59,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                             || peer.preserves_destination_frame_v1(source))
                 })
                 .map(|_| submission)
+                .or_else(|| {
+                    self.segmented_peer_copies
+                        .get(&submission)
+                        .filter(|peer| {
+                            ordinary
+                                && record.status == RuntimeCompletionStatusV1::Pending
+                                && peer.preserves_destination_frame_v1(source)
+                        })
+                        .map(|_| submission)
+                })
         });
         let Some(selected) = selected else {
             return Ok(None);
@@ -78,7 +88,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 RuntimeCompletionStatusV1::Succeeded if record.quiescent => {}
                 RuntimeCompletionStatusV1::Pending
                     if !record.quiescent
-                        && record.scalar_peer_copy
+                        && (record.scalar_peer_copy || record.segmented_peer_copy)
                         && (if record.directed_peer_copy {
                             directed
                         } else {
@@ -170,6 +180,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if self.versions.is_none()
             || self.scalar_peer_copies.contains_key(&id)
             || self.producer_launches.contains_key(&id)
+            || self.segmented_peer_copies.contains_key(&id)
             || id.context_generation != self.context_generation
             || root.stream.context_generation != self.context_generation
             || root.backend_stream == 0
@@ -265,7 +276,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             if producer.scalar_peer_copy {
                 self.validate_scalar_peer_custody_v1(dependency.submission)?;
-            } else if producer.status != RuntimeCompletionStatusV1::Succeeded || !producer.quiescent
+            } else if !producer.segmented_peer_copy
+                && (producer.status != RuntimeCompletionStatusV1::Succeeded || !producer.quiescent)
             {
                 return Err(invalid);
             }
@@ -281,13 +293,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         if depth != root.state.depth
             || !root.dependencies.contains(&root.producer)
-            || self
+            || (self
                 .scalar_peer_copies
                 .get(&root.producer.submission)
                 .is_none_or(|producer| {
                     !producer.covers_input_v1(root.source)
                         && !producer.preserves_destination_frame_v1(root.source)
                 })
+                && self
+                    .segmented_peer_copies
+                    .get(&root.producer.submission)
+                    .is_none_or(|producer| !producer.preserves_destination_frame_v1(root.source)))
         {
             return Err(invalid);
         }

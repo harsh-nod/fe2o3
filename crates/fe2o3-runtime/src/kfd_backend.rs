@@ -9133,13 +9133,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if directed.is_none() {
             self.admit_directed_owner_capacity_v1([source_route, destination_route], false)?;
         }
-        let compute_producer = if directed.is_none() && segments.is_none() {
+        let compute_producer = if directed.is_none() {
             self.prepare_compute_peer_v1(
                 source_route,
                 source,
                 destination_route,
                 destination,
                 dependencies,
+                segments.as_ref(),
             )?
         } else {
             None
@@ -9327,6 +9328,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 destination_route,
                 destination,
                 plan,
+                compute_producer.as_ref(),
             )?)
         } else if let Some(producer) = &compute_producer {
             Some(self.prepare_compute_xgmi_plan_v1(
@@ -12558,6 +12560,13 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     }
 
     fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+        true
+    }
+
+    fn supports_pending_compute_peer_copy_segments_v1(&self) -> bool {
+        // One exact full-Write source producer gates the complete immutable list.
+        // Native restoration preserves its initially settled destination frame;
+        // consumers retain that list identity, never scalar envelope coverage.
         true
     }
 

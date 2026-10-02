@@ -17,6 +17,9 @@ mod window;
 #[path = "gather_tests.rs"]
 mod gather;
 
+#[path = "segment_tests.rs"]
+mod segments;
+
 const BYTES: usize = 64;
 const ALLOCATIONS: usize = 10;
 
@@ -137,6 +140,18 @@ impl Fixture {
         promote: bool,
         prefixes: [Vec<ScriptedSdmaStepV1>; 2],
     ) -> Self {
+        Self::with_layout_driver_prefixes_and_readback_progress(
+            bytes, readback, promote, prefixes, true,
+        )
+    }
+
+    fn with_layout_driver_prefixes_and_readback_progress(
+        bytes: [usize; 2],
+        readback: Option<(usize, u64, u64, usize)>,
+        promote: bool,
+        prefixes: [Vec<ScriptedSdmaStepV1>; 2],
+        readback_will_run: bool,
+    ) -> Self {
         let mut local_allocations = [[0; ALLOCATIONS]; 2];
         let mut local_streams = [0; 2];
         let children = prefixes
@@ -145,6 +160,7 @@ impl Fixture {
             .map(|(index, mut steps)| {
                 if let Some((child, source, destination, len)) = readback
                     && index == child
+                    && readback_will_run
                 {
                     steps.extend(readback_range_steps(source, destination, len));
                 }

@@ -233,6 +233,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 journal_producer_read: None,
                 producer_launch: false,
                 same_device_copy: false,
+                segmented_peer_copy: false,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));

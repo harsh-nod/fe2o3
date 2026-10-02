@@ -47,6 +47,7 @@ pub use producer_launch::{
 };
 use producer_launch::{PreparedSubmissionCustodyV1, ProducerLaunchRootV1};
 mod peer_segments;
+use peer_segments::SegmentedPeerCopyRootV1;
 pub use peer_segments::*;
 mod unpublished;
 mod versions;
@@ -702,6 +703,30 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to an immutable ordered peer segment list behind one exact pending
+    /// producer-aware full-allocation Write. Context requires its version journal,
+    /// the exact current writer/event, and checked source and destination envelopes.
+    /// This is distinct from scalar range coverage and grants no kernel authority.
+    ///
+    /// Validate and retain the complete ordered list and original allocations before
+    /// effects. Retain every dependency independently of public events; issue no
+    /// segment until every dependency succeeded and original owners were restored.
+    /// Keep one logical result and whole-owner custody until the complete list and
+    /// closing checks finish. Cancellation is no-effect only before first publication;
+    /// a failed or uncertain prefix cannot authorize a dependent consumer.
+    ///
+    /// Authenticate an initialized whole destination and preserve every byte outside
+    /// the listed writes, including envelope gaps. Pending producer-aware Read-only
+    /// consumers and opted-in peer readbacks may read that original preserved frame,
+    /// but must authenticate the exact list event and wait for final success/restoration.
+    /// Admission and observation must not progress parents or acquire conflicting
+    /// physical custody. Explicit dependent progress services the retained chain.
+    /// Context independently observes logical parents before committing versions.
+    /// Pending destination-writer chaining is not part of this profile.
+    fn supports_pending_compute_peer_copy_segments_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered partial peer writes into one initialized allocation.
     ///
     /// This additionally requires `supports_pending_compute_peer_copy_v1`. Each
@@ -1059,13 +1084,15 @@ pub struct RuntimeCleanupReportV1<E> {
     graph_reserved: bool,
     native_pair_reserved: bool,
     allocation_credit_records: usize,
-    allocation_journal_records: usize,
+    // Journal capacity is bounded by CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1.
+    allocation_journal_records: u32,
     writer_journal_records: usize,
     reader_journal_records: usize,
     scalar_peer_copy_records: u32,
     // The submission admission bound fits u32; keep shutdown errors inline.
     producer_launch_records: u32,
     same_device_copy_records: u32,
+    segmented_peer_copy_records: u32,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -1093,6 +1120,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.scalar_peer_copy_records == 0
             && self.producer_launch_records == 0
             && self.same_device_copy_records == 0
+            && self.segmented_peer_copy_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -1112,7 +1140,7 @@ impl<E> RuntimeCleanupReportV1<E> {
 
     /// Opt-in journal records, including attempts with no returned handle.
     pub const fn allocation_journal_records_v1(&self) -> usize {
-        self.allocation_journal_records
+        self.allocation_journal_records as usize
     }
 
     /// Retained writer metadata; this is not an available-data count.
@@ -1139,6 +1167,10 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Retained same-device readback roots, including attempts without a handle.
     pub const fn same_device_copy_records_v1(&self) -> usize {
         self.same_device_copy_records as usize
+    }
+
+    pub const fn segmented_peer_copy_records_v1(&self) -> usize {
+        self.segmented_peer_copy_records as usize
     }
 }
 
@@ -1200,6 +1232,7 @@ struct SubmissionRecordV1 {
     directed_peer_copy: bool,
     producer_launch: bool,
     same_device_copy: bool,
+    segmented_peer_copy: bool,
     dependency_retains: usize,
 }
 
@@ -1250,6 +1283,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     scalar_peer_copies: HashMap<RuntimeSubmissionIdV1, ScalarPeerCopyRootV1>,
     producer_launches: HashMap<RuntimeSubmissionIdV1, ProducerLaunchRootV1>,
     same_device_copies: HashMap<RuntimeSubmissionIdV1, SameDeviceCopyRootV1>,
+    segmented_peer_copies: HashMap<RuntimeSubmissionIdV1, SegmentedPeerCopyRootV1>,
     generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
     completion_callback_count: usize,
@@ -1454,6 +1488,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             scalar_peer_copies: HashMap::new(),
             producer_launches: HashMap::new(),
             same_device_copies: HashMap::new(),
+            segmented_peer_copies: HashMap::new(),
             completion_callbacks: HashMap::new(),
             completion_callback_count: 0,
             completion_callback_panic_count: 0,
@@ -1497,6 +1532,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || !self.scalar_peer_copies.is_empty()
             || !self.producer_launches.is_empty()
             || !self.same_device_copies.is_empty()
+            || !self.segmented_peer_copies.is_empty()
             || self.native_pair_reservation.is_some()
     }
 
@@ -1646,6 +1682,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     self.scalar_peer_copies.remove(&id);
                     self.producer_launches.remove(&id);
                     self.same_device_copies.remove(&id);
+                    self.segmented_peer_copies.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
                     debug_assert!(!self.completion_callbacks.contains_key(&id));
                 }
@@ -1760,10 +1797,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             graph_reserved: self.graph_reservation.is_some(),
             native_pair_reserved: self.native_pair_reservation.is_some(),
             allocation_credit_records: self.allocation_admission.retained_records(),
-            allocation_journal_records: self
-                .versions
-                .as_ref()
-                .map_or(0, ContextVersionsV1::retained_records),
+            allocation_journal_records: u32::try_from(
+                self.versions
+                    .as_ref()
+                    .map_or(0, ContextVersionsV1::retained_records),
+            )
+            .expect("bounded allocation journal"),
             writer_journal_records: self
                 .versions
                 .as_ref()
@@ -1778,6 +1817,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .expect("bounded producer-launch registry"),
             same_device_copy_records: u32::try_from(self.same_device_copies.len())
                 .expect("bounded same-device-copy registry"),
+            segmented_peer_copy_records: u32::try_from(self.segmented_peer_copies.len())
+                .expect("bounded segmented-peer-copy registry"),
         }
     }
 
@@ -1841,6 +1882,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         if self.submissions[&submission].same_device_copy {
             let result = self.validate_pending_same_device_copy_roots_v1(submission);
+            self.journal_result_v1(result)?;
+        }
+        if self.submissions[&submission].segmented_peer_copy {
+            let result = self.validate_pending_segmented_peer_roots_v1(submission);
             self.journal_result_v1(result)?;
         }
         self.check_operation_custody_v1(submission)?;
@@ -3261,6 +3306,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.scalar_peer_copies.remove(&submission.id);
         self.producer_launches.remove(&submission.id);
         self.same_device_copies.remove(&submission.id);
+        self.segmented_peer_copies.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
         debug_assert!(!self.completion_callbacks.contains_key(&submission.id));
         Ok(())
@@ -3749,6 +3795,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let result = self.validate_pending_same_device_copy_roots_v1(submission.id);
             self.journal_result_v1(result)?;
         }
+        if !record.quiescent && record.segmented_peer_copy {
+            let result = self.validate_pending_segmented_peer_roots_v1(submission.id);
+            self.journal_result_v1(result)?;
+        }
         if record.quiescent || self.retained_directed_success_v1(submission.id) {
             return Ok(RuntimeCancellationV1::TooLate);
         }
@@ -4162,6 +4212,7 @@ mod tests {
         pending_peer_readback: bool,
         pending_directed_peer_readback: bool,
         pending_compute_peer: bool,
+        pending_compute_segments: bool,
         ordered_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
@@ -4378,24 +4429,25 @@ mod tests {
             if self.finish_producer_launch_test_v1(submission, success) {
                 return;
             }
-            if let Some(pending) = self.pending_peer_segments.remove(&submission)
-                && success
-            {
-                for segment in pending.segments {
-                    self.apply_copy(
-                        BackendMemoryRegionV1 {
-                            byte_offset: pending.source.byte_offset + segment.source_offset,
-                            byte_len: segment.byte_len,
-                            ..pending.source
-                        },
-                        BackendMemoryRegionV1 {
-                            byte_offset: pending.destination.byte_offset
-                                + segment.destination_offset,
-                            byte_len: segment.byte_len,
-                            ..pending.destination
-                        },
-                    );
+            if let Some(pending) = self.pending_peer_segments.remove(&submission) {
+                if success {
+                    for segment in pending.segments {
+                        self.apply_copy(
+                            BackendMemoryRegionV1 {
+                                byte_offset: pending.source.byte_offset + segment.source_offset,
+                                byte_len: segment.byte_len,
+                                ..pending.source
+                            },
+                            BackendMemoryRegionV1 {
+                                byte_offset: pending.destination.byte_offset
+                                    + segment.destination_offset,
+                                byte_len: segment.byte_len,
+                                ..pending.destination
+                            },
+                        );
+                    }
                 }
+                self.record_copy_completion_test_v1(submission, success);
             }
             if let Some((_, source, destination)) = self.pending_copies.remove(&submission) {
                 if success {
@@ -4792,6 +4844,10 @@ mod tests {
 
         fn supports_pending_compute_peer_copy_v1(&self) -> bool {
             self.pending_compute_peer
+        }
+
+        fn supports_pending_compute_peer_copy_segments_v1(&self) -> bool {
+            self.pending_compute_segments
         }
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {

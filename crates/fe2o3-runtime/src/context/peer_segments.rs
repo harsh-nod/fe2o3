@@ -1,6 +1,8 @@
 //! One logical peer transfer with an immutable, ordered descriptor snapshot.
 
 use super::*;
+mod custody;
+pub(super) use custody::SegmentedPeerCopyRootV1;
 use fe2o3_runtime_model::{
     OrderedPeerCopyAdmissionErrorV1, validate_ordered_peer_copy_segments_v1,
 };
@@ -97,18 +99,28 @@ impl<B: RuntimePeerCopySegmentsBackendV1> RuntimeContextV1<B> {
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         snapshot.extend_from_slice(segments);
         let identity = contract_identity(stream, source, destination, &snapshot);
+        let snapshot = std::sync::Arc::new(snapshot);
+        let custody = self.prepare_segmented_peer_custody_v1(
+            stream,
+            source,
+            destination,
+            snapshot.clone(),
+            dependencies,
+        )?;
+        let mechanism = PeerTransferMechanismV1::DeclaredPeerCopy {
+            contract_identity: identity,
+        };
         self.submit_context_operation_v1(
             stream,
             prepared.stream_record,
             &[destination.allocation],
-            Some(PreparedSubmissionCustodyV1::Peer(
-                PreparedPeerSubmissionV1 {
-                    mechanism: PeerTransferMechanismV1::DeclaredPeerCopy {
-                        contract_identity: identity,
-                    },
+            Some(match custody {
+                Some(root) => PreparedSubmissionCustodyV1::Segments { mechanism, root },
+                None => PreparedSubmissionCustodyV1::Peer(PreparedPeerSubmissionV1 {
+                    mechanism,
                     scalar: None,
-                },
-            )),
+                }),
+            }),
             &[prepared.journal_source],
             |backend| {
                 backend.peer_copy_segments_v1(

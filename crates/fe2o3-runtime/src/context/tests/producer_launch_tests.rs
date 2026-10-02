@@ -309,6 +309,7 @@ impl MockBackend {
         id: u64,
     ) -> Option<Result<BackendPollV1, RuntimeBackendFailureV1<MockError>>> {
         if !self.pending_copies.contains_key(&id)
+            && !self.pending_peer_segments.contains_key(&id)
             && !self.producer_launch.completed_copies.contains_key(&id)
         {
             return None;
@@ -355,6 +356,9 @@ impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
                         .contains_key(&dependency.producer_submission)
                     && !self
                         .pending_copies
+                        .contains_key(&dependency.producer_submission)
+                    && !self
+                        .pending_peer_segments
                         .contains_key(&dependency.producer_submission)
                     && self
                         .producer_launch

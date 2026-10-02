@@ -5,6 +5,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct DeferredComputeIdentityV1 {
     launch: std::sync::Weak<RetainedComputeLaunchV1>,
+    pub(super) completed_peer_launch: Option<Arc<RetainedComputeLaunchV1>>,
     pub(super) depth: usize,
     pub(super) route: Option<RoutedHandleV1>,
 }
@@ -17,6 +18,7 @@ impl DeferredComputeIdentityV1 {
     ) -> Self {
         Self {
             launch: Arc::downgrade(launch),
+            completed_peer_launch: None,
             depth,
             route,
         }

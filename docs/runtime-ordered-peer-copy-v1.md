@@ -54,13 +54,13 @@ resource release. Once submitted, existing whole-list settlement and native
 custody rules apply. Ordinary owner polling does not imply eligibility for the
 single-wait diagnostic capture mode below.
 
-With the version journal enabled, an input allocation with a pending writer
-still refuses a new reader with `ContextReserved`, even when the request names
-that producer's event. This happens before backend submission. The owner reports
-the error without retrying; it does not defer the request until the writer
-settles. Explicitly progressing the producer and submitting a fresh consumer
-with its completed event is supported. Pending versioned dataflow remains a gap,
-not a reason to disable the journal.
+Outside the explicit [pending compute profile](#pending-compute-composition),
+an input allocation with a pending journal writer still refuses a new reader
+with `ContextReserved`, even when the request names that producer's event. This
+happens before backend submission. The owner reports the error without retrying;
+it does not defer the request until the writer settles. Explicitly progressing
+the producer and submitting a fresh copy with its completed event remains
+supported. Unsupported pending profiles are not a reason to disable the journal.
 
 Focused CPU regressions cover both methods' snapshot bounds/compaction, combined
 credit and rejection refunds, owner-side validation precedence, cancellation,
@@ -72,8 +72,9 @@ qualification.
 
 `KfdMultiDeviceRuntimeBackendV1` implements the same local segment SPI for settled,
 initialized PUBLIC DeviceLocal owners on an explicitly admitted native route.
-Unsupported routes or pending compute producers are rejected without silently
-falling back to host staging. The original copy-only backend remains available.
+Unsupported routes or producers outside the distinct pending profile below are
+rejected without silently falling back to host staging. The original copy-only
+backend remains available and does not acquire the new compute provenance.
 
 The immutable lower `Gfx942ComputeXgmiSegmentsPlanV1` checks both original logical
 allocation extents, unequal bounding envelopes, every descriptor and every packet
@@ -91,11 +92,9 @@ prefix and retains terminal custody, never partial successful output.
 
 The Context journal and owned async engine keep their whole-list result and
 reservation rules. Pending list outputs are not scalar producer coverage: gaps
-inside an envelope may be untouched. Deferred scalar compute and pending native
-readback reject these inputs explicitly. Completed events may use ordinary
-terminal-control paths, but mixing a list into the deferred scalar-producer
-profile is unsupported. A distinct list producer record and reconciliation path
-remain necessary for prequeued compute/list/compute/readback dataflow.
+inside an envelope may be untouched. Legacy settled-source lists without the
+distinct provenance described below still reject pending frame consumers.
+Completed events may use ordinary terminal-control paths.
 
 The lower adapter reuses the existing R74 cursor and shared checked-window and
 packet arithmetic. This is not a formal refinement proof of the new nested
@@ -114,6 +113,30 @@ explicit cleanup pass. Fresh qualification also passes 1943 KFD tests, 2227
 runtime tests (32 existing hardware ignores), 16 example tests, 114 doctests,
 strict Clippy and all 32 source controls. The shared packet/window arithmetic
 campaigns pass; the new nested adapter composition remains outside their proofs.
+
+## Pending Compute Composition
+
+With the version journal and backend opt-in, an exact logically Pending
+producer-aware Ordinary compute result may feed a native segment list. Its
+source binding must be a sole full-allocation Write, and the original PUBLIC
+destination must be initialized and settled. A separate immutable list record
+binds the descriptor snapshot, producer, original endpoints and stream. A
+conservative source reader and whole-destination writer remain retained until
+logical reconciliation; poll does not rehash or rescan the descriptor list.
+
+Read-only compute inputs and native D2H may consume the preserved initialized
+destination frame, including untouched gaps, after whole-list success and owner
+restoration. A fully prequeued compute -> list -> compute -> peer -> D2H chain
+can be driven only from its final stream. Public event release does not release
+its retained dependencies. Exact completed-backend receipts cover physical
+completion before Context observation; the journal still supplies content
+currentness. Deferred successful writable launches keep their original single
+accounting charge until result release.
+
+The [pending-list qualification](evidence/dev-pending-peer-segments-2026-10-02/README.md)
+records the CPU checks and 14 accepted two-GPU cases. This profile does not authorize
+pending destination-writer chaining, standalone settled-source list frame
+consumers, arbitrary application kernels, or a new formal refinement.
 
 ## Copy Only Native Execution
 
@@ -417,13 +440,15 @@ qualification remains separate from this caller-driven Context workload.
   geometries, and attribute the 65-segment cost before larger optimizations. No
   speedup or parity claim follows from the completed comparisons.
 - Graph sequence nodes and explicit negotiated Worker transport support.
-- Versioned pending-producer input handoff. A host-deferred owner driver and
-  native admission of future readers are distinct designs; neither is supplied
-  by the completed-event fixture or ready-prefix flush change.
+- Broader versioned pending-producer handoff beyond the exact profile above:
+  standalone settled-source list frame consumers and ordered list writes behind
+  another pending destination writer remain unsupported. The completed-event
+  fixture and ready-prefix flush do not supply these missing profiles.
   The [producer-bound reservation model](runtime-producer-read-reservations-v1.md)
   is now a concrete Rust candidate with conditional settlement/custody proofs.
-  Its full lifecycle proof and Context/backend integration remain gates before
-  enabling that runtime behavior.
+  Its full lifecycle proof and the remaining broader Context/backend
+  integrations are still open; the narrow pending-list adapter is not a new
+  refinement of that model.
 - More permissive scheduling-domain coexistence and native multi-packet
   publication are separate optimizations. This serial version still publishes
   and waits once per descriptor and does not claim optimal packet throughput.

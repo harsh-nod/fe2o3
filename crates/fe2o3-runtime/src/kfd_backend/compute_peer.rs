@@ -1,7 +1,7 @@
 //! Exact pending compute writers retained by the existing cooperative copy owner.
 
 use super::*;
-use fe2o3_kfd::Gfx942ComputeXgmiCopyWindowV1;
+use fe2o3_kfd::{Gfx942ComputeXgmiCopyWindowV1, Gfx942ComputeXgmiSegmentsPlanV1};
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
@@ -155,7 +155,8 @@ impl DestinationFrame {
         }
         copy.compute_producer.as_ref().is_some_and(|producer| {
             producer.endpoints[1] == self.endpoint
-                && producer.window == self.window
+                && producer.segments().is_none()
+                && producer.window() == self.window
                 && (producer.id, producer.depth) == self.producer
                 && producer.predecessor == self.predecessor
         }) && backend.compute_peer_chain_intact_v1(id).is_ok()
@@ -230,6 +231,117 @@ impl AllocationIdentity {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SegmentDestinationFrame {
+    endpoint: (u64, RoutedHandleV1, AllocationIdentity),
+    source: (u64, RoutedHandleV1, AllocationIdentity),
+    plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    producer: (u64, usize),
+}
+
+impl SegmentDestinationFrame {
+    pub(super) fn covers(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        region: BackendMemoryRegionV1,
+    ) -> bool {
+        let (global, route, identity) = self.endpoint;
+        backend.allocations.get(&global) == Some(&route)
+            && region.allocation == global
+            && region.access == RuntimeAccessV1::Read
+            && backend.children[route.child]
+                .allocations
+                .get(&route.local)
+                .is_some_and(|record| {
+                    AllocationIdentity::of(record) == identity
+                        && record.sdma_initialized
+                        && compute_xgmi::checked_envelope(record, region)
+                })
+    }
+
+    pub(super) fn is_intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1, id: u64) -> bool {
+        let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = backend.submissions.get(&id) else {
+            return false;
+        };
+        if copy.directed.is_some()
+            || copy.source != self.source.1
+            || copy.source_region.allocation != self.source.0
+            || copy.destination != self.endpoint.1
+            || copy.destination_region.allocation != self.endpoint.0
+            || !self.matches_regions(copy.source_region, copy.destination_region)
+            || !copy
+                .compute_xgmi
+                .as_ref()
+                .is_some_and(|root| root.matches_segments(&self.plan))
+            || !self.covers(
+                backend,
+                BackendMemoryRegionV1 {
+                    allocation: self.endpoint.0,
+                    byte_offset: 0,
+                    byte_len: self.endpoint.2.bytes as u64,
+                    access: RuntimeAccessV1::Read,
+                },
+            )
+        {
+            return false;
+        }
+        // A final restored receipt outlives its released source and compute
+        // result. It proves frame identity, not successful completion.
+        if copy.is_quiescent() {
+            return copy.compute_producer.is_none()
+                && copy
+                    .compute_xgmi
+                    .as_ref()
+                    .is_some_and(|root| root.is_quiescent());
+        }
+        copy.compute_producer.as_ref().is_some_and(|producer| {
+            producer.endpoints == [self.source, self.endpoint]
+                && (producer.id, producer.depth) == self.producer
+                && producer.predecessor.is_none()
+                && producer
+                    .segments()
+                    .is_some_and(|plan| Arc::ptr_eq(plan, &self.plan))
+        }) && backend.compute_peer_chain_intact_v1(id).is_ok()
+    }
+
+    fn matches_regions(
+        &self,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> bool {
+        segment_regions_match(
+            &self.plan,
+            self.source.2,
+            self.endpoint.2,
+            source,
+            destination,
+        )
+    }
+}
+
+fn segment_regions_match(
+    plan: &Gfx942ComputeXgmiSegmentsPlanV1,
+    source_identity: AllocationIdentity,
+    destination_identity: AllocationIdentity,
+    source: BackendMemoryRegionV1,
+    destination: BackendMemoryRegionV1,
+) -> bool {
+    source.access == RuntimeAccessV1::Read
+        && destination.access == RuntimeAccessV1::Write
+        && plan.source_logical_bytes() == source_identity.bytes as u64
+        && plan.destination_logical_bytes() == destination_identity.bytes as u64
+        && plan.source_offset() == source.byte_offset
+        && plan.source_len() == source.byte_len
+        && plan.destination_offset() == destination.byte_offset
+        && plan.destination_len() == destination.byte_len
+}
+
+#[derive(Clone, Debug)]
+enum TransferIdentity {
+    Window(Gfx942ComputeXgmiCopyWindowV1),
+    Segments(Arc<Gfx942ComputeXgmiSegmentsPlanV1>),
+}
+
 #[derive(Debug)]
 pub(super) struct Producer {
     pub(super) id: u64,
@@ -238,7 +350,7 @@ pub(super) struct Producer {
     depth: usize,
     launch: Arc<RetainedComputeLaunchV1>,
     endpoints: [(u64, RoutedHandleV1, AllocationIdentity); 2],
-    window: Gfx942ComputeXgmiCopyWindowV1,
+    transfer: TransferIdentity,
     predecessor: Option<DestinationPredecessor>,
 }
 
@@ -248,13 +360,30 @@ impl Producer {
     }
 
     pub(super) fn window(&self) -> Gfx942ComputeXgmiCopyWindowV1 {
-        self.window
+        match self.transfer {
+            TransferIdentity::Window(window) => window,
+            TransferIdentity::Segments(_) => unreachable!("scalar profile requires a window"),
+        }
+    }
+
+    pub(super) fn segments(&self) -> Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>> {
+        match &self.transfer {
+            TransferIdentity::Window(_) => None,
+            TransferIdentity::Segments(plan) => Some(plan),
+        }
+    }
+
+    fn matches_root(&self, root: &compute_xgmi::Root) -> bool {
+        match &self.transfer {
+            TransferIdentity::Window(window) => root.matches_window(*window),
+            TransferIdentity::Segments(plan) => root.matches_segments(plan),
+        }
     }
 
     pub(super) fn destination_frame(&self) -> DestinationFrame {
         DestinationFrame {
             endpoint: self.endpoints[1],
-            window: self.window,
+            window: self.window(),
             producer: (self.id, self.depth),
             predecessor: self.predecessor,
         }
@@ -316,6 +445,15 @@ impl Producer {
         source: BackendMemoryRegionV1,
         destination: BackendMemoryRegionV1,
     ) -> bool {
+        if let Some(plan) = self.segments() {
+            return segment_regions_match(
+                plan,
+                self.endpoints[0].2,
+                self.endpoints[1].2,
+                source,
+                destination,
+            );
+        }
         source.access == RuntimeAccessV1::Read
             && destination.access == RuntimeAccessV1::Write
             && source.byte_len == destination.byte_len
@@ -325,7 +463,7 @@ impl Producer {
                 source.byte_offset,
                 destination.byte_offset,
                 source.byte_len,
-            ) == Some(self.window)
+            ) == Some(self.window())
     }
 
     pub(super) fn reserves_deferred_source(
@@ -358,6 +496,38 @@ impl Producer {
                                 && owner.stream == self.launch.stream
                         })
                 })
+    }
+
+    fn completed_source_is_restored(&self, backend: &KfdMultiDeviceRuntimeBackendV1) -> bool {
+        let source = self.endpoints[0].1;
+        let child = &backend.children[source.child];
+        let Some(record) = child.allocations.get(&source.local) else {
+            return false;
+        };
+        let completed = match self.origin {
+            Origin::Native(route) => {
+                child
+                    .submissions
+                    .get(&route.local)
+                    .is_some_and(|record| record.status == BackendPollV1::Succeeded)
+                    && child.exact_submission_quiescent_v1(route.local)
+            }
+            Origin::Deferred { .. } => backend
+                .deferred_compute_v1(self.id)
+                .is_some_and(|root| root.status == BackendPollV1::Succeeded),
+        };
+        completed
+            && !child.allocation_is_active(source.local)
+            && !backend.allocation_retained_by_deferred_compute_v1(source)
+            && record.sdma_initialized
+            && record.persistent_storage_restore.is_none()
+            && matches!(
+                record.sdma_storage,
+                KfdRuntimeSdmaStorageV1::Device(_)
+                    | KfdRuntimeSdmaStorageV1::H2dReady(_)
+                    | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                    | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
+            )
     }
 
     fn intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1) -> bool {
@@ -443,6 +613,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         destination: RoutedHandleV1,
         destination_region: BackendMemoryRegionV1,
         events: &[u64],
+        segments: Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>>,
     ) -> Result<Option<Producer>, Failure> {
         let child = &self.children[source.child];
         let target = &self.children[destination.child];
@@ -456,9 +627,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !target.peer_visible_device_allocations
             || source_region.access != RuntimeAccessV1::Read
             || destination_region.access != RuntimeAccessV1::Write
-            || source_region.byte_len != destination_region.byte_len
-            || !compute_xgmi::checked_region(source_record, source_region)
-            || !compute_xgmi::checked_region(destination_record, destination_region)
+            || segments.is_none() && source_region.byte_len != destination_region.byte_len
+            || !compute_xgmi::checked_envelope(source_record, source_region)
+            || !compute_xgmi::checked_envelope(destination_record, destination_region)
             || !destination_record.sdma_initialized
             || !matches!(
                 destination_record.sdma_storage,
@@ -470,14 +641,28 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         {
             return Ok(None);
         }
-        let Some(window) = Gfx942ComputeXgmiCopyWindowV1::new(
-            source_record.bytes.len() as u64,
-            destination_record.bytes.len() as u64,
-            source_region.byte_offset,
-            destination_region.byte_offset,
-            source_region.byte_len,
-        ) else {
-            return Ok(None);
+        let transfer = if let Some(plan) = segments {
+            if !segment_regions_match(
+                plan,
+                AllocationIdentity::of(source_record),
+                AllocationIdentity::of(destination_record),
+                source_region,
+                destination_region,
+            ) {
+                return Ok(None);
+            }
+            TransferIdentity::Segments(Arc::clone(plan))
+        } else {
+            let Some(window) = Gfx942ComputeXgmiCopyWindowV1::new(
+                source_record.bytes.len() as u64,
+                destination_record.bytes.len() as u64,
+                source_region.byte_offset,
+                destination_region.byte_offset,
+                source_region.byte_len,
+            ) else {
+                return Ok(None);
+            };
+            TransferIdentity::Window(window)
         };
         for event in events {
             let Some(RoutedEventV1::DeferredCompute {
@@ -490,8 +675,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             if *event_child != source.child {
                 continue;
             }
-            let Some((stream, depth, launch)) =
-                self.pending_deferred_peer_producer_v1(*submission, source.child)
+            let Some((stream, depth, launch)) = self
+                .pending_deferred_peer_producer_v1(*submission, source.child)
+                .or_else(|| {
+                    segments.and_then(|_| {
+                        self.completed_deferred_segment_producer_v1(*submission, source.child)
+                    })
+                })
             else {
                 continue;
             };
@@ -508,7 +698,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 stream,
                 depth,
                 launch,
-                window,
+                transfer: transfer.clone(),
                 predecessor: None,
                 endpoints: [
                     (
@@ -523,7 +713,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     ),
                 ],
             };
-            if !producer.intact(self) || !producer.owns_source(self, source) {
+            if !producer.intact(self)
+                || !(producer.owns_source(self, source)
+                    || segments.is_some() && producer.completed_source_is_restored(self))
+            {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "deferred compute peer producer does not match exact source custody",
@@ -537,14 +730,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             )?;
             return Ok(Some(producer));
         }
-        let Some(custody) = child.allocation_custody.get(&source.local) else {
-            return Ok(None);
-        };
-        let Some(owner) = custody.owners.front().filter(|owner| {
-            custody.owners.len() == 1 && owner.kind == RuntimeAllocationCustodyKindV1::Compute
-        }) else {
-            return Ok(None);
-        };
+        let owner = child
+            .allocation_custody
+            .get(&source.local)
+            .and_then(|custody| {
+                custody.owners.front().filter(|owner| {
+                    custody.owners.len() == 1
+                        && owner.kind == RuntimeAllocationCustodyKindV1::Compute
+                })
+            });
         for event in events {
             let Some(RoutedEventV1::Native {
                 route: event_route,
@@ -559,7 +753,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 continue;
             };
             if route.child != source.child
-                || route.local != owner.submission
                 || event_route.child != source.child
                 || child
                     .events
@@ -572,8 +765,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let Some(launch) = self.producer_aware_native.get(submission) else {
                 continue;
             };
+            let owns_source = owner.is_some_and(|owner| {
+                owner.submission == route.local && owner.stream == launch.stream
+            });
+            let completed = segments.is_some()
+                && child
+                    .submissions
+                    .get(&route.local)
+                    .is_some_and(|record| record.status == BackendPollV1::Succeeded)
+                && child.exact_submission_quiescent_v1(route.local);
             if launch.semantic_launch != BackendSemanticLaunchV1::Ordinary
-                || launch.stream != owner.stream
+                || !(owns_source || completed)
                 || !exact_full_writer(&launch.bindings, source.local, source_record)
             {
                 continue;
@@ -583,6 +785,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             };
             if !child.pending_compute.contains_key(&route.local)
                 && child.active_compute_submission_v1(route.local).is_none()
+                && !completed
             {
                 continue;
             }
@@ -592,7 +795,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 stream: *stream,
                 depth,
                 launch: Arc::clone(launch),
-                window,
+                transfer: transfer.clone(),
                 predecessor: None,
                 endpoints: [
                     (
@@ -607,7 +810,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     ),
                 ],
             };
-            if !producer.intact(self) || !producer.owns_source(self, source) {
+            if !producer.intact(self)
+                || !(producer.owns_source(self, source)
+                    || completed && producer.completed_source_is_restored(self))
+            {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "compute peer producer identity does not match retained custody",
@@ -642,7 +848,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
             let candidate = match self.submissions.get(&id) {
                 Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                    if copy.status() == BackendPollV1::Pending
+                    if producer.segments().is_none()
+                        && copy.status() == BackendPollV1::Pending
                         && !copy.is_quiescent()
                         && copy.destination == producer.endpoints[1].1
                         && copy.destination_region.allocation == producer.endpoints[1].0
@@ -651,6 +858,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 {
                     copy.compute_producer
                         .as_ref()
+                        .filter(|prior| prior.segments().is_none())
                         .map(|prior| DestinationPredecessor {
                             id,
                             stream: copy.stream,
@@ -659,7 +867,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             source_region: copy.source_region,
                             destination: copy.destination,
                             destination_region: copy.destination_region,
-                            window: prior.window,
+                            window: prior.window(),
                         })
                 }
                 _ => None,
@@ -730,6 +938,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return None;
         };
         let producer = copy.compute_producer.as_ref()?;
+        if producer.segments().is_some() {
+            return None;
+        }
         let (global, route, identity) = producer.endpoints[1];
         let record = self
             .children
@@ -786,6 +997,35 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .find_map(|id| self.compute_peer_destination_frame_v1(*id, source, source_region))
     }
 
+    pub(super) fn compute_peer_segment_frame_v1(
+        &self,
+        id: u64,
+        destination: RoutedHandleV1,
+    ) -> Option<SegmentDestinationFrame> {
+        let RoutedSubmissionV1::CooperativeCopy(copy) = self.submissions.get(&id)? else {
+            return None;
+        };
+        let producer = copy.compute_producer.as_ref()?;
+        let plan = producer.segments()?;
+        if copy.status() != BackendPollV1::Pending
+            || producer.predecessor.is_some()
+            || producer.endpoints[1].1 != destination
+            || self
+                .cooperative_allocation_owners
+                .get(&destination)
+                .is_none_or(|owners| owners.len() != 1 || owners[0] != id)
+        {
+            return None;
+        }
+        let frame = SegmentDestinationFrame {
+            source: producer.endpoints[0],
+            endpoint: producer.endpoints[1],
+            plan: Arc::clone(plan),
+            producer: (producer.id, producer.depth),
+        };
+        frame.is_intact(self, id).then_some(frame)
+    }
+
     fn compute_peer_chain_intact_v1(&self, id: u64) -> Result<(), u64> {
         let mut current = id;
         for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
@@ -805,7 +1045,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 && copy
                     .compute_xgmi
                     .as_ref()
-                    .is_some_and(|root| root.matches_window(producer.window))
+                    .is_some_and(|root| producer.matches_root(root))
                 && copy.directed.is_none()
                 && copy.source == producer.endpoints[0].1
                 && copy.source_region.allocation == producer.endpoints[0].0
@@ -819,7 +1059,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let Some(prior) = producer.predecessor else {
                 return Ok(());
             };
-            if prior.id >= current
+            if producer.segments().is_some()
+                || prior.id >= current
                 || prior.depth == 0
                 || prior.depth >= copy.dependency_depth
                 || prior.stream != copy.stream

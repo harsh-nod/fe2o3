@@ -44,6 +44,7 @@ struct NativePeerProducerV1 {
     source_region: BackendMemoryRegionV1,
     destination_region: BackendMemoryRegionV1,
     frame: Option<compute_peer::DestinationFrame>,
+    segment_frame: Option<compute_peer::SegmentDestinationFrame>,
 }
 
 #[derive(Debug, Default)]
@@ -143,10 +144,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     && copy.destination == peer.destination
                     && copy.source_region == peer.source_region
                     && copy.destination_region == peer.destination_region
-                    && copy.compute_xgmi.as_ref().is_some_and(|root| !root.is_segmented()))
+                    && copy.compute_xgmi.as_ref().is_some_and(|root|
+                        root.is_segmented() == peer.segment_frame.is_some()))
             && (!peer.directed || self.directed_identity_is_intact_v1(peer.id))
             && peer
                 .frame
+                .as_ref()
+                .is_none_or(|frame| frame.is_intact(self, peer.id))
+            && peer
+                .segment_frame
                 .as_ref()
                 .is_none_or(|frame| frame.is_intact(self, peer.id))
     }
@@ -260,6 +266,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             })
     }
 
+    pub(super) fn completed_deferred_segment_producer_v1(
+        &self,
+        id: u64,
+        child: usize,
+    ) -> Option<(u64, usize, Arc<RetainedComputeLaunchV1>)> {
+        let root = self.deferred_compute_v1(id)?;
+        let launch = root.identity.completed_peer_launch.as_ref()?;
+        (root.status == BackendPollV1::Succeeded
+            && self.deferred_peer_producer_intact_v1(
+                id,
+                child,
+                root.stream,
+                root.identity.depth,
+                launch,
+            ))
+        .then(|| (root.stream, root.identity.depth, Arc::clone(launch)))
+    }
+
     fn deferred_compute_mut_v1(&mut self, id: u64) -> &mut DeferredComputeV1 {
         match self.submissions.get_mut(&id) {
             Some(RoutedSubmissionV1::DeferredCompute(root)) => root,
@@ -349,19 +373,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         });
         if !has_native_peer {
             return Ok(None);
-        }
-        if request.dependencies.iter().any(|dependency| {
-            matches!(self.submissions.get(&dependency.producer_submission),
-                Some(RoutedSubmissionV1::CooperativeCopy(copy))
-                    if copy.compute_xgmi.as_ref().is_some_and(|root| root.is_segmented()))
-        }) {
-            // A list envelope includes gaps and is not one scalar producer write.
-            // Completed lists can use ordinary terminal controls, but mixing a
-            // list into this deferred scalar-producer profile is unsupported.
-            return Err(KfdRuntimeBackendV1::rejected(
-                KfdRuntimeBackendErrorKindV1::Unsupported,
-                "deferred compute requires scalar peer provenance, not a segmented envelope",
-            ));
         }
         self.require_no_deferred_stream_v1(request.stream)?;
         let stream = Self::route(
@@ -456,6 +467,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     if copy.directed.is_some() && !self.directed_identity_is_intact_v1(submission) {
                         return Err(self.directed_corruption_v1());
                     }
+                    let segmented = copy
+                        .compute_xgmi
+                        .as_ref()
+                        .is_some_and(|root| root.is_segmented());
+                    let segment_frame = if segmented {
+                        Some(
+                            self.compute_peer_segment_frame_v1(submission, copy.destination)
+                                .ok_or_else(|| {
+                                    KfdRuntimeBackendV1::rejected(
+                                        KfdRuntimeBackendErrorKindV1::Unsupported,
+                                        "deferred segmented input requires an exact pending compute-backed destination frame",
+                                    )
+                                })?,
+                        )
+                    } else {
+                        None
+                    };
                     let frame = request
                         .bindings
                         .iter()
@@ -486,25 +514,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             .any(|binding| {
                                 binding.region.access != RuntimeAccessV1::Read
                                     || binding.region.byte_len == 0
-                                    || !frame
-                                        .as_ref()
-                                        .is_some_and(|frame| frame.covers(self, binding.region))
-                                        && (binding.region.byte_offset
-                                            < copy.destination_region.byte_offset
-                                            || binding
-                                                .region
-                                                .byte_offset
-                                                .checked_add(binding.region.byte_len)
-                                                .zip(
-                                                    copy.destination_region
-                                                        .byte_offset
-                                                        .checked_add(
-                                                            copy.destination_region.byte_len,
-                                                        ),
-                                                )
-                                                .is_none_or(|(end, producer_end)| {
-                                                    end > producer_end
-                                                }))
+                                    || if let Some(frame) = &segment_frame {
+                                        !frame.covers(self, binding.region)
+                                    } else {
+                                        !frame
+                                            .as_ref()
+                                            .is_some_and(|frame| frame.covers(self, binding.region))
+                                            && (binding.region.byte_offset
+                                                < copy.destination_region.byte_offset
+                                                || binding
+                                                    .region
+                                                    .byte_offset
+                                                    .checked_add(binding.region.byte_len)
+                                                    .zip(
+                                                        copy.destination_region
+                                                            .byte_offset
+                                                            .checked_add(
+                                                                copy.destination_region.byte_len,
+                                                            ),
+                                                    )
+                                                    .is_none_or(|(end, producer_end)| {
+                                                        end > producer_end
+                                                    }))
+                                    }
                             })
                     {
                         return Err(KfdRuntimeBackendV1::rejected(
@@ -525,6 +557,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         source_region: copy.source_region,
                         destination_region: copy.destination_region,
                         frame,
+                        segment_frame,
                     });
                 }
                 Some(RoutedEventV1::Native { .. }) => {
@@ -748,7 +781,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let root = self.deferred_compute_mut_v1(id);
             root.status = status;
             root.completed = completed;
-            root.launch = None;
+            // Keep the original, once-charged writable launch until this result
+            // is released, even when Context has not observed its completion yet.
+            // Historical content currentness remains the Context journal's duty;
+            // this receipt authenticates the operation and restored child result.
+            root.identity.completed_peer_launch = root.launch.take().filter(|launch| {
+                status == BackendPollV1::Succeeded
+                    && launch
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.region.access == RuntimeAccessV1::Write)
+            });
             root.collected = None;
         }
         Ok(status)

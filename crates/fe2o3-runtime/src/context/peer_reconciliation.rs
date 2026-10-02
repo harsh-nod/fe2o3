@@ -46,7 +46,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Option<(&[ScalarPeerDependencyV1], &DirectedPeerStateV1)> {
-        if let Some(root) = self.same_device_copies.get(&id) {
+        if let Some(root) = self.segmented_peer_copies.get(&id) {
+            Some((&root.dependencies, &root.state))
+        } else if let Some(root) = self.same_device_copies.get(&id) {
             Some((&root.dependencies, &root.state))
         } else if let Some(root) = self.producer_launches.get(&id) {
             Some((&root.dependencies, &root.state))
@@ -68,7 +70,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         id: RuntimeSubmissionIdV1,
     ) -> Option<&mut DirectedPeerStateV1> {
-        if let Some(root) = self.same_device_copies.get_mut(&id) {
+        if let Some(root) = self.segmented_peer_copies.get_mut(&id) {
+            Some(&mut root.state)
+        } else if let Some(root) = self.same_device_copies.get_mut(&id) {
             Some(&mut root.state)
         } else if let Some(root) = self.producer_launches.get_mut(&id) {
             Some(&mut root.state)
@@ -153,6 +157,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if !record.status.is_terminal() {
             let result = if record.same_device_copy {
                 self.validate_pending_same_device_copy_roots_v1(id)
+            } else if record.segmented_peer_copy
+                || self
+                    .versions
+                    .as_ref()
+                    .is_some_and(|versions| versions.retains_segmented_peer_input_v1(id))
+            {
+                self.validate_pending_segmented_peer_roots_v1(id)
             } else if self
                 .scalar_peer_copies
                 .get(&id)

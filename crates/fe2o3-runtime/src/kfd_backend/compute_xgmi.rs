@@ -144,6 +144,43 @@ fn terminal(detail: impl Into<String>) -> Failure {
 }
 
 impl Root {
+    #[cfg(test)]
+    pub(super) fn segments_for_test_v1(&self) -> Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>> {
+        self.segments.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn trace_for_test_v1(&self) -> &[Stage] {
+        &self.trace
+    }
+
+    #[cfg(test)]
+    pub(super) fn scripted_owners_for_test_v1(&self) -> &[Option<DirectionalSdmaDeviceOwnerV1>; 2] {
+        &self.scripted_owners
+    }
+
+    #[cfg(test)]
+    pub(super) fn between_segments_for_test_v1(&self) -> bool {
+        self.between_segments
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_segments_for_test_v1(
+        &mut self,
+        plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) {
+        self.segments = Some(plan);
+    }
+
+    #[cfg(test)]
+    pub(super) fn inject_failure_for_test_v1(&mut self, stage: Stage, unwind: bool) {
+        self.route = Route::Scripted {
+            failure: Some(stage),
+            unwind,
+            pending_samples: 0,
+        };
+    }
+
     fn prepare(route: Route, window: Gfx942ComputeXgmiCopyWindowV1) -> Result<Box<Self>, Failure> {
         Self::prepare_profile(route, window, None)
     }
@@ -242,6 +279,12 @@ impl Root {
 
     pub(super) fn is_segmented(&self) -> bool {
         self.segments.is_some()
+    }
+
+    pub(super) fn matches_segments(&self, plan: &Arc<Gfx942ComputeXgmiSegmentsPlanV1>) -> bool {
+        self.segments
+            .as_ref()
+            .is_some_and(|retained| Arc::ptr_eq(retained, plan))
     }
 
     fn matches_regions(
@@ -546,7 +589,7 @@ pub(super) fn checked_region(record: &AllocationRecordV1, region: BackendMemoryR
         && Gfx942ComputeXgmiPacketPlanV1::new(region.byte_len).is_some()
 }
 
-fn checked_envelope(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+pub(super) fn checked_envelope(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
     record.kind == RuntimeMemoryKindV1::DeviceLocal
         && record.sdma_backed
         && region.byte_len != 0

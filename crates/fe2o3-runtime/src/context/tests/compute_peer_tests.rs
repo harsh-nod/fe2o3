@@ -14,6 +14,8 @@ mod gather_compute;
 mod gather_readback;
 #[path = "compute_peer_tests/repeated.rs"]
 mod repeated;
+#[path = "compute_peer_tests/segments.rs"]
+mod segments;
 #[path = "compute_peer_tests/windows.rs"]
 mod windows;
 

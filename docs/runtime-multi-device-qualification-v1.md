@@ -7,10 +7,15 @@ one live Context on 2/3/5/7 MI300X GPUs, without a host compute join. The newer
 adds ordered segmented native copies to the same compute/XGMI backend for
 settled initialized PUBLIC owners. Ten two-GPU cases pass, including 4096
 descriptors and packet-spanning segments in both directions. A single native
-queue and mapping pair remain retained until whole-list completion. Pending
-compute/list/compute provenance, broader kernel authority, native fault campaigns
-and performance remain open. Earlier sections below retain their original
-example and checkpoint scopes.
+queue and mapping pair remain retained until whole-list completion. The
+[pending-list checkpoint](evidence/dev-pending-peer-segments-2026-10-02/README.md)
+adds distinct producer/frame provenance for an exact pending full-write compute
+feeding a list into an initialized settled destination. Fourteen two-GPU cases
+pass, including prequeued and late compute consumers, direct full-frame D2H,
+and settled-list regressions. Standalone settled-source list frame consumers,
+pending destination-writer chaining, broader kernel authority, native fault
+campaigns and performance remain open. Earlier sections below retain their
+original example and checkpoint scopes.
 
 ## Scope
 

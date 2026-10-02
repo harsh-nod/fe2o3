@@ -12,8 +12,9 @@ impl RuntimePeerCopySegmentsBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     /// Each descriptor is checked before admission and retains its list position,
     /// including duplicates and overlapping writes. One queue, mapping pair, and
     /// logical result cover the complete list; no intermediate result is exposed.
-    /// Pending compute producers are not part of this profile. Their scalar
-    /// producer leases cannot authenticate an arbitrary segmented read set.
+    /// A pending source requires its exact producer-aware full-allocation Write
+    /// event. The initialized destination must be settled at list admission;
+    /// downstream reads use a distinct preserved-frame contract, not its envelope.
     fn peer_copy_segments_v1(
         &mut self,
         stream: u64,
@@ -81,11 +82,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         destination: RoutedHandleV1,
         destination_region: BackendMemoryRegionV1,
         plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+        producer: Option<&compute_peer::Producer>,
     ) -> Result<Box<Root>, Failure> {
         let unsupported = || {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
-                "segmented peer copy requires settled initialized PUBLIC native owners and a native route",
+                "segmented peer copy requires initialized PUBLIC owners, an exact source producer or settled source, and a native route",
             )
         };
         let route = self
@@ -93,21 +95,34 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .get(&(source.child, destination.child))
             .copied()
             .ok_or_else(unsupported)?;
+        if producer.is_some_and(|producer| {
+            producer
+                .segments()
+                .is_none_or(|retained| !Arc::ptr_eq(retained, &plan))
+        }) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "segmented native copy lost its exact pending source plan",
+            ));
+        }
         for (endpoint, region) in [(source, source_region), (destination, destination_region)] {
             let child = &self.children[endpoint.child];
             let record = &child.allocations[&endpoint.local];
+            let pending_source = endpoint == source
+                && producer.is_some_and(|producer| producer.owns_source(self, endpoint));
             if !child.peer_visible_device_allocations
                 || !checked_envelope(record, region)
                 || !record.sdma_initialized
-                || child.allocation_is_active(endpoint.local)
-                || self.allocation_retained_by_deferred_compute_v1(endpoint)
-                || !matches!(
-                    record.sdma_storage,
-                    KfdRuntimeSdmaStorageV1::Device(_)
-                        | KfdRuntimeSdmaStorageV1::H2dReady(_)
-                        | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
-                        | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
-                )
+                || !pending_source
+                    && (child.allocation_is_active(endpoint.local)
+                        || self.allocation_retained_by_deferred_compute_v1(endpoint)
+                        || !matches!(
+                            record.sdma_storage,
+                            KfdRuntimeSdmaStorageV1::Device(_)
+                                | KfdRuntimeSdmaStorageV1::H2dReady(_)
+                                | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                                | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
+                        ))
             {
                 return Err(unsupported());
             }

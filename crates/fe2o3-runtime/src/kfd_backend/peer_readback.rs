@@ -68,18 +68,26 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             else {
                 continue;
             };
-            if copy.status() == BackendPollV1::Pending
+            let segmented = copy
+                .compute_xgmi
+                .as_ref()
+                .is_some_and(|root| root.is_segmented());
+            let segment_frame = if copy.status() == BackendPollV1::Pending
                 && copy.destination == source_route
-                && copy
-                    .compute_xgmi
-                    .as_ref()
-                    .is_some_and(|root| root.is_segmented())
+                && segmented
             {
-                return Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "pending readback requires scalar peer provenance, not a segmented envelope",
-                ));
-            }
+                Some(
+                    self.compute_peer_segment_frame_v1(submission, source_route)
+                        .ok_or_else(|| {
+                            KfdRuntimeBackendV1::rejected(
+                                KfdRuntimeBackendErrorKindV1::Unsupported,
+                                "pending segmented readback requires an exact compute-backed destination frame",
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
             if copy.directed.is_some() {
                 if !self.supports_pending_directed_peer_readback_v1() {
                     continue;
@@ -104,15 +112,21 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     .streams
                     .get(&copy.stream)
                     .is_some_and(|route| route.child == event_child)
-                && ((copy.destination_region.byte_offset <= source.byte_offset
-                    && copy
-                        .destination_region
-                        .byte_offset
-                        .checked_add(copy.destination_region.byte_len)
-                        .is_some_and(|end| source_end <= end))
-                    || self
-                        .compute_peer_destination_frame_v1(submission, source_route, source)
-                        .is_some())
+                && if segmented {
+                    segment_frame
+                        .as_ref()
+                        .is_some_and(|frame| frame.covers(self, source))
+                } else {
+                    (copy.destination_region.byte_offset <= source.byte_offset
+                        && copy
+                            .destination_region
+                            .byte_offset
+                            .checked_add(copy.destination_region.byte_len)
+                            .is_some_and(|end| source_end <= end))
+                        || self
+                            .compute_peer_destination_frame_v1(submission, source_route, source)
+                            .is_some()
+                }
             {
                 return Ok(true);
             }

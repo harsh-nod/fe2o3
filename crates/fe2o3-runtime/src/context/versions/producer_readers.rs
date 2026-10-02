@@ -44,6 +44,7 @@ enum ProducerReadDomainV1 {
     Launch,
     Copy,
     ComputePeer,
+    SegmentedPeer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -214,7 +215,9 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
         if matches!(
             self.root.domain,
-            ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+            ProducerReadDomainV1::Copy
+                | ProducerReadDomainV1::ComputePeer
+                | ProducerReadDomainV1::SegmentedPeer
         ) {
             return self.validate_single_input_v1(index, active_index, queued_index);
         }
@@ -277,6 +280,19 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
                     peer.source,
                 )
             }
+            ProducerReadDomainV1::SegmentedPeer => {
+                let peer = self
+                    .context
+                    .segmented_peer_copies
+                    .get(&self.id)
+                    .ok_or(E::InvalidReference)?;
+                (
+                    peer.dependencies_held,
+                    peer.producer,
+                    peer.dependencies.as_slice(),
+                    peer.source,
+                )
+            }
             _ => return Err(E::InvalidReference),
         };
         if !held
@@ -330,8 +346,10 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
             }
             ProducerReadRequestV1::Queued(request) => {
                 let reference = self.root.queued_references[0];
-                if self.root.domain != ProducerReadDomainV1::Copy
-                    || self.root.queued_requests[0] != request
+                if !matches!(
+                    self.root.domain,
+                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::SegmentedPeer
+                ) || self.root.queued_requests[0] != request
                     || reference.consumer != self.consumer
                     || request.producer.key != producer_key
                     || request.allocation.allocation != allocation
@@ -339,11 +357,17 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
                     || request.allocation.byte_extent != source.record.byte_len
                     || request.byte_offset != source.region.byte_offset
                     || request.byte_len != source.region.byte_len
-                    || self
-                        .context
-                        .scalar_peer_copies
-                        .get(&producer.submission)
-                        .is_none_or(|peer| !peer.preserves_destination_frame_v1(source))
+                    || self.root.domain == ProducerReadDomainV1::Copy
+                        && !self
+                            .context
+                            .scalar_peer_copies
+                            .get(&producer.submission)
+                            .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
+                        && !self
+                            .context
+                            .segmented_peer_copies
+                            .get(&producer.submission)
+                            .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
                     || self.observe_queued_lookup(reference)? != request
                 {
                     return Err(E::InvalidReference);
@@ -381,6 +405,14 @@ pub(super) enum MixedInputFaultV1 {
 }
 
 impl ContextVersionsV1 {
+    pub(in crate::context) fn retains_segmented_peer_input_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> bool {
+        self.producer_readers
+            .get(&id)
+            .is_some_and(|root| root.domain == ProducerReadDomainV1::SegmentedPeer)
+    }
     pub(in crate::context) fn retains_compute_peer_input_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -502,6 +534,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         launch: Option<&ProducerLaunchRootV1>,
         copy: Option<&SameDeviceCopyRootV1>,
         compute_peer: Option<&ScalarPeerCopyRootV1>,
+        segmented_peer: Option<&SegmentedPeerCopyRootV1>,
     ) -> Result<Option<ProducerInputV1>, RuntimeValidationErrorV1> {
         if self.allocations.get(&source.region.allocation) != Some(&source.record)
             || !self
@@ -572,13 +605,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })
             .copied()
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
-        let queued_launch =
-            launch.is_some() && self.producer_launches.contains_key(&dependency.submission);
+        let queued_launch = (launch.is_some() || segmented_peer.is_some())
+            && self.producer_launches.contains_key(&dependency.submission);
         let queued_frame_input = (copy.is_some() || launch.is_some())
-            && self
+            && (self
                 .scalar_peer_copies
                 .get(&dependency.submission)
-                .is_some_and(|producer| producer.preserves_destination_frame_v1(source));
+                .is_some_and(|producer| producer.preserves_destination_frame_v1(source))
+                || self
+                    .segmented_peer_copies
+                    .get(&dependency.submission)
+                    .is_some_and(|producer| producer.preserves_destination_frame_v1(source)));
         if queued && !queued_launch && !queued_frame_input {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
@@ -604,6 +641,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                                         || producer.preserves_destination_frame_v1(*binding)
                                 })
                         })
+                        .or_else(|| {
+                            self.segmented_peer_copies
+                                .get(&dependency.submission)
+                                .map(|producer| producer.preserves_destination_frame_v1(*binding))
+                        })
                         .unwrap_or(false)
                 {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
@@ -618,6 +660,20 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             } else {
                 self.validate_pending_peer_copy_roots_v1(dependency.submission)
             };
+            self.journal_result_v1(result)?;
+        } else if let Some(peer) = segmented_peer {
+            let producer = self
+                .producer_launches
+                .get(&dependency.submission)
+                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+            if dependency != peer.producer
+                || source.region != peer.source.region
+                || source.record != peer.source.record
+                || !producer.covers_input_v1(source)
+            {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
+            let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
             self.journal_result_v1(result)?;
         } else if let Some(peer) = compute_peer {
             let compute = peer
@@ -638,15 +694,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
             self.journal_result_v1(result)?;
         } else if let Some(copy) = copy {
-            let producer = self
+            let covered = self
                 .scalar_peer_copies
                 .get(&dependency.submission)
-                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+                .is_some_and(|producer| {
+                    producer.covers_input_v1(source)
+                        || producer.preserves_destination_frame_v1(source)
+                })
+                || self
+                    .segmented_peer_copies
+                    .get(&dependency.submission)
+                    .is_some_and(|producer| producer.preserves_destination_frame_v1(source));
             if dependency != copy.producer
                 || source.region != copy.source.region
                 || source.record != copy.source.record
-                || (!producer.covers_input_v1(source)
-                    && !producer.preserves_destination_frame_v1(source))
+                || !covered
             {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
@@ -815,6 +877,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 None,
                 None,
                 compute.then_some(root),
+                None,
             )? {
                 inputs.push(input);
             } else if compute {
@@ -868,6 +931,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     *source,
                     &root.dependencies,
                     Some(root),
+                    None,
                     None,
                     None,
                 )? {
@@ -1052,6 +1116,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .scalar_peer_copies
                     .get(&id)
                     .is_some_and(|root| root.compute.is_some());
+                let segmented_peer = context.segmented_peer_copies.contains_key(&id);
                 let versions = context
                     .versions
                     .as_mut()
@@ -1060,6 +1125,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     || launch != (prepared.root.domain == ProducerReadDomainV1::Launch)
                     || copy != (prepared.root.domain == ProducerReadDomainV1::Copy)
                     || compute_peer != (prepared.root.domain == ProducerReadDomainV1::ComputePeer)
+                    || segmented_peer
+                        != (prepared.root.domain == ProducerReadDomainV1::SegmentedPeer)
                     || !launch && versions.submission_readers.contains_key(&id)
                     || versions
                         .submission_writers
@@ -1139,7 +1206,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .is_some_and(|root| {
                 matches!(
                     root.domain,
-                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+                    ProducerReadDomainV1::Copy
+                        | ProducerReadDomainV1::ComputePeer
+                        | ProducerReadDomainV1::SegmentedPeer
                 )
             })
         {
@@ -1157,6 +1226,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .scalar_peer_copies
                 .get(&id)
                 .is_some_and(|peer| peer.compute.is_some() && peer.dependencies_held)
+            || self
+                .segmented_peer_copies
+                .get(&id)
+                .is_some_and(|peer| peer.dependencies_held)
+            || self
+                .submissions
+                .get(&id)
+                .is_some_and(|record| record.segmented_peer_copy && !record.quiescent)
         {
             return Err(ContextVersionJournalErrorV1::InvalidReference);
         }
@@ -1174,7 +1251,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get(&id)
             .ok_or(E::InvalidReference)?;
         let compute = root.domain == ProducerReadDomainV1::ComputePeer;
-        if compute {
+        let segments = root.domain == ProducerReadDomainV1::SegmentedPeer;
+        if segments {
+            self.validate_segmented_peer_custody_v1(id)
+                .map_err(|_| E::InvalidReference)?;
+            if !self.segmented_peer_copies.contains_key(&id) {
+                return Err(E::InvalidReference);
+            }
+        } else if compute {
             self.validate_scalar_peer_custody_v1(id)
                 .map_err(|_| E::InvalidReference)?;
             if self
@@ -1206,8 +1290,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     && root.queued_references.is_empty()
             }
             Some(ProducerReadRequestV1::Queued(_)) => {
-                root.domain == ProducerReadDomainV1::Copy
-                    && root.references.is_empty()
+                matches!(
+                    root.domain,
+                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::SegmentedPeer
+                ) && root.references.is_empty()
                     && root.requests.is_empty()
                     && root.queued_requests.len() == 1
                     && root.queued_references.len() == 1
@@ -1216,7 +1302,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         if !matches!(
             root.domain,
-            ProducerReadDomainV1::Copy | ProducerReadDomainV1::ComputePeer
+            ProducerReadDomainV1::Copy
+                | ProducerReadDomainV1::ComputePeer
+                | ProducerReadDomainV1::SegmentedPeer
         ) || root.inputs.len() != 1
             || !request_shape
             || marker != root.complete_marker()
@@ -1224,9 +1312,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || versions.submission_readers.contains_key(&id)
             || writer.domain != SubmissionWriterDomainV1::Ordinary
             || self.submissions.get(&id).is_some_and(|record| {
-                record.same_device_copy == compute
+                record.same_device_copy != (!compute && !segments)
                     || record.producer_launch
                     || record.scalar_peer_copy != compute
+                    || record.segmented_peer_copy != segments
                     || record.directed_peer_copy
                     || record.journal_read.is_some()
                     || record.journal_producer_read != Some(marker)
@@ -1243,6 +1332,30 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })
     }
 
+    pub(super) fn prepare_segmented_peer_inputs_v1(
+        &mut self,
+        root: &SegmentedPeerCopyRootV1,
+    ) -> Result<Option<PreparedProducerReadsV1>, RuntimeValidationErrorV1> {
+        self.guard_journal_unwind_v1(|context| {
+            let mut inputs = Vec::new();
+            inputs
+                .try_reserve_exact(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            let input = context
+                .prepare_pending_input_v1(
+                    root.source,
+                    &root.dependencies,
+                    None,
+                    None,
+                    None,
+                    Some(root),
+                )?
+                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+            inputs.push(input);
+            context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::SegmentedPeer)
+        })
+    }
+
     pub(super) fn prepare_copy_inputs_v1(
         &mut self,
         root: &SameDeviceCopyRootV1,
@@ -1253,7 +1366,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .try_reserve_exact(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             let input = context
-                .prepare_pending_input_v1(root.source, &root.dependencies, None, Some(root), None)?
+                .prepare_pending_input_v1(
+                    root.source,
+                    &root.dependencies,
+                    None,
+                    Some(root),
+                    None,
+                    None,
+                )?
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
             inputs.push(input);
             context.prepare_producer_batch_v1(inputs, ProducerReadDomainV1::Copy)

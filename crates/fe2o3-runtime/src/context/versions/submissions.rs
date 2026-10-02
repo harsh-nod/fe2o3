@@ -329,6 +329,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
+        if self
+            .submissions
+            .get(&id)
+            .is_some_and(|record| record.segmented_peer_copy)
+        {
+            return self.validate_pending_segmented_peer_roots_v1(id);
+        }
         use ContextVersionJournalErrorV1 as E;
         use fe2o3_runtime_model::ContextWriterStateV1;
         let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
@@ -428,6 +435,79 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .lookup_allocation(member.allocation)?
                     .pending_writer
                     != Some(writer)
+        {
+            return Err(E::InvalidAllocationReference);
+        }
+        Ok(())
+    }
+
+    pub(in crate::context) fn validate_pending_segmented_peer_roots_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        self.validate_segmented_peer_custody_v1(id)
+            .map_err(|_| E::InvalidReference)?;
+        let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
+        let peer = self
+            .segmented_peer_copies
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        if !record.segmented_peer_copy
+            || record.quiescent
+            || record.status != RuntimeCompletionStatusV1::Pending
+        {
+            return Err(E::InvalidState);
+        }
+        let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
+        if self
+            .validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?
+            .is_some()
+            || self.validate_producer_read_v1(id)?.is_none()
+        {
+            return Err(E::InvalidReference);
+        }
+        let root = versions
+            .submission_writers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        let writer = root.writer;
+        if record.journal_writer != Some(writer)
+            || root.domain != SubmissionWriterDomainV1::Ordinary
+            || root.disposal_started
+            || root.disposed_count != 0
+            || root.journal_disposed
+            || root.queued.is_some()
+            || root.allocations.len() != 1
+            || root.members.len() != 1
+            || writer.key.context_generation != id.context_generation
+            || writer.key.local != id.local
+            || writer.key.kind != ContextWriterKindV1::Submission
+            || versions.retained_writer(writer)?
+                != (fe2o3_runtime_model::ContextWriterStateV1::Pending { member_count: 1 })
+        {
+            return Err(E::InvalidReference);
+        }
+        let allocation = &root.allocations[0];
+        let member = root.members[0];
+        if allocation.disposed
+            || allocation.id != peer.destination.region.allocation
+            || allocation.record != peer.destination.record
+            || self.allocations.get(&allocation.id) != Some(&allocation.record)
+            || !self
+                .backend_allocations
+                .contains(&allocation.record.backend_allocation)
+            || !self.allocation_admission.has_expected_credit(
+                allocation.id,
+                allocation.record.device,
+                allocation.record.byte_len,
+            )
+            || versions.whole_allocation(allocation.id, &allocation.record)? != member
+            || versions
+                .journal
+                .lookup_allocation(member.allocation)?
+                .pending_writer
+                != Some(writer)
         {
             return Err(E::InvalidAllocationReference);
         }
@@ -929,6 +1009,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 }
                 (None, self.prepare_copy_inputs_v1(root)?)
             }
+            Some(PreparedSubmissionCustodyV1::Segments { root, .. }) => {
+                if sources.len() != 1
+                    || sources[0].region != root.source.region
+                    || sources[0].record != root.source.record
+                    || destinations != [root.destination.region.allocation]
+                {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+                (None, self.prepare_segmented_peer_inputs_v1(root)?)
+            }
             other => {
                 let peer = match other {
                     Some(PreparedSubmissionCustodyV1::Peer(peer)) => Some(peer),
@@ -954,13 +1044,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Some(PreparedSubmissionCustodyV1::Peer(peer)) => Some(peer),
             _ => None,
         };
-        let peer_transfer = peer.map(|peer| peer.mechanism);
+        let peer_transfer = match &custody {
+            Some(PreparedSubmissionCustodyV1::Segments { mechanism, .. }) => Some(*mechanism),
+            _ => peer.map(|peer| peer.mechanism),
+        };
         let scalar_peer_copy = peer.is_some_and(|peer| peer.scalar.is_some());
         let directed_peer_copy = peer
             .and_then(|peer| peer.scalar.as_ref())
             .is_some_and(|root| root.directed.is_some());
         let producer_launch = matches!(&custody, Some(PreparedSubmissionCustodyV1::Launch(_)));
         let same_device_copy = matches!(&custody, Some(PreparedSubmissionCustodyV1::Copy(_)));
+        let segmented_peer_copy =
+            matches!(&custody, Some(PreparedSubmissionCustodyV1::Segments { .. }));
         // Retain all original footprints and dependencies before acquiring any journal lease.
         match custody {
             Some(PreparedSubmissionCustodyV1::Launch(root)) => {
@@ -968,6 +1063,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             Some(PreparedSubmissionCustodyV1::Copy(root)) => {
                 self.begin_same_device_copy_custody_v1(id, root)
+            }
+            Some(PreparedSubmissionCustodyV1::Segments { root, .. }) => {
+                self.begin_segmented_peer_custody_v1(id, root)
             }
             Some(PreparedSubmissionCustodyV1::Peer(peer)) => {
                 if let Some(root) = peer.scalar {
@@ -1013,6 +1111,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     self.scalar_peer_copies.remove(&id);
                     self.producer_launches.remove(&id);
                     self.same_device_copies.remove(&id);
+                    self.segmented_peer_copies.remove(&id);
                 }
                 return self.backend_result(Err(failure));
             }
@@ -1032,6 +1131,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if let Some(root) = self.same_device_copies.get_mut(&id) {
             root.backend_submission = Some(backend_submission);
         }
+        if let Some(root) = self.segmented_peer_copies.get_mut(&id) {
+            root.backend_submission = Some(backend_submission);
+        }
         self.submissions.insert(
             id,
             SubmissionRecordV1 {
@@ -1047,6 +1149,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 directed_peer_copy,
                 producer_launch,
                 same_device_copy,
+                segmented_peer_copy,
                 dependency_retains: 0,
             },
         );
