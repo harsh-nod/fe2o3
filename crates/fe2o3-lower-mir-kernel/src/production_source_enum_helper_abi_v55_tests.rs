@@ -18,6 +18,16 @@ fn enum_helper_owner_with_ownership_v55(
     nested: bool,
     ownership: SemanticSourceArgumentOwnershipV1,
 ) -> ProductionSemanticSsaOwnerV1 {
+    enum_helper_owner_case_v55(variant, moved, nested, ownership, false)
+}
+
+fn enum_helper_owner_case_v55(
+    variant: u32,
+    moved: bool,
+    nested: bool,
+    ownership: SemanticSourceArgumentOwnershipV1,
+    returns: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     owner_with(Case::Shared, |types, functions| {
         types.push(enum_declaration());
         types.push(SemanticTypeDeclV1::new(
@@ -35,6 +45,9 @@ fn enum_helper_owner_with_ownership_v55(
         let mut locals = functions[2].locals().to_vec();
         locals.push(local(201, ENUM, SemanticLocalRoleV1::Temporary));
         locals.push(local(202, PAIR, SemanticLocalRoleV1::Temporary));
+        if returns {
+            locals.push(local(205, input, SemanticLocalRoleV1::Temporary));
+        }
         let mut initial = functions[2].blocks()[0].statements().to_vec();
         initial.push(construct(variant, 2));
         if nested {
@@ -53,25 +66,37 @@ fn enum_helper_owner_with_ownership_v55(
             ));
         }
         let argument = place(if nested { 6 } else { 5 }, input);
+        let argument = if moved {
+            SemanticOperandV1::Move(argument)
+        } else {
+            SemanticOperandV1::Copy(argument)
+        };
+        let invocation = if returns {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(3),
+                    vec![argument],
+                    Some(SemanticCallDestinationV1::new(
+                        place(7, input),
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::CallReturn,
+                            SemanticBlockIdV1::from_index(1),
+                        ),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        } else {
+            call(3, argument, 1)
+        };
         functions[2] = function(
             30,
             false,
             CAPTURE,
             locals,
             vec![
-                block(
-                    200,
-                    initial,
-                    call(
-                        3,
-                        if moved {
-                            SemanticOperandV1::Move(argument)
-                        } else {
-                            SemanticOperandV1::Copy(argument)
-                        },
-                        1,
-                    ),
-                ),
+                block(200, initial, invocation),
                 block(201, vec![unit()], SemanticTerminatorKindV1::Return),
             ],
         );
@@ -102,9 +127,14 @@ fn enum_helper_owner_with_ownership_v55(
             false,
             1,
             vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
-                input, mode,
+                input,
+                mode.clone(),
             ))],
-            SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
+            if returns {
+                SemanticAbiValueV1::new(input, mode)
+            } else {
+                SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore)
+            },
         )
         .unwrap()
         .with_source_argument_ownership(vec![ownership])
@@ -120,15 +150,50 @@ fn enum_helper_owner_with_ownership_v55(
                 source(),
                 abi,
                 vec![
-                    local(203, UNIT, SemanticLocalRoleV1::Return),
+                    local(
+                        203,
+                        if returns { input } else { UNIT },
+                        SemanticLocalRoleV1::Return,
+                    ),
                     local(204, input, SemanticLocalRoleV1::Argument(0)),
                 ],
                 SemanticBlockIdV1::from_index(0),
-                vec![block(202, vec![unit()], SemanticTerminatorKindV1::Return)],
+                vec![block(
+                    202,
+                    vec![if returns {
+                        assign(
+                            place(0, input),
+                            SemanticRvalueKindV1::Use(if moved {
+                                SemanticOperandV1::Move(place(1, input))
+                            } else {
+                                SemanticOperandV1::Copy(place(1, input))
+                            }),
+                        )
+                    } else {
+                        unit()
+                    }],
+                    SemanticTerminatorKindV1::Return,
+                )],
             )
             .unwrap(),
         );
     })
+}
+
+fn expected_enum_helper_types_v55(nested: bool) -> Vec<Type> {
+    let mut types = vec![
+        Type::Scalar(ScalarType::U64),
+        Type::pointer(
+            Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0)),
+            AddressSpace::Private,
+            AccessMode::ReadOnly,
+        ),
+        Type::Scalar(ScalarType::U64),
+    ];
+    if nested {
+        types.push(Type::Scalar(ScalarType::U64));
+    }
+    types
 }
 
 fn helper_instance_v55(plan: &SourceReferencePlanV29<'_, '_>) -> ProductionCallInstanceIdV1 {
@@ -160,7 +225,7 @@ fn scoped_enum_helper_abi_preserves_variants_moves_nested_carriers_and_kernel_re
                         )?;
                         assert_eq!(
                             signature.parameter_types,
-                            vec![Type::Scalar(ScalarType::U64); if nested { 4 } else { 3 }]
+                            expected_enum_helper_types_v55(nested)
                         );
                         assert_eq!(
                             signature.parameter_semantic_types,
@@ -254,7 +319,7 @@ fn scoped_enum_helper_abi_cannot_admit_adjustment_pointee_or_ownership_substitut
                 original.mode().clone(),
             ),
             1 => original.clone().with_pointee_override(
-                SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 24, 8).unwrap(),
+                SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap(),
             ),
             _ => original.clone(),
         };
@@ -359,6 +424,130 @@ fn scoped_enum_helper_abi_refuses_a_foreign_budget_before_any_debit() {
             reached.set(true);
             Ok(())
         });
+    assert!(reached.get());
+    assert!(matches!(
+        result,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Accounting
+            )
+        )
+    ));
+}
+
+#[test]
+fn scoped_enum_helper_return_preserves_the_complete_original_carrier() {
+    for variant in 0..3 {
+        for moved in [false, true] {
+            for nested in [false, true] {
+                let owner = enum_helper_owner_case_v55(
+                    variant,
+                    moved,
+                    nested,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                    true,
+                );
+                run_enum_with_original_demands(owner, |plan, budget| {
+                    let instance = helper_instance_v55(plan);
+                    let signature = execution_function_signature_with_references_v29(
+                        plan.instances,
+                        instance,
+                        Some(plan),
+                        budget,
+                    )?;
+                    let expected = expected_enum_helper_types_v55(nested);
+                    assert_eq!(signature.parameter_types, expected);
+                    assert_eq!(signature.result_types, expected);
+                    let node = plan.returns[instance.index()].unwrap();
+                    assert_eq!(plan.nodes[node].ty, if nested { PAIR } else { ENUM });
+                    assert_eq!(
+                        source_enum_helper_return_types_v55(plan, instance, node, budget)?.unwrap(),
+                        expected
+                    );
+                    let function = plan.instances.instance(instance).unwrap().declaration();
+                    assert!(
+                        source_arguments_v1::scoped_v18::source_kernel_parameter_components_v18(
+                            plan.instances.owner().source_semantic().types(),
+                            function,
+                            0,
+                            if nested { PAIR } else { ENUM },
+                        )
+                        .is_err()
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn scoped_enum_helper_return_rejects_root_absent_and_foreign_instance_nodes() {
+    run_enum_with_original_demands(
+        enum_helper_owner_case_v55(
+            0,
+            true,
+            true,
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            true,
+        ),
+        |plan, budget| {
+            let instance = helper_instance_v55(plan);
+            let node = plan.returns[instance.index()].unwrap();
+            assert!(source_enum_helper_return_types_v55(plan, instance, node, budget)?.is_some());
+            assert!(
+                source_enum_helper_return_types_v55(plan, plan.instances.root(), node, budget,)
+                    .is_err()
+            );
+            assert!(
+                source_enum_helper_return_types_v55(plan, instance, usize::MAX, budget).is_err()
+            );
+            let other = plan
+                .instances
+                .instances()
+                .iter()
+                .position(|row| row.function() == SemanticFunctionIdV1::from_index(2))
+                .unwrap();
+            let other = plan.instances.id_at(other).unwrap();
+            assert!(source_enum_helper_return_types_v55(plan, other, node, budget).is_err());
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn scoped_enum_helper_return_refuses_foreign_budget_before_any_debit() {
+    let reached = std::cell::Cell::new(false);
+    let result = run_enum_with_original_demands(
+        enum_helper_owner_case_v55(
+            0,
+            false,
+            false,
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            true,
+        ),
+        |plan, budget| {
+            let instance = helper_instance_v55(plan);
+            let node = plan.returns[instance.index()].unwrap();
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut foreign = ArgumentBudgetV1::new(&mut work, usize::MAX);
+            let before = (budget.work(), budget.storage());
+            assert!(matches!(
+                source_enum_helper_return_types_v55(plan, instance, node, &mut foreign),
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting
+                    )
+                )
+            ));
+            assert_eq!((foreign.work(), foreign.storage()), (0, 0));
+            assert_eq!((budget.work(), budget.storage()), before);
+            reached.set(true);
+            Ok(())
+        },
+    );
     assert!(reached.get());
     assert!(matches!(
         result,

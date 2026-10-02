@@ -426,6 +426,9 @@ fn source_reference_return_types_v29(
     let Some(node) = plan.returns.get(instance.index()).copied().flatten() else {
         return Ok(None);
     };
+    if let Some(types) = source_enum_helper_return_types_v55(plan, instance, node, budget)? {
+        return Ok(Some(types));
+    }
     if !source_reference_node_has_loan_v29(plan, node, budget)?
         && !source_reference_node_has_selected_pointer_v29(plan, node, budget)?
         && !source_descriptor_node_present_v29(plan, node, &mut 0, budget)?
