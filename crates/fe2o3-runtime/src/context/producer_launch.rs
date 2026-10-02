@@ -30,6 +30,11 @@ pub struct BackendProducerAwareLaunchV1<'a> {
 /// independently of public events. Publish a consumer only after every explicit
 /// producer succeeded; failure, cancellation and quiescence without a result are
 /// not success. Implicit stream ordering alone does not satisfy this contract.
+/// When ordered peer-frame support is enabled, each pending frame Read must name
+/// the exact latest peer, authenticate its bounded predecessor chain and original
+/// initialized allocation, and wait for full owner restoration before native
+/// handoff. The final partial peer need not have written every byte; this relies
+/// on the separate preserved-frame contract, not widened writable coverage.
 /// All ordinary failure, uncertain-custody and completion contracts still apply.
 /// Poll/wait/flush use the existing backend paths; this adds no alternate executor,
 /// semantic authority, Worker transport or formal-refinement claim.
@@ -106,7 +111,10 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// reservation, not initialized-data or completion authority. Backend support
     /// is still required for deferred peer-to-compute execution.
     /// Pure reads retain whole-allocation custody; every original pending read
-    /// range must be covered by its named producer's writable ranges. Full-allocation
+    /// range must be covered by its named producer's writable ranges or its
+    /// independently authenticated initialized peer frame. A gathered frame Read
+    /// names the exact latest peer event and retains that writer's actual version;
+    /// each original alias must remain Read-only. Full-allocation
     /// Write outputs can queue behind an exact latest writer from this profile,
     /// named by an explicit event. Every output alias must then be a full Write;
     /// partial/ReadWrite queued outputs remain unsupported. Pure reads of queued

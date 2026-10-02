@@ -4,6 +4,9 @@
 use super::window::{initialize_bytes, restored};
 use super::*;
 
+#[path = "gather_consumer_tests.rs"]
+mod consumer;
+
 const DESTINATION_BYTES: usize = 96;
 
 struct Gather {
@@ -20,11 +23,14 @@ struct Gather {
 
 impl Gather {
     fn new(readback: bool) -> Self {
-        let mut f = Fixture::with_layout(
+        Self::with_fixture(Fixture::with_layout(
             [BYTES, DESTINATION_BYTES],
             readback.then_some((0, 0, DESTINATION_BYTES)),
             false,
-        );
+        ))
+    }
+
+    fn with_fixture(mut f: Fixture) -> Self {
         let a = f.allocations[0][2];
         let b = f.allocations[0][6];
         let destination = f.allocations[1][3];

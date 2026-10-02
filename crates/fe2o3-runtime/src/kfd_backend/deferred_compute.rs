@@ -43,6 +43,7 @@ struct NativePeerProducerV1 {
     destination: RoutedHandleV1,
     source_region: BackendMemoryRegionV1,
     destination_region: BackendMemoryRegionV1,
+    frame: Option<compute_peer::DestinationFrame>,
 }
 
 #[derive(Debug, Default)]
@@ -144,6 +145,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     && copy.destination_region == peer.destination_region
                     && copy.compute_xgmi.is_some())
             && (!peer.directed || self.directed_identity_is_intact_v1(peer.id))
+            && peer
+                .frame
+                .as_ref()
+                .is_none_or(|frame| frame.is_intact(self, peer.id))
     }
 
     #[cfg(test)]
@@ -438,6 +443,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     if copy.directed.is_some() && !self.directed_identity_is_intact_v1(submission) {
                         return Err(self.directed_corruption_v1());
                     }
+                    let frame = request
+                        .bindings
+                        .iter()
+                        .find(|binding| {
+                            binding.region.allocation == copy.destination_region.allocation
+                        })
+                        .and_then(|binding| {
+                            self.compute_peer_destination_frame_v1(
+                                submission,
+                                copy.destination,
+                                binding.region,
+                            )
+                        })
+                        .map(compute_peer::Producer::destination_frame);
                     if copy.compute_xgmi.is_none()
                         || copy.directed.is_some()
                             && !copy.is_quiescent()
@@ -454,18 +473,25 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             .any(|binding| {
                                 binding.region.access != RuntimeAccessV1::Read
                                     || binding.region.byte_len == 0
-                                    || binding.region.byte_offset
-                                        < copy.destination_region.byte_offset
-                                    || binding
-                                        .region
-                                        .byte_offset
-                                        .checked_add(binding.region.byte_len)
-                                        .zip(
-                                            copy.destination_region
+                                    || !frame
+                                        .as_ref()
+                                        .is_some_and(|frame| frame.covers(self, binding.region))
+                                        && (binding.region.byte_offset
+                                            < copy.destination_region.byte_offset
+                                            || binding
+                                                .region
                                                 .byte_offset
-                                                .checked_add(copy.destination_region.byte_len),
-                                        )
-                                        .is_none_or(|(end, producer_end)| end > producer_end)
+                                                .checked_add(binding.region.byte_len)
+                                                .zip(
+                                                    copy.destination_region
+                                                        .byte_offset
+                                                        .checked_add(
+                                                            copy.destination_region.byte_len,
+                                                        ),
+                                                )
+                                                .is_none_or(|(end, producer_end)| {
+                                                    end > producer_end
+                                                }))
                             })
                     {
                         return Err(KfdRuntimeBackendV1::rejected(
@@ -485,6 +511,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         destination: copy.destination,
                         source_region: copy.source_region,
                         destination_region: copy.destination_region,
+                        frame,
                     });
                 }
                 Some(RoutedEventV1::Native { .. }) => {
@@ -519,7 +546,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || allocations.iter().any(|(_, route)| {
                 self.cooperative_allocation_owners
                     .get(route)
-                    .is_some_and(|owners| owners.iter().any(|owner| !retained.contains(owner)))
+                    .is_some_and(|owners| {
+                        owners.iter().any(|owner| {
+                            !retained.contains(owner)
+                                && !peers.iter().any(|peer| {
+                                    peer.frame.as_ref().is_some_and(|frame| {
+                                        frame.orders_owner(self, peer.id, *route, *owner)
+                                    })
+                                })
+                        })
+                    })
             })
         {
             return Err(KfdRuntimeBackendV1::rejected(
@@ -527,10 +563,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "deferred consumer has an unrelated cooperative predecessor",
             ));
         }
-        // A busy child is admissible only as a metadata-only wait for that exact copy.
-        if self.compute_xgmi_children[stream.child]
-            .is_some_and(|owner| !peers.iter().any(|peer| peer.id == owner))
-        {
+        // A busy child is a metadata-only wait for an exact peer or its
+        // authenticated destination predecessor, never an unrelated native owner.
+        if self.compute_xgmi_children[stream.child].is_some_and(|owner| {
+            !peers.iter().any(|peer| {
+                peer.id == owner
+                    || peer.frame.as_ref().is_some_and(|frame| {
+                        frame.owns_occupied_child(self, peer.id, stream.child, owner)
+                    })
+            })
+        }) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "deferred consumer child belongs to another native copy",
@@ -864,7 +906,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     );
                 }
                 BackendPollV1::Pending => {
-                    selected = Some((peer.id, peer.directed));
+                    let ancestor = self.compute_xgmi_children[child].filter(|owner| {
+                        peer.frame.as_ref().is_some_and(|frame| {
+                            frame.owns_occupied_child(self, peer.id, child, *owner)
+                        })
+                    });
+                    selected = Some((peer.id, peer.directed, ancestor));
                     break;
                 }
                 BackendPollV1::Succeeded => {
@@ -881,8 +928,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 }
             }
         }
-        if let Some((peer, directed)) = selected {
-            let result = if directed {
+        if let Some((peer, directed, ancestor)) = selected {
+            // A published gather ancestor can block the selected tail's compute
+            // producer before the dependency cursor reaches that ancestor. Restore
+            // only this authenticated, already-started owner before child I/O.
+            let result = if let Some(ancestor) = ancestor {
+                self.progress_cooperative_copy_step_v1(ancestor)
+            } else if directed {
                 self.progress_retained_directed_peer_v1(peer)
             } else {
                 self.progress_cooperative_copy(peer)

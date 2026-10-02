@@ -120,6 +120,10 @@ fn output_byte(submission: u64) -> u8 {
 }
 
 impl MockBackend {
+    pub(super) fn producer_launch_observation_count_for_test_v1(&self) -> usize {
+        self.producer_launch.calls.len()
+    }
+
     pub(super) fn record_copy_completion_test_v1(&mut self, id: u64, success: bool) {
         self.producer_launch.completed_copies.insert(
             id,

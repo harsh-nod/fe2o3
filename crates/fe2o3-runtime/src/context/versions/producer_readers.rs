@@ -574,16 +574,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
         let queued_launch =
             launch.is_some() && self.producer_launches.contains_key(&dependency.submission);
-        let queued_frame_copy = copy.is_some()
+        let queued_frame_input = (copy.is_some() || launch.is_some())
             && self
                 .scalar_peer_copies
                 .get(&dependency.submission)
                 .is_some_and(|producer| producer.preserves_destination_frame_v1(source));
-        if queued && !queued_launch && !queued_frame_copy {
+        if queued && !queued_launch && !queued_frame_input {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
         if let Some(consumer) = launch {
-            // Leases cover the allocation; native coverage must cover every original Read alias.
+            // Each original Read alias needs copied coverage or an authenticated preserved frame.
             let mut found = false;
             for binding in consumer
                 .bindings
@@ -599,7 +599,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .or_else(|| {
                             self.scalar_peer_copies
                                 .get(&dependency.submission)
-                                .map(|producer| producer.covers_input_v1(*binding))
+                                .map(|producer| {
+                                    producer.covers_input_v1(*binding)
+                                        || producer.preserves_destination_frame_v1(*binding)
+                                })
                         })
                         .unwrap_or(false)
                 {

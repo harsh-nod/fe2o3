@@ -232,8 +232,10 @@ The [directed-native checkpoint](evidence/dev-multigpu-directed-peer-2026-10-02/
 adds prequeued scalar chains and shared-source fanout on three GPUs in both
 orders, with two changed rounds, full destination and postcopy source checks.
 It uses the production copy-only constructor with a deny-all kernel authority.
-Eligible initialized full-buffer copies use native transport; partial ranges
-and absent routes retain staging. Shared native endpoints serialize without
+Eligible initialized full-buffer copies use native transport. The later
+[checked-window checkpoint](evidence/dev-native-peer-subranges-2026-10-02/README.md)
+adds bounded native subranges and full logical guard checks; absent routes
+retain the existing fallback policy. Shared native endpoints serialize without
 creating sibling success dependencies. Exact queued typed-consumer permits and
 consumer-only progress under native custody have scripted CPU coverage.
 The [directed-readback checkpoint](evidence/dev-multigpu-directed-readback-2026-10-02/README.md)
@@ -255,6 +257,23 @@ or compiler authority is widened, and native ambiguity still fail-stops the rout
 The compute witnesses' finite artifact authorities do not supply general application/compiler
 evidence. Physical overlap, native partial-failure isolation, full refinement and
 matched HIP/HSA performance remain separate gates; no overall parity is claimed.
+
+The [ordered-gather checkpoint](evidence/dev-queued-gather-2026-10-02/README.md)
+assembles initialized destination frames from ordered partial peer writes and
+allows a full-frame readback to name only the latest gather event. The
+[gathered-consumer checkpoint](evidence/dev-gather-compute-2026-10-02/README.md)
+extends this to queued Read-only compute inputs, followed by an outgoing peer
+and final readback. Every original alias is checked against the independently
+authenticated preserved frame; the final peer's actual written coverage is not
+widened. Late consumer admission remains metadata-only until native ancestor
+custody is restored. Explicit progress can restore an authenticated, already
+started ancestor before retrying the tail's blocked source compute, preventing
+a dependency-cursor cycle. Whole-allocation serialization and bounded chains
+remain required. New native gathered-consumer modes are prequeued; late gathered
+ancestor admission has CPU coverage only. These finite artifact witnesses do
+not close the concrete production semantic-machine provider or generated
+application-argument integration gaps. Those application-facing gaps take
+priority over widening the runtime parity surface.
 
 The additive in-process scalar `flush_stream` extension snapshots the complete
 ready XGMI directional set and publishes it in one allocation-disjoint batch of

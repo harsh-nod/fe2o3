@@ -123,24 +123,38 @@ impl Fixture {
     }
 
     fn with_layout(bytes: [usize; 2], readback: Option<(u64, u64, usize)>, promote: bool) -> Self {
+        Self::with_layout_driver_prefixes(
+            bytes,
+            readback.map(|(source, destination, len)| (1, source, destination, len)),
+            promote,
+            [Vec::new(), Vec::new()],
+        )
+    }
+
+    fn with_layout_driver_prefixes(
+        bytes: [usize; 2],
+        readback: Option<(usize, u64, u64, usize)>,
+        promote: bool,
+        prefixes: [Vec<ScriptedSdmaStepV1>; 2],
+    ) -> Self {
         let mut local_allocations = [[0; ALLOCATIONS]; 2];
         let mut local_streams = [0; 2];
-        let children = (0..2)
-            .map(|index| {
-                let mut steps = if let Some((source, destination, len)) = readback
-                    && index == 1
+        let children = prefixes
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut steps)| {
+                if let Some((child, source, destination, len)) = readback
+                    && index == child
                 {
-                    readback_range_steps(source, destination, len)
-                } else {
-                    Vec::new()
-                };
+                    steps.extend(readback_range_steps(source, destination, len));
+                }
                 if promote && index == 0 {
                     steps.push(ScriptedSdmaStepV1::PromoteInitializedStorage(
                         ScriptedFailureModeV1::Success,
                     ));
                 }
                 steps.extend((0..ALLOCATIONS).flat_map(|_| release_steps_for(bytes[index])));
-                if readback.is_some() && index == 1 {
+                if readback.is_some_and(|(child, _, _, _)| child == index) {
                     steps.push(ScriptedSdmaStepV1::Recycle(
                         ScriptedRecycleOutcomeV1::Success,
                     ));
@@ -196,23 +210,25 @@ impl Fixture {
                 .unwrap()
         });
         let peer_stream = backend.create_stream_v1(8).unwrap();
-        let readback_stream = backend.create_stream_v1(8).unwrap();
-        let host = readback.map(|_| {
-            let child = &mut backend.children[1];
+        let readback_stream = backend
+            .create_stream_v1(7 + readback.map_or(1, |(child, _, _, _)| child) as u64)
+            .unwrap();
+        let host = readback.map(|(index, _, _, _)| {
+            let child = &mut backend.children[index];
             // Only host storage is added here; computed output is never installed.
             let local = child.next_id().unwrap();
             let owner = child
                 .scripted_sdma
                 .as_ref()
                 .unwrap()
-                .test_host_owner(bytes[1]);
+                .test_host_owner(bytes[index]);
             child.allocations.insert(
                 local,
                 AllocationRecordV1 {
-                    device: 8,
+                    device: 7 + index as u64,
                     kind: RuntimeMemoryKindV1::HostVisible,
                     alignment: 8,
-                    bytes: vec![0; bytes[1]].into(),
+                    bytes: vec![0; bytes[index]].into(),
                     content_sha256: None,
                     last_full_host_write: None,
                     native_dirty: Vec::new(),
@@ -224,11 +240,15 @@ impl Fixture {
                     scripted_three_binding_replay: false,
                 },
             );
-            child.staged_context_bytes += bytes[1] as u64;
+            child.staged_context_bytes += bytes[index] as u64;
             let global = backend.next_id().unwrap();
-            backend
-                .allocations
-                .insert(global, RoutedHandleV1 { child: 1, local });
+            backend.allocations.insert(
+                global,
+                RoutedHandleV1 {
+                    child: index,
+                    local,
+                },
+            );
             global
         });
         backend.compute_xgmi_routes.insert(

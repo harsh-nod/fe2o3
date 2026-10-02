@@ -24,6 +24,9 @@ use sha2::{Digest, Sha256};
 mod data;
 use data::*;
 
+#[path = "deferred_peer_chain/gather_compute.rs"]
+mod gather_compute;
+
 type Context = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type Engine = RuntimeAsyncCurrentThreadOwnedEngineV1<KfdMultiDeviceRuntimeBackendV1>;
 type Handle = RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>;
@@ -888,7 +891,16 @@ fn report(options: Options, output: &str) -> String {
 }
 
 fn main() -> Result<(), String> {
-    let options = options(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().is_some_and(|argument| {
+        matches!(
+            argument.as_str(),
+            "--gather-compute" | "--gather-compute-overlap"
+        )
+    }) {
+        return gather_compute::main(&arguments);
+    }
+    let options = options(&arguments)?;
     let output = run(options)?;
     println!("{}", report(options, &output));
     Ok(())

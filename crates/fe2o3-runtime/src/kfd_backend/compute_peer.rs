@@ -80,7 +80,7 @@ struct AllocationIdentity {
     alignment: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DestinationPredecessor {
     id: u64,
     stream: u64,
@@ -90,6 +90,117 @@ struct DestinationPredecessor {
     destination: RoutedHandleV1,
     destination_region: BackendMemoryRegionV1,
     window: Gfx942ComputeXgmiCopyWindowV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DestinationFrame {
+    endpoint: (u64, RoutedHandleV1, AllocationIdentity),
+    window: Gfx942ComputeXgmiCopyWindowV1,
+    producer: (u64, usize),
+    predecessor: Option<DestinationPredecessor>,
+}
+
+impl DestinationFrame {
+    pub(super) fn covers(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        region: BackendMemoryRegionV1,
+    ) -> bool {
+        let (global, route, identity) = self.endpoint;
+        backend.allocations.get(&global) == Some(&route)
+            && region.allocation == global
+            && region.access == RuntimeAccessV1::Read
+            && backend
+                .children
+                .get(route.child)
+                .and_then(|child| child.allocations.get(&route.local))
+                .is_some_and(|record| {
+                    AllocationIdentity::of(record) == identity
+                        && record.sdma_initialized
+                        && compute_xgmi::checked_region(record, region)
+                })
+    }
+
+    pub(super) fn is_intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1, id: u64) -> bool {
+        let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = backend.submissions.get(&id) else {
+            return false;
+        };
+        if copy.directed.is_some()
+            || copy.destination != self.endpoint.1
+            || copy.destination_region.allocation != self.endpoint.0
+            || !self.covers(
+                backend,
+                BackendMemoryRegionV1 {
+                    allocation: self.endpoint.0,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: self.endpoint.2.bytes as u64,
+                },
+            )
+            || copy
+                .compute_xgmi
+                .as_ref()
+                .is_none_or(|root| !root.matches_window(self.window))
+        {
+            return false;
+        }
+        if copy.is_quiescent() {
+            // Settlement clears the operational producer and may release its
+            // ancestors and their source allocations. Keep only exact frame identity.
+            return copy.compute_producer.is_none()
+                && copy
+                    .compute_xgmi
+                    .as_ref()
+                    .is_some_and(|root| root.is_quiescent());
+        }
+        copy.compute_producer.as_ref().is_some_and(|producer| {
+            producer.endpoints[1] == self.endpoint
+                && producer.window == self.window
+                && (producer.id, producer.depth) == self.producer
+                && producer.predecessor == self.predecessor
+        }) && backend.compute_peer_chain_intact_v1(id).is_ok()
+    }
+
+    pub(super) fn orders_owner(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        route: RoutedHandleV1,
+        owner: u64,
+    ) -> bool {
+        route == self.endpoint.1
+            && self.is_intact(backend, id)
+            && matches!(backend.submissions.get(&id),
+            Some(RoutedSubmissionV1::CooperativeCopy(copy))
+                if copy.compute_producer.as_ref().is_some_and(|producer| {
+                    producer.orders_destination_owner(backend, owner)
+                    }))
+    }
+
+    pub(super) fn owns_occupied_child(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        child: usize,
+        owner: u64,
+    ) -> bool {
+        if self.endpoint.1.child != child || !self.orders_owner(backend, id, self.endpoint.1, owner)
+        {
+            return false;
+        }
+        matches!(backend.submissions.get(&owner),
+        Some(RoutedSubmissionV1::CooperativeCopy(copy))
+            if copy.status() == BackendPollV1::Pending
+                && copy.compute_xgmi.as_ref().is_some_and(|root| !root.is_quiescent())
+                && [copy.source, copy.destination].iter().all(|endpoint| {
+                    backend.compute_xgmi_children.get(endpoint.child) == Some(&Some(owner))
+                        && backend.children.get(endpoint.child)
+                            .and_then(|child| child.allocations.get(&endpoint.local))
+                            .is_some_and(|record| matches!(record.sdma_storage,
+                                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(id))
+                                    if id == owner))
+                }))
+    }
 }
 
 impl DestinationPredecessor {
@@ -138,6 +249,15 @@ impl Producer {
 
     pub(super) fn window(&self) -> Gfx942ComputeXgmiCopyWindowV1 {
         self.window
+    }
+
+    pub(super) fn destination_frame(&self) -> DestinationFrame {
+        DestinationFrame {
+            endpoint: self.endpoints[1],
+            window: self.window,
+            producer: (self.id, self.depth),
+            predecessor: self.predecessor,
+        }
     }
 
     pub(super) fn orders_on_stream(&self, stream: u64) -> bool {

@@ -717,8 +717,10 @@ pub trait RuntimeBackendV1 {
     /// bytes. This frame guarantee permits a pending readback of the final whole
     /// allocation, not a claim that the last partial peer produced every byte.
     /// Whole-allocation custody remains serialized, including overlapping windows.
-    /// Backends supporting pending peer readback must apply the same exact retained
-    /// chain and original-owner restoration checks before any readback effect.
+    /// Backends supporting pending peer readback or producer-aware compute consumers
+    /// must apply the same exact retained chain and original-owner restoration checks
+    /// before a dependent effect. Compute aliases must each be checked Read ranges
+    /// of the original initialized frame; writable aliases gain no extra authority.
     fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
         false
     }
