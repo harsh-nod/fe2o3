@@ -18,7 +18,9 @@ observed publication. Checked native peer subranges now also pass three-GPU
 chain/fanout/readback qualification with independent offsets and unequal logical
 owner lengths. Subsequent checkpoints qualify pending-compute source windows,
 ordered destination gathers, and gathered-frame compute consumers on three and
-four GPUs with final-readback-only progress. Earlier matched wait-cadence measurements remain scoped
+four GPUs with final-readback-only progress. Late gathered consumers now also
+pass after observed retained native publication, with final-readback-only
+progress after seeding. Earlier matched wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
@@ -35,7 +37,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and gathered-frame consumers; ordinary generated argument API CPU-qualified; incomplete | Native generated-argument and late-gather qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; ordinary generated argument API CPU-qualified; incomplete | Native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -270,20 +272,27 @@ checks and all 32 source controls pass. Three shared-body arithmetic functions
 are verified with eleven rejected logical mutants and seven runner controls.
 This is not whole-adapter/DMA refinement, physical overlap or performance parity.
 
+The [late gathered-consumer checkpoint](evidence/dev-late-gather-compute-2026-10-02/README.md)
+passes all eight new three/four-GPU late cases, eight matching prequeued controls
+and two direct late controls. All gathers precede the seed; one retained native
+root, zero completed peers and the ordered Pending roster identify the oldest
+publication immediately before and after consumer admission. Capture is
+timing-dependent and fails closed if that interval is missed. The campaign
+checks complete computed/guard bytes, 136 callbacks, 60 native copies and owned
+cleanup. Fresh CPU qualification passes 2,198 runtime tests (32 existing ignores)
+and 13 witness tests. This closes that finite native gate, not A3 or parity.
+
 The remaining practical multi-GPU priority order is:
 
 1. Use the CPU-qualified ordinary generated Context argument API for supported
    scalar/slice arguments. The [qualification packet](evidence/dev-context-arguments-2026-10-02/README.md)
    checks real-host encoding, admission failures and a scripted two-device
    pipeline. It removes manual ABI packing, not private generated-storage or
-   execution-authority boundaries. Native use still needs the exact admitted
-   kernel path in item 3. See [Context arguments](runtime-context-arguments-v1.md).
-2. Qualify late gathered-frame consumer admission on hardware, after an exact
-   gather ancestor has published and while its native child custody is retained.
-   The implementation and CPU regressions exist; current gathered-consumer native
-   cases are prequeued. Drive only final D2H and check all computed/guard bytes
-   plus original-owner cleanup.
-3. Integrate one evidence-backed application kernel. Existing production peer
+   execution-authority boundaries. First qualify its encoding on an exact
+   admitted native kernel without changing that kernel's policy. This is not
+   generated Rust execution or compiler refinement. Production use still needs
+   item 2. See [Context arguments](runtime-context-arguments-v1.md).
+2. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
@@ -291,11 +300,11 @@ The remaining practical multi-GPU priority order is:
    adds shared-body unsigned-add arithmetic and a conditional MIR/KIR/machine
    obligation. Retained local-to-SSA and SSA-to-register correspondence,
    LLVM/CFG/ABI/effect composition and application authority remain open.
-4. Qualify native partial failures and isolation before broadening execution
+3. Qualify native partial failures and isolation before broadening execution
    claims. CPU scripted failures are not a native fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's
    metadata does not authorize continued execution in that Context.
-5. Defer same-process reopen, eight-GPU coverage and matched performance until
+4. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2

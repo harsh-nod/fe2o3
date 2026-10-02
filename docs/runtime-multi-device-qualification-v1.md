@@ -712,11 +712,18 @@ in the [pending-compute windows](evidence/dev-pending-compute-windows-2026-10-02
 [ordered gather](evidence/dev-queued-gather-2026-10-02/README.md), and
 [gathered-frame consumer](evidence/dev-gather-compute-2026-10-02/README.md)
 checkpoints. The last packet includes eight new prequeued three/four-GPU
-compute/gather/compute/return/readback cases. Native late gathered-consumer
-admission remains open; direct-peer late-admission controls do not cover it.
+compute/gather/compute/return/readback cases. The subsequent
+[late gathered-consumer packet](evidence/dev-late-gather-compute-2026-10-02/README.md)
+adds eight native late cases, eight matching prequeued controls and two direct
+late controls. It observes one retained native root and zero completed peers
+in the exact preadmitted gather roster, then admits the consumer using only the
+latest event. Only final-readback progress follows seeding. The full byte oracle,
+136 callbacks, 60 native copies and explicit owned cleanup pass. Publication
+capture is timing-dependent and rejects a missed interval; retained ownership
+does not prove an active GPU fence or physical overlap.
 Prioritize [ordinary generated Context arguments](runtime-context-arguments-v1.md),
-that focused hardware gate, and an evidence-backed application kernel through
-the existing production constructor.
+their encoding on an unchanged exact native kernel policy, and an evidence-backed
+application kernel through the existing production constructor.
 Same-process device reopen is a separate device/VM ownership redesign, not a
 prerequisite for useful iterative workloads. General application kernels still
 require compiler/effects evidence; neither finite qualification policy nor the

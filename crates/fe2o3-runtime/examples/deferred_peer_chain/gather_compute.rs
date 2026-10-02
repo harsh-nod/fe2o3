@@ -2,18 +2,22 @@
 
 use super::*;
 
-const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--gather-compute|--gather-compute-overlap> <0xsource-id> <0xsource-id> [more source IDs] <0xsink-id>";
+const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--gather-compute|--gather-compute-overlap|--late-gather-compute|--late-gather-compute-overlap> <0xsource-id> <0xsource-id> [more source IDs] <0xsink-id>";
+const SEED_PROGRESS_QUANTUM: Duration = Duration::from_micros(50);
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
     ids: Vec<u64>,
     overlap: bool,
+    late: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
-    let overlap = match arguments.first().map(String::as_str) {
-        Some("--gather-compute") => false,
-        Some("--gather-compute-overlap") => true,
+    let (overlap, late) = match arguments.first().map(String::as_str) {
+        Some("--gather-compute") => (false, false),
+        Some("--gather-compute-overlap") => (true, false),
+        Some("--late-gather-compute") => (false, true),
+        Some("--late-gather-compute-overlap") => (true, true),
         _ => return Err(USAGE.into()),
     };
     if !(3..=8).contains(&(arguments.len() - 1)) {
@@ -31,7 +35,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         }
         ids.push(id);
     }
-    Ok(Options { ids, overlap })
+    Ok(Options { ids, overlap, late })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -276,10 +280,80 @@ struct Chain {
     ids: Vec<RuntimeSubmissionIdV1>,
 }
 
+fn publication_gate(retained: usize, completed: u64, all_pending: bool) -> ResultV1<bool> {
+    if completed != 0 || !all_pending || retained > 1 {
+        return Err(failure(
+            "gather-late-publication-state",
+            (retained, completed, all_pending),
+        ));
+    }
+    Ok(retained == 1)
+}
+
+fn publication_observation(
+    context: &Context,
+    peers: &[RuntimeSubmissionV1<RuntimePeerCopyV1>],
+) -> ResultV1<bool> {
+    if peers.len() < 2 {
+        return Err(failure("gather-late-roster", "ordered peers required"));
+    }
+    let mut all_pending = true;
+    for peer in peers {
+        all_pending &= context
+            .query_submission(peer)
+            .map_err(|error| failure("gather-late-peer-status", error))?
+            == RuntimeCompletionStatusV1::Pending;
+    }
+    publication_gate(
+        context.backend().retained_compute_xgmi_copies_v1(),
+        context.backend().completed_compute_xgmi_copies_v1(),
+        all_pending,
+    )
+}
+
+fn seed_oldest(
+    context: &mut Context,
+    peers: &mut [RuntimeSubmissionV1<RuntimePeerCopyV1>],
+    deadline: Instant,
+) -> ResultV1<()> {
+    if publication_observation(context, peers)? {
+        return Err(failure(
+            "gather-late-baseline",
+            "native peer already retained",
+        ));
+    }
+    for _ in 0..TICKS {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        // Ordinary drain may perform several steps. A short deadline helps expose
+        // publication, but neither elapsed time nor a Pending result proves it.
+        let status = context
+            .drain(&mut peers[0], deadline.min(now + SEED_PROGRESS_QUANTUM))
+            .map_err(|error| failure("gather-late-oldest-drain", error))?;
+        if status != RuntimePollV1::Pending {
+            return Err(failure("gather-late-publication-missed", status));
+        }
+        if publication_observation(context, peers)? {
+            // These are the only peer roots. Shared-destination ordering and zero
+            // completions identify the oldest; the counter alone exposes no pair.
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    Err(failure(
+        "gather-late-publication-deadline",
+        "retained publication not observed",
+    ))
+}
+
 fn admit(
     context: &mut Context,
     resources: &Resources,
     receipts: &Arc<Mutex<Receipts>>,
+    late: bool,
+    deadline: Instant,
 ) -> ResultV1<Chain> {
     let count = resources.windows.len();
     let sink = &resources.runs[count];
@@ -347,6 +421,9 @@ fn admit(
         );
         peers.push(submission);
     }
+    if late {
+        seed_oldest(context, &mut peers, deadline)?;
+    }
     let event = predecessor.ok_or("missing gather tail")?;
     let arguments = Arguments::new(
         sink.allocations[2],
@@ -354,6 +431,12 @@ fn admit(
         sink.allocations[3],
     )
     .map_err(|error| failure("gather-consumer-arguments", error))?;
+    if late && !publication_observation(context, &peers)? {
+        return Err(failure(
+            "gather-late-before-consumer",
+            "native custody changed",
+        ));
+    }
     let compute = context
         .launch_producer_aware_v1(
             sink.stream,
@@ -363,6 +446,14 @@ fn admit(
             &[event],
         )
         .map_err(|error| failure("gather-consumer-compute", error))?;
+    // Normal late admission authenticates the exact ancestor and both paired
+    // reservations/InFlight slots; no witness-only native inspection is used.
+    if late && !publication_observation(context, &peers)? {
+        return Err(failure(
+            "gather-late-after-consumer",
+            "native custody changed",
+        ));
+    }
     callback(context, &compute, receipts)?;
     ids.push(compute.id());
     context
@@ -433,8 +524,11 @@ fn admit(
     if context.backend().completed_compute_xgmi_copies_v1() != 0 {
         return Err(failure(
             "gather-admission",
-            "peer completed before explicit progress",
+            "peer completed before final-readback progress",
         ));
+    }
+    if late && !publication_observation(context, &peers)? {
+        return Err(failure("gather-late-admission", "native custody changed"));
     }
     Ok(Chain {
         sources,
@@ -446,7 +540,12 @@ fn admit(
     })
 }
 
-fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> ResultV1<String> {
+fn pipeline(
+    engine: &mut Engine,
+    handle: &Handle,
+    resources: Arc<Resources>,
+    late: bool,
+) -> ResultV1<String> {
     let deadline = Instant::now() + WAIT;
     let mut future = Box::pin(
         handle
@@ -463,7 +562,7 @@ fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> 
     let observed = Arc::clone(&receipts);
     let owned = Arc::clone(&resources);
     let mut chain = command(engine, handle, deadline, "gather-admit", move |context| {
-        admit(context, &owned, &observed)
+        admit(context, &owned, &observed, late, deadline)
     })?;
     let mut completed = false;
     for _ in 0..TICKS {
@@ -631,8 +730,23 @@ fn report(options: &Options, output: &str) -> String {
         .map(|window| format!("{}:{}:{}", window.source, window.destination, window.bytes))
         .collect::<Vec<_>>()
         .join(",");
+    let (schema, admission, progress, publication) = if options.late {
+        (
+            "fe2o3.late-gather-compute.v1",
+            "gather-preadmitted-consumer-after-oldest-publication",
+            "oldest-peer-seed-then-final-readback-stream-only",
+            " publication_observed=true publication_identity=ordered-roster-inference paired_custody=validated-by-consumer-admission retained_native_at_consumer_admission=1 retained_native_counter=0,1,0 publication_capture=timing-dependent-fail-closed oldest_seed=bounded-context-drain",
+        )
+    } else {
+        (
+            "fe2o3.gather-compute.v1",
+            "all-before-explicit-progress",
+            "final-readback-stream-only",
+            "",
+        )
+    };
     format!(
-        "PASS schema=fe2o3.gather-compute.v1 authority=qualification-r57-n3-v2 devices={} sources={count} unique_ids={ids} overlap={} windows={windows} elements={ELEMENTS} bytes={BYTES} setup_launches={} pipeline_launches={} peer_copies={} dependent_readbacks=1 completion_receipts={} pipeline=compute-gather-compute-peer-readback admission=all-before-explicit-progress progress=final-readback-stream-only public_events=released-after-dependent-admission consumer_dependencies=latest-gather-only consumer_bindings=full-frame-read-stable-read-full-write native_transport=NATIVE-XGMI native_counter=0,{} output=full-byte-pass source_preservation=full-byte-pass gathered_frame=full-byte-pass return_guards=full-byte-pass host_guards=full-byte-pass output_sha256={output} digest=length-prefixed-sources-C-D-E-host host_output_installations=0 pipeline_host_joins=0 journal=enabled contexts=1 owners=1 batches=1 results_release=reverse-dependencies final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+        "PASS schema={schema} authority=qualification-r57-n3-v2 devices={} sources={count} unique_ids={ids} overlap={} windows={windows} elements={ELEMENTS} bytes={BYTES} setup_launches={} pipeline_launches={} peer_copies={} dependent_readbacks=1 completion_receipts={} pipeline=compute-gather-compute-peer-readback admission={admission} progress={progress} public_events=released-after-dependent-admission consumer_dependencies=latest-gather-only consumer_bindings=full-frame-read-stable-read-full-write native_transport=NATIVE-XGMI native_counter=0,{} output=full-byte-pass source_preservation=full-byte-pass gathered_frame=full-byte-pass return_guards=full-byte-pass host_guards=full-byte-pass output_sha256={output} digest=length-prefixed-sources-C-D-E-host host_output_installations=0 pipeline_host_joins=0 journal=enabled contexts=1 owners=1 batches=1 results_release=reverse-dependencies final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{publication}",
         options.ids.len(),
         options.overlap,
         options.ids.len(),
@@ -657,7 +771,7 @@ pub(super) fn main(arguments: &[String]) -> ResultV1<()> {
         progress,
     )
     .map_err(|error| failure("gather-owner", error))?;
-    let result = pipeline(&mut engine, &handle, resources);
+    let result = pipeline(&mut engine, &handle, resources, options.late);
     let shutdown = engine.shutdown();
     if shutdown.disposition != RuntimeAsyncOwnedDispositionV1::Released
         || shutdown.worker_panicked
@@ -683,6 +797,7 @@ mod tests {
             let parsed = options(&[mode.into(), "0x3".into(), "0x2".into(), "0x1".into()]).unwrap();
             assert_eq!(parsed.ids, [3, 2, 1]);
             assert_eq!(parsed.overlap, mode.ends_with("overlap"));
+            assert!(!parsed.late);
             let line = report(
                 &parsed,
                 &verify(
@@ -705,6 +820,119 @@ mod tests {
             vec!["--unknown", "0x1", "0x2", "0x3"],
         ] {
             assert!(options(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err());
+        }
+    }
+
+    #[test]
+    fn late_gather_compute_cli_is_distinct_and_preserves_the_complete_roster() {
+        for mode in ["--late-gather-compute", "--late-gather-compute-overlap"] {
+            for devices in 3..=8 {
+                let mut arguments = vec![mode.to_owned()];
+                arguments.extend((1..=devices).rev().map(|id| format!("0x{id:x}")));
+                let parsed = options(&arguments).unwrap();
+                assert_eq!(parsed.ids, (1..=devices).rev().collect::<Vec<_>>());
+                assert!(parsed.late);
+                assert_eq!(parsed.overlap, mode.ends_with("overlap"));
+            }
+            for suffix in [
+                vec!["0x1", "0x2"],
+                vec!["0x1", "0x2", "0x01"],
+                vec!["0x1", "0x2", "0x0"],
+                vec!["0x1", "0x2", "0x10000000000000000"],
+                vec!["0x1", "0x2", "0xg"],
+                vec!["0x1", "0x2", "--gather-compute"],
+                vec!["0x1", "0x2", "0x3", "--late-gather-compute"],
+                vec![
+                    "0x1", "0x2", "0x3", "0x4", "0x5", "0x6", "0x7", "0x8", "0x9",
+                ],
+            ] {
+                let arguments = std::iter::once(mode)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(options(&arguments).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn late_gather_publication_gate_never_infers_publication_from_pending_alone() {
+        assert!(!publication_gate(0, 0, true).unwrap());
+        assert!(publication_gate(1, 0, true).unwrap());
+        for (retained, completed, pending) in [
+            (0, 1, true),
+            (1, 1, true),
+            (2, 0, true),
+            (usize::MAX, 0, true),
+            (0, 0, false),
+            (1, 0, false),
+            (1, u64::MAX, true),
+        ] {
+            assert!(publication_gate(retained, completed, pending).is_err());
+        }
+    }
+
+    #[test]
+    fn late_gather_report_keeps_the_full_oracle_and_distinguishes_publication_evidence() {
+        fn fields(line: &str) -> std::collections::BTreeMap<&str, &str> {
+            let fields: std::collections::BTreeMap<_, _> = line
+                .strip_prefix("PASS ")
+                .unwrap()
+                .split_whitespace()
+                .map(|field| field.split_once('=').unwrap())
+                .collect();
+            assert_eq!(fields.len(), line.split_whitespace().count() - 1);
+            fields
+        }
+        for devices in [3, 4, 8] {
+            for overlap in [false, true] {
+                let mut options = Options {
+                    ids: (1..=devices).collect(),
+                    overlap,
+                    late: false,
+                };
+                let checked = windows(options.ids.len() - 1, overlap);
+                let oracle = verify(&checked, &expected(&checked)).unwrap();
+                let old = report(&options, &oracle);
+                options.late = true;
+                let late = report(&options, &oracle);
+                let old = fields(&old);
+                let late = fields(&late);
+                assert_eq!(old["schema"], "fe2o3.gather-compute.v1");
+                assert_eq!(old["admission"], "all-before-explicit-progress");
+                assert_eq!(old["progress"], "final-readback-stream-only");
+                assert_eq!(late["schema"], "fe2o3.late-gather-compute.v1");
+                assert_eq!(
+                    late["admission"],
+                    "gather-preadmitted-consumer-after-oldest-publication"
+                );
+                assert_eq!(
+                    late["progress"],
+                    "oldest-peer-seed-then-final-readback-stream-only"
+                );
+                let new_fields = [
+                    ("publication_observed", "true"),
+                    ("publication_identity", "ordered-roster-inference"),
+                    ("paired_custody", "validated-by-consumer-admission"),
+                    ("retained_native_at_consumer_admission", "1"),
+                    ("retained_native_counter", "0,1,0"),
+                    ("publication_capture", "timing-dependent-fail-closed"),
+                    ("oldest_seed", "bounded-context-drain"),
+                ];
+                assert_eq!(late.len(), old.len() + new_fields.len());
+                for (name, value) in new_fields {
+                    assert_eq!(late[name], value);
+                    assert!(!old.contains_key(name));
+                }
+                for (name, value) in old {
+                    if !["schema", "admission", "progress"].contains(&name) {
+                        assert_eq!(late[name], value);
+                    }
+                }
+                assert_eq!(late["output_sha256"], oracle);
+                assert_eq!(late["pipeline_host_joins"], "0");
+                assert_eq!(late["formal_refinement"], "false");
+            }
         }
     }
 

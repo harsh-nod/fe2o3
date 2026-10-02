@@ -895,7 +895,10 @@ fn main() -> Result<(), String> {
     if arguments.first().is_some_and(|argument| {
         matches!(
             argument.as_str(),
-            "--gather-compute" | "--gather-compute-overlap"
+            "--gather-compute"
+                | "--gather-compute-overlap"
+                | "--late-gather-compute"
+                | "--late-gather-compute-overlap"
         )
     }) {
         return gather_compute::main(&arguments);
