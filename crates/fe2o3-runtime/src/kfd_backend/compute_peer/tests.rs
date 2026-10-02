@@ -5,6 +5,9 @@ use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedExecutionOutcomeV1;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[path = "deferred_tests.rs"]
+mod deferred;
+
 const BYTES: usize = 64;
 const ALLOCATIONS: usize = 10;
 
@@ -99,6 +102,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(readback: bool) -> Self {
+        Self::with_peer_input_promotion(readback, false)
+    }
+
+    fn with_peer_input_promotion(readback: bool, promote: bool) -> Self {
         let mut local_allocations = [[0; ALLOCATIONS]; 2];
         let mut local_streams = [0; 2];
         let children = (0..2)
@@ -108,6 +115,11 @@ impl Fixture {
                 } else {
                     Vec::new()
                 };
+                if promote && index == 0 {
+                    steps.push(ScriptedSdmaStepV1::PromoteInitializedStorage(
+                        ScriptedFailureModeV1::Success,
+                    ));
+                }
                 steps.extend((0..ALLOCATIONS).flat_map(|_| release_steps()));
                 if readback && index == 1 {
                     steps.push(ScriptedSdmaStepV1::Recycle(

@@ -197,7 +197,8 @@ or general multi-recipe same-lane scheduling. Consequently the new
 logical-stream surface removes the third-stream capacity failure but is not
 general HIP/HSA stream scheduling parity. The
 `concurrent_compute` capability still means exact two-lane, disjoint-allocation
-execution. Native peer copy remains a separate backend. Ordinary KFD atomic and
+execution. Native peer copy is available through both a separate copy-only owner
+and the integrated multi-device compute router described below. Ordinary KFD atomic and
 collective capabilities remain false; the unsafe semantic-authority SPI does
 not supply the missing production authority.
 
@@ -215,9 +216,21 @@ until host access or allocation release and publishes directional copies from a
 deterministic FIFO readiness queue in batches of at most 63 with caller-driven
 fairness. Disjoint ready selection compares O(batch squared) pairs, bounded by
 63 entries, with exact directed provenance checks for shared sources. Focused
-in-flight selection is O(log batch), independent of the total active set. It remains
-separate from the single-device compute owner; there is no unified native
-multi-device compute backend.
+in-flight selection is O(log batch), independent of the total active set. This
+copy-only owner remains distinct from the integrated multi-device compute router.
+
+The integrated router now supports bounded producer-aware compute, native peer
+copy and dependent readback on the same ordinary allocation ownership path.
+[Live-batch qualification](evidence/dev-multigpu-live-batches-2026-10-02/README.md)
+covers two changed batches in one Context on up to seven MI300X GPUs.
+[Deferred-producer qualification](evidence/dev-multigpu-deferred-peer-2026-10-02/README.md)
+adds `peer -> deferred compute -> peer -> D2H`, admitted before explicit progress
+and driven from the final readback stream on two GPUs in both orders. Exact
+events, full `Write` outputs, independently retained producer results and
+restored native custody gate the continuation; there is no staged fallback.
+These finite artifact authorities do not supply general application/compiler
+evidence. Physical overlap, native partial-failure isolation, full refinement and
+matched HIP/HSA performance remain separate gates; no overall parity is claimed.
 
 The additive in-process scalar `flush_stream` extension snapshots the complete
 ready XGMI directional set and publishes it in one allocation-disjoint batch of

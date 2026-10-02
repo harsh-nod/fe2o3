@@ -9018,14 +9018,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             "unknown destination KFD allocation",
         )?;
         self.require_no_deferred_stream_v1(stream)?;
-        if self.allocation_retained_by_deferred_compute_v1(source_route)
-            || self.allocation_retained_by_deferred_compute_v1(destination_route)
-        {
-            return Err(KfdRuntimeBackendV1::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "copy endpoint is retained by a deferred compute consumer",
-            ));
-        }
         let distinct_devices = source_route.child != destination_route.child;
         if distinct_devices != require_distinct_devices
             || destination_route.child != stream_route.child
@@ -9075,6 +9067,28 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if directed.is_none() {
             self.admit_directed_owner_capacity_v1([source_route, destination_route], false)?;
         }
+        let compute_producer = if directed.is_none() {
+            self.prepare_compute_peer_v1(
+                source_route,
+                source,
+                destination_route,
+                destination,
+                dependencies,
+            )?
+        } else {
+            None
+        };
+        if (self.allocation_retained_by_deferred_compute_v1(source_route)
+            && !compute_producer
+                .as_ref()
+                .is_some_and(|producer| producer.reserves_deferred_source(self, source_route)))
+            || self.allocation_retained_by_deferred_compute_v1(destination_route)
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "copy endpoint is retained by an unrelated deferred compute consumer",
+            ));
+        }
         let stream_tail = self.cooperative_stream_tails.get(&stream).copied();
         let mut dependency_submissions = Vec::new();
         dependency_submissions
@@ -9093,11 +9107,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             )
             .map_err(|_| KfdRuntimeBackendV1::capacity("copy dependency set allocation failed"))?;
         for event in dependencies {
-            let dependency = self.peer_dependency_submission(
-                *event,
-                source_route.child,
-                destination_route.child,
-            )?;
+            let dependency = match &compute_producer {
+                Some(producer) if producer.deferred_event(self, *event) => producer.id,
+                _ => self.peer_dependency_submission(
+                    *event,
+                    source_route.child,
+                    destination_route.child,
+                )?,
+            };
             if !dependency_set.insert(dependency) {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -9139,17 +9156,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 );
             }
         }
-        let compute_producer = if directed.is_none() {
-            self.prepare_compute_peer_v1(
-                source_route,
-                source,
-                destination_route,
-                destination,
-                dependencies,
-            )?
-        } else {
-            None
-        };
         if let Some(producer) = &compute_producer {
             dependency_depth =
                 dependency_depth.max(producer.depth().checked_add(1).ok_or_else(|| {
@@ -9211,7 +9217,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         for route in [source_route, destination_route] {
             if !compute_producer
                 .as_ref()
-                .is_some_and(|producer| producer.owns_source(&self.children[route.child], route))
+                .is_some_and(|producer| producer.owns_source(self, route))
                 && !self.cooperative_native_custody_is_ordered_v1(
                     route,
                     stream,

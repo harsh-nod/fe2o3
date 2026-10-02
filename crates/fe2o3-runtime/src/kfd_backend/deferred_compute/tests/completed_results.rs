@@ -137,6 +137,13 @@ impl Fixture {
             status: BackendPollV1::Pending,
             quiescent: None,
             completed: None,
+            identity: DeferredComputeIdentityV1::new(
+                &launch,
+                compute_peer::compute_identity(child, route.local)
+                    .unwrap()
+                    .1,
+                Some(route),
+            ),
             launch: Some(launch),
             collected: None,
             kernel: (global_kernel, backend.kernels[&global_kernel]),

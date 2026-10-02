@@ -103,6 +103,14 @@ impl Fixture {
                 }]),
             )
             .unwrap();
+        let payload = RetainedComputeLaunchV1::copy_from(launch, None).unwrap();
+        let depth = backend.children[0]
+            .next_dependency_depth_v1(
+                collected.ordered_predecessor,
+                &collected.explicit_success_dependencies,
+            )
+            .unwrap()
+            .max(collected.minimum_dependency_depth);
         let root = DeferredComputeV1 {
             stream,
             child: 0,
@@ -110,7 +118,8 @@ impl Fixture {
             status: BackendPollV1::Pending,
             quiescent: None,
             completed: None,
-            launch: Some(RetainedComputeLaunchV1::copy_from(launch, None).unwrap()),
+            identity: DeferredComputeIdentityV1::new(&payload, depth, None),
+            launch: Some(payload),
             collected: Some(collected),
             kernel: (kernel, backend.kernels[&kernel]),
             module: (module, backend.modules[&module]),

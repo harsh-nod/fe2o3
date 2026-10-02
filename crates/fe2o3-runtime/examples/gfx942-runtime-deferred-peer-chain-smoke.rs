@@ -1,0 +1,663 @@
+//! Unchanged R57 V2 peer -> deferred compute -> peer -> readback qualification.
+
+use std::mem::ManuallyDrop;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use fe2o3_runtime::qualification_gfx942_r57_n3_v1::{
+    GFX942_R57_N3_QUALIFICATION_ARGUMENTS_V1, GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1,
+    GFX942_R57_N3_QUALIFICATION_ELEMENTS_V1, GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
+    Gfx942R57N3QualificationArgumentsV2 as Arguments, admit_gfx942_r57_n3_qualification_v2,
+};
+use fe2o3_runtime::{
+    KfdMultiDeviceRuntimeBackendV1, RuntimeAccessV1, RuntimeAllocationIdV1,
+    RuntimeAsyncCurrentThreadOwnedEngineV1, RuntimeAsyncDrainOutcomeV1, RuntimeAsyncEngineConfigV1,
+    RuntimeAsyncOwnedDispositionV1, RuntimeAsyncProgressConfigV1, RuntimeAsyncProgressHandleV1,
+    RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeCopyV1, RuntimeMemoryKindV1,
+    RuntimeMemoryRegionV1, RuntimePeerCopyV1, RuntimePollV1, RuntimeStreamIdV1,
+    RuntimeStreamObservationV1, RuntimeSubmissionIdV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+};
+use sha2::{Digest, Sha256};
+
+#[path = "deferred_peer_chain/data.rs"]
+mod data;
+use data::*;
+
+type Context = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
+type Engine = RuntimeAsyncCurrentThreadOwnedEngineV1<KfdMultiDeviceRuntimeBackendV1>;
+type Handle = RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>;
+type ResultV1<T> = Result<T, String>;
+const WAIT: Duration = Duration::from_secs(30);
+const TICKS: usize = 30_000;
+const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <0xsource-unique-id> <0xdestination-unique-id>";
+
+struct DeviceRun {
+    stream: RuntimeStreamIdV1,
+    upload: RuntimeAllocationIdV1,
+    allocations: [RuntimeAllocationIdV1; 4],
+    kernel: TypedRuntimeKernelV1<Arguments>,
+}
+
+struct Resources {
+    runs: [DeviceRun; 2],
+    initial_peer_stream: RuntimeStreamIdV1,
+    return_peer_stream: RuntimeStreamIdV1,
+    readback_stream: RuntimeStreamIdV1,
+    returned: RuntimeAllocationIdV1,
+    host_output: RuntimeAllocationIdV1,
+}
+
+struct Chain {
+    initial_peer: RuntimeSubmissionV1<RuntimePeerCopyV1>,
+    compute: RuntimeSubmissionV1<Arguments>,
+    return_peer: RuntimeSubmissionV1<RuntimePeerCopyV1>,
+    readback: RuntimeSubmissionV1<RuntimeCopyV1>,
+    ids: [RuntimeSubmissionIdV1; 4],
+}
+
+fn failure(stage: &str, error: impl core::fmt::Debug) -> String {
+    let detail = format!("stage={stage} {error:?}");
+    eprintln!("deferred peer chain diagnostic: {detail}");
+    detail
+}
+
+fn region(allocation: RuntimeAllocationIdV1, access: RuntimeAccessV1) -> RuntimeMemoryRegionV1 {
+    RuntimeMemoryRegionV1 {
+        allocation,
+        access,
+        byte_offset: 0,
+        byte_len: BYTES as u64,
+    }
+}
+
+fn verify_initial(
+    context: &mut Context,
+    allocation: RuntimeAllocationIdV1,
+    expected: &[u8],
+) -> ResultV1<()> {
+    let mut observed = vec![0; BYTES];
+    context
+        .read_allocation(allocation, 0, &mut observed)
+        .map_err(|error| failure("initial-readback", error))?;
+    if observed != expected {
+        return Err(failure("initial-bytes", "full initial extent differs"));
+    }
+    Ok(())
+}
+
+fn join_setup<A>(
+    context: &mut Context,
+    stream: RuntimeStreamIdV1,
+    submission: &mut RuntimeSubmissionV1<A>,
+    deadline: Instant,
+) -> ResultV1<()> {
+    for _ in 0..TICKS {
+        if Instant::now() >= deadline {
+            break;
+        }
+        context
+            .flush_stream(stream)
+            .map_err(|error| failure("setup-flush", error))?;
+        match context
+            .poll(submission)
+            .map_err(|error| failure("setup-poll", error))?
+        {
+            RuntimePollV1::Succeeded => return Ok(()),
+            RuntimePollV1::Pending => std::thread::sleep(Duration::from_micros(50)),
+            status => return Err(failure("setup-status", status)),
+        }
+    }
+    Err(failure(
+        "setup-deadline",
+        "bounded setup progress exhausted",
+    ))
+}
+
+fn upload(
+    context: &mut Context,
+    stream: RuntimeStreamIdV1,
+    host: RuntimeAllocationIdV1,
+    device: RuntimeAllocationIdV1,
+    bytes: &[u8],
+    deadline: Instant,
+) -> ResultV1<()> {
+    if bytes.len() != BYTES {
+        return Err(failure("upload-extent", bytes.len()));
+    }
+    context
+        .write_allocation(host, 0, bytes)
+        .map_err(|error| failure("upload-write", error))?;
+    verify_initial(context, host, bytes)?;
+    let mut submission = context
+        .copy_async(
+            stream,
+            region(host, RuntimeAccessV1::Read),
+            region(device, RuntimeAccessV1::Write),
+            &[],
+        )
+        .map_err(|error| failure("upload-admission", error))?;
+    join_setup(context, stream, &mut submission, deadline)?;
+    context
+        .release_submission(submission)
+        .map_err(|error| failure("upload-release", error))
+}
+
+fn setup_compute(
+    context: &mut Context,
+    run: &DeviceRun,
+    second: bool,
+    deadline: Instant,
+) -> ResultV1<()> {
+    let [a, b, c, d] = run.allocations;
+    let arguments = Arguments::new(if second { c } else { a }, b, if second { d } else { c })
+        .map_err(|error| failure("setup-arguments", error))?;
+    let mut submission = context
+        .launch(
+            run.stream,
+            &run.kernel,
+            &arguments,
+            GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
+            &[],
+        )
+        .map_err(|error| failure("setup-compute", error))?;
+    join_setup(context, run.stream, &mut submission, deadline)?;
+    context
+        .release_submission(submission)
+        .map_err(|error| failure("setup-compute-release", error))
+}
+
+fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
+    let admitted =
+        admit_gfx942_r57_n3_qualification_v2().map_err(|error| failure("artifact", error))?;
+    let fixture = admitted
+        .host_buffers()
+        .map_err(|error| failure("fixture", error))?;
+    let inputs = inputs();
+    if BYTES != GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1
+        || ELEMENTS != GFX942_R57_N3_QUALIFICATION_ELEMENTS_V1
+        || BYTES.div_ceil(PAGE) * PAGE != BYTES
+        || GFX942_R57_N3_QUALIFICATION_ARGUMENTS_V1[2].access != RuntimeAccessV1::Write
+        || inputs.iter().map(Vec::as_slice).ne([
+            fixture.a(),
+            fixture.b(),
+            fixture.c_initial(),
+            fixture.d_initial(),
+        ])
+    {
+        return Err(failure(
+            "fixture",
+            "independent inputs or full Write shape differ",
+        ));
+    }
+    let backend = KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_peer_qualification_v2(&ids)
+        .map_err(|error| failure("device-admission", error))?;
+    // A failed setup cannot unwind over native owners; the bounded process retains them.
+    let mut context = ManuallyDrop::new(
+        Context::open_with_version_journal_members_v1(backend, 32, 32, 32)
+            .map_err(|error| failure("context-open", error))?,
+    );
+    if context.devices().len() != 2
+        || context
+            .devices()
+            .iter()
+            .any(|device| device.target() != "gfx942:xnack-")
+    {
+        return Err(failure(
+            "devices",
+            "exact ordered two-device gfx942:xnack- roster required",
+        ));
+    }
+    let devices: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
+    let deadline = Instant::now() + WAIT;
+    let mut runs = Vec::with_capacity(2);
+    for &device in &devices {
+        let stream = context
+            .create_stream(device)
+            .map_err(|error| failure("compute-stream", error))?;
+        let module = context
+            .load_module(device, admitted.hsaco())
+            .map_err(|error| failure("module", error))?;
+        let kernel = context
+            .resolve_kernel::<Arguments>(module, admitted.kernel_name())
+            .map_err(|error| failure("kernel", error))?;
+        let host = context
+            .allocate(
+                device,
+                RuntimeMemoryKindV1::HostVisible,
+                BYTES as u64,
+                PAGE as u64,
+            )
+            .map_err(|error| failure("upload-host", error))?;
+        let mut allocations = Vec::with_capacity(4);
+        for bytes in &inputs {
+            let allocation = context
+                .allocate(
+                    device,
+                    RuntimeMemoryKindV1::DeviceLocal,
+                    BYTES as u64,
+                    PAGE as u64,
+                )
+                .map_err(|error| failure("compute-allocation", error))?;
+            upload(&mut context, stream, host, allocation, bytes, deadline)?;
+            allocations.push(allocation);
+        }
+        runs.push(DeviceRun {
+            stream,
+            upload: host,
+            allocations: allocations
+                .try_into()
+                .map_err(|_| "four compute allocations required")?,
+            kernel,
+        });
+    }
+    // Complete the source gate before the pipeline; destination's second gate stays pending.
+    setup_compute(&mut context, &runs[0], false, deadline)?;
+    setup_compute(&mut context, &runs[1], false, deadline)?;
+    setup_compute(&mut context, &runs[0], true, deadline)?;
+    verify_initial(&mut context, runs[0].allocations[2], &expected_c())?;
+    upload(
+        &mut context,
+        runs[1].stream,
+        runs[1].upload,
+        runs[1].allocations[2],
+        &filled(-1.0),
+        deadline,
+    )?;
+    verify_initial(&mut context, runs[1].allocations[2], &filled(-1.0))?;
+    // The auxiliary return destination has no kernel authority and distinct identity.
+    let returned = context
+        .allocate(
+            devices[0],
+            RuntimeMemoryKindV1::DeviceLocal,
+            BYTES as u64,
+            PAGE as u64,
+        )
+        .map_err(|error| failure("return-allocation", error))?;
+    let host_output = context
+        .allocate(
+            devices[0],
+            RuntimeMemoryKindV1::HostVisible,
+            BYTES as u64,
+            PAGE as u64,
+        )
+        .map_err(|error| failure("output-host", error))?;
+    upload(
+        &mut context,
+        runs[0].stream,
+        host_output,
+        returned,
+        &filled(-23.0),
+        deadline,
+    )?;
+    verify_initial(&mut context, returned, &filled(-23.0))?;
+    let initial_peer_stream = context
+        .create_stream(devices[1])
+        .map_err(|error| failure("initial-peer-stream", error))?;
+    let return_peer_stream = context
+        .create_stream(devices[0])
+        .map_err(|error| failure("return-peer-stream", error))?;
+    let readback_stream = context
+        .create_stream(devices[0])
+        .map_err(|error| failure("readback-stream", error))?;
+    if context.backend().completed_compute_xgmi_copies_v1() != 0 {
+        return Err(failure("setup-native-count", "unexpected peer completion"));
+    }
+    Ok((
+        context,
+        Arc::new(Resources {
+            runs: runs.try_into().map_err(|_| "two runs required")?,
+            initial_peer_stream,
+            return_peer_stream,
+            readback_stream,
+            returned,
+            host_output,
+        }),
+    ))
+}
+
+fn command<T: Send + 'static>(
+    engine: &mut Engine,
+    handle: &Handle,
+    deadline: Instant,
+    stage: &str,
+    operation: impl FnOnce(&mut Context) -> ResultV1<T> + Send + 'static,
+) -> ResultV1<T> {
+    let mut future = Box::pin(
+        handle
+            .observer()
+            .enqueue_with_context(operation)
+            .map_err(|error| failure(stage, error))?,
+    );
+    let result = engine.drive_until_ready(future.as_mut(), deadline);
+    drop(future);
+    result
+        .map_err(|error| failure(stage, error))?
+        .map_err(|error| failure(stage, error))?
+}
+
+fn callback<A>(
+    context: &mut Context,
+    submission: &RuntimeSubmissionV1<A>,
+    index: usize,
+    receipts: &Arc<Mutex<Receipts>>,
+) -> ResultV1<()> {
+    let id = submission.id();
+    let receipts = Arc::clone(receipts);
+    context
+        .on_completion(submission, move |status| {
+            receipts
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .record(index, id, status);
+        })
+        .map_err(|error| failure("callback", error))
+}
+
+fn require<A>(
+    context: &Context,
+    submission: &RuntimeSubmissionV1<A>,
+    status: RuntimeCompletionStatusV1,
+) -> ResultV1<()> {
+    let observed = context
+        .query_submission(submission)
+        .map_err(|error| failure("submission-status", error))?;
+    if observed != status {
+        return Err(failure("submission-status", observed));
+    }
+    Ok(())
+}
+
+fn admit_chain(
+    context: &mut Context,
+    resources: &Resources,
+    receipts: &Arc<Mutex<Receipts>>,
+) -> ResultV1<Chain> {
+    let [source, destination] = &resources.runs;
+    let first = context
+        .peer_copy(
+            resources.initial_peer_stream,
+            region(source.allocations[2], RuntimeAccessV1::Read),
+            region(destination.allocations[2], RuntimeAccessV1::Write),
+            &[],
+        )
+        .map_err(|error| failure("initial-peer", error))?;
+    callback(context, &first, 0, receipts)?;
+    let event = context
+        .record_event(&first)
+        .map_err(|error| failure("initial-peer-event", error))?;
+    let [_, b, c, d] = destination.allocations;
+    let arguments =
+        Arguments::new(c, b, d).map_err(|error| failure("deferred-arguments", error))?;
+    let compute = context
+        .launch_producer_aware_v1(
+            destination.stream,
+            &destination.kernel,
+            &arguments,
+            GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
+            &[event],
+        )
+        .map_err(|error| failure("deferred-compute", error))?;
+    callback(context, &compute, 1, receipts)?;
+    context
+        .release_event(event)
+        .map_err(|error| failure("initial-event-release", error))?;
+    let event = context
+        .record_event(&compute)
+        .map_err(|error| failure("deferred-event", error))?;
+    let second = context
+        .peer_copy(
+            resources.return_peer_stream,
+            region(d, RuntimeAccessV1::Read),
+            region(resources.returned, RuntimeAccessV1::Write),
+            &[event],
+        )
+        .map_err(|error| failure("return-peer", error))?;
+    callback(context, &second, 2, receipts)?;
+    context
+        .release_event(event)
+        .map_err(|error| failure("deferred-event-release", error))?;
+    let event = context
+        .record_event(&second)
+        .map_err(|error| failure("return-peer-event", error))?;
+    let readback = context
+        .copy_async(
+            resources.readback_stream,
+            region(resources.returned, RuntimeAccessV1::Read),
+            region(resources.host_output, RuntimeAccessV1::Write),
+            &[event],
+        )
+        .map_err(|error| failure("readback", error))?;
+    callback(context, &readback, 3, receipts)?;
+    context
+        .release_event(event)
+        .map_err(|error| failure("return-event-release", error))?;
+    require(context, &first, RuntimeCompletionStatusV1::Pending)?;
+    require(context, &compute, RuntimeCompletionStatusV1::Pending)?;
+    require(context, &second, RuntimeCompletionStatusV1::Pending)?;
+    require(context, &readback, RuntimeCompletionStatusV1::Pending)?;
+    if context.backend().completed_compute_xgmi_copies_v1() != 0 {
+        return Err(failure(
+            "admission-native-count",
+            "unexpected peer completion",
+        ));
+    }
+    let ids = [first.id(), compute.id(), second.id(), readback.id()];
+    Ok(Chain {
+        initial_peer: first,
+        compute,
+        return_peer: second,
+        readback,
+        ids,
+    })
+}
+
+fn pipeline(engine: &mut Engine, handle: &Handle, resources: Arc<Resources>) -> ResultV1<String> {
+    let deadline = Instant::now() + WAIT;
+    let mut registration = Box::pin(
+        handle
+            .enqueue_stream_registration(resources.readback_stream)
+            .map_err(|error| failure("progress-register", error))?,
+    );
+    let result = engine.drive_until_ready(registration.as_mut(), deadline);
+    drop(registration);
+    let registration = result
+        .map_err(|error| failure("progress-drive", error))?
+        .map_err(|error| failure("progress-reply", error))?
+        .map_err(|error| failure("progress-admission", error))?;
+    let receipts = Arc::new(Mutex::new(Receipts::new()));
+    let observed = Arc::clone(&receipts);
+    let owned = Arc::clone(&resources);
+    let mut chain = command(
+        engine,
+        handle,
+        deadline,
+        "chain-admission",
+        move |context| admit_chain(context, &owned, &observed),
+    )?;
+    let mut complete = false;
+    for _ in 0..TICKS {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let result = command(engine, handle, deadline, "chain-observe", move |context| {
+            let complete = match context
+                .poll(&mut chain.readback)
+                .map_err(|error| failure("final-poll", error))?
+            {
+                RuntimePollV1::Succeeded => true,
+                RuntimePollV1::Pending => false,
+                status => return Err(failure("final-status", status)),
+            };
+            Ok((chain, complete))
+        })?;
+        chain = result.0;
+        complete = result.1;
+        if complete {
+            break;
+        }
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    if !complete {
+        return Err(failure(
+            "pipeline-deadline",
+            "final-only progress exhausted",
+        ));
+    }
+    if !receipts
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .succeeded(&chain.ids)
+    {
+        return Err(failure(
+            "pipeline-callbacks",
+            "four exact successful receipts required",
+        ));
+    }
+    let owned = Arc::clone(&resources);
+    let (chain, bytes) = command(
+        engine,
+        handle,
+        deadline,
+        "settled-snapshot",
+        move |context| {
+            require(
+                context,
+                &chain.initial_peer,
+                RuntimeCompletionStatusV1::Succeeded,
+            )?;
+            require(
+                context,
+                &chain.compute,
+                RuntimeCompletionStatusV1::Succeeded,
+            )?;
+            require(
+                context,
+                &chain.return_peer,
+                RuntimeCompletionStatusV1::Succeeded,
+            )?;
+            require(
+                context,
+                &chain.readback,
+                RuntimeCompletionStatusV1::Succeeded,
+            )?;
+            if context.backend().completed_compute_xgmi_copies_v1() != 2 {
+                return Err(failure(
+                    "native-counter",
+                    "exactly two completed native copies required",
+                ));
+            }
+            for stream in [
+                owned.initial_peer_stream,
+                owned.runs[1].stream,
+                owned.return_peer_stream,
+                owned.readback_stream,
+            ] {
+                let observation = context
+                    .query_stream(stream)
+                    .map_err(|error| failure("settled-stream", error))?;
+                if observation.total_submissions != 1
+                    || observation.succeeded != 1
+                    || !observation.is_quiescent()
+                    || observation.failed != 0
+                    || observation.quiescent_without_result != 0
+                    || observation.first_failure.is_some()
+                {
+                    return Err(failure("settled-stream", observation));
+                }
+            }
+            let mut bytes = vec![0; BYTES];
+            context
+                .read_allocation(owned.host_output, 0, &mut bytes)
+                .map_err(|error| failure("snapshot-read", error))?;
+            Ok((chain, bytes))
+        },
+    )?;
+    let output_digest = verify_output(&bytes)?;
+    command(
+        engine,
+        handle,
+        deadline,
+        "pipeline-release",
+        move |context| {
+            context
+                .release_submission(chain.readback)
+                .map_err(|error| failure("readback-release", error))?;
+            context
+                .release_submission(chain.return_peer)
+                .map_err(|error| failure("return-peer-release", error))?;
+            context
+                .release_submission(chain.compute)
+                .map_err(|error| failure("deferred-release", error))?;
+            context
+                .release_submission(chain.initial_peer)
+                .map_err(|error| failure("initial-peer-release", error))?;
+            Ok(())
+        },
+    )?;
+    if handle.observer().reply_cells_in_use() != 0 {
+        return Err(failure(
+            "reply-credits",
+            "completed acknowledgment retained",
+        ));
+    }
+    let mut future = Box::pin(
+        handle
+            .begin_drain(TICKS)
+            .map_err(|error| failure("drain-admission", error))?,
+    );
+    let result = engine.drive_until_ready(future.as_mut(), Instant::now() + WAIT);
+    drop(future);
+    let drained = result
+        .map_err(|error| failure("drain-drive", error))?
+        .map_err(|error| failure("drain-result", error))?;
+    if drained.outcome != RuntimeAsyncDrainOutcomeV1::Quiescent
+        || !drained.queued_commands_exhausted
+        || drained.operations_remaining != 0
+        || drained.graph_active
+        || drained.retained_submissions != RuntimeStreamObservationV1::default()
+        || drained.ticks == 0
+        || drained.ticks > TICKS
+    {
+        return Err(failure("completed-drain", drained));
+    }
+    drop(registration);
+    Ok(output_digest)
+}
+
+fn run(ids: [u64; 2]) -> ResultV1<String> {
+    let (context, resources) = setup(ids)?;
+    let config = RuntimeAsyncEngineConfigV1::new(16, 16, 16, 16, Duration::from_micros(50))
+        .and_then(|config| config.with_reply_capacity(16))
+        .map_err(|error| failure("owner-config", error))?;
+    let progress = RuntimeAsyncProgressConfigV1::new(1, 1)
+        .map_err(|error| failure("progress-config", error))?;
+    let (mut engine, handle) = Engine::new_with_progress(
+        || Ok::<_, String>(ManuallyDrop::into_inner(context)),
+        config,
+        progress,
+    )
+    .map_err(|error| failure("owner-open", error))?;
+    let result = pipeline(&mut engine, &handle, resources);
+    let shutdown = engine.shutdown();
+    if shutdown.disposition != RuntimeAsyncOwnedDispositionV1::Released
+        || shutdown.worker_panicked
+        || shutdown.native_failure.is_some()
+        || shutdown
+            .cleanup
+            .as_ref()
+            .is_none_or(|report| !report.is_complete() || !report.failures().is_empty())
+    {
+        return Err(failure("native-shutdown", (result.err(), shutdown)));
+    }
+    result
+}
+
+fn main() -> Result<(), String> {
+    let ids = unique_ids(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let output = run(ids)?;
+    println!(
+        "PASS schema=fe2o3.deferred-peer-chain-smoke.v1 authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} padding_bytes=0 launches=4 setup_launches=3 pipeline_launches=1 peer_copies=2 dependent_readbacks=1 completion_receipts=4 pipeline=peer-deferred-compute-peer-readback admission=all-four-before-explicit-progress compute_admission=deferred-before-first-peer-completion progress=final-readback-stream-only public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter=0,2 initial_peer_sentinel=full-byte-pass final_peer_sentinel=full-byte-pass output=full-byte-pass padding=exact-page-extent output_sha256={output} snapshot=settled-host-visible-owner-command host_output_installations=0 journal=enabled retained_results=4 allocations=12 modules=2 streams=5 contexts=1 owners=1 pipeline_host_joins=0 results_release=readback-peer-compute-peer final_drain=completed-only cleanup=owned-shutdown-explicit source_preservation=unobserved physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+        ids[0], ids[1]
+    );
+    Ok(())
+}

@@ -4,6 +4,8 @@ use super::*;
 use fe2o3_runtime_model::ContextWriterStateV1;
 use std::sync::{Arc, Mutex};
 
+#[path = "compute_peer_tests/deferred_chain.rs"]
+mod deferred_chain;
 #[path = "compute_peer_tests/repeated.rs"]
 mod repeated;
 

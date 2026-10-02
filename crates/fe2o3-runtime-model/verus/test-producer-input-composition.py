@@ -21,8 +21,8 @@ PINS = {
     "producer_input_fold_body.rs": "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
     "producer_input_fold_tests.rs": "39f37757239f9f6880caeddded618bb13952d863d8aef11dc5c53453084a2d00",
 }
-NATIVE_TREE_SHA = "3f34f7263df78955aeedf768123cbdef841f7bccc0c01e46cae0843c538fa7f0"
-SCHEMA_TREE_SHA = "09568cbc4efbd6d5d539d131e5d99a6f6175d13cd6bb7dea52e2464736195bd4"
+NATIVE_TREE_SHA = "b99359fed635d0670941683c8dc4eb374156d57311f9a766cc06a117f865a648"
+SCHEMA_TREE_SHA = "d6e2ab0978e29a165ed2c82708b3175d117db76a256c8dc3b2b7ef0e6f8ae166"
 DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_version_journal/declarations.rs",
     "context_version_journal/enrollment_declarations.rs",
@@ -31,9 +31,9 @@ DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_queued_writers/read_declarations.rs",
 ))
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "9dfebf639e18a027191f7f86ff1e8c1cf8bce0b3a1accaa6a6da405f991e5455",
-    "check-producer-input-fold.py": "37b64dac4784c15d15799160388acfbcb856f9833e2cbbd2f9d495cb52dbcd60",
-    "check-producer-input-composition.py": "f86b1db0a5692c732c7a66ebb4a1695d10ef0cf2afad995a00ce4a879e3e4b52",
+    "check-producer-input-validate.py": "e25afb5afa332ef905b8b5ddd46c13aa0f3d17c3ffdee7eef4e7cf81f453d68b",
+    "check-producer-input-fold.py": "3e069d70ee94bc5ac3de42a2b06efcfc50bba3a9f40567b8a3b7a4f2ec1a2281",
+    "check-producer-input-composition.py": "0981be4ba7714a119814be38436090af8d407ab200d108605e5ca297714d94dd",
 }
 PARTS = (DEFINITIONS, COMPOSITION, "producer_input_runtime_declarations_v1.rs",
          "producer_input_journal_comparison_declarations_v1.rs", "producer_input_outcome_spec_v1.rs",
@@ -270,11 +270,11 @@ class SourceControls(unittest.TestCase):
         for name, digest in PINS.items():
             self.assertEqual(hashlib.sha256((ROOT / (NATIVE + name)).read_bytes()).hexdigest(), digest)
         native = native_inventory()
-        self.assertEqual(len(native), 362)
+        self.assertEqual(len(native), 365)
         self.assertEqual(tree_hash(native), NATIVE_TREE_SHA)
         with_schemas = {**native, **{str(path): hashlib.sha256(raw_source(ROOT / path)).hexdigest()
                                    for path in DECLARATIONS}}
-        self.assertEqual(len(with_schemas), 367)
+        self.assertEqual(len(with_schemas), 370)
         self.assertEqual(tree_hash(with_schemas), SCHEMA_TREE_SHA)
 
     def test_reconstruction_and_roster_reject_unreviewed_edits(self):

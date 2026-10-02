@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod producer;
+use producer::DeferredComputeIdentityV1;
+
 #[cfg(test)]
 mod tests;
 
@@ -13,6 +16,7 @@ pub(super) struct DeferredComputeV1 {
     pub(super) status: BackendPollV1,
     quiescent: Option<KfdRuntimeBackendErrorV1>,
     completed: Option<CompletedDeferredResultV1>,
+    identity: DeferredComputeIdentityV1,
     launch: Option<Arc<RetainedComputeLaunchV1>>,
     collected: Option<CollectedComputeDependenciesV1>,
     kernel: (u64, RoutedHandleV1),
@@ -517,6 +521,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let mut collected = self.latch(result)?;
         let result = self.children[stream.child].validate_compute_launch_base_v1(&launch);
         self.latch(result)?;
+        depth = self.children[stream.child]
+            .next_dependency_depth_v1(
+                collected.ordered_predecessor,
+                &collected.explicit_success_dependencies,
+            )
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("deferred dependency depth exceeds its bound")
+            })?
+            .max(depth);
         collected.minimum_dependency_depth = depth;
         if let Some(prior) = collected.ordered_predecessor {
             let owner = self
@@ -581,6 +594,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     status: BackendPollV1::Pending,
                     quiescent: None,
                     completed: None,
+                    identity: DeferredComputeIdentityV1::new(&payload, depth, None),
                     launch: Some(payload),
                     collected: Some(collected),
                     kernel: (request.kernel, kernel),
@@ -614,6 +628,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     let record = child.submissions.get(&route.local)?;
                     (route.child == root.child
                         && record.status == BackendPollV1::Succeeded
+                        && record.dependency_depth == root.identity.depth
                         && child.exact_submission_quiescent_v1(route.local)
                         && root
                             .launch
@@ -740,10 +755,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             &mut Self,
         ) -> Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
     ) -> Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let child = self
-            .deferred_compute_v1(id)
-            .expect("known deferred root")
-            .child;
+        let root = self.deferred_compute_v1(id).expect("known deferred root");
+        let child = root.child;
+        // Rank and ID checks precede cross-router recursive progress. Settled
+        // results no longer retain their own parents and need no traversal.
+        if root.status == BackendPollV1::Pending
+            && (!(1..=MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1).contains(&root.identity.depth)
+                || root.peers.iter().any(|peer| {
+                    peer.id >= id
+                        || !matches!(self.submissions.get(&peer.id),
+                            Some(RoutedSubmissionV1::CooperativeCopy(copy))
+                                if copy.dependency_depth > 0
+                                    && copy.dependency_depth < root.identity.depth)
+                }))
+        {
+            self.children[child].terminal = true;
+            return Err(self.directed_corruption_v1());
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
         match result {
             Ok(result) => {
@@ -873,6 +901,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .collected
             .as_ref()
             .expect("waiting deferred dependencies");
+        if self.children[child]
+            .next_dependency_depth_v1(
+                retained.ordered_predecessor,
+                &retained.explicit_success_dependencies,
+            )
+            .ok()
+            .map(|depth| depth.max(retained.minimum_dependency_depth))
+            != Some(root.identity.depth)
+        {
+            return Err(self.directed_corruption_v1());
+        }
         let mut dependencies = Vec::new();
         if dependencies
             .try_reserve_exact(retained.explicit_success_dependencies.len())
@@ -903,7 +942,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         );
         match result {
             Ok(local) => {
-                self.deferred_compute_mut_v1(id).route = Some(RoutedHandleV1 { child, local });
+                let root = self.deferred_compute_mut_v1(id);
+                root.route = Some(RoutedHandleV1 { child, local });
+                root.identity.route = root.route;
                 Ok(BackendPollV1::Pending)
             }
             Err(
@@ -911,10 +952,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 | RuntimeBackendFailureV1::Quiescent(error),
             ) => {
                 if self.children[child].next_handle != expected_local {
-                    self.deferred_compute_mut_v1(id).route = Some(RoutedHandleV1 {
+                    let root = self.deferred_compute_mut_v1(id);
+                    root.route = Some(RoutedHandleV1 {
                         child,
                         local: expected_local,
                     });
+                    root.identity.route = root.route;
                     if !self.children[child].exact_submission_quiescent_v1(expected_local) {
                         self.children[child].terminal = true;
                         return Err(self.directed_corruption_v1());
