@@ -166,7 +166,7 @@ Ordinary constructors do not enable this route.
 
 R57 DeviceLocal launches use persistent SDMA allocations, not recycled
 fixed-dispatch DATA. The new
-`Gfx942ComputeXgmiQueueV1::copy_persistent_data_full_extent_with_peer_v1`
+`Gfx942ComputeXgmiQueueV1` persistent transfer adapter
 retains the original persistent owners, directional attachments, identities and
 pool generations. It copies equal complete logical extents up to `0x003f_ffe0`
 bytes, while preserving independently sized physical pool extents. Both buffers
@@ -188,20 +188,38 @@ materialized caches may be reconciled by those existing release operations.
 The selected endpoints cannot have materialized dirty extents. Dirty persistent
 SDMA shadows are allowed and are not downloaded for the transfer. After checking
 both normalized storage slots, the submission roots both owners, creates an
-ephemeral peer queue, copies, retires the queue and restores both allocations.
+ephemeral peer queue and publishes the copy. Later progress calls sample its
+completion, restore local mappings, retire the queue and restore both allocations.
 Success is published only after restoration. Any uncertain error or unwind
 poisons both children and retains the occupied root, without staged fallback.
 
-This development profile currently performs the native step synchronously, with
-a 30-second completion wait. A drain deadline is checked between steps, not inside
-this wait. It does not yet establish asynchronous native peer-copy progress or
-hard deadline behavior. The qualification-only completion counter increases only
+The runtime uses `begin_persistent_data_full_extent_with_peer_v1`,
+`poll_persistent_data_full_extent_with_peer_v1` and
+`finish_persistent_data_full_extent_with_peer_v1`. Each sample reads the fence
+once, without a GPU wait. Pending retains the exact ticket, mapping owners and
+both child reservations across calls; it does not advance the cooperative
+progress generation. Both model foundations are retaken before each return.
+Ready retains custody until explicit finish restores the original owners.
+The synchronous lower adapter remains available for its existing callers.
+
+Both entire child backends are reserved before owner extraction. Conflicting
+native allocation, compute, SDMA, readback, cache release and teardown cannot
+enter either child until restoration. Stored observations and host-only logical
+bookkeeping remain available, and disjoint pairs may progress. Cancellation
+before publication remains possible; a started transfer is TooLate to cancel.
+No uncertain native prefix falls back to host staging.
+
+Drain checks its deadline between phases and before starting new progress.
+Native mapping, topology/currentness, creation and retirement calls remain
+synchronous: this is not a hard syscall deadline or general same-VM compute/copy
+concurrency guarantee. The qualification-only completion counter increases only
 after an actual native transfer, queue retirement and both restorations succeed;
 scripted CPU execution does not increase it.
 
-The new `gfx942-runtime-compute-xgmi-smoke` witness runs `A+B -> C` on each GPU, releases both producers,
-overwrites the destination's existing C allocation with a full-buffer `-1.0`
-sentinel, and verifies that sentinel before the peer copy. Copying the source C
+The new `gfx942-runtime-compute-xgmi-smoke` witness runs `A+B -> C` on each GPU,
+releases both producers, overwrites the destination's existing C allocation with
+a full-buffer `-1.0` sentinel, and verifies that sentinel before the peer copy.
+Copying the source C
 back into that same destination allocation must restore every expected byte;
 both children then run their existing `C+B -> D` second phase. This preserves
 the authority's exact local C/B identities while ensuring a no-op copy fails.
@@ -212,7 +230,8 @@ qualification constructor supplies PUBLIC backing explicitly. The direct
 fixed-dispatch initializer was already PUBLIC. Neither path retags private
 allocations.
 
-The witness checks the native completion counter changes from zero to one and
+The witness requires pre-flush poll and zero-time wait to remain Pending, checks
+the native completion counter changes from zero to one, and
 performs 13 full-buffer readbacks before explicit logical and native shutdown.
 It is implemented but has not run on GPUs. The latest SSH attempt failed hostname
 resolution before executing a remote command; no current device pair is admitted.
@@ -227,9 +246,10 @@ Run only after fresh shared-host endpoint admission. This command is a correctne
 witness, not a performance benchmark or an independently verified machine-code
 refinement. No new formal-verification claim follows from existing source guards.
 
-Final-source CPU testing passes 12 scripted runtime route tests, two example
-tests, and the focused KFD initialization, transfer, paired-restoration and
-allocation-policy regressions. The full runtime run records 1,941 passes,
+At the preceding synchronous checkpoint `d2ff52f63`, CPU testing passes 12
+scripted runtime route tests, two example tests, and the focused KFD
+initialization, transfer, paired-restoration and allocation-policy regressions.
+The full runtime run records 1,941 passes,
 three unchanged baseline socket-inspection permission failures and 32 ignores;
 the broad KFD suite remains incomplete. All 32 source-control commands pass,
 with 76 associated executable proof files unchanged. Strict combined Clippy
@@ -237,11 +257,22 @@ passes and the runnable witness builds; neither is a hardware result. The
 [persistent runtime CPU packet](evidence/dev-compute-xgmi-persistent-cpu-2026-10-02/README.md)
 records exact commands, rosters, executable identities and coverage limits.
 
+The asynchronous successor passes all 17 runtime route tests, both example
+tests and six focused KFD filters, including eight one-shot sampler tests.
+The full runtime run records 1,946 passes, the same three socket-inspection
+permission failures and 32 ignores; broad KFD qualification remains incomplete.
+Strict combined Clippy, the runnable witness build and all 32 source-control
+commands pass, with 76 executable proof files unchanged. The
+[async CPU packet](evidence/dev-compute-xgmi-async-cpu-2026-10-02/README.md)
+records final-source executable hashes, earlier rejected checks and the exact
+boundary between scripted, mapped-arena and unexecuted native coverage.
+
 ## Next Dependencies
 
 Native hardware qualification, complete composed native fault coverage,
-asynchronous transfer custody, persistent peer mappings and multi-packet copies
-remain open. The current route does not qualify a general native runtime pipeline.
+hardware validation of the asynchronous custody path, persistent peer mappings
+and multi-packet copies remain open. The current route does not qualify a
+general native runtime pipeline.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

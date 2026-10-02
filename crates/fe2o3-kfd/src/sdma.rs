@@ -3534,7 +3534,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn poll_xgmi_in_current_scope(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         ticket: Gfx942SdmaCopyTicketV1,
     ) -> Result<Gfx942XgmiCopyPollV1, Gfx942SdmaErrorV1> {
         self.require_live()?;
@@ -6692,6 +6692,7 @@ fn next_pool_generation(current: u64) -> Result<u64, Gfx942SdmaErrorV1> {
 #[cfg(test)]
 mod tests {
     mod xgmi_batch_wait;
+    mod xgmi_single_poll;
     mod xgmi_single_wait;
     use super::*;
     use fe2o3_runtime_model::{

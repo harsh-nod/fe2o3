@@ -382,7 +382,10 @@ impl KfdRuntimeBackendV1 {
         for (&allocation, record) in self.allocations.ordinary_iter() {
             match record.sdma_storage {
                 KfdRuntimeSdmaStorageV1::ComputeInFlight(_)
-                | KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous) => {
+                | KfdRuntimeSdmaStorageV1::InFlight(
+                    KfdRuntimeSdmaInFlightV1::Synchronous
+                    | KfdRuntimeSdmaInFlightV1::ComputeXgmi(_),
+                ) => {
                     return Err(Failure::Storage);
                 }
                 KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(id))

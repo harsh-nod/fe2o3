@@ -1,12 +1,19 @@
 use super::super::kfd_backend_sdma_seam::{
-    ScriptedFailureModeV1, ScriptedRecycleOutcomeV1, ScriptedSdmaStepV1,
+    ScriptedBufferKindV1, ScriptedFailureModeV1, ScriptedRecycleOutcomeV1, ScriptedSdmaStepV1,
 };
 use super::*;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const BYTES: usize = 64;
-const STAGES: [Stage; 4] = [Stage::Create, Stage::Copy, Stage::Retire, Stage::Restore];
+const STAGES: [Stage; 6] = [
+    Stage::Create,
+    Stage::Copy,
+    Stage::Poll,
+    Stage::Finish,
+    Stage::Retire,
+    Stage::Restore,
+];
 
 struct Fixture {
     // A failing assertion must not destroy intentionally retained native custody.
@@ -18,10 +25,33 @@ struct Fixture {
 
 impl Fixture {
     fn new(failure: Option<Stage>, unwind: bool) -> Self {
-        let left = KfdRuntimeBackendV1::mock();
-        let mut right = KfdRuntimeBackendV1::mock();
-        right.description.backend_device = 8;
-        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        Self::configured(failure, unwind, 0, 2)
+    }
+
+    fn configured(
+        failure: Option<Stage>,
+        unwind: bool,
+        pending_samples: usize,
+        child_count: usize,
+    ) -> Self {
+        Self::with_destination_steps(failure, unwind, pending_samples, child_count, Vec::new())
+    }
+
+    fn with_destination_steps(
+        failure: Option<Stage>,
+        unwind: bool,
+        pending_samples: usize,
+        child_count: usize,
+        mut destination_steps: Vec<ScriptedSdmaStepV1>,
+    ) -> Self {
+        let children = (0..child_count)
+            .map(|index| {
+                let mut child = KfdRuntimeBackendV1::mock();
+                child.description.backend_device = 7 + index as u64;
+                child
+            })
+            .collect();
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(children).unwrap();
         let stream = backend.create_stream_v1(8).unwrap();
         let source = backend
             .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, BYTES as u64, 8)
@@ -29,14 +59,35 @@ impl Fixture {
         let destination = backend
             .allocate_v1(8, RuntimeMemoryKindV1::DeviceLocal, BYTES as u64, 8)
             .unwrap();
-        for (allocation, fill) in [(source, 0x53), (destination, 0x17)] {
-            let driver = ScriptedSdmaDriverV1::new([
+        for index in 2..child_count {
+            backend
+                .allocate_v1(
+                    7 + index as u64,
+                    RuntimeMemoryKindV1::DeviceLocal,
+                    BYTES as u64,
+                    8,
+                )
+                .unwrap();
+        }
+        for allocation in backend.allocations.keys().copied().collect::<Vec<_>>() {
+            let route = backend.allocations[&allocation];
+            let fill = if route.child.is_multiple_of(2) {
+                0x53
+            } else {
+                0x17
+            };
+            let mut steps = if route.child == 1 {
+                core::mem::take(&mut destination_steps)
+            } else {
+                Vec::new()
+            };
+            steps.extend([
                 ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
                 ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
             ]);
+            let driver = ScriptedSdmaDriverV1::new(steps);
             let mut owner = driver.test_device_owner(BYTES);
             owner.scripted_bytes_mut().unwrap().fill(fill);
-            let route = backend.allocations[&allocation];
             let child = &mut backend.children[route.child];
             let record = child.allocations.get_mut(&route.local).unwrap();
             record.sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(owner));
@@ -49,9 +100,16 @@ impl Fixture {
             child.peer_visible_device_allocations = true;
             child.scripted_sdma = Some(driver);
         }
-        backend
-            .compute_xgmi_routes
-            .insert((0, 1), Route::Scripted { failure, unwind });
+        for source in (0..child_count).step_by(2) {
+            backend.compute_xgmi_routes.insert(
+                (source, source + 1),
+                Route::Scripted {
+                    failure,
+                    unwind,
+                    pending_samples,
+                },
+            );
+        }
         Self {
             backend: ManuallyDrop::new(backend),
             stream,
@@ -118,6 +176,19 @@ impl Fixture {
         owner
     }
 
+    fn unrelated(&mut self, child: usize) -> u64 {
+        let device = self.backend.children[child].description.backend_device;
+        self.backend.children[child].native_available = false;
+        self.backend.children[child].sdma_enabled = false;
+        let allocation = self
+            .backend
+            .allocate_v1(device, RuntimeMemoryKindV1::HostVisible, BYTES as u64, 8)
+            .unwrap();
+        self.backend.children[child].native_available = true;
+        self.backend.children[child].sdma_enabled = true;
+        allocation
+    }
+
     fn producer(&mut self, status: BackendPollV1) -> (u64, u64, RoutedHandleV1) {
         let stream = self.backend.create_stream_v1(7).unwrap();
         let stream_route = self.backend.streams[&stream];
@@ -161,6 +232,9 @@ impl Fixture {
                 .unwrap()
                 .sdma_backed = false;
             self.backend.release_allocation_v1(allocation).unwrap();
+        }
+        for module in self.backend.modules.keys().copied().collect::<Vec<_>>() {
+            self.backend.unload_module_v1(module).unwrap();
         }
         for stream in self.backend.streams.keys().copied().collect::<Vec<_>>() {
             self.backend.destroy_stream_v1(stream).unwrap();
@@ -548,12 +622,11 @@ fn native_route_releases_unrelated_retained_control_before_native_effects() {
             f.backend.progress_cooperative_copy(copy).unwrap(),
             BackendPollV1::Pending
         );
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            f.backend.progress_cooperative_copy(copy)
-        }));
+        let outcome = catch_unwind(AssertUnwindSafe(|| f.backend.flush_stream_v1(f.stream)));
         match fault {
             None => {
-                assert_eq!(outcome.unwrap().unwrap(), BackendPollV1::Succeeded);
+                outcome.unwrap().unwrap();
+                assert_eq!(f.backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
                 assert!(f.backend.children[0].retained_persistent_dispatch.is_none());
                 f.clean();
             }
@@ -622,9 +695,7 @@ fn native_route_every_failure_and_unwind_retains_both_owners_and_poisons_both_ch
                 f.backend.progress_cooperative_copy(copy).unwrap(),
                 BackendPollV1::Pending
             );
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                f.backend.progress_cooperative_copy(copy)
-            }));
+            let outcome = catch_unwind(AssertUnwindSafe(|| f.backend.flush_stream_v1(f.stream)));
             if unwind {
                 assert!(outcome.is_err());
             } else {
@@ -648,10 +719,11 @@ fn native_route_every_failure_and_unwind_retains_both_owners_and_poisons_both_ch
             for source in [false, true] {
                 assert!(matches!(
                     f.record(source).sdma_storage,
-                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
+                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(owner)) if owner == copy
                 ));
             }
             assert_eq!(f.copy(copy).phase, CooperativeCopyPhaseV1::Read);
+            assert_eq!(f.backend.compute_xgmi_children, [Some(copy), Some(copy)]);
             assert!(matches!(
                 f.backend.poll_v1(copy),
                 Err(RuntimeBackendFailureV1::Terminal(_))
@@ -662,5 +734,389 @@ fn native_route_every_failure_and_unwind_retains_both_owners_and_poisons_both_ch
             ));
             // Deliberately retain terminal custody, matching the runtime contract.
         }
+    }
+}
+
+fn busy<T: fmt::Debug>(result: Result<T, Failure>) {
+    assert!(
+        matches!(result,
+            Err(RuntimeBackendFailureV1::Rejected(ref error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ),
+        "expected settled Busy, got {result:?}"
+    );
+}
+
+#[test]
+fn native_route_pending_samples_keep_exact_custody_and_observers_do_not_sample() {
+    let mut f = Fixture::configured(None, false, 3, 2);
+    let identities = [
+        f.owner(true).scripted_owner_id(),
+        f.owner(false).scripted_owner_id(),
+    ];
+    let copy = f.submit(&[]);
+    assert_eq!(
+        f.backend.drain_v1(copy, Instant::now()).unwrap(),
+        BackendPollV1::Pending
+    );
+    assert_eq!(f.copy(copy).phase, CooperativeCopyPhaseV1::Dependencies);
+    assert!(f.root(copy).trace.is_empty());
+    assert!(f.backend.compute_xgmi_children.iter().all(Option::is_none));
+    f.backend.flush_stream_v1(f.stream).unwrap();
+    assert_eq!(
+        f.root(copy).trace,
+        [Stage::Create, Stage::Copy, Stage::Poll]
+    );
+    assert_eq!(f.backend.compute_xgmi_children, [Some(copy), Some(copy)]);
+    assert_eq!(f.root(copy).phase, Phase::Published);
+    let generation = f.backend.cooperative_progress_generation;
+    for _ in 0..3 {
+        assert_eq!(f.backend.poll_v1(copy).unwrap(), BackendPollV1::Pending);
+        assert_eq!(
+            f.backend.wait_v1(copy, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert_eq!(
+            f.backend.drain_v1(copy, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert_eq!(f.root(copy).trace.len(), 3);
+        assert_eq!(f.backend.cooperative_progress_generation, generation);
+    }
+    assert_eq!(
+        f.backend.cancel_v1(copy).unwrap(),
+        crate::BackendCancellationV1::TooLate
+    );
+    busy(f.backend.release_submission_v1(copy));
+    busy(f.backend.release_allocation_v1(f.source.allocation));
+    busy(f.backend.release_allocation_v1(f.destination.allocation));
+    busy(f.backend.shutdown_native_v1());
+    f.backend.flush_stream_v1(f.stream).unwrap();
+    assert_eq!(f.root(copy).trace.len(), 4);
+    assert_eq!(f.backend.cooperative_progress_generation, generation);
+    assert_eq!(
+        f.root(copy)
+            .scripted_owners
+            .each_ref()
+            .map(|owner| owner.as_ref().unwrap().scripted_owner_id()),
+        identities
+    );
+    f.backend.assert_cooperative_indexes_consistent();
+    assert_eq!(
+        f.backend
+            .drain_v1(copy, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    assert_eq!(f.backend.compute_xgmi_children, [None, None]);
+    assert_eq!(
+        f.root(copy)
+            .trace
+            .iter()
+            .filter(|stage| **stage == Stage::Poll)
+            .count(),
+        4
+    );
+    assert_eq!(
+        [
+            f.owner(true).scripted_owner_id(),
+            f.owner(false).scripted_owner_id()
+        ],
+        identities
+    );
+    assert_eq!(f.owner(false).scripted_bytes().unwrap(), &[0x53; BYTES]);
+    f.clean();
+}
+
+#[test]
+fn native_route_occupied_children_reject_mutation_but_allow_bookkeeping() {
+    let mut f = Fixture::configured(None, false, 2, 4);
+    let unrelated = [f.unrelated(0), f.unrelated(1), f.unrelated(2)];
+    let (completed, event, _) = f.producer(BackendPollV1::Succeeded);
+    let copy = f.submit(&[]);
+    f.backend.flush_stream_v1(f.stream).unwrap();
+    let trace = f.root(copy).trace.clone();
+    assert_eq!(
+        f.backend.poll_v1(completed).unwrap(),
+        BackendPollV1::Succeeded
+    );
+    assert_eq!(
+        f.backend.wait_v1(completed, Instant::now()).unwrap(),
+        BackendPollV1::Succeeded
+    );
+    f.backend.release_event_v1(event).unwrap();
+    f.backend.release_submission_v1(completed).unwrap();
+    for (child, allocation) in unrelated[..2].iter().copied().enumerate() {
+        let device = 7 + child as u64;
+        let stream = f.backend.create_stream_v1(device).unwrap();
+        let module = f
+            .backend
+            .load_module_v1(device, &crate::synthetic_cov6::module())
+            .unwrap();
+        let kernel = f
+            .backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        busy(
+            f.backend
+                .allocate_v1(device, RuntimeMemoryKindV1::HostVisible, 8, 8),
+        );
+        busy(f.backend.release_allocation_v1(allocation));
+        busy(f.backend.write_allocation_v1(allocation, 0, &[0]));
+        busy(f.backend.read_allocation_v1(allocation, 0, &mut [0]));
+        busy(f.backend.unload_module_v1(module));
+        let geometry = crate::RuntimeLaunchGeometryV1 {
+            grid: [1; 3],
+            workgroup: [1; 3],
+            dynamic_shared_bytes: 0,
+        };
+        busy(f.backend.submit_v1(BackendLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg: &[],
+            bindings: &[],
+            dependencies: &[],
+            geometry,
+            semantic_launch: BackendSemanticLaunchV1::Ordinary,
+        }));
+        busy(
+            f.backend
+                .submit_producer_aware_launch_v1(BackendProducerAwareLaunchV1 {
+                    stream,
+                    kernel,
+                    explicit_kernarg: &[],
+                    bindings: &[],
+                    dependencies: &[],
+                    geometry,
+                }),
+        );
+        let region = BackendMemoryRegionV1 {
+            allocation,
+            access: RuntimeAccessV1::Read,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        busy(f.backend.copy_async_v1(
+            stream,
+            region,
+            BackendMemoryRegionV1 {
+                access: RuntimeAccessV1::Write,
+                ..region
+            },
+            &[],
+        ));
+        f.backend.flush_stream_v1(stream).unwrap();
+        f.backend.destroy_stream_v1(stream).unwrap();
+    }
+    f.backend
+        .write_allocation_v1(unrelated[2], 0, &[0x45])
+        .unwrap();
+    let mut observed = [0];
+    f.backend
+        .read_allocation_v1(unrelated[2], 0, &mut observed)
+        .unwrap();
+    assert_eq!(observed, [0x45]);
+    assert_eq!(f.root(copy).trace, trace);
+    assert_eq!(
+        f.backend.compute_xgmi_children,
+        [Some(copy), Some(copy), None, None]
+    );
+    assert_eq!(
+        f.backend
+            .drain_v1(copy, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    for allocation in unrelated[..2].iter().copied() {
+        f.backend
+            .write_allocation_v1(allocation, 0, &[0x31])
+            .unwrap();
+    }
+    f.clean();
+}
+
+#[test]
+fn native_route_occupied_dependency_observation_defers_without_failing_copy() {
+    // The native write leg allocates and retires scratch even for a HostVisible endpoint.
+    let mut f = Fixture::with_destination_steps(
+        None,
+        false,
+        2,
+        2,
+        vec![
+            ScriptedSdmaStepV1::Allocate {
+                kind: ScriptedBufferKindV1::Host,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ],
+    );
+    let source = f.unrelated(0);
+    let destination = f.unrelated(1);
+    f.backend
+        .write_allocation_v1(source, 0, &[0x6d; 8])
+        .unwrap();
+    let other_stream = f.backend.create_stream_v1(8).unwrap();
+    let (producer, event, producer_route) = f.producer(BackendPollV1::Pending);
+    let copy = f.submit(&[]);
+    let dependent = f
+        .backend
+        .peer_copy_v1(
+            other_stream,
+            BackendMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            BackendMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            &[event],
+        )
+        .unwrap();
+    f.backend.flush_stream_v1(f.stream).unwrap();
+    f.backend.flush_stream_v1(other_stream).unwrap();
+    assert_eq!(
+        f.backend.poll_v1(dependent).unwrap(),
+        BackendPollV1::Pending
+    );
+    assert_eq!(f.copy(dependent).dependency_cursor, 0);
+    f.backend.children[producer_route.child]
+        .submissions
+        .get_mut(&producer_route.local)
+        .unwrap()
+        .status = BackendPollV1::Succeeded;
+    f.backend.flush_stream_v1(other_stream).unwrap();
+    assert_eq!(f.copy(dependent).phase, CooperativeCopyPhaseV1::Read);
+    assert_eq!(
+        f.backend.poll_v1(dependent).unwrap(),
+        BackendPollV1::Pending
+    );
+    assert_eq!(
+        f.backend.poll_v1(producer).unwrap(),
+        BackendPollV1::Succeeded
+    );
+    assert_eq!(f.root(copy).trace.len(), 3);
+    f.backend.assert_cooperative_indexes_consistent();
+    assert_eq!(
+        f.backend
+            .drain_v1(copy, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    f.backend.flush_stream_v1(other_stream).unwrap();
+    assert_eq!(
+        f.backend.poll_v1(dependent).unwrap(),
+        BackendPollV1::Succeeded
+    );
+    let mut copied = [0; 8];
+    f.backend
+        .read_allocation_v1(destination, 0, &mut copied)
+        .unwrap();
+    assert_eq!(copied, [0x6d; 8]);
+    assert_eq!(
+        f.backend.children[1]
+            .scripted_sdma
+            .as_ref()
+            .unwrap()
+            .remaining_steps(),
+        2
+    );
+    f.clean();
+}
+
+#[test]
+fn native_route_disjoint_pairs_progress_independently_through_flush_and_drain() {
+    let mut f = Fixture::configured(None, false, 2, 4);
+    let allocation = |child| {
+        f.backend
+            .allocations
+            .iter()
+            .find_map(|(id, route)| (route.child == child).then_some(*id))
+            .unwrap()
+    };
+    let source = allocation(2);
+    let destination = allocation(3);
+    let other_stream = f.backend.create_stream_v1(10).unwrap();
+    let first = f.submit(&[]);
+    let second = f
+        .backend
+        .peer_copy_v1(
+            other_stream,
+            BackendMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: BYTES as u64,
+            },
+            BackendMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: BYTES as u64,
+            },
+            &[],
+        )
+        .unwrap();
+    f.backend.flush_stream_v1(f.stream).unwrap();
+    f.backend.flush_stream_v1(other_stream).unwrap();
+    assert_eq!(
+        f.backend.compute_xgmi_children,
+        [Some(first), Some(first), Some(second), Some(second)]
+    );
+    let first_trace = f.root(first).trace.clone();
+    assert_eq!(
+        f.backend
+            .drain_v1(second, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    assert_eq!(
+        f.backend.compute_xgmi_children,
+        [Some(first), Some(first), None, None]
+    );
+    assert_eq!(f.root(first).trace, first_trace);
+    assert_eq!(f.backend.poll_v1(first).unwrap(), BackendPollV1::Pending);
+    f.backend.assert_cooperative_indexes_consistent();
+    assert_eq!(
+        f.backend
+            .drain_v1(first, Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        BackendPollV1::Succeeded
+    );
+    assert!(f.backend.compute_xgmi_children.iter().all(Option::is_none));
+    f.clean();
+}
+
+#[test]
+fn native_route_retained_slot_or_reservation_mismatch_poison_both_without_retirement() {
+    for reservation in [false, true] {
+        let mut f = Fixture::configured(None, false, 1, 2);
+        let copy = f.submit(&[]);
+        f.backend.flush_stream_v1(f.stream).unwrap();
+        if reservation {
+            f.backend.compute_xgmi_children[1] = Some(copy + 1);
+        } else {
+            f.record_mut(false).sdma_storage =
+                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(copy + 1));
+        }
+        assert!(matches!(
+            f.backend.progress_cooperative_copy(copy),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(f.backend.terminal && f.backend.children.iter().all(|child| child.terminal));
+        assert_eq!(
+            f.root(copy).trace,
+            [Stage::Create, Stage::Copy, Stage::Poll]
+        );
+        assert!(f.root(copy).scripted_owners.iter().all(Option::is_some));
+        assert!(f.root(copy).shells.iter().all(Option::is_some));
     }
 }

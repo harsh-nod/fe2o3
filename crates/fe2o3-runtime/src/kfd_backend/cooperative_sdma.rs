@@ -712,6 +712,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             unreachable!()
         };
         let leaf = copy.sdma_leaf.as_ref().expect("private leaf is installed");
+        self.require_compute_xgmi_child_available_v1(leaf.endpoint.child)?;
         let (origin, endpoint, allocation, stream) =
             (leaf.origin, leaf.endpoint, leaf.allocation, leaf.stream);
         let current = self.peer_copy_origin_for_leg_v1(
@@ -841,6 +842,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         };
         if copy.sdma_leaf.is_none() {
             return Ok(true);
+        }
+        if copy
+            .sdma_leaf
+            .as_ref()
+            .is_some_and(|leaf| self.compute_xgmi_child_occupied_v1(leaf.child()))
+        {
+            return Ok(false);
         }
         let cancelled = self.with_cooperative_leaf_v1(submission, |child, copy| {
             let leaf = copy.sdma_leaf.as_mut().unwrap();

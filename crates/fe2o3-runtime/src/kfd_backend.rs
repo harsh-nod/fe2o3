@@ -773,6 +773,7 @@ struct AllocationRecordV1 {
 enum KfdRuntimeSdmaInFlightV1 {
     Async(u64),
     Synchronous,
+    ComputeXgmi(u64),
 }
 
 #[derive(Debug)]
@@ -7039,6 +7040,7 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     device_children: HashMap<u64, usize>,
     request_policy: multi_admission::MultiRequestPolicyV1,
     compute_xgmi_routes: HashMap<(usize, usize), compute_xgmi::Route>,
+    compute_xgmi_children: Vec<Option<u64>>,
     completed_compute_xgmi_copies: u64,
     terminal: bool,
     next_handle: u64,
@@ -7960,6 +7962,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         mut device_children: HashMap<u64, usize>,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let request_policy = multi_admission::classify_children_v1(&children)?;
+        let mut compute_xgmi_children = Vec::new();
+        compute_xgmi_children
+            .try_reserve_exact(children.len())
+            .map_err(|_| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "multi-device peer custody roster allocation failed",
+                )
+            })?;
+        compute_xgmi_children.resize(children.len(), None);
         for (index, child) in children.iter().enumerate() {
             if child.description.backend_device == 0
                 || device_children
@@ -7977,6 +7989,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             device_children,
             request_policy,
             compute_xgmi_routes: HashMap::new(),
+            compute_xgmi_children,
             completed_compute_xgmi_copies: 0,
             terminal: false,
             next_handle: 1,
@@ -8019,6 +8032,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.cooperative_stream_tails.is_empty()
             || !self.native_stream_submission_counts.is_empty()
             || !self.event_submission_retain_counts.is_empty()
+            || self.compute_xgmi_children.iter().any(Option::is_some)
             || self.cooperative_staging_bytes != 0
         {
             return Err(KfdRuntimeBackendV1::rejected(
@@ -8406,6 +8420,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     .is_none_or(|root| root.is_quiescent()),
                 "compute-XGMI custody remains live"
             );
+            assert!(
+                [copy.source.child, copy.destination.child]
+                    .into_iter()
+                    .all(|child| self.compute_xgmi_children[child] != Some(submission)),
+                "compute-XGMI child reservation remains live"
+            );
             copy.phase = phase;
             let staging = core::mem::take(&mut copy.staging);
             let released_staging_bytes = u64::try_from(staging.len())
@@ -8465,6 +8485,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let mut expected_stream_counts = HashMap::<u64, usize>::new();
         let mut expected_native_stream_counts = HashMap::<u64, usize>::new();
         let mut expected_staging_bytes = 0_u64;
+        let mut expected_compute_xgmi_children = vec![None; self.children.len()];
         for (submission, record) in &self.submissions {
             let copy = match record {
                 RoutedSubmissionV1::Native { stream, .. } => {
@@ -8474,6 +8495,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 RoutedSubmissionV1::CooperativeCopy(copy) => copy,
             };
             assert!(copy.dependency_depth <= MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1);
+            if copy
+                .compute_xgmi
+                .as_ref()
+                .is_some_and(|root| !root.is_quiescent())
+            {
+                assert!(!copy.is_quiescent());
+                for child in [copy.source.child, copy.destination.child] {
+                    assert!(
+                        expected_compute_xgmi_children[child]
+                            .replace(*submission)
+                            .is_none()
+                    );
+                }
+            }
             if copy.is_quiescent() {
                 assert!(copy.dependencies.is_empty());
                 assert!(copy.staging.is_empty());
@@ -8509,6 +8544,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
             *expected_stream_counts.entry(copy.stream).or_insert(0) += 1;
         }
+        assert_eq!(self.compute_xgmi_children, expected_compute_xgmi_children);
         for owners in expected_allocation_owners.values_mut() {
             owners.sort_unstable();
         }
@@ -8608,6 +8644,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                if let Some(status) = self.compute_xgmi_stored_observation_v1(route) {
+                    return self.observe_peer_launch_result_v1(submission, status, |status| {
+                        *status != BackendPollV1::Pending
+                    });
+                }
                 self.refresh_peer_launch_gate_v1(submission)?;
                 self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].poll_v1(route.local);
@@ -8717,6 +8758,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             && self.compute_xgmi_endpoints_v1(submission).is_some()
         {
             return self.progress_compute_xgmi_v1(submission);
+        }
+
+        if matches!(
+            phase,
+            CooperativeCopyPhaseV1::Read | CooperativeCopyPhaseV1::Write
+        ) {
+            let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission] else {
+                unreachable!()
+            };
+            let child = if phase == CooperativeCopyPhaseV1::Read {
+                copy.source.child
+            } else {
+                copy.destination.child
+            };
+            if self.compute_xgmi_child_occupied_v1(child) {
+                return Ok(BackendPollV1::Pending);
+            }
         }
 
         if matches!(
@@ -11798,6 +11856,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "allocation is retained by a pending cooperative copy",
             ));
         }
+        self.require_compute_xgmi_child_available_v1(route.child)?;
         let result = self.children[route.child].release_allocation_v1(route.local);
         self.latch(result)?;
         self.allocations.remove(&allocation);
@@ -11822,6 +11881,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "allocation is retained by a pending cooperative copy",
             ));
         }
+        self.require_compute_xgmi_child_available_v1(route.child)?;
         let result =
             self.children[route.child].write_allocation_v1(route.local, byte_offset, bytes);
         self.latch(result)
@@ -11845,6 +11905,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "allocation is retained by a pending cooperative copy",
             ));
         }
+        self.require_compute_xgmi_child_available_v1(route.child)?;
         let result =
             self.children[route.child].read_allocation_v1(route.local, byte_offset, destination);
         self.latch(result)
@@ -11874,6 +11935,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let route = Self::route(&self.modules, module, "unknown multi-device KFD module")?;
+        self.require_compute_xgmi_child_available_v1(route.child)?;
         let result = self.children[route.child].unload_module_v1(route.local);
         self.latch(result)?;
         self.modules.remove(&module);
@@ -11925,6 +11987,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             launch.stream,
             "unknown multi-device KFD stream",
         )?;
+        self.require_compute_xgmi_child_available_v1(stream.child)?;
         let kernel = Self::route(
             &self.kernels,
             launch.kernel,
@@ -12033,6 +12096,11 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                if let Some(status) = self.compute_xgmi_stored_observation_v1(route) {
+                    return self.observe_peer_launch_result_v1(submission, status, |status| {
+                        *status != BackendPollV1::Pending
+                    });
+                }
                 self.refresh_peer_launch_gate_v1(submission)?;
                 self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].poll_v1(route.local);
@@ -12067,6 +12135,11 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         };
         match native_route {
             Some(route) => {
+                if let Some(status) = self.compute_xgmi_stored_observation_v1(route) {
+                    return self.observe_peer_launch_result_v1(submission, status, |status| {
+                        *status != BackendPollV1::Pending
+                    });
+                }
                 self.refresh_peer_launch_gate_v1(submission)?;
                 self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].wait_v1(route.local, deadline);
@@ -12107,9 +12180,19 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 RoutedSubmissionV1::Native { route, stream } => {
                     (Some(*route), Some(*stream), None, true)
                 }
-                RoutedSubmissionV1::CooperativeCopy(copy) => {
-                    (None, None, Some(copy.stream), copy.is_quiescent())
-                }
+                RoutedSubmissionV1::CooperativeCopy(copy) => (
+                    None,
+                    None,
+                    Some(copy.stream),
+                    copy.is_quiescent()
+                        && copy
+                            .compute_xgmi
+                            .as_ref()
+                            .is_none_or(|root| root.is_quiescent())
+                        && [copy.source.child, copy.destination.child]
+                            .into_iter()
+                            .all(|child| self.compute_xgmi_children[child] != Some(submission)),
+                ),
             };
         if self
             .event_submission_retain_counts
@@ -12299,6 +12382,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             request.stream,
             "unknown multi-device KFD stream",
         )?;
+        self.require_compute_xgmi_child_available_v1(stream.child)?;
         let kernel = Self::route(
             &self.kernels,
             request.kernel,
@@ -13133,6 +13217,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             && destination_route.child == stream_route.child
             && self.children[stream_route.child].native_available
         {
+            self.require_compute_xgmi_child_available_v1(stream_route.child)?;
             if self.stream_has_pending_cooperative_copy_v1(stream) {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
@@ -13253,6 +13338,9 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 }
             }
         }
+        if self.compute_xgmi_child_occupied_v1(route.child) {
+            return Ok(());
+        }
         let result = self.children[route.child].flush_stream_v1(route.local);
         let result = self.latch(result);
         if !self.terminal {
@@ -13277,6 +13365,13 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
             RoutedSubmissionV1::CooperativeCopy(copy) => {
+                if copy
+                    .compute_xgmi
+                    .as_ref()
+                    .is_some_and(|root| !root.is_quiescent())
+                {
+                    return Ok(crate::BackendCancellationV1::TooLate);
+                }
                 let cancellable = match copy.phase {
                     CooperativeCopyPhaseV1::Dependencies | CooperativeCopyPhaseV1::Read => true,
                     CooperativeCopyPhaseV1::Write => copy.byte_cursor == 0,
@@ -13291,6 +13386,7 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
         };
         if let Some(route) = native_route {
+            self.require_compute_xgmi_child_available_v1(route.child)?;
             let result = self.children[route.child].cancel_v1(route.local);
             return self.observe_peer_launch_result_v1(submission, result, |status| {
                 *status == crate::BackendCancellationV1::Cancelled
@@ -13325,6 +13421,11 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
         };
         if let Some(route) = native_route {
+            if let Some(status) = self.compute_xgmi_stored_observation_v1(route) {
+                return self.observe_peer_launch_result_v1(submission, status, |status| {
+                    *status != BackendPollV1::Pending
+                });
+            }
             if self.peer_launch_retains.is_empty() {
                 self.service_native_peer_prefix_v1(route, false)?;
                 let result = self.children[route.child].drain_v1(route.local, deadline);
@@ -13359,6 +13460,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         let mut attempts = 0_u32;
         let mut sleep = WAIT_INITIAL_SLEEP_V1;
         loop {
+            if Instant::now() >= deadline {
+                return self.poll_v1(submission);
+            }
             let status = if matches!(self.submissions.get(&submission), Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.directed.is_some())
             {
                 self.progress_retained_directed_peer_v1(submission)?

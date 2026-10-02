@@ -329,6 +329,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         route: RoutedHandleV1,
         execute: bool,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.compute_xgmi_child_occupied_v1(route.child) {
+            return Ok(());
+        }
         let no_peer_custody = self.peer_launch_retains.is_empty();
         if no_peer_custody && !self.children[route.child].has_admitted_peer_gate {
             if self.children[route.child]

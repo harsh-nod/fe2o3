@@ -73,6 +73,8 @@ const STEPS: [Step; 10] = [
     Step::SourceLocalMap,
     Step::DestinationLocalMap,
 ];
+const BEGIN_STEP_COUNT: usize = 5;
+const FINISH_STEP_START: usize = BEGIN_STEP_COUNT + 1;
 
 #[derive(Default)]
 struct Progress {
@@ -82,9 +84,10 @@ struct Progress {
 
 fn run_steps<E>(
     progress: &mut Progress,
+    steps: &[Step],
     mut operation: impl FnMut(Step) -> Result<(), E>,
 ) -> Result<(), E> {
-    for step in STEPS {
+    for &step in steps {
         progress.attempted = Some(step);
         operation(step)?;
         progress.completed = Some(step);
@@ -143,6 +146,73 @@ impl TransferCore {
         queue: &mut Gfx942NativeXgmiSdmaQueueV1,
         timeout: Duration,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.run_steps(source, destination, queue, timeout, &STEPS)
+    }
+
+    pub(super) fn begin(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.run_steps(
+            source,
+            destination,
+            queue,
+            Duration::ZERO,
+            &STEPS[..BEGIN_STEP_COUNT],
+        )
+    }
+
+    pub(super) fn poll(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        self.progress.attempted = Some(Step::Wait);
+        let ready = queue.poll_compute_xgmi_rooted_v1(source, destination, &mut self.copy)?;
+        if ready {
+            require_completed_extent(&self.copy, self.bytes)?;
+            self.progress.completed = Some(Step::Wait);
+        }
+        Ok(ready)
+    }
+
+    pub(super) fn finish(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let [source_buffer, destination_buffer] = &mut self.buffers;
+        restore_completed_mappings(
+            &mut self.copy,
+            self.bytes,
+            source_buffer
+                .as_mut()
+                .unwrap_or_else(|| std::process::abort()),
+            destination_buffer
+                .as_mut()
+                .unwrap_or_else(|| std::process::abort()),
+        )?;
+        self.run_steps(
+            source,
+            destination,
+            queue,
+            Duration::ZERO,
+            &STEPS[FINISH_STEP_START..],
+        )
+    }
+
+    fn run_steps(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+        timeout: Duration,
+        steps: &[Step],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let [source_buffer, destination_buffer] = &mut self.buffers;
         let source_buffer = source_buffer
             .as_mut()
@@ -151,7 +221,7 @@ impl TransferCore {
             .as_mut()
             .unwrap_or_else(|| std::process::abort());
         let route = queue.route();
-        run_steps(&mut self.progress, |step| {
+        run_steps(&mut self.progress, steps, |step| {
             match step {
                 Step::SourceLocalUnmap => source.unmap_compute_xgmi_local_v1(source_buffer)?,
                 Step::DestinationLocalUnmap => {
@@ -184,23 +254,12 @@ impl TransferCore {
                         timeout,
                         &mut self.copy,
                     )?;
-                    let completed = self
-                        .copy
-                        .completed
-                        .as_ref()
-                        .unwrap_or_else(|| std::process::abort());
-                    if completed.copy_bytes() != self.bytes {
-                        return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                            "compute-XGMI completed extent mismatch",
-                        ));
-                    }
-                    let completed = self
-                        .copy
-                        .completed
-                        .take()
-                        .unwrap_or_else(|| std::process::abort());
-                    source_buffer.peer = Some(completed.source);
-                    destination_buffer.peer = Some(completed.destination);
+                    restore_completed_mappings(
+                        &mut self.copy,
+                        self.bytes,
+                        source_buffer,
+                        destination_buffer,
+                    )?;
                 }
                 Step::SourcePeerUnmap => source.transition_compute_xgmi_peer_v1(
                     destination,
@@ -222,6 +281,44 @@ impl TransferCore {
             Ok(())
         })
     }
+}
+
+fn require_completed_extent(
+    copy: &ComputeXgmiCopyCustodyV1,
+    bytes: u32,
+) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    if copy
+        .completed
+        .as_ref()
+        .map(|completed| completed.copy_bytes())
+        != Some(bytes)
+    {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute-XGMI completed extent mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn restore_completed_mappings(
+    copy: &mut ComputeXgmiCopyCustodyV1,
+    bytes: u32,
+    source: &mut ComputeXgmiBufferV1,
+    destination: &mut ComputeXgmiBufferV1,
+) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    require_completed_extent(copy, bytes)?;
+    if source.peer.is_some() || destination.peer.is_some() {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute-XGMI completed mapping slots occupied",
+        ));
+    }
+    let completed = copy
+        .completed
+        .take()
+        .unwrap_or_else(|| std::process::abort());
+    source.peer = Some(completed.source);
+    destination.peer = Some(completed.destination);
+    Ok(())
 }
 
 fn require_data(
@@ -562,7 +659,7 @@ mod tests {
         for fail in 0..=STEPS.len() {
             let mut progress = Progress::default();
             let mut trace = Vec::new();
-            let result = run_steps(&mut progress, |step| {
+            let result = run_steps(&mut progress, &STEPS, |step| {
                 trace.push(step);
                 if trace.len() == fail + 1 {
                     Err(())
@@ -585,7 +682,7 @@ mod tests {
         for (fail, failed_step) in STEPS.iter().copied().enumerate() {
             let mut progress = Progress::default();
             let result = catch_unwind(AssertUnwindSafe(|| {
-                run_steps(&mut progress, |step| {
+                run_steps(&mut progress, &STEPS, |step| {
                     if step == failed_step {
                         panic!("injected transition failure");
                     }
@@ -599,5 +696,53 @@ mod tests {
                 fail.checked_sub(1).map(|index| STEPS[index])
             );
         }
+    }
+
+    #[test]
+    fn compute_xgmi_async_boundaries_partition_the_same_transfer_sequence_without_waiting() {
+        let begin_steps = &STEPS[..BEGIN_STEP_COUNT];
+        let finish_steps = &STEPS[FINISH_STEP_START..];
+        assert_eq!(
+            begin_steps,
+            [
+                Step::SourceLocalUnmap,
+                Step::DestinationLocalUnmap,
+                Step::SourcePeerMap,
+                Step::DestinationPeerMap,
+                Step::Submit,
+            ]
+        );
+        assert_eq!(
+            finish_steps,
+            [
+                Step::SourcePeerUnmap,
+                Step::DestinationPeerUnmap,
+                Step::SourceLocalMap,
+                Step::DestinationLocalMap,
+            ]
+        );
+        let mut progress = Progress::default();
+        let mut trace = Vec::new();
+        run_steps(&mut progress, begin_steps, |step| {
+            trace.push(step);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(progress.completed, Some(Step::Submit));
+        assert_eq!(trace, begin_steps);
+        assert!(!trace.contains(&Step::Wait));
+        assert!(!trace.contains(&Step::SourcePeerUnmap));
+        assert!(!trace.contains(&Step::SourceLocalMap));
+        progress.attempted = Some(Step::Wait);
+        assert_eq!(progress.completed, Some(Step::Submit));
+        progress.completed = Some(Step::Wait);
+        trace.push(Step::Wait);
+        run_steps(&mut progress, finish_steps, |step| {
+            trace.push(step);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(trace, STEPS);
+        assert_eq!(progress.completed, Some(Step::DestinationLocalMap));
     }
 }

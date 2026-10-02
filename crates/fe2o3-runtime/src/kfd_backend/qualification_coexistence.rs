@@ -167,6 +167,9 @@ impl KfdRuntimeBackendV1 {
                 KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous) => {
                     return Err(Failure::ShapeSynchronousStorage);
                 }
+                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(_)) => {
+                    return Err(Failure::ShapeUnaccountedCopyStorage);
+                }
                 _ => {}
             }
         }

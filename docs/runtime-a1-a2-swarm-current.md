@@ -22,7 +22,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Current priority, incomplete | Qualify the implemented compute/XGMI route on two GPUs; asynchronous peer progress, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A3: local multi-GPU | Current priority, incomplete | Qualify the implemented asynchronous compute/XGMI route on two GPUs; all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -44,8 +44,8 @@ router's first native qualification.
    MI300X devices: produce on both, overwrite the destination with a distinct
    sentinel, copy natively into that same allocation, consume on both devices,
    verify every byte and explicitly retire logical and native resources.
-2. Complete composed native fault tests and asynchronous peer progress, then
-   exercise retained multi-device async group drain and shutdown, including
+2. Complete composed native fault tests and qualify asynchronous peer progress,
+   then exercise retained multi-device async group drain and shutdown, including
    pending, failed and uncertain outcomes. Reuse the existing current-thread
    owner and drain API; do not create a second orchestration interface.
 3. Qualify dependency-driven peer-to-compute pipelines and additional device
@@ -101,18 +101,20 @@ keeps these outcomes distinct from incomplete native and broad KFD acceptance.
 The latest read-only hardware attempt failed at SSH hostname resolution before
 any remote command; no workload or scratch was created.
 
-The current increment implements that persistent adapter and connects it to the
-existing cooperative-copy ledger in the opt-in peer qualification profile. It
-preserves original owners, generations and independent physical pool extents;
+Checkpoint `d2ff52f63`, pushed to both repositories, implements that persistent
+adapter and connects it to the existing cooperative-copy ledger in the opt-in
+peer qualification profile. It preserves original owners, generations and
+independent physical pool extents;
 restores both VM models before returning either persistent owner; and publishes
 runtime success only after peer queue retirement and both allocation restorations.
 Uninitialized, demoted, in-flight, partial, directed and larger copies retain
 host staging. A native transfer reserves no host payload staging. Quiescent cache
 release may still reconcile unrelated materialized outputs through existing code.
 
-The native step is synchronous inside flush/drain with a 30-second completion
-wait, not asynchronous peer-copy execution or hard drain-deadline support. The
-new two-GPU smoke checks a native completion counter, sentinel replacement,
+At that checkpoint, the native step is synchronous inside flush/drain with a
+30-second completion wait, not asynchronous peer-copy execution or hard
+drain-deadline support. The new two-GPU smoke checks a native completion counter,
+sentinel replacement,
 unchanged source, both independent R57 consumer launches and explicit cleanup.
 The witness is implemented but has not executed on hardware. Composed native
 mapping/publication fault coverage, asynchronous custody, multi-packet transfers,
@@ -120,7 +122,7 @@ additional device pairs and matched performance remain open. Existing proof
 bindings do not verify this new native route. A3 and every other milestone remain
 incomplete.
 
-Final-source CPU checks pass all 12 new runtime route tests and both example
+That checkpoint's CPU checks pass all 12 new runtime route tests and both example
 tests. The full runtime run has 1,941 passes, the same three baseline
 socket-inspection permission failures and 32 existing ignores; it is not a
 full-suite pass. Focused KFD runs pass 63 initialization, 25 compute-XGMI,
@@ -131,6 +133,34 @@ combined all-feature Clippy passes, and the runnable GPU witness builds.
 The no-default check passes with one feature-specific dead-code warning. The
 [persistent runtime CPU packet](evidence/dev-compute-xgmi-persistent-cpu-2026-10-02/README.md)
 retains the earlier rejected guard/formatting checks and the corrected outcomes.
+
+The current increment replaces that fixed GPU wait with retained native
+begin/sample/finish phases. Each sample reads the fence once; Pending preserves
+both original owners and does not increment cooperative progress. Both model
+foundations are restored before every return. Whole-child reservations exclude
+conflicting native work until queue retirement and both allocation restorations;
+stored observations and host-only bookkeeping remain available. CPU regressions
+exercise repeated Pending, zero-deadline retention, pending dependencies,
+disjoint four-child pairs and failure or unwind at all six runtime stages.
+
+This is still the opt-in R57 qualification route for initialized PUBLIC buffers
+with equal full logical extents within one packet. It is not general same-VM
+compute/copy concurrency, persistent peer mapping or arbitrary-kernel support.
+Drain checks deadlines between phases, not inside native syscalls. The updated
+witness checks pre-flush observers remain Pending, but has not run on GPUs.
+Composed native fault qualification, hardware correctness, overlap and matched
+performance remain open; A3 is not complete. The
+[async CPU packet](evidence/dev-compute-xgmi-async-cpu-2026-10-02/README.md)
+records final-source checks separately from hardware and formal acceptance.
+
+Final-source tests pass all 17 runtime route cases and both example cases.
+The full runtime run records 1,946 passes, the same three socket-inspection
+permission failures and 32 ignores; it is not a full-suite pass. Focused KFD
+runs pass 39 compute-XGMI, eight single-sample, seven paired-restoration,
+63 initialization, six PUBLIC-SDMA and one allocation test. These overlap;
+broad KFD qualification remains incomplete. Strict combined Clippy and all
+32 source-control commands pass, with 76 executable proof files unchanged.
+The latest SSH receipt is still a DNS failure before remote execution.
 
 ## Latest Qualification
 

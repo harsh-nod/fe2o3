@@ -15,6 +15,7 @@ pub(super) enum Route {
     Scripted {
         failure: Option<Stage>,
         unwind: bool,
+        pending_samples: usize,
     },
 }
 
@@ -23,12 +24,29 @@ pub(super) enum Route {
 pub(super) enum Stage {
     Create,
     Copy,
+    Poll,
+    Finish,
     Retire,
     Restore,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Phase {
+    Prepared,
+    Published,
+    Ready,
+    Retired,
+}
+
+enum Progress {
+    Pending,
+    Changed,
+    Complete,
+}
+
 pub(super) struct Root {
     route: Route,
+    phase: Phase,
     creation: Gfx942ComputeXgmiQueueCreationRootV1,
     queue: Option<Gfx942ComputeXgmiQueueV1>,
     owners: [Option<Gfx942DirectionalQueuePersistentAllocationV1>; 2],
@@ -37,12 +55,15 @@ pub(super) struct Root {
     scripted_owners: [Option<DirectionalSdmaDeviceOwnerV1>; 2],
     #[cfg(test)]
     trace: Vec<Stage>,
+    #[cfg(test)]
+    pending_samples: usize,
 }
 
 impl fmt::Debug for Root {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComputeXgmiRoot")
             .field("route", &self.route)
+            .field("phase", &self.phase)
             .field("creation_vacant", &self.creation.is_vacant())
             .field("queue", &self.queue.is_some())
             .field("owners", &self.owners.each_ref().map(Option::is_some))
@@ -76,13 +97,22 @@ impl Root {
         #[cfg(test)]
         let trace = {
             let mut trace = Vec::new();
-            trace.try_reserve_exact(4).map_err(|_| capacity())?;
+            let samples = match route {
+                Route::Scripted {
+                    pending_samples, ..
+                } => pending_samples,
+                Route::Native(_) => 0,
+            };
+            trace
+                .try_reserve_exact(samples.checked_add(6).ok_or_else(capacity)?)
+                .map_err(|_| capacity())?;
             trace
         };
         Ok(Box::write(
             root,
             Self {
                 route,
+                phase: Phase::Prepared,
                 creation: Gfx942ComputeXgmiQueueCreationRootV1::new(),
                 queue: None,
                 owners: [None, None],
@@ -91,6 +121,13 @@ impl Root {
                 scripted_owners: [None, None],
                 #[cfg(test)]
                 trace,
+                #[cfg(test)]
+                pending_samples: match route {
+                    Route::Scripted {
+                        pending_samples, ..
+                    } => pending_samples,
+                    Route::Native(_) => 0,
+                },
             },
         ))
     }
@@ -158,6 +195,7 @@ impl Root {
         if let Route::Scripted {
             failure: Some(failure),
             unwind,
+            ..
         } = self.route
             && failure == stage
         {
@@ -169,54 +207,116 @@ impl Root {
         Ok(())
     }
 
-    fn execute(
+    fn progress(
         &mut self,
         source: &mut KfdRuntimeBackendV1,
         destination: &mut KfdRuntimeBackendV1,
         _byte_len: usize,
-    ) -> Result<(), Failure> {
+    ) -> Result<Progress, Failure> {
         #[cfg(not(test))]
         let Route::Native(route) = self.route;
         #[cfg(test)]
         let route = match self.route {
             Route::Native(route) => route,
             Route::Scripted { .. } => {
-                self.script_step(Stage::Create)?;
-                self.script_step(Stage::Copy)?;
-                let [source, destination] = &mut self.scripted_owners;
-                destination.as_mut().unwrap().scripted_bytes_mut().unwrap()[.._byte_len]
-                    .copy_from_slice(
-                        &source.as_ref().unwrap().scripted_bytes().unwrap()[.._byte_len],
-                    );
-                self.script_step(Stage::Retire)?;
-                return self.script_step(Stage::Restore);
+                return match self.phase {
+                    Phase::Prepared => {
+                        self.script_step(Stage::Create)?;
+                        self.script_step(Stage::Copy)?;
+                        self.phase = Phase::Published;
+                        Ok(Progress::Changed)
+                    }
+                    Phase::Published => {
+                        self.script_step(Stage::Poll)?;
+                        if self.pending_samples != 0 {
+                            self.pending_samples -= 1;
+                            return Ok(Progress::Pending);
+                        }
+                        self.phase = Phase::Ready;
+                        Ok(Progress::Changed)
+                    }
+                    Phase::Ready => {
+                        self.script_step(Stage::Finish)?;
+                        let [source, destination] = &mut self.scripted_owners;
+                        destination.as_mut().unwrap().scripted_bytes_mut().unwrap()[.._byte_len]
+                            .copy_from_slice(
+                                &source.as_ref().unwrap().scripted_bytes().unwrap()[.._byte_len],
+                            );
+                        self.script_step(Stage::Retire)?;
+                        self.script_step(Stage::Restore)?;
+                        self.phase = Phase::Retired;
+                        Ok(Progress::Complete)
+                    }
+                    Phase::Retired => {
+                        Err(terminal("compute-XGMI root progressed after retirement"))
+                    }
+                };
             }
         };
         let (source, destination) = match (&mut source.queue, &mut destination.queue) {
             (Some(source), Some(destination)) => (source, destination),
             _ => return Err(terminal("compute-XGMI endpoint queue disappeared")),
         };
-        self.queue = Some(
-            source
-                .create_native_xgmi_queue_with_peer_v1(destination, route, &mut self.creation)
-                .map_err(|error| terminal(format!("compute-XGMI queue creation: {error}")))?,
-        );
-        let queue = self.queue.as_mut().unwrap_or_else(|| std::process::abort());
-        let [source_owner, destination_owner] = &mut self.owners;
-        queue
-            .copy_persistent_data_full_extent_with_peer_v1(
-                source,
-                destination,
-                source_owner,
-                destination_owner,
-                Duration::from_secs(30),
-            )
-            .map_err(|error| terminal(format!("compute-XGMI transfer: {error}")))?;
-        source
-            .destroy_native_xgmi_queue_with_peer_v1(destination, queue)
-            .map_err(|error| terminal(format!("compute-XGMI queue retirement: {error}")))?;
-        self.queue = None;
-        Ok(())
+        match self.phase {
+            Phase::Prepared => {
+                self.queue = Some(
+                    source
+                        .create_native_xgmi_queue_with_peer_v1(
+                            destination,
+                            route,
+                            &mut self.creation,
+                        )
+                        .map_err(|error| {
+                            terminal(format!("compute-XGMI queue creation: {error}"))
+                        })?,
+                );
+                let [source_owner, destination_owner] = &mut self.owners;
+                self.queue
+                    .as_mut()
+                    .unwrap_or_else(|| std::process::abort())
+                    .begin_persistent_data_full_extent_with_peer_v1(
+                        source,
+                        destination,
+                        source_owner,
+                        destination_owner,
+                    )
+                    .map_err(|error| terminal(format!("compute-XGMI publication: {error}")))?;
+                self.phase = Phase::Published;
+                Ok(Progress::Changed)
+            }
+            Phase::Published => {
+                let ready = self
+                    .queue
+                    .as_mut()
+                    .unwrap_or_else(|| std::process::abort())
+                    .poll_persistent_data_full_extent_with_peer_v1(source, destination)
+                    .map_err(|error| terminal(format!("compute-XGMI observation: {error}")))?;
+                if !ready {
+                    return Ok(Progress::Pending);
+                }
+                self.phase = Phase::Ready;
+                Ok(Progress::Changed)
+            }
+            Phase::Ready => {
+                let queue = self.queue.as_mut().unwrap_or_else(|| std::process::abort());
+                let [source_owner, destination_owner] = &mut self.owners;
+                queue
+                    .finish_persistent_data_full_extent_with_peer_v1(
+                        source,
+                        destination,
+                        source_owner,
+                        destination_owner,
+                    )
+                    .map_err(|error| terminal(format!("compute-XGMI restoration: {error}")))?;
+                source
+                    .destroy_native_xgmi_queue_with_peer_v1(destination, queue)
+                    .map_err(|error| terminal(format!("compute-XGMI queue retirement: {error}")))?;
+                self.queue = None;
+                self.phase = Phase::Retired;
+                Ok(Progress::Complete)
+            }
+            Phase::Retired => Err(terminal("compute-XGMI root progressed after retirement")),
+        }
     }
 }
 
@@ -242,6 +342,46 @@ fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bo
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    pub(super) fn compute_xgmi_child_occupied_v1(&self, child: usize) -> bool {
+        self.compute_xgmi_children[child].is_some()
+    }
+
+    pub(super) fn require_compute_xgmi_child_available_v1(
+        &self,
+        child: usize,
+    ) -> Result<(), Failure> {
+        if self.compute_xgmi_child_occupied_v1(child) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "KFD child is retained by a pending compute-XGMI transfer",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn compute_xgmi_stored_observation_v1(
+        &self,
+        route: RoutedHandleV1,
+    ) -> Option<Result<BackendPollV1, Failure>> {
+        if !self.compute_xgmi_child_occupied_v1(route.child) {
+            return None;
+        }
+        let child = &self.children[route.child];
+        if let Err(error) = child.require_live() {
+            return Some(Err(error));
+        }
+        if child.quiescent_sdma_submissions.contains(&route.local) {
+            return Some(Err(KfdRuntimeBackendV1::quiescent_error(
+                KfdRuntimeBackendErrorKindV1::Native,
+                "KFD SDMA submission is quiescent without a complete result",
+            )));
+        }
+        Some(Ok(child
+            .submissions
+            .get(&route.local)
+            .map_or(BackendPollV1::Pending, |record| record.status)))
+    }
+
     /// Native compute-owned peer copies whose queue and both buffers were retired
     /// or restored before successful completion. This is an observation, not authority.
     #[cfg(feature = "hardware-qualification")]
@@ -374,48 +514,113 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             ),
             _ => unreachable!("compute-XGMI submission remains indexed"),
         };
-        for (endpoint, region) in [(source, regions[0]), (destination, regions[1])] {
-            let child = &self.children[endpoint.child];
-            child.require_live()?;
-            if child.allocation_is_active(endpoint.local)
-                || child.any_compute_active_v1()
-                || !child.active_sdma.is_empty()
-                || child.native_reconciliations.iter().any(Option::is_some)
+        let fresh = match &self.submissions[&submission] {
+            RoutedSubmissionV1::CooperativeCopy(copy) => {
+                copy.compute_xgmi.as_ref().unwrap().is_quiescent()
+            }
+            _ => unreachable!(),
+        };
+        if fresh {
+            if [source.child, destination.child]
+                .into_iter()
+                .any(|child| self.compute_xgmi_child_occupied_v1(child))
             {
                 return Ok(BackendPollV1::Pending);
             }
-            let record = &child.allocations[&endpoint.local];
-            if record.persistent_storage_restore.is_some() {
-                return Ok(BackendPollV1::Pending);
-            }
-            if !full_extent(record, region) || !record.sdma_initialized {
-                return Ok(self.fail_cooperative_copy(submission));
-            }
-        }
-        for endpoint in [source, destination] {
-            let child = &mut self.children[endpoint.child];
-            let prepared = (|| {
-                // The peer queue requires VM-wide compute quiescence. The normal
-                // release path also reconciles unrelated cached materialized data.
-                child.release_retained_persistent_control_v1()?;
-                for lane in 0..child.native_compute_lanes.len() {
-                    child.release_compute_lane_cache_v1(lane)?;
-                }
-                child.normalize_h2d_ready_v1(endpoint.local)
-            })();
-            match prepared {
-                Ok(()) => {}
-                Err(RuntimeBackendFailureV1::Rejected(error))
-                    if error.kind() == KfdRuntimeBackendErrorKindV1::Busy =>
+            for (endpoint, region) in [(source, regions[0]), (destination, regions[1])] {
+                let child = &self.children[endpoint.child];
+                child.require_live()?;
+                if child.allocation_is_active(endpoint.local)
+                    || child.any_compute_active_v1()
+                    || !child.active_sdma.is_empty()
+                    || child.native_reconciliations.iter().any(Option::is_some)
                 {
                     return Ok(BackendPollV1::Pending);
                 }
-                Err(RuntimeBackendFailureV1::Rejected(_))
-                | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                let record = &child.allocations[&endpoint.local];
+                if record.persistent_storage_restore.is_some() {
+                    return Ok(BackendPollV1::Pending);
+                }
+                if !full_extent(record, region) || !record.sdma_initialized {
                     return Ok(self.fail_cooperative_copy(submission));
                 }
-                Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => return Err(failure),
             }
+            for endpoint in [source, destination] {
+                let child = &mut self.children[endpoint.child];
+                let prepared = (|| {
+                    // The peer queue requires VM-wide compute quiescence. The normal
+                    // release path also reconciles unrelated cached materialized data.
+                    child.release_retained_persistent_control_v1()?;
+                    for lane in 0..child.native_compute_lanes.len() {
+                        child.release_compute_lane_cache_v1(lane)?;
+                    }
+                    child.normalize_h2d_ready_v1(endpoint.local)
+                })();
+                match prepared {
+                    Ok(()) => {}
+                    Err(RuntimeBackendFailureV1::Rejected(error))
+                        if error.kind() == KfdRuntimeBackendErrorKindV1::Busy =>
+                    {
+                        return Ok(BackendPollV1::Pending);
+                    }
+                    Err(RuntimeBackendFailureV1::Rejected(_))
+                    | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                        return Ok(self.fail_cooperative_copy(submission));
+                    }
+                    Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => return Err(failure),
+                }
+            }
+            let RoutedSubmissionV1::CooperativeCopy(copy) =
+                self.submissions.get_mut(&submission).unwrap()
+            else {
+                unreachable!()
+            };
+            let root = copy.compute_xgmi.as_mut().unwrap();
+            let (source_child, destination_child) =
+                pair_mut(&mut self.children, source.child, destination.child);
+            // Check both slots before extracting either owner. From extraction through
+            // restoration, the submission itself owns every native failure prefix.
+            let slots_ready = [
+                (&*source_child, source, regions[0]),
+                (&*destination_child, destination, regions[1]),
+            ]
+            .into_iter()
+            .all(|(child, endpoint, region)| {
+                let record = &child.allocations[&endpoint.local];
+                let accepted = matches!(&record.sdma_storage,
+                    KfdRuntimeSdmaStorageV1::Device(owner) if root.accepts(owner));
+                full_extent(record, region) && record.sdma_initialized && accepted
+            });
+            if !slots_ready {
+                return Ok(self.fail_cooperative_copy(submission));
+            }
+            self.compute_xgmi_children[source.child] = Some(submission);
+            self.compute_xgmi_children[destination.child] = Some(submission);
+            for (index, child, endpoint) in [
+                (0, &mut *source_child, source),
+                (1, &mut *destination_child, destination),
+            ] {
+                let slot = &mut child
+                    .allocations
+                    .get_mut(&endpoint.local)
+                    .unwrap()
+                    .sdma_storage;
+                let KfdRuntimeSdmaStorageV1::Device(owner) = core::mem::replace(
+                    slot,
+                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(
+                        submission,
+                    )),
+                ) else {
+                    std::process::abort();
+                };
+                root.take_owner(index, *owner);
+            }
+        }
+        if [source.child, destination.child]
+            .into_iter()
+            .any(|child| self.compute_xgmi_children[child] != Some(submission))
+        {
+            return Err(terminal("compute-XGMI child custody changed"));
         }
         let RoutedSubmissionV1::CooperativeCopy(copy) =
             self.submissions.get_mut(&submission).unwrap()
@@ -425,41 +630,26 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let root = copy.compute_xgmi.as_mut().unwrap();
         let (source_child, destination_child) =
             pair_mut(&mut self.children, source.child, destination.child);
-        // Check both slots before extracting either owner. From extraction through
-        // restoration, the submission itself owns every native failure prefix.
-        let slots_ready = [
-            (&*source_child, source, regions[0]),
-            (&*destination_child, destination, regions[1]),
-        ].into_iter().all(|(child, endpoint, region)| {
-            let record = &child.allocations[&endpoint.local];
-            full_extent(record, region) && record.sdma_initialized
-                && matches!(&record.sdma_storage, KfdRuntimeSdmaStorageV1::Device(owner) if root.accepts(owner))
-        });
-        if !slots_ready {
-            return Ok(self.fail_cooperative_copy(submission));
+        for (child, endpoint) in [(&*source_child, source), (&*destination_child, destination)] {
+            child.require_live()?;
+            if !matches!(child.allocations[&endpoint.local].sdma_storage,
+                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(owner)) if owner == submission)
+            {
+                return Err(terminal("compute-XGMI retained allocation slot changed"));
+            }
         }
-        for (index, child, endpoint) in [
-            (0, &mut *source_child, source),
-            (1, &mut *destination_child, destination),
-        ] {
-            let slot = &mut child
-                .allocations
-                .get_mut(&endpoint.local)
-                .unwrap()
-                .sdma_storage;
-            let KfdRuntimeSdmaStorageV1::Device(owner) = core::mem::replace(
-                slot,
-                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
-            ) else {
-                std::process::abort();
-            };
-            root.take_owner(index, *owner);
-        }
-        root.execute(
+        match root.progress(
             source_child,
             destination_child,
             regions[0].byte_len as usize,
-        )?;
+        )? {
+            Progress::Pending => return Ok(BackendPollV1::Pending),
+            Progress::Changed => {
+                self.note_cooperative_progress();
+                return Ok(BackendPollV1::Pending);
+            }
+            Progress::Complete => {}
+        }
         for (index, child, endpoint) in [
             (0, &*source_child, source),
             (1, &*destination_child, destination),
@@ -467,7 +657,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             if !root.output_ready(index)
                 || !matches!(
                     child.allocations[&endpoint.local].sdma_storage,
-                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
+                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(owner)) if owner == submission
                 )
             {
                 return Err(terminal("compute-XGMI restoration owner or slot changed"));
@@ -488,6 +678,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         record.content_sha256 = None;
         record.last_full_host_write = None;
         let native = matches!(root.route, Route::Native(_));
+        self.compute_xgmi_children[source.child] = None;
+        self.compute_xgmi_children[destination.child] = None;
         let status = self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Succeeded);
         if native {
             self.completed_compute_xgmi_copies =

@@ -62,7 +62,10 @@ impl KfdRuntimeBackendV1 {
                 | KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) => {
                     matches!(active.phase, ActiveSdmaPhaseV1::Ready) && actual != submission
                 }
-                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous) => false,
+                KfdRuntimeSdmaStorageV1::InFlight(
+                    KfdRuntimeSdmaInFlightV1::Synchronous
+                    | KfdRuntimeSdmaInFlightV1::ComputeXgmi(_),
+                ) => false,
                 _ => true,
             };
             storage_intact

@@ -297,6 +297,21 @@ fn run(unique_ids: &[u64; 2]) -> ResultV1<()> {
             &[],
         )
         .map_err(|error| failure("peer-copy-enqueue", error))?;
+    if context
+        .poll(&mut copy)
+        .map_err(|error| failure("peer-copy-before-flush-poll", error))?
+        != RuntimePollV1::Pending
+        || context
+            .wait(&mut copy, Duration::ZERO)
+            .map_err(|error| failure("peer-copy-before-flush-wait", error))?
+            != RuntimePollV1::Pending
+        || context.backend().completed_compute_xgmi_copies_v1() != 0
+    {
+        return Err(failure(
+            "peer-copy-before-flush",
+            "observers must not publish or complete the unflushed copy",
+        ));
+    }
     let deadline = Instant::now() + WAIT;
     loop {
         context
@@ -376,7 +391,7 @@ fn run(unique_ids: &[u64; 2]) -> ResultV1<()> {
         .shutdown_native_v1()
         .map_err(|error| failure("native-shutdown", error))?;
     println!(
-        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies=1 bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks=13 modules=2 allocations=10 cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
+        "PASS schema=fe2o3.compute-xgmi-smoke.v1 fixture={} devices=2 launches=4 launches_per_device=2 peer_copies=1 bytes={} transport=NATIVE-XGMI observed_native_copies={} source_unique_id=0x{:016x} destination_unique_id=0x{:016x} pre_flush_observers=pending destination_sentinel=full-byte-pass source_unchanged=full-byte-pass output=full-byte-pass readbacks=13 modules=2 allocations=10 cleanup=logical-and-native-explicit performance_acceptance=false formal_refinement=false",
         GFX942_R57_N3_QUALIFICATION_PROFILE_ID_V2,
         expected_c.len(),
         native_copies,

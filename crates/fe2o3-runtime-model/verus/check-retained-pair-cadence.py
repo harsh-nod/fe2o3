@@ -28,7 +28,7 @@ PINS = {
     RUST: "dea23a3c0fb84703dfbd0627f742ada2eb097f617ad679e4a59c39ddd0177eb4",
     PROOF: "95f04710b73a65c8d6d272a849f650e36d04a531b8504fe4b409cd20c07c8cbe",
     SRC / "lib.rs": "dc7a33fbc253241309e7d0cfc98d0df3ec96511fd59afa1cc45c9c97c474a3cf",
-    SRC / "sdma.rs": "ee55abcea193dfea9ca17269972a1f44b437523c41e20b24c50a6e590c482820",
+    SRC / "sdma.rs": "f0dff38add2e34477ba5974e57e8780f98229af40cdc3eff8414720c7d8eb12e",
     SRC / "sdma/retained_pair.rs": "69e1b72a7f31ec1461f627a4fd381093985f570a8e6a71540f3bf27230b35547",
     SRC / "sdma/retained_pair_operation_body.rs": "54236918b01d7167878c4827e28ab0c4a103e3f3b069d311b56931daad86b7ac",
     SRC / "sdma/retained_pair_policy_v1.txt": "18cfe1c56d270d9cab1cdc2f67a2b26b35e7cf1540a2962e4dc2f5cb42155b61",

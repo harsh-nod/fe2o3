@@ -21,8 +21,8 @@ PINS = {
     "producer_input_fold_body.rs": "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
     "producer_input_fold_tests.rs": "39f37757239f9f6880caeddded618bb13952d863d8aef11dc5c53453084a2d00",
 }
-NATIVE_TREE_SHA = "8f4078103cd2995ba50d3b5a6e20847eeced76737a4b2cbf983eab8d789d44b3"
-SCHEMA_TREE_SHA = "42cd9af10a99c1eb1d29dc3db42dac8f919fc27d2aeac963272b962333b0c291"
+NATIVE_TREE_SHA = "1a5a28e02ed9c8d9489a27de6edc6d9bad052817b8f06b73a6fb39e016144625"
+SCHEMA_TREE_SHA = "8bfa9db352d2b44c39816ab0b77ddf0f331cf708faeeb0847fd20361a8263a1a"
 DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_version_journal/declarations.rs",
     "context_version_journal/enrollment_declarations.rs",
@@ -31,9 +31,9 @@ DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_queued_writers/read_declarations.rs",
 ))
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "2ea590120cbdaa88d2369f21bd63bec1ebad8aac01f3e1d2f877bc680cc4fc7b",
-    "check-producer-input-fold.py": "e62ba0cdf8914b133d8408fb496b9a0949cbec087dbec5ab069c853d9bc1c1bd",
-    "check-producer-input-composition.py": "126c48db6e37807382e012f4dab4527c6111f57d4223a38daf880ca2ad5b819b",
+    "check-producer-input-validate.py": "13de11ebb4e2de989b07135b4f2225e078c2ae4e86f2e912d15ac3a3fdfd08e6",
+    "check-producer-input-fold.py": "9f126ce01068b2c170fa22d63a44c510d31107d426cdcfb31859c369d9e8f488",
+    "check-producer-input-composition.py": "d5e499b5a4a6b0308944785801d966edbde549253ff6689e61ee3e75008700d7",
 }
 PARTS = (DEFINITIONS, COMPOSITION, "producer_input_runtime_declarations_v1.rs",
          "producer_input_journal_comparison_declarations_v1.rs", "producer_input_outcome_spec_v1.rs",

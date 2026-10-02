@@ -61,8 +61,11 @@ pub(super) struct Attachment {
 ///
 /// Each compute owner retains an exact private attachment certificate. It
 /// cannot be destroyed or acquire another peer queue until explicit retirement.
-/// The synchronous full-extent copy adapter accepts exact recycled PUBLIC
-/// compute data. Any indeterminate transfer retains its data in this owner.
+/// Recycled PUBLIC DATA retains its synchronous full-extent adapter. Persistent
+/// PUBLIC owners also support begin, one-shot sample, and finish without a GPU
+/// completion wait. Native syscalls remain synchronous and both endpoints must
+/// be quiescent for each operation; this grants no general concurrent-compute
+/// guarantee. Any indeterminate transfer retains its data in this owner.
 #[must_use = "the peer queue must be explicitly destroyed before releasing either compute session"]
 pub struct Gfx942ComputeXgmiQueueV1 {
     attachment: Attachment,
@@ -86,6 +89,12 @@ impl Gfx942ComputeXgmiQueueV1 {
 
     pub fn observation(&self) -> Option<crate::sdma::Gfx942SdmaQueueObservationV1> {
         self.queue.observation()
+    }
+
+    /// Audit-only occupancy, including pending, ready, and terminal transfers.
+    /// This does not grant completion, cancellation, or resource-release authority.
+    pub const fn has_persistent_data_transfer_v1(&self) -> bool {
+        self.persistent_transfer.is_some()
     }
 }
 

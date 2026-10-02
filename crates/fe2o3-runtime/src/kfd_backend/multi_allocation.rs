@@ -69,6 +69,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     ),
                 ));
             }
+            self.require_compute_xgmi_child_available_v1(child)?;
             let next = self.next_handle.checked_add(1).ok_or_else(|| {
                 KfdRuntimeBackendV1::capacity("multi-device routing handle space exhausted")
             })?;

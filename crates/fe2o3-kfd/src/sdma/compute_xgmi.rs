@@ -66,6 +66,30 @@ pub(crate) struct ComputeXgmiCopyCustodyV1 {
 }
 
 impl ComputeXgmiCopyCustodyV1 {
+    pub(super) fn retain_poll_then_check(
+        &mut self,
+        polled: Result<Gfx942XgmiCopyPollV1, Gfx942SdmaErrorV1>,
+        closing_check: impl FnOnce() -> Result<(), Gfx942SdmaErrorV1>,
+    ) -> Result<bool, Gfx942SdmaErrorV1> {
+        let ready = match polled? {
+            Gfx942XgmiCopyPollV1::Pending(ticket) => {
+                if self.ticket != Some(ticket) {
+                    return Err(Gfx942SdmaErrorV1::Contract(
+                        "compute-XGMI pending ticket changed",
+                    ));
+                }
+                false
+            }
+            Gfx942XgmiCopyPollV1::Completed(completed) => {
+                self.completed = Some(completed);
+                true
+            }
+        };
+        // Completed mappings remain rooted if the closing check errors or unwinds.
+        closing_check()?;
+        Ok(ready)
+    }
+
     fn retain_completion_then_check(
         &mut self,
         completed: Result<Gfx942XgmiCompletedCopyV1, Gfx942SdmaErrorV1>,
@@ -144,6 +168,44 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             self.route,
             XgmiRouteCurrentnessV1::Full,
         )
+    }
+
+    pub(crate) fn poll_compute_xgmi_rooted_v1(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        custody: &mut ComputeXgmiCopyCustodyV1,
+    ) -> Result<bool, Gfx942SdmaErrorV1> {
+        self.require_live_queue_state_v1()?;
+        let ticket = custody
+            .ticket
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing compute-XGMI ticket"))?;
+        if custody.completed.is_some() {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "occupied compute-XGMI completion",
+            ));
+        }
+        Self::validate_route_currentness(
+            source,
+            destination,
+            self.route,
+            XgmiRouteCurrentnessV1::Full,
+        )?;
+        let polled = self
+            .owner
+            .as_mut()
+            .ok_or(Gfx942SdmaErrorV1::Contract(
+                "missing compute-XGMI queue owner",
+            ))?
+            .poll_xgmi_in_current_scope(source, ticket);
+        custody.retain_poll_then_check(polled, || {
+            Self::validate_route_currentness(
+                source,
+                destination,
+                self.route,
+                XgmiRouteCurrentnessV1::Full,
+            )
+        })
     }
 
     pub(crate) fn wait_compute_xgmi_rooted_v1(

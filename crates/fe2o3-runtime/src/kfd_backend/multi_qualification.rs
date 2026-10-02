@@ -104,9 +104,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     /// unchanged. Equal complete persistent allocations within one native copy
     /// packet use XGMI after dependency resolution and endpoint quiescence.
     /// Other copies retain the ordinary bounded host-staging path.
-    /// This development profile executes each native transfer synchronously in
-    /// flush/drain, with a 30-second completion wait. Drain checks its deadline
-    /// between steps, not within this transfer; poll and wait remain observers.
+    /// Flush/drain publish a retained native ticket, sample its completion once
+    /// per progress step, and retire the queue before restoring both owners.
+    /// Both children exclude unrelated native work while the ticket is retained;
+    /// disjoint child pairs can progress independently. Poll and wait only observe
+    /// stored results. Drain deadlines are checked between steps: native ioctl
+    /// and currentness checks remain synchronous, without a hard wall-clock bound.
     pub fn open_gfx942_r57_n3_peer_qualification_v2(
         unique_ids: &[u64],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
