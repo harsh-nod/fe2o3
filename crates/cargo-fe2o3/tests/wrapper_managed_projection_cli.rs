@@ -18,6 +18,8 @@ const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
 
+const COMPILER_FLAGS_ENVIRONMENT: &[&str] = &["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"];
+
 struct TestWorkspace(PathBuf);
 
 impl TestWorkspace {
@@ -46,8 +48,11 @@ impl TestWorkspace {
 
     fn binding_check_command(&self) -> Command {
         let mut command = self.command(env!("CARGO_BIN_EXE_cargo-fe2o3"));
-        // The outer Cargo lane can pin rustc; the CLI selects its own tools.
-        for name in COMPILER_SELECTION_ENVIRONMENT {
+        // Keep outer-lane compiler and linker settings out of the independent fixture.
+        for name in COMPILER_SELECTION_ENVIRONMENT
+            .iter()
+            .chain(COMPILER_FLAGS_ENVIRONMENT)
+        {
             command.env_remove(name);
         }
         command.env("CARGO", cargo());
@@ -177,6 +182,26 @@ fn projection_fixture_isolates_compiler_selection_and_keeps_explicit_overrides()
             .get_envs()
             .any(|(key, value)| { key == OsStr::new("CARGO_TARGET_DIR") && value.is_none() })
     );
+}
+
+#[test]
+fn projection_fixture_isolates_outer_flags_and_preserves_explicit_flag_overrides() {
+    let workspace = TestWorkspace::new();
+    let mut command = workspace.binding_check_command();
+    for name in COMPILER_FLAGS_ENVIRONMENT {
+        let key = OsStr::new(name);
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none())
+        );
+        command.env(name, "-Copt-level=1");
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == key && value == Some(OsStr::new("-Copt-level=1")) })
+        );
+    }
 }
 
 #[test]
