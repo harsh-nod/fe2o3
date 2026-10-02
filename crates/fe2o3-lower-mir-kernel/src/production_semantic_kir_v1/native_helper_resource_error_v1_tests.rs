@@ -36,7 +36,9 @@ fn first_current_resource_failure_survives_cleanup_and_prior_denials() {
             }
             error => panic!("wrong current failure: {error:?}"),
         }
+        let current = meter.resource_error;
         meter.release(0).unwrap();
+        assert_eq!(meter.resource_error, current);
         assert_eq!((meter.budget.work(), meter.budget.storage()), (2, 31));
         assert_eq!(
             (meter.budget.failed_work(), meter.budget.failed_storage()),
