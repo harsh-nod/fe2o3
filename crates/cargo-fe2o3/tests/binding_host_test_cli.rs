@@ -189,10 +189,15 @@ const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
 
+const COMPILER_FLAGS_ENVIRONMENT: &[&str] = &["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"];
+
 fn binding_command(workspace: &TestWorkspace) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
-    // The outer Cargo lane can pin rustc; each CLI fixture selects its own tools.
-    for name in COMPILER_SELECTION_ENVIRONMENT {
+    // Keep outer-lane compiler and linker settings out of the independent fixture.
+    for name in COMPILER_SELECTION_ENVIRONMENT
+        .iter()
+        .chain(COMPILER_FLAGS_ENVIRONMENT)
+    {
         command.env_remove(name);
     }
     command.env("CARGO", cargo()).current_dir(&workspace.0);
@@ -232,6 +237,29 @@ fn binding_fixture_removes_inherited_compiler_selection_without_erasing_explicit
             assert!(command.get_envs().any(|(key, value)| {
                 key == std::ffi::OsStr::new(name)
                     && value == Some(std::ffi::OsStr::new("/explicit/test/compiler"))
+            }));
+        }
+    }
+}
+
+#[test]
+fn binding_fixture_isolates_outer_flags_and_preserves_explicit_flag_overrides() {
+    let workspace = TestWorkspace::new();
+    for mut command in [
+        binding_test(&workspace),
+        binding_clippy(&workspace),
+        binding_selected_test(&workspace, &["--lib"]),
+    ] {
+        for name in COMPILER_FLAGS_ENVIRONMENT {
+            let key = std::ffi::OsStr::new(name);
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(name, value)| name == key && value.is_none())
+            );
+            command.env(name, "-Copt-level=1");
+            assert!(command.get_envs().any(|(name, value)| {
+                name == key && value == Some(std::ffi::OsStr::new("-Copt-level=1"))
             }));
         }
     }
