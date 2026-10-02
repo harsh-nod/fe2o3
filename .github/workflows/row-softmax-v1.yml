@@ -74,6 +74,9 @@ jobs:
       - name: Verify proof and reject mutations
         run: examples/row_softmax_v1/run-verus.sh
 
+      - name: Verify RoPE and paged KV conditional integer proof
+        run: sh examples/qwen3_rope_kv_v1/run-verus.sh
+
   host-contract:
     name: Host contract and fail-closed source checks
     runs-on: ubuntu-24.04

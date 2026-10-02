@@ -14,6 +14,7 @@ EXAMPLES = (
     "qwen3_paged_gqa_decode_v1",
     "qwen3_swiglu_v1",
     "qwen3_logits_compact_v1",
+    "qwen3_rope_kv_v1",
 )
 HARNESS = r'''
 set -Eeuo pipefail
@@ -34,6 +35,13 @@ main host-reference
 
 
 class HostReferenceCiTests(unittest.TestCase):
+    def test_rope_proof_is_in_the_pinned_production_proof_job(self):
+        workflow = (ROOT / ".github/workflows/row-softmax-v1.yml").read_text()
+        proof_job = workflow.split("\n  proof-contract:", 1)[1].split("\n  host-contract:", 1)[0]
+        self.assertEqual(proof_job.count("run: sh examples/qwen3_rope_kv_v1/run-verus.sh"), 1)
+        self.assertLess(proof_job.index("run: examples/row_softmax_v1/run-verus.sh"),
+                        proof_job.index("run: sh examples/qwen3_rope_kv_v1/run-verus.sh"))
+
     def run_lane(self, root, failure=0):
         environment = dict(os.environ)
         environment.update(

@@ -151,6 +151,7 @@ readonly HOST_REFERENCE_EXAMPLES=(
   qwen3_paged_gqa_decode_v1
   qwen3_swiglu_v1
   qwen3_logits_compact_v1
+  qwen3_rope_kv_v1
 )
 
 usage() {
