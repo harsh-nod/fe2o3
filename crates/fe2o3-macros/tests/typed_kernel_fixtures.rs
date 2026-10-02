@@ -117,7 +117,10 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
         ("global_mut_raw_escape", &["no method named `as_raw`"]),
         (
             "global_mut_wrong_address_space",
-            &["requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`"],
+            &[
+                "general typed V1 argument 1 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "DeviceWorkgroupMutPtr<u32>",
+            ],
         ),
     ];
 
@@ -229,14 +232,13 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
         (
             "invalid_signatures",
             &[
-                "#[kernel(typed)] requires a public kernel function",
-                "#[kernel(typed)] requires a safe kernel function",
-                "#[kernel(typed)] does not support generic kernel functions",
-                "#[kernel(typed)] requires the unit return type",
-                "#[kernel(typed)] requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`",
-                "#[kernel(typed)] argument 1 must have exact type `&[f32]`",
-                "#[kernel(typed)] argument 2 must have exact type `&[f32]`",
-                "#[kernel(typed)] argument 3 must have exact type `DisjointSlice<f32>`",
+                "general typed V1 requires a public kernel function",
+                "general typed V1 requires a safe kernel function",
+                "general typed V1 does not support generic kernel functions",
+                "general typed V1 requires the unit return type or KernelResult",
+                "general typed V1 argument 1 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "general typed V1 argument 2 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "general typed V1 argument 3 must be a supported scalar, pointer-free by-value struct/tuple/array",
             ],
         ),
         (
@@ -255,7 +257,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "general typed V1 explicit launch requires required dimensions",
                 "general typed V1 explicit launch requires identical required and max dimensions",
                 "general typed V1 requires exact [N, 1, 1] launch dimensions with N in 1..=256",
-                "the typed vecadd V2 profile requires an exact 256x1x1 launch contract",
+                "general typed V1 does not support launch occupancy constraints",
             ],
         ),
         (
