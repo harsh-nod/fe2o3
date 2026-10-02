@@ -13,9 +13,8 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     NativeRankedSourceCandidateV1, ProductionConditionalSourceTranslationErrorV1 as Error,
-    ProductionMirPlironTranslationErrorV1, ProductionPreRankedKirOwnerV1,
-    ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectSourceV1,
-    ProductionSemanticKirErrorV1,
+    ProductionPreRankedKirOwnerV1, ProductionRankedAccessSourceV1,
+    ProductionRankedExecutableEffectSourceV1, ProductionSemanticKirErrorV1,
 };
 use fe2o3_pliron::{
     HierarchicalOwnershipFindingV1, MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1,
@@ -572,10 +571,10 @@ fn check_budget(
         matches!(
             short,
             Err(Error::Correspondence(
-                ProductionSemanticKirErrorV1::MirPlironTranslation(
-                    ProductionMirPlironTranslationErrorV1::ResourceLimit
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    Resource::Work(error)
                 )
-            ))
+            )) if error.actual() == exact && error.limit() == exact - 1
         ),
         "{short:?}"
     );
