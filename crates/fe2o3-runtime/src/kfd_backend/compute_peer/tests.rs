@@ -11,6 +11,9 @@ mod deferred;
 #[path = "prefix_progress_tests.rs"]
 mod prefix_progress;
 
+#[path = "window_tests.rs"]
+mod window;
+
 const BYTES: usize = 64;
 const ALLOCATIONS: usize = 10;
 
@@ -23,27 +26,27 @@ fn region(allocation: u64, access: RuntimeAccessV1) -> BackendMemoryRegionV1 {
     }
 }
 
-fn host_steps() -> [ScriptedSdmaStepV1; 2] {
+fn host_steps_for(bytes: usize) -> [ScriptedSdmaStepV1; 2] {
     [
         ScriptedSdmaStepV1::Allocate {
             kind: ScriptedBufferKindV1::Host,
-            byte_len: BYTES,
+            byte_len: bytes,
         },
         ScriptedSdmaStepV1::Write {
             offset: 0,
-            byte_len: BYTES,
+            byte_len: bytes,
         },
     ]
 }
 
-fn release_steps() -> Vec<ScriptedSdmaStepV1> {
-    let mut steps: Vec<_> = host_steps().into_iter().collect();
+fn release_steps_for(bytes: usize) -> Vec<ScriptedSdmaStepV1> {
+    let mut steps: Vec<_> = host_steps_for(bytes).into_iter().collect();
     steps.extend([
         ScriptedSdmaStepV1::Submit {
             direction: Gfx942PersistentSdmaDirectionV1::HostToDevice,
             host_offset: 0,
             device_offset: 0,
-            copy_bytes: BYTES as u32,
+            copy_bytes: bytes as u32,
             outcome: ScriptedFailureModeV1::Success,
         },
         ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Completed {
@@ -58,14 +61,18 @@ fn release_steps() -> Vec<ScriptedSdmaStepV1> {
     steps
 }
 
-fn readback_steps() -> Vec<ScriptedSdmaStepV1> {
-    let mut steps: Vec<_> = host_steps().into_iter().collect();
+fn readback_range_steps(
+    source_offset: u64,
+    destination_offset: u64,
+    bytes: usize,
+) -> Vec<ScriptedSdmaStepV1> {
+    let mut steps: Vec<_> = host_steps_for(bytes).into_iter().collect();
     steps.extend([
         ScriptedSdmaStepV1::Submit {
             direction: Gfx942PersistentSdmaDirectionV1::DeviceToHost,
             host_offset: 0,
-            device_offset: 0,
-            copy_bytes: BYTES as u32,
+            device_offset: source_offset,
+            copy_bytes: bytes as u32,
             outcome: ScriptedFailureModeV1::Success,
         },
         ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Pending),
@@ -76,15 +83,15 @@ fn readback_steps() -> Vec<ScriptedSdmaStepV1> {
         ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
         ScriptedSdmaStepV1::Read {
             offset: 0,
-            byte_len: BYTES as u64,
+            byte_len: bytes as u64,
         },
         ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
     ]);
-    steps.extend(host_steps());
+    steps.extend(host_steps_for(bytes));
     steps.extend([
         ScriptedSdmaStepV1::Write {
-            offset: 0,
-            byte_len: BYTES,
+            offset: destination_offset,
+            byte_len: bytes,
         },
         ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
     ]);
@@ -109,12 +116,18 @@ impl Fixture {
     }
 
     fn with_peer_input_promotion(readback: bool, promote: bool) -> Self {
+        Self::with_layout([BYTES; 2], readback.then_some((0, 0, BYTES)), promote)
+    }
+
+    fn with_layout(bytes: [usize; 2], readback: Option<(u64, u64, usize)>, promote: bool) -> Self {
         let mut local_allocations = [[0; ALLOCATIONS]; 2];
         let mut local_streams = [0; 2];
         let children = (0..2)
             .map(|index| {
-                let mut steps = if readback && index == 1 {
-                    readback_steps()
+                let mut steps = if let Some((source, destination, len)) = readback
+                    && index == 1
+                {
+                    readback_range_steps(source, destination, len)
                 } else {
                     Vec::new()
                 };
@@ -123,14 +136,14 @@ impl Fixture {
                         ScriptedFailureModeV1::Success,
                     ));
                 }
-                steps.extend((0..ALLOCATIONS).flat_map(|_| release_steps()));
-                if readback && index == 1 {
+                steps.extend((0..ALLOCATIONS).flat_map(|_| release_steps_for(bytes[index])));
+                if readback.is_some() && index == 1 {
                     steps.push(ScriptedSdmaStepV1::Recycle(
                         ScriptedRecycleOutcomeV1::Success,
                     ));
                 }
                 let (mut child, stream, allocations) =
-                    scripted_persistent_backend_with_steps_v1::<ALLOCATIONS>(BYTES, steps);
+                    scripted_persistent_backend_with_steps_v1::<ALLOCATIONS>(bytes[index], steps);
                 child.description.backend_device = 7 + index as u64;
                 for record in child.allocations.values_mut() {
                     record.device = 7 + index as u64;
@@ -181,18 +194,22 @@ impl Fixture {
         });
         let peer_stream = backend.create_stream_v1(8).unwrap();
         let readback_stream = backend.create_stream_v1(8).unwrap();
-        let host = readback.then(|| {
+        let host = readback.map(|_| {
             let child = &mut backend.children[1];
             // Only host storage is added here; computed output is never installed.
             let local = child.next_id().unwrap();
-            let owner = child.scripted_sdma.as_ref().unwrap().test_host_owner(BYTES);
+            let owner = child
+                .scripted_sdma
+                .as_ref()
+                .unwrap()
+                .test_host_owner(bytes[1]);
             child.allocations.insert(
                 local,
                 AllocationRecordV1 {
                     device: 8,
                     kind: RuntimeMemoryKindV1::HostVisible,
                     alignment: 8,
-                    bytes: vec![0; BYTES].into(),
+                    bytes: vec![0; bytes[1]].into(),
                     content_sha256: None,
                     last_full_host_write: None,
                     native_dirty: Vec::new(),
@@ -204,7 +221,7 @@ impl Fixture {
                     scripted_three_binding_replay: false,
                 },
             );
-            child.staged_context_bytes += BYTES as u64;
+            child.staged_context_bytes += bytes[1] as u64;
             let global = backend.next_id().unwrap();
             backend
                 .allocations
@@ -628,8 +645,9 @@ fn compute_peer_unsupported_profiles_reject_without_staging_or_owner_extraction(
         let mut source = region(f.allocations[0][2], RuntimeAccessV1::Read);
         let mut destination = region(f.allocations[1][3], RuntimeAccessV1::Write);
         if case == 1 {
-            source.byte_len -= 1;
-            destination.byte_len -= 1;
+            source.byte_offset = BYTES as u64;
+            source.byte_len = 1;
+            destination.byte_len = 1;
         }
         if case == 2 {
             f.backend.children[1].peer_visible_device_allocations = false;

@@ -30,19 +30,32 @@ type Handle = RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>;
 type ResultV1<T> = Result<T, String>;
 const WAIT: Duration = Duration::from_secs(30);
 const TICKS: usize = 30_000;
-const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke [--late-compute] <0xsource-unique-id> <0xdestination-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke [--late-compute] [--return-window] <0xsource-unique-id> <0xdestination-unique-id>";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Options {
     ids: [u64; 2],
     late_compute: bool,
+    return_window: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
-    let late_compute = arguments.first().is_some_and(|arg| arg == "--late-compute");
+    let mut late_compute = false;
+    let mut return_window = false;
+    let mut flags = 0;
+    for argument in arguments {
+        match argument.as_str() {
+            "--late-compute" if !late_compute => late_compute = true,
+            "--return-window" if !return_window => return_window = true,
+            value if value.starts_with("--") => return Err(USAGE.into()),
+            _ => break,
+        }
+        flags += 1;
+    }
     Ok(Options {
-        ids: unique_ids(&arguments[usize::from(late_compute)..])?,
+        ids: unique_ids(&arguments[flags..])?,
         late_compute,
+        return_window,
     })
 }
 
@@ -60,6 +73,7 @@ struct Resources {
     readback_stream: RuntimeStreamIdV1,
     returned: RuntimeAllocationIdV1,
     host_output: RuntimeAllocationIdV1,
+    layout: ReturnLayout,
 }
 
 enum InitialPeer {
@@ -109,11 +123,20 @@ fn failure(stage: &str, error: impl core::fmt::Debug) -> String {
 }
 
 fn region(allocation: RuntimeAllocationIdV1, access: RuntimeAccessV1) -> RuntimeMemoryRegionV1 {
+    range(allocation, access, 0, BYTES)
+}
+
+fn range(
+    allocation: RuntimeAllocationIdV1,
+    access: RuntimeAccessV1,
+    offset: usize,
+    bytes: usize,
+) -> RuntimeMemoryRegionV1 {
     RuntimeMemoryRegionV1 {
         allocation,
         access,
-        byte_offset: 0,
-        byte_len: BYTES as u64,
+        byte_offset: offset as u64,
+        byte_len: bytes as u64,
     }
 }
 
@@ -122,7 +145,7 @@ fn verify_initial(
     allocation: RuntimeAllocationIdV1,
     expected: &[u8],
 ) -> ResultV1<()> {
-    let mut observed = vec![0; BYTES];
+    let mut observed = vec![0; expected.len()];
     context
         .read_allocation(allocation, 0, &mut observed)
         .map_err(|error| failure("initial-readback", error))?;
@@ -168,7 +191,7 @@ fn upload(
     bytes: &[u8],
     deadline: Instant,
 ) -> ResultV1<()> {
-    if bytes.len() != BYTES {
+    if bytes.is_empty() {
         return Err(failure("upload-extent", bytes.len()));
     }
     context
@@ -178,8 +201,8 @@ fn upload(
     let mut submission = context
         .copy_async(
             stream,
-            region(host, RuntimeAccessV1::Read),
-            region(device, RuntimeAccessV1::Write),
+            range(host, RuntimeAccessV1::Read, 0, bytes.len()),
+            range(device, RuntimeAccessV1::Write, 0, bytes.len()),
             &[],
         )
         .map_err(|error| failure("upload-admission", error))?;
@@ -213,7 +236,9 @@ fn setup_compute(
         .map_err(|error| failure("setup-compute-release", error))
 }
 
-fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
+fn setup(options: Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
+    let ids = options.ids;
+    let layout = ReturnLayout::new(options.return_window);
     let admitted =
         admit_gfx942_r57_n3_qualification_v2().map_err(|error| failure("artifact", error))?;
     let fixture = admitted
@@ -316,7 +341,7 @@ fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
         .allocate(
             devices[0],
             RuntimeMemoryKindV1::DeviceLocal,
-            BYTES as u64,
+            layout.returned_bytes as u64,
             PAGE as u64,
         )
         .map_err(|error| failure("return-allocation", error))?;
@@ -324,7 +349,7 @@ fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
         .allocate(
             devices[0],
             RuntimeMemoryKindV1::HostVisible,
-            BYTES as u64,
+            layout.host_bytes as u64,
             PAGE as u64,
         )
         .map_err(|error| failure("output-host", error))?;
@@ -333,10 +358,17 @@ fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
         runs[0].stream,
         host_output,
         returned,
-        &filled(-23.0),
+        &layout.returned_initial(),
         deadline,
     )?;
-    verify_initial(&mut context, returned, &filled(-23.0))?;
+    verify_initial(&mut context, returned, &layout.returned_initial())?;
+    if options.return_window {
+        let initial = vec![0x5a; layout.host_bytes];
+        context
+            .write_allocation(host_output, 0, &initial)
+            .map_err(|error| failure("host-sentinel", error))?;
+        verify_initial(&mut context, host_output, &initial)?;
+    }
     let initial_peer_stream = context
         .create_stream(devices[1])
         .map_err(|error| failure("initial-peer-stream", error))?;
@@ -358,6 +390,7 @@ fn setup(ids: [u64; 2]) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
             readback_stream,
             returned,
             host_output,
+            layout,
         }),
     ))
 }
@@ -511,8 +544,18 @@ fn admit_chain(
     let second = context
         .peer_copy(
             resources.return_peer_stream,
-            region(d, RuntimeAccessV1::Read),
-            region(resources.returned, RuntimeAccessV1::Write),
+            range(
+                d,
+                RuntimeAccessV1::Read,
+                resources.layout.source_offset,
+                resources.layout.copy_bytes,
+            ),
+            range(
+                resources.returned,
+                RuntimeAccessV1::Write,
+                resources.layout.returned_offset,
+                resources.layout.copy_bytes,
+            ),
             &[event],
         )
         .map_err(|error| failure("return-peer", error))?;
@@ -526,8 +569,18 @@ fn admit_chain(
     let readback = context
         .copy_async(
             resources.readback_stream,
-            region(resources.returned, RuntimeAccessV1::Read),
-            region(resources.host_output, RuntimeAccessV1::Write),
+            range(
+                resources.returned,
+                RuntimeAccessV1::Read,
+                resources.layout.returned_offset,
+                resources.layout.copy_bytes,
+            ),
+            range(
+                resources.host_output,
+                RuntimeAccessV1::Write,
+                resources.layout.host_offset,
+                resources.layout.copy_bytes,
+            ),
             &[event],
         )
         .map_err(|error| failure("readback", error))?;
@@ -629,7 +682,7 @@ fn pipeline(
         ));
     }
     let owned = Arc::clone(&resources);
-    let (chain, bytes) = command(
+    let (chain, snapshots) = command(
         engine,
         handle,
         deadline,
@@ -684,14 +737,33 @@ fn pipeline(
                     return Err(failure("settled-stream", observation));
                 }
             }
-            let mut bytes = vec![0; BYTES];
-            context
-                .read_allocation(owned.host_output, 0, &mut bytes)
-                .map_err(|error| failure("snapshot-read", error))?;
-            Ok((chain, bytes))
+            let mut snapshots = [Vec::new(), Vec::new(), vec![0; owned.layout.host_bytes]];
+            if owned.layout != ReturnLayout::new(false) {
+                snapshots[0].resize(BYTES, 0);
+                snapshots[1].resize(owned.layout.returned_bytes, 0);
+            }
+            for (allocation, bytes) in [
+                owned.runs[1].allocations[3],
+                owned.returned,
+                owned.host_output,
+            ]
+            .into_iter()
+            .zip(&mut snapshots)
+            {
+                if !bytes.is_empty() {
+                    context
+                        .read_allocation(allocation, 0, bytes)
+                        .map_err(|error| failure("snapshot-read", error))?;
+                }
+            }
+            Ok((chain, snapshots))
         },
     )?;
-    let output_digest = verify_output(&bytes)?;
+    let output_digest = if resources.layout == ReturnLayout::new(false) {
+        verify_output(&snapshots[2])?
+    } else {
+        verify_window_output(&snapshots)?
+    };
     command(
         engine,
         handle,
@@ -742,7 +814,7 @@ fn pipeline(
 }
 
 fn run(options: Options) -> ResultV1<String> {
-    let (context, resources) = setup(options.ids)?;
+    let (context, resources) = setup(options)?;
     let config = RuntimeAsyncEngineConfigV1::new(16, 16, 16, 16, Duration::from_micros(50))
         .and_then(|config| config.with_reply_capacity(16))
         .map_err(|error| failure("owner-config", error))?;
@@ -770,6 +842,11 @@ fn run(options: Options) -> ResultV1<String> {
 }
 
 fn report(options: Options, output: &str) -> String {
+    let padding_field = if options.return_window {
+        "kernel_padding_bytes=0"
+    } else {
+        "padding_bytes=0"
+    };
     let (schema, admission, compute_admission, progress, retained) = if options.late_compute {
         (
             "fe2o3.late-deferred-peer-chain-smoke.v1",
@@ -787,8 +864,25 @@ fn report(options: Options, output: &str) -> String {
             "",
         )
     };
+    let (schema, padding, snapshot, preservation, window) = if options.return_window {
+        (
+            "fe2o3.pending-compute-return-window.v1",
+            "logical-guards-checked",
+            "settled-full-D-E-host-owner-command",
+            "full-computed-source-byte-pass",
+            " return_window=true logical_extents=262144,262913,263297 peer_offsets=20,131 readback_offsets=131,97 copy_bytes=262080 outside_destination_ranges=full-byte-pass readback_guards=full-byte-pass digest=length-prefixed-D-E-host",
+        )
+    } else {
+        (
+            schema,
+            "exact-page-extent",
+            "settled-host-visible-owner-command",
+            "unobserved",
+            "",
+        )
+    };
     format!(
-        "PASS schema={schema} authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} padding_bytes=0 launches=4 setup_launches=3 pipeline_launches=1 peer_copies=2 dependent_readbacks=1 completion_receipts=4 pipeline=peer-deferred-compute-peer-readback admission={admission} compute_admission={compute_admission} progress={progress} public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter=0,2 initial_peer_sentinel=full-byte-pass final_peer_sentinel=full-byte-pass output=full-byte-pass padding=exact-page-extent output_sha256={output} snapshot=settled-host-visible-owner-command host_output_installations=0 journal=enabled retained_results=4 allocations=12 modules=2 streams=5 contexts=1 owners=1 pipeline_host_joins=0 results_release=readback-peer-compute-peer final_drain=completed-only cleanup=owned-shutdown-explicit source_preservation=unobserved physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{retained}",
+        "PASS schema={schema} authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} {padding_field} launches=4 setup_launches=3 pipeline_launches=1 peer_copies=2 dependent_readbacks=1 completion_receipts=4 pipeline=peer-deferred-compute-peer-readback admission={admission} compute_admission={compute_admission} progress={progress} public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter=0,2 initial_peer_sentinel=full-byte-pass final_peer_sentinel=full-byte-pass output=full-byte-pass padding={padding} output_sha256={output} snapshot={snapshot} host_output_installations=0 journal=enabled retained_results=4 allocations=12 modules=2 streams=5 contexts=1 owners=1 pipeline_host_joins=0 results_release=readback-peer-compute-peer final_drain=completed-only cleanup=owned-shutdown-explicit source_preservation={preservation} physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{retained}{window}",
         options.ids[0], options.ids[1]
     )
 }
@@ -805,6 +899,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn return_window_cli_combines_with_late_compute_without_changing_authority() {
+        for flags in [
+            vec!["--return-window"],
+            vec!["--late-compute", "--return-window"],
+            vec!["--return-window", "--late-compute"],
+        ] {
+            let mut args: Vec<_> = flags.iter().map(|s| (*s).to_owned()).collect();
+            args.extend(["0x2".into(), "0x1".into()]);
+            let parsed = options(&args).unwrap();
+            assert_eq!(parsed.ids, [2, 1]);
+            assert!(parsed.return_window);
+            assert_eq!(parsed.late_compute, flags.contains(&"--late-compute"));
+            let line = report(
+                parsed,
+                &verify_window_output(&expected_window_output()).unwrap(),
+            );
+            let fields: Vec<_> = line.split_whitespace().skip(1).collect();
+            assert_eq!(fields.len(), if parsed.late_compute { 54 } else { 50 });
+            assert!(fields.contains(&"schema=fe2o3.pending-compute-return-window.v1"));
+            assert!(fields.contains(&"authority=qualification-r57-n3-v2"));
+            assert!(fields.contains(&"pipeline_host_joins=0"));
+            assert!(fields.contains(&"formal_refinement=false"));
+        }
+        for args in [
+            vec!["--return-window", "--return-window", "0x1", "0x2"],
+            vec!["0x1", "--return-window", "0x2"],
+            vec!["--unknown", "0x1", "0x2"],
+        ] {
+            assert!(options(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err());
+        }
+    }
+
+    #[test]
     fn late_compute_cli_is_explicit_and_preserves_device_order() {
         for late_compute in [false, true] {
             let mut arguments = Vec::new();
@@ -816,7 +943,8 @@ mod tests {
                 options(&arguments).unwrap(),
                 Options {
                     ids: [2, 1],
-                    late_compute
+                    late_compute,
+                    return_window: false,
                 }
             );
         }
@@ -842,6 +970,7 @@ mod tests {
                 Options {
                     ids: [2, 1],
                     late_compute,
+                    return_window: false,
                 },
                 &digest,
             );

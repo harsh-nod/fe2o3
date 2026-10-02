@@ -1,8 +1,23 @@
 //! Exact pending compute writers retained by the existing cooperative copy owner.
 
 use super::*;
+use fe2o3_kfd::Gfx942ComputeXgmiCopyWindowV1;
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
+
+pub(super) fn exact_full_writer(
+    bindings: &[BackendBindingV1],
+    source: u64,
+    record: &AllocationRecordV1,
+) -> bool {
+    let mut aliases = bindings
+        .iter()
+        .filter(|binding| binding.region.allocation == source);
+    aliases.next().is_some_and(|binding| {
+        binding.region.access == RuntimeAccessV1::Write
+            && compute_xgmi::full_extent(record, binding.region)
+    }) && aliases.next().is_none()
+}
 
 pub(super) fn compute_identity(child: &KfdRuntimeBackendV1, id: u64) -> Option<(u64, usize)> {
     child
@@ -84,11 +99,33 @@ pub(super) struct Producer {
     depth: usize,
     launch: Arc<RetainedComputeLaunchV1>,
     endpoints: [(u64, RoutedHandleV1, AllocationIdentity); 2],
+    window: Gfx942ComputeXgmiCopyWindowV1,
 }
 
 impl Producer {
     pub(super) fn depth(&self) -> usize {
         self.depth
+    }
+
+    pub(super) fn window(&self) -> Gfx942ComputeXgmiCopyWindowV1 {
+        self.window
+    }
+
+    fn matches_regions(
+        &self,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> bool {
+        source.access == RuntimeAccessV1::Read
+            && destination.access == RuntimeAccessV1::Write
+            && source.byte_len == destination.byte_len
+            && Gfx942ComputeXgmiCopyWindowV1::new(
+                self.endpoints[0].2.bytes as u64,
+                self.endpoints[1].2.bytes as u64,
+                source.byte_offset,
+                destination.byte_offset,
+                source.byte_len,
+            ) == Some(self.window)
     }
 
     pub(super) fn reserves_deferred_source(
@@ -209,6 +246,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<Option<Producer>, Failure> {
         let child = &self.children[source.child];
         let target = &self.children[destination.child];
+        let source_record = &child.allocations[&source.local];
+        let destination_record = &target.allocations[&destination.local];
         if source.child == destination.child
             || !self
                 .compute_xgmi_routes
@@ -217,14 +256,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !target.peer_visible_device_allocations
             || source_region.access != RuntimeAccessV1::Read
             || destination_region.access != RuntimeAccessV1::Write
-            || !compute_xgmi::full_extent(&child.allocations[&source.local], source_region)
-            || !compute_xgmi::full_extent(
-                &target.allocations[&destination.local],
-                destination_region,
+            || source_region.byte_len != destination_region.byte_len
+            || !compute_xgmi::checked_region(source_record, source_region)
+            || !compute_xgmi::checked_region(destination_record, destination_region)
+            || !destination_record.sdma_initialized
+            || !matches!(
+                destination_record.sdma_storage,
+                KfdRuntimeSdmaStorageV1::Device(_)
+                    | KfdRuntimeSdmaStorageV1::H2dReady(_)
+                    | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                    | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
             )
         {
             return Ok(None);
         }
+        let Some(window) = Gfx942ComputeXgmiCopyWindowV1::new(
+            source_record.bytes.len() as u64,
+            destination_record.bytes.len() as u64,
+            source_region.byte_offset,
+            destination_region.byte_offset,
+            source_region.byte_len,
+        ) else {
+            return Ok(None);
+        };
         for event in events {
             let Some(RoutedEventV1::DeferredCompute {
                 submission,
@@ -242,18 +296,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 continue;
             };
             if launch.semantic_launch != BackendSemanticLaunchV1::Ordinary
-                || launch
-                    .bindings
-                    .iter()
-                    .filter(|binding| binding.region.allocation == source.local)
-                    .count()
-                    != 1
-                || !launch.bindings.iter().any(|binding| {
-                    binding.region.allocation == source.local
-                        && binding.region.access == RuntimeAccessV1::Write
-                        && binding.region.byte_offset == 0
-                        && binding.region.byte_len == source_region.byte_len
-                })
+                || !exact_full_writer(&launch.bindings, source.local, source_record)
             {
                 continue;
             }
@@ -265,6 +308,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 stream,
                 depth,
                 launch,
+                window,
                 endpoints: [
                     (
                         source_region.allocation,
@@ -329,18 +373,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             };
             if launch.semantic_launch != BackendSemanticLaunchV1::Ordinary
                 || launch.stream != owner.stream
-                || launch
-                    .bindings
-                    .iter()
-                    .filter(|binding| binding.region.allocation == source.local)
-                    .count()
-                    != 1
-                || !launch.bindings.iter().any(|binding| {
-                    binding.region.allocation == source.local
-                        && binding.region.access == RuntimeAccessV1::Write
-                        && binding.region.byte_offset == 0
-                        && binding.region.byte_len == source_region.byte_len
-                })
+                || !exact_full_writer(&launch.bindings, source.local, source_record)
             {
                 continue;
             }
@@ -358,6 +391,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 stream: *stream,
                 depth,
                 launch: Arc::clone(launch),
+                window,
                 endpoints: [
                     (
                         source_region.allocation,
@@ -446,7 +480,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         && producer.depth < copy.dependency_depth
                         && copy.dependency_depth <= MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1
                         && producer.intact(self)
-                        && copy.compute_xgmi.is_some()
+                        && producer.matches_regions(copy.source_region, copy.destination_region)
+                        && copy
+                            .compute_xgmi
+                            .as_ref()
+                            .is_some_and(|root| root.matches_window(producer.window))
                         && copy.directed.is_none()
                         && copy.source == producer.endpoints[0].1
                         && copy.source_region.allocation == producer.endpoints[0].0

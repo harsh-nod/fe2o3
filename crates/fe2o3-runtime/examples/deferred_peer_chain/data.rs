@@ -4,6 +4,72 @@ pub(super) const ELEMENTS: usize = 65_536;
 pub(super) const BYTES: usize = ELEMENTS * 4;
 pub(super) const PAGE: usize = 4096;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ReturnLayout {
+    pub source_offset: usize,
+    pub returned_offset: usize,
+    pub host_offset: usize,
+    pub copy_bytes: usize,
+    pub returned_bytes: usize,
+    pub host_bytes: usize,
+}
+
+impl ReturnLayout {
+    pub fn new(window: bool) -> Self {
+        if window {
+            Self {
+                source_offset: 20,
+                returned_offset: 131,
+                host_offset: 97,
+                copy_bytes: BYTES - 64,
+                returned_bytes: BYTES + 769,
+                host_bytes: BYTES + 1153,
+            }
+        } else {
+            Self {
+                source_offset: 0,
+                returned_offset: 0,
+                host_offset: 0,
+                copy_bytes: BYTES,
+                returned_bytes: BYTES,
+                host_bytes: BYTES,
+            }
+        }
+    }
+
+    pub fn returned_initial(self) -> Vec<u8> {
+        if self == Self::new(false) {
+            filled(-23.0)
+        } else {
+            vec![0xa5; self.returned_bytes]
+        }
+    }
+}
+
+pub(super) fn expected_window_output() -> [Vec<u8>; 3] {
+    let layout = ReturnLayout::new(true);
+    let source = expected_d();
+    let copied = &source[layout.source_offset..layout.source_offset + layout.copy_bytes];
+    let mut returned = layout.returned_initial();
+    returned[layout.returned_offset..layout.returned_offset + layout.copy_bytes]
+        .copy_from_slice(copied);
+    let mut host = vec![0x5a; layout.host_bytes];
+    host[layout.host_offset..layout.host_offset + layout.copy_bytes].copy_from_slice(copied);
+    [source, returned, host]
+}
+
+pub(super) fn verify_window_output(snapshots: &[Vec<u8>; 3]) -> ResultV1<String> {
+    if snapshots != &expected_window_output() {
+        return Err("complete independent D/E/host window oracle differs".into());
+    }
+    let mut framed = b"fe2o3.pending-compute-return-window.v1\0".to_vec();
+    for bytes in snapshots {
+        framed.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        framed.extend_from_slice(bytes);
+    }
+    Ok(digest(&framed))
+}
+
 pub(super) fn unique_ids(arguments: &[String]) -> ResultV1<[u64; 2]> {
     if arguments.len() != 2 {
         return Err(USAGE.into());
@@ -98,6 +164,58 @@ impl<I: Copy + Eq> Receipts<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn return_window_checks_all_three_full_extents_and_guard_boundaries() {
+        let layout = ReturnLayout::new(true);
+        assert_eq!(layout.source_offset + layout.copy_bytes, BYTES - 44);
+        assert_eq!(
+            layout.returned_offset + layout.copy_bytes,
+            layout.returned_bytes - 702
+        );
+        assert_eq!(
+            layout.host_offset + layout.copy_bytes,
+            layout.host_bytes - 1120
+        );
+        let snapshots = expected_window_output();
+        assert!(verify_window_output(&snapshots).is_ok());
+        for (index, offset) in [
+            layout.source_offset,
+            layout.returned_offset,
+            layout.host_offset,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for byte in [
+                0,
+                offset - 1,
+                offset,
+                offset + layout.copy_bytes - 1,
+                offset + layout.copy_bytes,
+                snapshots[index].len() - 1,
+            ] {
+                let mut corrupt = snapshots.clone();
+                corrupt[index][byte] ^= 1;
+                assert!(verify_window_output(&corrupt).is_err());
+            }
+            let mut truncated = snapshots.clone();
+            truncated[index].pop();
+            assert!(verify_window_output(&truncated).is_err());
+            let mut extended = snapshots.clone();
+            extended[index].push(0);
+            assert!(verify_window_output(&extended).is_err());
+        }
+        let mut absent = snapshots.clone();
+        absent[0] = expected_c();
+        assert!(verify_window_output(&absent).is_err());
+        absent = snapshots.clone();
+        absent[1] = layout.returned_initial();
+        assert!(verify_window_output(&absent).is_err());
+        absent = snapshots;
+        absent[2].fill(0x5a);
+        assert!(verify_window_output(&absent).is_err());
+    }
 
     #[test]
     fn cli_preserves_two_explicit_device_identities_and_rejects_ambiguity() {

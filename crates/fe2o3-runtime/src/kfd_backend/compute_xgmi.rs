@@ -190,6 +190,10 @@ impl Root {
         self.creation.is_vacant() && self.queue.is_none() && self.owners.iter().all(Option::is_none)
     }
 
+    pub(super) fn matches_window(&self, window: Gfx942ComputeXgmiCopyWindowV1) -> bool {
+        self.window == window
+    }
+
     fn matches_regions(
         &self,
         source: &AllocationRecordV1,
@@ -432,7 +436,7 @@ pub(super) fn full_extent(record: &AllocationRecordV1, region: BackendMemoryRegi
         && record.native_dirty.is_empty()
 }
 
-fn checked_region(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
+pub(super) fn checked_region(record: &AllocationRecordV1, region: BackendMemoryRegionV1) -> bool {
     record.kind == RuntimeMemoryKindV1::DeviceLocal
         && record.sdma_backed
         && region.byte_len != 0
@@ -449,7 +453,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &self,
         source: RoutedHandleV1,
         destination: RoutedHandleV1,
-        bytes: u64,
+        window: Gfx942ComputeXgmiCopyWindowV1,
     ) -> Result<Box<Root>, Failure> {
         let route = self
             .compute_xgmi_routes
@@ -460,10 +464,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     KfdRuntimeBackendErrorKindV1::Unsupported,
                     "pending compute peer has no native route",
                 )
-            })?;
-        let window =
-            Gfx942ComputeXgmiCopyWindowV1::new(bytes, bytes, 0, 0, bytes).ok_or_else(|| {
-                KfdRuntimeBackendV1::capacity("pending compute peer extent exceeds its packet plan")
             })?;
         Root::prepare(route, window)
     }

@@ -9256,11 +9256,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
 
-        let compute_xgmi = if compute_producer.is_some() {
+        let compute_xgmi = if let Some(producer) = &compute_producer {
             Some(self.prepare_compute_xgmi_plan_v1(
                 source_route,
                 destination_route,
-                source.byte_len,
+                producer.window(),
             )?)
         } else {
             self.prepare_compute_xgmi_v1(

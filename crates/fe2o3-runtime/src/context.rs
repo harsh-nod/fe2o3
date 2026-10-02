@@ -681,9 +681,11 @@ pub trait RuntimeBackendV1 {
 
     fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 
-    /// Opt in to full DeviceLocal peer reads behind an exact pending producer-aware
-    /// compute writer. Context additionally requires its version journal and exact
-    /// writer lease; this flag grants neither kernel authority nor initialized data.
+    /// Opt in to checked contained DeviceLocal peer reads behind an exact pending
+    /// producer-aware full-allocation Write. Context additionally requires its
+    /// version journal and exact writer lease; this flag grants neither kernel
+    /// authority nor initialized data. Source and destination windows may differ
+    /// in offset and allocation extent, but must have the same positive length.
     ///
     /// Authenticate the explicit event, producer-aware submission, original source
     /// allocation and complete writable coverage. Retain the producer independently

@@ -6,28 +6,39 @@ use crate::context::peer_reconciliation::DirectedPeerStateV1;
 pub(in crate::context) struct ComputePeerInputV1 {
     pub(in crate::context) producer: ScalarPeerDependencyV1,
     pub(in crate::context) state: DirectedPeerStateV1,
+    regions: [RuntimeMemoryRegionV1; 2],
+    extents: [u64; 2],
 }
 
-fn full_device_endpoints(root: &ScalarPeerCopyRootV1) -> bool {
+fn bounded_device_endpoints(root: &ScalarPeerCopyRootV1) -> bool {
     root.source.region.access == RuntimeAccessV1::Read
         && root.destination.region.access == RuntimeAccessV1::Write
+        && root.source.region.byte_len == root.destination.region.byte_len
         && [root.source, root.destination].iter().all(|endpoint| {
             endpoint.record.kind == RuntimeMemoryKindV1::DeviceLocal
-                && endpoint.region.byte_offset == 0
                 && endpoint.region.byte_len != 0
-                && endpoint.region.byte_len == endpoint.record.byte_len
+                && endpoint
+                    .region
+                    .byte_offset
+                    .checked_add(endpoint.region.byte_len)
+                    .is_some_and(|end| end <= endpoint.record.byte_len)
         })
 }
 
 fn exact_written_source(launch: &ProducerLaunchRootV1, source: ContextReadSourceV1) -> bool {
-    launch.covers_input_v1(source)
-        && launch
-            .bindings
-            .iter()
-            .filter(|binding| binding.region.allocation == source.region.allocation)
-            .all(|binding| {
-                binding.record == source.record && binding.region.access == RuntimeAccessV1::Write
-            })
+    let mut bindings = launch
+        .bindings
+        .iter()
+        .filter(|binding| binding.region.allocation == source.region.allocation);
+    let Some(binding) = bindings.next() else {
+        return false;
+    };
+    bindings.next().is_none()
+        && binding.record == source.record
+        && binding.region.access == RuntimeAccessV1::Write
+        && binding.region.byte_offset == 0
+        && binding.region.byte_len == source.record.byte_len
+        && launch.covers_input_v1(source)
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
@@ -37,7 +48,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         if self.versions.is_none()
             || !self.backend.supports_pending_compute_peer_copy_v1()
-            || !full_device_endpoints(root)
+            || !bounded_device_endpoints(root)
         {
             return Ok(());
         }
@@ -84,6 +95,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         root.compute = Some(ComputePeerInputV1 {
             producer,
+            regions: [root.source.region, root.destination.region],
+            extents: [
+                root.source.record.byte_len,
+                root.destination.record.byte_len,
+            ],
             state: DirectedPeerStateV1 {
                 depth,
                 cursor: 0,
@@ -104,7 +120,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let invalid = RuntimeValidationErrorV1::InvalidBackendDescription;
         if self.versions.is_none()
             || root.directed.is_some()
-            || !full_device_endpoints(root)
+            || !bounded_device_endpoints(root)
+            || compute.regions != [root.source.region, root.destination.region]
+            || compute.extents
+                != [
+                    root.source.record.byte_len,
+                    root.destination.record.byte_len,
+                ]
             || compute.state.depth < 2
             || compute.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
             || compute.state.cursor > root.dependencies.len()

@@ -16,7 +16,13 @@ impl Chain {
     }
 
     fn with_depth(readback: bool, promote: bool, incoming_depth: usize) -> Self {
-        let mut f = Fixture::with_peer_input_promotion(readback, promote);
+        Self::with_fixture(
+            Fixture::with_peer_input_promotion(readback, promote),
+            incoming_depth,
+        )
+    }
+
+    fn with_fixture(mut f: Fixture, incoming_depth: usize) -> Self {
         f.backend.compute_xgmi_routes.insert(
             (1, 0),
             Route::Scripted {
@@ -143,6 +149,113 @@ impl Chain {
             );
         }
         self.fixture.clean();
+    }
+}
+
+#[test]
+fn deferred_compute_peer_window_final_readback_preserves_full_unequal_owner_guards() {
+    for routed in [false, true] {
+        let mut f = Fixture::with_layout([BYTES, 96], Some((11, 7, 47)), true);
+        let source = f.allocations[0][2];
+        let destination = f.allocations[1][3];
+        let (source_id, original) = window::initialize_bytes(&mut f, source, 0x37);
+        let (destination_id, mut expected) = window::initialize_bytes(&mut f, destination, 0xa1);
+        let mut chain = Chain::with_fixture(f, 1);
+        if routed {
+            chain.handoff();
+        }
+        let f = &mut chain.fixture;
+        let source_region = BackendMemoryRegionV1 {
+            byte_offset: 17,
+            byte_len: 47,
+            ..region(source, RuntimeAccessV1::Read)
+        };
+        let destination_region = BackendMemoryRegionV1 {
+            byte_offset: 11,
+            byte_len: 47,
+            ..region(destination, RuntimeAccessV1::Write)
+        };
+        let peer = f
+            .backend
+            .peer_copy_v1(
+                f.peer_stream,
+                source_region,
+                destination_region,
+                &[chain.producer_event],
+            )
+            .unwrap();
+        let exact = fe2o3_kfd::Gfx942ComputeXgmiCopyWindowV1::new(64, 96, 17, 11, 47).unwrap();
+        assert_eq!(
+            f.copy(peer).compute_producer.as_ref().unwrap().window(),
+            exact
+        );
+        assert!(
+            f.copy(peer)
+                .compute_xgmi
+                .as_ref()
+                .unwrap()
+                .matches_window(exact)
+        );
+        assert!(f.copy(peer).staging.is_empty());
+        let peer_event = f.backend.record_event_v1(f.peer_stream, peer).unwrap();
+        let readback = f
+            .backend
+            .copy_async_v1(
+                f.readback_stream,
+                BackendMemoryRegionV1 {
+                    access: RuntimeAccessV1::Read,
+                    ..destination_region
+                },
+                BackendMemoryRegionV1 {
+                    allocation: f.host.unwrap(),
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 7,
+                    byte_len: 47,
+                },
+                &[peer_event],
+            )
+            .unwrap();
+        f.backend.release_event_v1(peer_event).unwrap();
+        chain.release_events();
+        let f = &mut chain.fixture;
+        assert!(f.backend.release_submission_v1(chain.producer).is_err());
+        assert_eq!(f.backend.poll_v1(readback).unwrap(), BackendPollV1::Pending);
+        assert_eq!(
+            f.backend.wait_v1(readback, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert_eq!(
+            f.backend.drain_v1(readback, Instant::now()).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert!(f.copy(peer).compute_xgmi.as_ref().unwrap().is_quiescent());
+        f.drive(f.readback_stream, readback);
+        for id in [chain.incoming, chain.producer, peer, readback] {
+            assert_eq!(f.backend.poll_v1(id).unwrap(), BackendPollV1::Succeeded);
+        }
+        expected[11..58].copy_from_slice(&original[17..64]);
+        assert_eq!(
+            window::restored(f, source),
+            (source_id, original.as_slice())
+        );
+        assert_eq!(
+            window::restored(f, destination),
+            (destination_id, expected.as_slice())
+        );
+        let host = f.backend.allocations[&f.host.unwrap()];
+        let KfdRuntimeSdmaStorageV1::Host(owner) =
+            &f.backend.children[host.child].allocations[&host.local].sdma_storage
+        else {
+            panic!("host owner expected")
+        };
+        let mut expected_host = vec![0; 96];
+        expected_host[7..54].copy_from_slice(&original[17..64]);
+        assert_eq!(owner.scripted_bytes().unwrap(), expected_host);
+        assert!(f.backend.deferred_compute_retains.is_empty());
+        assert!(f.backend.cooperative_dependency_retain_counts.is_empty());
+        assert!(f.backend.compute_xgmi_children.iter().all(Option::is_none));
+        assert_eq!(f.backend.completed_compute_xgmi_copies, 0);
+        chain.fixture.clean();
     }
 }
 

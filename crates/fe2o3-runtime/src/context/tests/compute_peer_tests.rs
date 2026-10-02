@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 mod deferred_chain;
 #[path = "compute_peer_tests/repeated.rs"]
 mod repeated;
+#[path = "compute_peer_tests/windows.rs"]
+mod windows;
 
 type Context = RuntimeContextV1<MockBackend>;
 type Peer = RuntimeSubmissionV1<RuntimePeerCopyV1>;
@@ -47,6 +49,13 @@ impl Fixture {
     fn with_bindings(
         bindings: impl FnOnce(RuntimeAllocationIdV1) -> Vec<RuntimeMemoryRegionV1>,
     ) -> Self {
+        Self::with_sizes([64; 3], bindings)
+    }
+
+    fn with_sizes(
+        sizes: [u64; 3],
+        bindings: impl FnOnce(RuntimeAllocationIdV1) -> Vec<RuntimeMemoryRegionV1>,
+    ) -> Self {
         let backend = MockBackend {
             next: 100,
             deferred_copies: true,
@@ -63,17 +72,20 @@ impl Fixture {
         let peer_stream = context.create_stream(second).unwrap();
         let readback_stream = context.create_stream(second).unwrap();
         let source = context
-            .allocate(first, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .allocate(first, RuntimeMemoryKindV1::DeviceLocal, sizes[0], 16)
             .unwrap();
         let destination = context
-            .allocate(second, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .allocate(second, RuntimeMemoryKindV1::DeviceLocal, sizes[1], 16)
             .unwrap();
         let host = context
-            .allocate(second, RuntimeMemoryKindV1::HostVisible, 64, 16)
+            .allocate(second, RuntimeMemoryKindV1::HostVisible, sizes[2], 16)
             .unwrap();
-        for (allocation, byte) in [(source, 3), (destination, 5), (host, 7)] {
+        for ((allocation, byte), size) in [(source, 3), (destination, 5), (host, 7)]
+            .into_iter()
+            .zip(sizes)
+        {
             context
-                .write_allocation(allocation, 0, &[byte; 64])
+                .write_allocation(allocation, 0, &vec![byte; size as usize])
                 .unwrap();
         }
         let module = context.load_module(first, b"compute-peer-tests").unwrap();
@@ -343,12 +355,6 @@ fn compute_peer_opt_in_full_write_coverage_and_exact_events_are_required() {
     let alias = f.context.record_event(&f.producer).unwrap();
     for (offset, bytes, dependencies, expected) in [
         (0, 64, vec![], RuntimeValidationErrorV1::ContextReserved),
-        (
-            1,
-            63,
-            vec![f.event],
-            RuntimeValidationErrorV1::ContextReserved,
-        ),
         (
             0,
             64,
