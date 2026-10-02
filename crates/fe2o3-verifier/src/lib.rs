@@ -12,6 +12,9 @@
 //! work, and neither path grants proof or GPU authority. The legacy planning path
 //! retains caller-supplied identities for compatibility.
 
+#[cfg(test)]
+extern crate self as fe2o3_verifier;
+
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
@@ -25,6 +28,7 @@ mod executor;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
 mod generated_verus_proof_input_v3;
+mod gfx942_local_checked_u32_add_v1;
 mod mir_pliron_per_compilation_verus_v1;
 mod mir_pliron_verus_execution_evidence_v1;
 mod model;
@@ -70,6 +74,7 @@ pub use compiler_proof_binding_v3::{
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
     validate_compiler_proof_inputs_v4,
 };
+pub use gfx942_local_checked_u32_add_v1::*;
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a
 // solver ran.

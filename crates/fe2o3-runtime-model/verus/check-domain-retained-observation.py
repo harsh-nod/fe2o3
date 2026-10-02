@@ -31,7 +31,7 @@ EXTRA = {VECTOR, PHASE, MODEL / "lib.rs", R75_REFERENCE,
          Path("crates/fe2o3-runtime-model/Cargo.toml"), Path("Cargo.toml"), Path("Cargo.lock")}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "034df7b7f150832dcec1b3a6b3258e2f58cb3b8128552afc7202674f824c3ecb"
+SOURCE_TREE_SHA = "bea9f1ee015fe73ba23992a397e126e15c860af71605ef5373e5341f82a6a77e"
 PROOF_SHA = "5c36bade68fe9e35382e85d8cbd110adfb93e0279dc439cab8eb1043fca24f16"
 RECORD_PROOF_SHA = "a303f5ceeac20d3c9f1c53228562aa452e56b24d5b7052ed9982a3de8a039a5a"
 # Full no-cheating discovery measured 21 obligations on the exact PROOF_SHA.

@@ -254,16 +254,27 @@ campaign and A2 proof-runner campaign below are parked, not abandoned or
 completed. Neither is a prerequisite for the existing multi-device compute
 router's first native qualification.
 
-1. Integrate one evidence-backed application kernel. Existing production peer
+1. Enable native peer subranges for already initialized PUBLIC allocations.
+   The public API carries checked ranges, but the native route still requires
+   equal, whole-allocation extents and stages partial views through the host.
+   Independent source/destination offsets with unchanged whole-owner custody
+   will support tensor slices and halo exchange. Keep pending compute outputs
+   full-extent until their separate coverage contract is extended. Require
+   offset/overflow/ownership rejection tests and full-buffer sentinel checks
+   in both native directions before accepting this route.
+2. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
-   general runtime authority.
-2. Qualify native partial failures and isolation before broadening execution
+   general runtime authority. The [local integer refinement component](gfx942-local-integer-refinement-v1.md)
+   adds shared-body unsigned-add arithmetic and a conditional MIR/KIR/machine
+   obligation. Retained local-to-SSA and SSA-to-register correspondence,
+   LLVM/CFG/ABI/effect composition and application authority remain open.
+3. Qualify native partial failures and isolation before broadening execution
    claims. CPU scripted failures are not a native fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's
    metadata does not authorize continued execution in that Context.
-3. Defer same-process reopen, eight-GPU coverage and matched performance until
+4. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2

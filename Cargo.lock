@@ -1992,6 +1992,7 @@ dependencies = [
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",

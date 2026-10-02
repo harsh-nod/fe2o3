@@ -5,6 +5,9 @@ on:
     paths:
       - ".github/workflows/runtime-model-verus.yml"
       - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics*"
+      - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/**"
+      - "crates/fe2o3-kernel-analysis/verus/**"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   push:
@@ -12,6 +15,9 @@ on:
     paths:
       - ".github/workflows/runtime-model-verus.yml"
       - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics*"
+      - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/**"
+      - "crates/fe2o3-kernel-analysis/verus/**"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   workflow_dispatch:
@@ -54,3 +60,6 @@ jobs:
 
       - name: Verify authenticated runtime model
         run: crates/fe2o3-runtime-model/verus/verify-verus.sh
+
+      - name: Verify shared gfx942 unsigned-add arithmetic and negative controls
+        run: bash crates/fe2o3-kernel-analysis/verus/run-gfx942-add-u32.sh

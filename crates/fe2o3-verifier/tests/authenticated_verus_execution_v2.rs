@@ -472,12 +472,9 @@ fn fixture_has_no_checkout_path_or_path_bearing_debug_sections() {
         "fixture embeds its checkout root"
     );
 
-    let fixed_gdb_marker = audit_debug_sections(&bytes).unwrap();
-    assert_eq!(
-        fixed_gdb_marker,
-        cfg!(debug_assertions),
-        "the fixed GDB marker must appear only in the stripped debug fixture"
-    );
+    // Debug information and debug assertions are independent build settings. The fixed
+    // marker is optional; when present, the audit still requires its exact canonical form.
+    audit_debug_sections(&bytes).unwrap();
 }
 
 fn synthetic_elf_section(
@@ -580,6 +577,8 @@ fn every_compressed_path_bearing_and_delegating_debug_family_is_rejected() {
 
 #[test]
 fn gdb_script_exception_requires_exact_name_type_flags_shape_and_bytes() {
+    let without_marker = synthetic_elf_section(b".text", 1, 0, 1, 0, b"\x90");
+    assert!(!audit_debug_sections(&without_marker).unwrap());
     let canonical =
         synthetic_elf_section(b".debug_gdb_scripts", 1, GDB_SCRIPT_FLAGS, 1, 1, GDB_SCRIPT);
     assert!(audit_debug_sections(&canonical).unwrap());

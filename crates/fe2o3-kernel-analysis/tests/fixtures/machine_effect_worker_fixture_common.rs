@@ -502,9 +502,14 @@ fn evidence(request: &Request) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=34).contains(mode));
+        .filter(|mode| (19..=35).contains(mode));
     let semantic_fixture = semantic_mode.is_some_and(|mode| {
-        request.payload.len() == if mode == 34 { 20 } else { 16 }
+        request.payload.len()
+            == match mode {
+                35 => 8,
+                34 => 20,
+                _ => 16,
+            }
     });
     let global_atomic_fixture = matches!(semantic_mode, Some(19 | 20 | 23));
     let global_read_fixture = semantic_mode == Some(24);
@@ -563,9 +568,14 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=34).contains(mode));
+        .filter(|mode| (19..=35).contains(mode));
     let semantic_fixture = semantic_mode.is_some_and(|mode| {
-        request.payload.len() == if mode == 34 { 20 } else { 16 }
+        request.payload.len()
+            == match mode {
+                35 => 8,
+                34 => 20,
+                _ => 16,
+            }
     });
     push_u32(&mut output, request.entries.len() as u32);
     for entry in &request.entries {
@@ -574,7 +584,9 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
         push_u64(&mut output, 0);
         push_u32(
             &mut output,
-            if semantic_fixture && semantic_mode == Some(34) {
+            if semantic_fixture && semantic_mode == Some(35) {
+                2
+            } else if semantic_fixture && semantic_mode == Some(34) {
                 5
             } else if semantic_fixture {
                 4
@@ -588,7 +600,9 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     push_u32(
         &mut output,
         request.entries.len() as u32
-            * if semantic_fixture && semantic_mode == Some(34) {
+            * if semantic_fixture && semantic_mode == Some(35) {
+                2
+            } else if semantic_fixture && semantic_mode == Some(34) {
                 5
             } else if semantic_fixture {
                 4
@@ -597,7 +611,22 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
             },
     );
     for entry in &request.entries {
-        if semantic_fixture && semantic_mode == Some(34) {
+        if semantic_fixture && semantic_mode == Some(35) {
+            // Synthetic TEST-worker mode, not LLVM extraction or production analyzer evidence.
+            // The encoded first byte (SGPR35) selects this mode without an artificial prefix.
+            push_synthetic_s_add_u32(&mut output, &entry.symbol, &request.payload[..4]);
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                4,
+                "S_ENDPGM",
+                &request.payload[4..8],
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        } else if semantic_fixture && semantic_mode == Some(34) {
             push_register_instruction(
                 &mut output,
                 &entry.symbol,
@@ -802,6 +831,33 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     }
     set_length(&mut output, TRACE_DOMAIN.len());
     output
+}
+
+fn push_synthetic_s_add_u32(output: &mut Vec<u8>, symbol: &str, encoding: &[u8]) {
+    push_text(output, symbol);
+    push_u64(output, 0);
+    push_u32(output, 0);
+    push_text(output, "S_ADD_U32_vi");
+    push_u16(output, 4);
+    output.extend_from_slice(encoding);
+    push_u16(output, 1);
+    push_u16(output, 3);
+    for register in ["SGPR0", "SGPR35"] {
+        output.push(1);
+        push_u16(output, u16::MAX);
+        push_text(output, register);
+    }
+    output.push(2);
+    push_u16(output, u16::MAX);
+    push_u64(output, 1);
+    push_u16(output, 1);
+    push_text(output, "SCC");
+    push_u16(output, 0);
+    output.push(0);
+    push_u64(output, 0);
+    push_u16(output, 0);
+    output.push(0);
+    push_u16(output, 0);
 }
 
 #[allow(clippy::too_many_arguments)]
