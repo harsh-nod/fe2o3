@@ -213,7 +213,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 // The complete workspace tree includes the reviewed generic typed-entry changes
 // in 54585b104 and nested fixture lockfile synchronization in ce7bed431.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "00d1fb61bd1525cb979784bae3ae44f3f237228c067814186ee420e7086fde29";
+    "ff19ba83811013d6ae90aad47275825903acb36784ba9f2706b2b85adb751c58";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
