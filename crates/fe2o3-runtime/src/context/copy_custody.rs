@@ -23,6 +23,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         source: RuntimeMemoryRegionV1,
         destination: RuntimeMemoryRegionV1,
         dependencies: &[RuntimeEventIdV1],
+        ordinary: bool,
+        directed: bool,
     ) -> Result<Option<SameDeviceCopyRootV1>, RuntimeValidationErrorV1> {
         if self.versions.is_none() {
             return Ok(None);
@@ -48,8 +50,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.scalar_peer_copies
                 .get(&submission)
                 .filter(|peer| {
-                    peer.directed.is_none()
-                        && record.status == RuntimeCompletionStatusV1::Pending
+                    (if peer.directed.is_some() {
+                        directed
+                    } else {
+                        ordinary
+                    }) && record.status == RuntimeCompletionStatusV1::Pending
                         && peer.covers_input_v1(source)
                 })
                 .map(|_| submission)
@@ -73,7 +78,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 RuntimeCompletionStatusV1::Pending
                     if !record.quiescent
                         && record.scalar_peer_copy
-                        && !record.directed_peer_copy
+                        && (if record.directed_peer_copy {
+                            directed
+                        } else {
+                            ordinary
+                        })
                         && !record.producer_launch
                         && !record.same_device_copy => {}
                 _ => return Err(RuntimeValidationErrorV1::ContextReserved),
@@ -253,7 +262,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 return Err(invalid);
             }
-            if producer.scalar_peer_copy && !producer.directed_peer_copy {
+            if producer.scalar_peer_copy {
                 self.validate_scalar_peer_custody_v1(dependency.submission)?;
             } else if producer.status != RuntimeCompletionStatusV1::Succeeded || !producer.quiescent
             {
@@ -274,9 +283,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self
                 .scalar_peer_copies
                 .get(&root.producer.submission)
-                .is_none_or(|producer| {
-                    producer.directed.is_some() || !producer.covers_input_v1(root.source)
-                })
+                .is_none_or(|producer| !producer.covers_input_v1(root.source))
         {
             return Err(invalid);
         }

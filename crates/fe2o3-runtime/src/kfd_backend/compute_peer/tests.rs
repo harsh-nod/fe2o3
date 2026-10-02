@@ -8,6 +8,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[path = "deferred_tests.rs"]
 mod deferred;
 
+#[path = "prefix_progress_tests.rs"]
+mod prefix_progress;
+
 const BYTES: usize = 64;
 const ALLOCATIONS: usize = 10;
 

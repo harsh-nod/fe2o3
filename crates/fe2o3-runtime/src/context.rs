@@ -739,6 +739,15 @@ pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to the same readback contract for exact pending directed peer
+    /// producers, including their retained transitive dependencies and resource
+    /// blockers. Explicit consumer progress must advance those ancestors without
+    /// depending on public producer events or reserving child SDMA ahead of them.
+    /// This is independent of the ordinary-peer opt-in above and defaults off.
+    fn supports_pending_directed_peer_readback_v1(&self) -> bool {
+        false
+    }
+
     fn copy_async_v1(
         &mut self,
         stream: u64,
@@ -3481,8 +3490,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     {
         let prepared =
             self.prepare_context_copy_v1(stream, source, destination, dependencies, None)?;
-        let custody = if self.backend.supports_pending_peer_readback_v1() {
-            self.prepare_same_device_copy_custody_v1(stream, source, destination, dependencies)?
+        let ordinary = self.backend.supports_pending_peer_readback_v1();
+        let directed = self.backend.supports_pending_directed_peer_readback_v1();
+        let custody = if ordinary || directed {
+            self.prepare_same_device_copy_custody_v1(
+                stream,
+                source,
+                destination,
+                dependencies,
+                ordinary,
+                directed,
+            )?
         } else {
             None
         };
@@ -3941,6 +3959,7 @@ mod tests {
     mod construction_custody_tests;
     mod copy_custody_tests;
     mod copy_source_lease_tests;
+    mod directed_readback_tests;
     mod kernel_read_lease_tests;
     mod native_retained_pair_tests;
     mod peer_batch_tests;
@@ -4073,6 +4092,7 @@ mod tests {
         cancel_before_publication: bool,
         deferred_copies: bool,
         pending_peer_readback: bool,
+        pending_directed_peer_readback: bool,
         pending_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
@@ -4720,6 +4740,10 @@ mod tests {
     impl RuntimeAsyncCopyBackendV1 for MockBackend {
         fn supports_pending_peer_readback_v1(&self) -> bool {
             self.pending_peer_readback
+        }
+
+        fn supports_pending_directed_peer_readback_v1(&self) -> bool {
+            self.pending_directed_peer_readback
         }
 
         fn copy_async_v1(

@@ -3,8 +3,10 @@
 Status: the [CPU-qualified Context contract](evidence/dev-directed-context-peer-cpu-2026-09-24/README.md)
 above the [directed scalar backend SPI](runtime-directed-scalar-peer-v1.md) now
 has [bounded integrated native qualification](evidence/dev-multigpu-directed-peer-2026-10-02/README.md)
-for prequeued three-GPU chains and fanout. Formal refinement, broader native
-coverage and performance evidence remain separate boundaries.
+for prequeued three-GPU chains and fanout, now extended with
+[dependent D2H qualification](evidence/dev-multigpu-directed-readback-2026-10-02/README.md).
+Formal refinement, broader native coverage and performance evidence remain
+separate boundaries.
 
 ## Public Contract
 
@@ -35,6 +37,29 @@ original binding is rooted before acquisition and backend entry. Resolution
 does not revisit the old writer slot: a producer can settle and its writer slot
 can be reused while downstream reservations still retain their own result.
 This is custody and version bookkeeping, not a new initializedness theorem.
+
+## Dependent Readback
+
+`RuntimeAsyncCopyBackendV1::supports_pending_directed_peer_readback_v1` is a
+separate, default-false opt-in for `copy_async` from a pending directed peer's
+DeviceLocal output to HostVisible memory on the destination device. Ordinary
+peer-readback support alone does not enable it. The readback remains a distinct
+same-device submission, not another directed peer.
+
+Journal admission requires the exact current producer, covered source range,
+device, writer epoch and lineage. Public producer events can be released after
+admission; independent result retains survive until reconciliation. Cancellation
+releases only the consumer's custody. A failed or unknown producer cannot become
+successful host output, and ambiguous native failure still seals the router.
+
+The integrated KFD router admits these readbacks behind selected native directed
+copies before or after native publication. Admission retains router metadata and
+staging, without reserving child SDMA ahead of the peer. Explicit readback
+progress drives retained directed ancestry and, when necessary, one authenticated
+already-started native resource blocker. A resource sibling's result is not a
+success dependency. Child DMA starts only after the required owners are restored.
+This does not widen application-kernel authority or native peer/compute admission
+after endpoint extraction.
 
 ## Observation And Progress
 
@@ -88,7 +113,7 @@ panics preserve uncertain custody.
 
 - Broader native directed async/owner integration beyond the recorded witnesses.
 - Native partial-failure disposition and isolation; native admission after
-  endpoint extraction and pending directed D2H chaining in the integrated router.
+  endpoint extraction for new directed peers or compute consumers.
   The latest copy-only witness qualifies both orders of three-GPU chains and
   fanout, full destination/source checks and exact cleanup, not arbitrary graphs.
 - Source-bound executable refinement for the changed Context transitions;

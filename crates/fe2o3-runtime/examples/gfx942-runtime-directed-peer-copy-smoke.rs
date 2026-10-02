@@ -1,4 +1,4 @@
-//! Native directed chain and shared-source fan-out with no compute authority.
+//! Native directed peers and optional dependent D2H with no compute authority.
 
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
@@ -8,19 +8,20 @@ use fe2o3_kfd::{GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942ComputeXgmiPacketPla
 use fe2o3_runtime::{
     KfdMultiDeviceRuntimeBackendV1, KfdRuntimeAuthorityRequestV1, KfdRuntimeLaunchAuthorityV1,
     RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeCompletionStatusV1, RuntimeContextV1,
-    RuntimeDirectedScalarPeerCopyV1, RuntimeErrorV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1,
-    RuntimePollV1, RuntimeStreamIdV1, RuntimeSubmissionIdV1, RuntimeSubmissionV1,
-    RuntimeValidationErrorV1,
+    RuntimeCopyV1, RuntimeDirectedScalarPeerCopyV1, RuntimeErrorV1, RuntimeMemoryKindV1,
+    RuntimeMemoryRegionV1, RuntimePollV1, RuntimeStreamIdV1, RuntimeSubmissionIdV1,
+    RuntimeSubmissionV1, RuntimeValidationErrorV1,
 };
 use sha2::{Digest, Sha256};
 
 type Context = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type Peer = RuntimeSubmissionV1<RuntimeDirectedScalarPeerCopyV1>;
+type Copy = RuntimeSubmissionV1<RuntimeCopyV1>;
 type ResultV1<T> = Result<T, String>;
 const BYTES: u64 = 2 * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64 + 37;
 const ROUNDS: usize = 2;
 const WAIT: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--fanout] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
+const USAGE: &str = "usage: gfx942-runtime-directed-peer-copy-smoke [--fanout] [--readback] <0xA-unique-id> <0xB-unique-id> <0xC-unique-id>";
 
 #[derive(Debug)]
 struct NoCompute;
@@ -36,13 +37,23 @@ unsafe impl KfdRuntimeLaunchAuthorityV1 for NoCompute {
 struct Options {
     ids: [u64; 3],
     fanout: bool,
+    readback: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
-    let fanout = arguments
-        .first()
-        .is_some_and(|argument| argument == "--fanout");
-    let arguments = if fanout { &arguments[1..] } else { arguments };
+    let (mut fanout, mut readback, mut flags) = (false, false, 0);
+    for argument in arguments
+        .iter()
+        .take_while(|argument| argument.starts_with("--"))
+    {
+        match argument.as_str() {
+            "--fanout" if !fanout => fanout = true,
+            "--readback" if !readback => readback = true,
+            _ => return Err(USAGE.into()),
+        }
+        flags += 1;
+    }
+    let arguments = &arguments[flags..];
     if arguments.len() != 3 {
         return Err(USAGE.into());
     }
@@ -57,7 +68,11 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
     if ids.contains(&0) || ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
         return Err(USAGE.into());
     }
-    Ok(Options { ids, fanout })
+    Ok(Options {
+        ids,
+        fanout,
+        readback,
+    })
 }
 
 fn failure(stage: &str, error: impl std::fmt::Debug) -> String {
@@ -114,13 +129,13 @@ struct Device {
 
 #[derive(Default)]
 struct Receipts {
-    values: [Option<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>; 4],
+    values: [Option<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>; 6],
     invalid: bool,
 }
 
-fn callback(
+fn callback<A>(
     context: &mut Context,
-    copy: &Peer,
+    copy: &RuntimeSubmissionV1<A>,
     index: usize,
     receipts: &Arc<Mutex<Receipts>>,
 ) -> ResultV1<()> {
@@ -194,6 +209,104 @@ fn require_counter(context: &Context, expected: u64) -> ResultV1<()> {
     Ok(())
 }
 
+fn require_pending<A>(context: &mut Context, copy: &mut RuntimeSubmissionV1<A>) -> ResultV1<()> {
+    if context
+        .poll(copy)
+        .map_err(|error| failure("admission-observer", error))?
+        != RuntimePollV1::Pending
+        || context
+            .wait(copy, Duration::ZERO)
+            .map_err(|error| failure("admission-wait", error))?
+            != RuntimePollV1::Pending
+        || !matches!(
+            context.drain(copy, Instant::now()),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidDeadline
+            ))
+        )
+    {
+        return Err(failure(
+            "admission-state",
+            "observer or expired drain advanced work",
+        ));
+    }
+    Ok(())
+}
+
+fn seed_first(
+    context: &mut Context,
+    first: &mut Peer,
+    deadline: Instant,
+    before: u64,
+) -> ResultV1<()> {
+    for _ in 0..2 {
+        if Instant::now() >= deadline {
+            return Err(failure("fanout-seed-deadline", first.id()));
+        }
+        if context
+            .progress_directed_peer_copy_v1(first)
+            .map_err(|error| failure("fanout-seed", error))?
+            != RuntimePollV1::Pending
+        {
+            return Err(failure("fanout-seed", "first copy unexpectedly conclusive"));
+        }
+        require_counter(context, before)?;
+    }
+    Ok(())
+}
+
+fn tail_seed_steps(fanout: bool) -> usize {
+    if fanout { 2 } else { 3 }
+}
+
+fn seed_tail_for_readback(
+    context: &mut Context,
+    second: &mut Peer,
+    fanout: bool,
+    deadline: Instant,
+    before: u64,
+) -> ResultV1<()> {
+    loop {
+        let observed = context.backend().completed_compute_xgmi_copies_v1();
+        if observed == before + 1 {
+            break;
+        }
+        if observed != before || Instant::now() >= deadline {
+            return Err(failure("readback-seed-counter-deadline", observed));
+        }
+        if context
+            .progress_directed_peer_copy_v1(second)
+            .map_err(|error| failure("readback-seed-progress", error))?
+            != RuntimePollV1::Pending
+        {
+            return Err(failure(
+                "readback-seed-result",
+                "tail completed before readback admission",
+            ));
+        }
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    // Consume the chain dependency, if any, leave gating, and seed the native tail.
+    // The public API exposes Pending and completion counts, not publication state.
+    for _ in 0..tail_seed_steps(fanout) {
+        if Instant::now() >= deadline {
+            return Err(failure("readback-tail-seed-deadline", second.id()));
+        }
+        if context
+            .progress_directed_peer_copy_v1(second)
+            .map_err(|error| failure("readback-tail-seed", error))?
+            != RuntimePollV1::Pending
+        {
+            return Err(failure(
+                "readback-tail-seed",
+                "tail unexpectedly conclusive",
+            ));
+        }
+        require_counter(context, before + 1)?;
+    }
+    Ok(())
+}
+
 fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS]> {
     if context.devices().len() != 3
         || context
@@ -208,18 +321,28 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
     }
     let ids: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
     let mut devices = Vec::with_capacity(3);
-    for id in ids {
+    for id in &ids {
         let stream = context
-            .create_stream(id)
+            .create_stream(*id)
             .map_err(|error| failure("stream-create", error))?;
         let host = context
-            .allocate(id, RuntimeMemoryKindV1::HostVisible, BYTES, 4096)
+            .allocate(*id, RuntimeMemoryKindV1::HostVisible, BYTES, 4096)
             .map_err(|error| failure("host-allocation", error))?;
         let data = context
-            .allocate(id, RuntimeMemoryKindV1::DeviceLocal, BYTES, 4096)
+            .allocate(*id, RuntimeMemoryKindV1::DeviceLocal, BYTES, 4096)
             .map_err(|error| failure("device-allocation", error))?;
         devices.push(Device { stream, host, data });
     }
+    let readback_stream = if settings.readback {
+        Some(
+            context
+                .create_stream(ids[2])
+                .map_err(|error| failure("readback-stream-create", error))?,
+        )
+    } else {
+        None
+    };
+    let per_round = 2 + usize::from(settings.readback);
     let receipts = Arc::new(Mutex::new(Receipts::default()));
     let mut hashes: [String; ROUNDS] = std::array::from_fn(|_| String::new());
     for (round, hash) in hashes.iter_mut().enumerate() {
@@ -229,6 +352,12 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         for (device, contents) in devices.iter().zip([&source, &sentinel_b, &sentinel_c]) {
             upload(context, *device, contents)?;
             verify(context, device.data, contents)?;
+        }
+        if settings.readback {
+            context
+                .write_allocation(devices[2].host, 0, &sentinel_b)
+                .map_err(|error| failure("readback-sentinel-write", error))?;
+            verify(context, devices[2].host, &sentinel_b)?;
         }
         let before = (round * 2) as u64;
         require_counter(context, before)?;
@@ -261,67 +390,73 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         let second_event = context
             .record_event(&second)
             .map_err(|error| failure("second-event", error))?;
-        context
-            .release_event(second_event)
-            .map_err(|error| failure("second-event-release", error))?;
-        context
-            .release_event(event)
-            .map_err(|error| failure("first-event-release", error))?;
-        callback(context, &first, round * 2, &receipts)?;
-        callback(context, &second, round * 2 + 1, &receipts)?;
-        let expected_ids = [first.id(), second.id()];
+        if !settings.readback {
+            context
+                .release_event(second_event)
+                .map_err(|error| failure("second-event-release", error))?;
+            context
+                .release_event(event)
+                .map_err(|error| failure("first-event-release", error))?;
+        }
+        callback(context, &first, round * per_round, &receipts)?;
+        callback(context, &second, round * per_round + 1, &receipts)?;
+        let mut expected_ids = vec![first.id(), second.id()];
         for copy in [&mut first, &mut second] {
-            if context
-                .poll(copy)
-                .map_err(|error| failure("admission-observer", error))?
-                != RuntimePollV1::Pending
-                || context
-                    .wait(copy, Duration::ZERO)
-                    .map_err(|error| failure("admission-wait", error))?
-                    != RuntimePollV1::Pending
-                || !matches!(
-                    context.drain(copy, Instant::now()),
-                    Err(RuntimeErrorV1::Validation(
-                        RuntimeValidationErrorV1::InvalidDeadline
-                    ))
-                )
-            {
-                return Err(failure(
-                    "admission-state",
-                    "observer or expired drain advanced work",
-                ));
-            }
+            require_pending(context, copy)?;
         }
         require_counter(context, before)?;
         let deadline = Instant::now() + WAIT;
-        if settings.fanout {
-            // The first step leaves dependency gating; the second starts its native root.
-            // No completion is inferred from either Pending observation.
-            for _ in 0..2 {
-                if Instant::now() >= deadline {
-                    return Err(failure("fanout-seed-deadline", first.id()));
+        let mut readback: Option<Copy> = None;
+        if let Some(stream) = readback_stream {
+            if round == 1 {
+                if settings.fanout {
+                    seed_first(context, &mut first, deadline, before)?;
                 }
-                if context
-                    .progress_directed_peer_copy_v1(&mut first)
-                    .map_err(|error| failure("fanout-seed", error))?
-                    != RuntimePollV1::Pending
-                {
-                    return Err(failure("fanout-seed", "first copy unexpectedly conclusive"));
-                }
-                require_counter(context, before)?;
+                seed_tail_for_readback(context, &mut second, settings.fanout, deadline, before)?;
             }
+            let mut copy = context
+                .copy_async(
+                    stream,
+                    region(devices[2].data, RuntimeAccessV1::Read),
+                    region(devices[2].host, RuntimeAccessV1::Write),
+                    &[second_event],
+                )
+                .map_err(|error| failure("readback-admission", error))?;
+            callback(context, &copy, round * per_round + 2, &receipts)?;
+            expected_ids.push(copy.id());
+            require_pending(context, &mut copy)?;
+            require_counter(context, before + u64::from(round == 1))?;
+            context
+                .release_event(second_event)
+                .map_err(|error| failure("second-event-release", error))?;
+            context
+                .release_event(event)
+                .map_err(|error| failure("first-event-release", error))?;
+            readback = Some(copy);
+        }
+        if settings.fanout && (!settings.readback || round == 0) {
+            seed_first(context, &mut first, deadline, before)?;
         }
         loop {
             if Instant::now() >= deadline {
-                return Err(failure("final-peer-deadline", second.id()));
+                return Err(failure("final-operation-deadline", second.id()));
             }
-            match context
-                .progress_directed_peer_copy_v1(&mut second)
-                .map_err(|error| failure("final-peer-progress", error))?
-            {
+            let status = if let Some(copy) = readback.as_mut() {
+                context
+                    .flush_stream(readback_stream.unwrap())
+                    .map_err(|error| failure("readback-only-flush", error))?;
+                context
+                    .drain(copy, deadline)
+                    .map_err(|error| failure("readback-only-drain", error))?
+            } else {
+                context
+                    .progress_directed_peer_copy_v1(&mut second)
+                    .map_err(|error| failure("final-peer-progress", error))?
+            };
+            match status {
                 RuntimePollV1::Succeeded => break,
                 RuntimePollV1::Pending => std::thread::sleep(Duration::from_micros(50)),
-                other => return Err(failure("final-peer-result", other)),
+                other => return Err(failure("final-operation-result", other)),
             }
         }
         require_counter(context, before + 2)?;
@@ -332,7 +467,7 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
         {
             return Err(failure(
                 "first-peer-result",
-                "first copy was not settled by final-peer progress",
+                "first copy was not settled by final-operation progress",
             ));
         }
         for copy in [&mut first, &mut second] {
@@ -349,11 +484,11 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                 .lock()
                 .map_err(|_| failure("callbacks", "poisoned"))?;
             if receipts.invalid
-                || receipts.values[..(round + 1) * 2]
+                || receipts.values[..(round + 1) * per_round]
                     .iter()
                     .any(Option::is_none)
                 || expected_ids.into_iter().enumerate().any(|(index, id)| {
-                    receipts.values[round * 2 + index]
+                    receipts.values[round * per_round + index]
                         != Some((id, RuntimeCompletionStatusV1::Succeeded))
                 })
             {
@@ -362,6 +497,22 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
                     "missing, duplicate or unsuccessful exact receipt",
                 ));
             }
+        }
+        if let Some(copy) = readback {
+            if context
+                .query_submission(&copy)
+                .map_err(|error| failure("readback-status", error))?
+                != RuntimeCompletionStatusV1::Succeeded
+            {
+                return Err(failure(
+                    "readback-status",
+                    "original result is not successful",
+                ));
+            }
+            verify(context, devices[2].host, &source)?;
+            context
+                .release_submission(copy)
+                .map_err(|error| failure("readback-release", error))?;
         }
         context
             .release_submission(second)
@@ -376,6 +527,11 @@ fn rounds(context: &mut Context, settings: &Options) -> ResultV1<[String; ROUNDS
     }
     if hashes[0] == hashes[1] {
         return Err(failure("round-digests", "payload did not change"));
+    }
+    if let Some(stream) = readback_stream {
+        context
+            .destroy_stream(stream)
+            .map_err(|error| failure("readback-stream-destroy", error))?;
     }
     for device in devices.into_iter().rev() {
         context
@@ -431,20 +587,38 @@ fn run(settings: Options) -> ResultV1<()> {
         .shutdown_native_v1()
         .map_err(|error| failure("native-shutdown", error))?;
     drop(ManuallyDrop::into_inner(backend));
-    println!(
-        "PASS schema=fe2o3.directed-peer-copy-smoke.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=3 launches=0 modules=0 completion_receipts=4 readbacks=12 admission=both-before-progress progress=final-directed-peer-only first_seed={} public_events=released-before-progress pre_progress_observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=completed-only cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
-        if settings.fanout { "fanout" } else { "chain" },
-        settings.ids[0],
-        settings.ids[1],
-        settings.ids[2],
-        if settings.fanout {
-            "two-bounded-steps"
-        } else {
-            "none"
-        },
-        hashes[0],
-        hashes[1],
-    );
+    if settings.readback {
+        println!(
+            "PASS schema=fe2o3.directed-peer-readback-smoke.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=4 launches=0 modules=0 completion_receipts=6 readbacks=16 admission=peers-before-progress progress=readback-only-after-seed first_seed={} public_events=released-after-readback-admission-before-tail-drive pre_progress_observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=pending-readback-then-completed-peers cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false d2h_copies=2 readback_admission=before-progress,after-bounded-seed readback_admission_native_counts=0,3 tail_seed_steps={} publication_observed=false readback_sentinels=full-byte-pass",
+            if settings.fanout { "fanout" } else { "chain" },
+            settings.ids[0],
+            settings.ids[1],
+            settings.ids[2],
+            if settings.fanout {
+                "two-bounded-steps"
+            } else {
+                "none"
+            },
+            hashes[0],
+            hashes[1],
+            tail_seed_steps(settings.fanout),
+        );
+    } else {
+        println!(
+            "PASS schema=fe2o3.directed-peer-copy-smoke.v1 authority=production-deny-all transport=NATIVE-XGMI mode={} devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} rounds=2 bytes_per_copy={BYTES} peer_copies=4 native_packets=12 observed_native_copies=4 native_counter=0,2,4 allocations=6 streams=3 launches=0 modules=0 completion_receipts=4 readbacks=12 admission=both-before-progress progress=final-directed-peer-only first_seed={} public_events=released-before-progress pre_progress_observers=pending expired_drain=rejected journal=enabled source_unchanged=full-byte-pass destination_sentinels=full-byte-pass output=full-byte-pass round_sha256={},{} rounds_changed=true allocation_reuse=true contexts=1 drain=completed-only cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+            if settings.fanout { "fanout" } else { "chain" },
+            settings.ids[0],
+            settings.ids[1],
+            settings.ids[2],
+            if settings.fanout {
+                "two-bounded-steps"
+            } else {
+                "none"
+            },
+            hashes[0],
+            hashes[1],
+        );
+    }
     Ok(())
 }
 
@@ -474,14 +648,16 @@ mod tests {
             parse(&["0x3", "0x2", "0x1"]).unwrap(),
             Options {
                 ids: [3, 2, 1],
-                fanout: false
+                fanout: false,
+                readback: false,
             }
         );
         assert_eq!(
             parse(&["--fanout", "0x1", "0x2", "0x3"]).unwrap(),
             Options {
                 ids: [1, 2, 3],
-                fanout: true
+                fanout: true,
+                readback: false,
             }
         );
         for arguments in [
@@ -500,6 +676,47 @@ mod tests {
             vec!["0x1", "--fanout", "0x2", "0x3"],
         ] {
             assert!(parse(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn readback_cli_composes_modes_but_rejects_duplicate_and_misplaced_flags() {
+        for flags in [
+            vec!["--readback"],
+            vec!["--readback", "--fanout"],
+            vec!["--fanout", "--readback"],
+        ] {
+            let mut arguments = flags.clone();
+            arguments.extend(["0x3", "0x2", "0x1"]);
+            assert_eq!(
+                parse(&arguments).unwrap(),
+                Options {
+                    ids: [3, 2, 1],
+                    fanout: flags.contains(&"--fanout"),
+                    readback: true,
+                }
+            );
+        }
+        for arguments in [
+            vec!["--readback", "--readback", "0x1", "0x2", "0x3"],
+            vec!["--readback", "--fanout", "--fanout", "0x1", "0x2", "0x3"],
+            vec!["--readback", "--chain", "0x1", "0x2", "0x3"],
+            vec!["--readback", "0x1", "0x2"],
+            vec!["0x1", "--readback", "0x2", "0x3"],
+            vec!["--readback", "0x1", "0x1", "0x3"],
+        ] {
+            assert!(parse(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn readback_seed_and_receipt_bounds_are_finite() {
+        assert_eq!(tail_seed_steps(false), 3);
+        assert_eq!(tail_seed_steps(true), 2);
+        assert_eq!(Receipts::default().values.len(), ROUNDS * 3);
+        for round in 0..ROUNDS {
+            let before = (round * 2) as u64;
+            assert_eq!(before + u64::from(round == 1), [0, 3][round]);
         }
     }
 

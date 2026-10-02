@@ -8679,7 +8679,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if let Some(oldest) = self.oldest_pending_cooperative_dependency(submission)?
             && oldest != submission
         {
-            if let Err(failure) = self.progress_cooperative_copy_step_v1(oldest) {
+            let result = self.progress_selected_cooperative_copy_v1(oldest);
+            if let Err(failure) = result {
                 if matches!(failure, RuntimeBackendFailureV1::Quiescent(_)) {
                     // Settle the complete selected path, including intermediate
                     // copies that would otherwise be stranded behind a failed tail.
@@ -8688,6 +8689,29 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Err(failure);
             }
             return Ok(BackendPollV1::Pending);
+        }
+        self.progress_selected_cooperative_copy_v1(submission)
+    }
+
+    fn progress_selected_cooperative_copy_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if matches!(self.submissions.get(&submission), Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.directed.is_some())
+        {
+            return self.progress_retained_directed_peer_v1(submission);
+        }
+        // Native owners retain their own paired corruption/failure envelope.
+        // Only a staged leg needs this additional resource-only handoff.
+        if self.compute_xgmi_endpoints_v1(submission).is_none()
+            && let Some(blocker) = self.directed_native_blocker_v1(submission)?
+        {
+            // Only an already-started owner is driven here. Its conclusive
+            // result is not a success dependency of this ordinary copy.
+            return match self.progress_retained_directed_peer_v1(blocker) {
+                Ok(_) | Err(RuntimeBackendFailureV1::Quiescent(_)) => Ok(BackendPollV1::Pending),
+                Err(error) => Err(error),
+            };
         }
         self.progress_cooperative_copy_step_v1(submission)
     }
@@ -13368,6 +13392,10 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         true
     }
 
+    fn supports_pending_directed_peer_readback_v1(&self) -> bool {
+        true
+    }
+
     fn copy_async_v1(
         &mut self,
         stream: u64,
@@ -13400,7 +13428,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 destination,
                 destination_route,
                 dependencies,
-            ) {
+            )? {
                 return self.submit_cooperative_copy(
                     stream,
                     source,

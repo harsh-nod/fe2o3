@@ -514,9 +514,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 result => result,
             };
         };
-        if self.compute_xgmi_child_occupied_v1(route.child) {
-            return Ok(BackendPollV1::Pending);
-        }
         // Flush only while the exact target is still queued. Once it is active or
         // complete, another stream head is not this copy's publication authority.
         if self.children[route.child]
@@ -525,6 +522,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         {
             if let Err(error) = self.service_native_peer_prefix_v1(route, true) {
                 return self.attribute_compute_peer_progress_error_v1(id, route, error);
+            }
+            // Its retained peer prefix may own this child. Drive that prefix
+            // above, but never enter child I/O until the peer restores both owners.
+            if self.compute_xgmi_child_occupied_v1(route.child) {
+                return Ok(BackendPollV1::Pending);
             }
             if self.children[route.child]
                 .pending_compute
@@ -535,6 +537,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     return self.attribute_compute_peer_progress_error_v1(id, route, error);
                 }
             }
+        }
+        if self.compute_xgmi_child_occupied_v1(route.child) {
+            return Ok(BackendPollV1::Pending);
         }
         let status = match self.observe_dependency(dependency) {
             Ok(status) => status,

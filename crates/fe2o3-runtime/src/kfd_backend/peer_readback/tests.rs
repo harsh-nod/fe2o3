@@ -1,4 +1,6 @@
 use super::*;
+#[path = "directed_tests.rs"]
+mod directed_tests;
 use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedExecutionOutcomeV1;
 use crate::{
     RuntimeAllocationIdV1, RuntimeCancellationV1, RuntimeContextV1, RuntimeCopyV1,
@@ -601,15 +603,17 @@ fn peer_readback_authenticates_contained_ranges_and_preserves_capacity_admission
     let source_route = backend.allocations[&source.allocation];
     let destination_route = backend.allocations[&host];
     let stream = backend.streams[&f.backend_readback_stream];
-    let eligible = |backend: &KfdMultiDeviceRuntimeBackendV1, source, destination| {
-        backend.pending_native_peer_readback_v1(
-            stream,
-            source,
-            source_route,
-            destination,
-            destination_route,
-            &[backend_event],
-        )
+    let eligible = |backend: &mut KfdMultiDeviceRuntimeBackendV1, source, destination| {
+        backend
+            .pending_native_peer_readback_v1(
+                stream,
+                source,
+                source_route,
+                destination,
+                destination_route,
+                &[backend_event],
+            )
+            .unwrap()
     };
     assert!(eligible(backend, source, destination));
     assert!(eligible(

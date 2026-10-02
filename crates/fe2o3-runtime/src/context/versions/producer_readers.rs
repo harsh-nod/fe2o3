@@ -606,7 +606,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let producer = self
                 .scalar_peer_copies
                 .get(&dependency.submission)
-                .filter(|producer| producer.directed.is_none())
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
             if dependency != copy.producer
                 || source.region != copy.source.region

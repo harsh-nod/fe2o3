@@ -235,9 +235,15 @@ It uses the production copy-only constructor with a deny-all kernel authority.
 Eligible initialized full-buffer copies use native transport; partial ranges
 and absent routes retain staging. Shared native endpoints serialize without
 creating sibling success dependencies. Exact queued typed-consumer permits and
-consumer-only progress under native custody have scripted CPU coverage. Native
-admission after endpoint extraction and pending directed D2H remain outside this
-increment. No compute or compiler authority is widened.
+consumer-only progress under native custody have scripted CPU coverage.
+The [directed-readback checkpoint](evidence/dev-multigpu-directed-readback-2026-10-02/README.md)
+adds pending directed peer -> D2H with a separate backend opt-in and final-readback
+progress through exact ancestry and active resource siblings. Ten live cases
+pass, including three-GPU chains/fanout/readbacks in both orders. The late live
+readback round follows bounded seeding, not an independently observed publication
+phase; exact before/after-publication admission has CPU coverage. New native
+peer/compute admission after endpoint extraction remains open. No compute or
+compiler authority is widened, and native ambiguity still fail-stops the router.
 The compute witnesses' finite artifact authorities do not supply general application/compiler
 evidence. Physical overlap, native partial-failure isolation, full refinement and
 matched HIP/HSA performance remain separate gates; no overall parity is claimed.
