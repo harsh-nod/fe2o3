@@ -556,6 +556,56 @@ assert_source_isa_characteristic_matrix_v2_gate() {
   STEP_COMMANDS=()
 }
 
+assert_codegen_lib_steps() {
+  local step index
+  for step in rustc-codegen-lib-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+    assert_step_count "${step}" 1 "backend unit step ${step} did not run exactly once"
+  done
+  assert_equals \
+    "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+    "$(step_command rustc-codegen-lib-tests)" \
+    'backend library test command changed'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --bin fe2o3-rustc-extract" \
+    "$(step_command rustc-codegen-extractor-bin-tests)" \
+    'extractor unit tests are not isolated and selector-free'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --bin fe2o3-export-sim" \
+    "$(step_command rustc-codegen-exporter-bin-tests)" \
+    'exporter unit tests are not isolated and selector-free'
+  for index in "${!STEP_NAMES[@]}"; do
+    if [[ "${STEP_NAMES[index]}" == rustc-codegen-lib-tests ]]; then
+      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+1]:-}" \
+        'extractor unit tests did not follow the backend library'
+      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+2]:-}" \
+        'exporter unit tests did not follow the extractor'
+    fi
+  done
+}
+
+assert_codegen_lib_fail_fast() {
+  local step status trace
+  for step in rustc-codegen-lib-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+    trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+    status=0
+    timeout --signal=TERM --kill-after=2s 10s \
+      env LIBRARY_FAIL_STEP="${step}" LIBRARY_TRACE="${trace}" \
+      bash -c '
+        source "$1"
+        run_step() {
+          printf "%s\n" "$1" >>"${LIBRARY_TRACE}"
+          [[ "$1" != "${LIBRARY_FAIL_STEP}" ]] || return 37
+        }
+        run_rustc_codegen_lib_tests
+        printf "%s\n" unexpected-success
+      ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+      >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+    assert_equals 37 "${status}" 'a backend unit failure was suppressed'
+    assert_equals "${step}" "$(tail -n 1 "${trace}")" 'backend unit tests continued after failure'
+    [[ ! -s "${trace}.stdout" ]]
+  done
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -590,6 +640,7 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
+assert_codegen_lib_fail_fast
 assert_source_isa_unit_matrix_gate
 assert_source_isa_characteristic_contract_v2_gate
 assert_source_isa_characteristic_matrix_v2_gate
@@ -665,10 +716,7 @@ assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'generic backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -722,10 +770,7 @@ assert_equals \
   'full workspace tests did not retain the descriptor-safe artifact-transaction bound'
 assert_step_count fe2o3-artifact-transaction-tests 1 \
   'full workspace tests did not run artifact-transaction tests exactly once'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'full workspace backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -746,6 +791,10 @@ assert_equals \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
+assert_step_count rustc-codegen-extractor-bin-tests 0 \
+  'integration shard unexpectedly reran extractor unit tests'
+assert_step_count rustc-codegen-exporter-bin-tests 0 \
+  'integration shard unexpectedly reran exporter unit tests'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
     [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
@@ -819,6 +868,8 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
+  rustc-codegen-extractor-bin-tests \
+  rustc-codegen-exporter-bin-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -830,6 +881,7 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_codegen_lib_steps
 assert_equals \
   'python3 -B scripts/tests/tutorial_cpu_reference.py' \
   "$(step_command tutorial-cpu-reference-tests)" \
@@ -979,8 +1031,7 @@ assert_runtime_release_gate
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
-assert_step_count rustc-codegen-lib-tests 1 \
-  'serial generic gate did not run backend library tests exactly once'
+assert_codegen_lib_steps
 assert_step_count tutorial-cpu-reference-tests 1 \
   'serial generic gate did not run tutorial CPU runner protocols exactly once'
 assert_step_count cpu-reference-tiled-gemm-paired-default 1 \

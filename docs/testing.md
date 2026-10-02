@@ -343,9 +343,15 @@ link the unversioned `librustc_codegen_fe2o3.so`. A later variant can replace
 that file and leave an integration-test binary expecting Rust symbols from the
 earlier variant. The failure then appears as an undefined dynamic symbol even
 though the test passes by itself. The repository command runs the library test
-target and every integration target in deterministic separate Cargo
+target, the `fe2o3-rustc-extract` and `fe2o3-export-sim` binary targets, and every
+integration target in deterministic separate Cargo
 invocations. Each test therefore executes against the exact dylib produced for
 its link, without changing compiler or crate behavior.
+
+`generic-core` runs the backend library and both binary unit-test suites once;
+integration shards run only their assigned integration targets. The binary
+suites use default features and the production limited-debug profile. These
+unit regressions do not replace source-to-simulator, proof, or GPU qualification.
 
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.
