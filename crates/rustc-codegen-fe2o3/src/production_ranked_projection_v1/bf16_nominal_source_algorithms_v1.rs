@@ -3,6 +3,70 @@
 use super::bf16_nominal_preparation_resources_v1::PreparationResourcesV1;
 use super::*;
 
+// Exact whole-slice reborrows preserve the pointer and its length, not merely
+// its allocation. Indexed/projected and type-changing borrows do not.
+pub(super) fn exact_shared_slice_reborrow_source_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    value: &SemanticRvalueV1,
+) -> Option<SemanticLocalIdV1> {
+    let SemanticRvalueKindV1::Borrow {
+        kind: SemanticBorrowKindV1::Shared,
+        place,
+    } = value.kind()
+    else {
+        return None;
+    };
+    let [projection] = place.projections() else {
+        return None;
+    };
+    let base = function.locals().get(place.local().index() as usize)?;
+    if projection.kind() != SemanticProjectionKindV1::Dereference
+        || base.ty() != value.result_type()
+    {
+        return None;
+    }
+    let SemanticTypeShapeV1::Pointer(pointer) = types.get(base.ty().index() as usize)?.shape()
+    else {
+        return None;
+    };
+    (pointer.kind() == SemanticPointerKindV1::Reference
+        && pointer.mutability() == SemanticMutabilityV1::Immutable
+        && pointer.metadata() == SemanticPointerMetadataV1::SliceLength
+        && projection.result_type() == pointer.pointee()
+        && place.ty() == pointer.pointee()
+        && matches!(
+            types.get(pointer.pointee().index() as usize)?.shape(),
+            SemanticTypeShapeV1::Slice { .. }
+        ))
+    .then_some(place.local())
+}
+
+pub(super) fn shared_slice_reborrow_frame_v1() -> usize {
+    std::mem::size_of::<(
+        &[SemanticTypeDeclV1],
+        &SemanticFunctionDeclV1,
+        &SemanticRvalueV1,
+        &SemanticPlaceV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+        &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+        SemanticProjectionKindV1,
+        Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
+        Option<&SemanticTypeDeclV1>,
+        &SemanticTypeDeclV1,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1,
+        Option<&SemanticTypeDeclV1>,
+        &SemanticTypeShapeV1,
+        SemanticTypeIdV1,
+        SemanticTypeIdV1,
+        usize,
+        bool,
+        Option<SemanticLocalIdV1>,
+        Option<SemanticLocalIdV1>,
+    )>()
+}
+
 // Prepay every variable transparency/reborrow scan before invoking the shared
 // helpers. Fixed statement classification does not cover source-sized spines.
 pub(super) fn prepay_provenance_spines_v1(
@@ -47,6 +111,7 @@ pub(super) fn local_provenance_with_resources_v1(
     address_escaped: &[bool],
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
+    resources.reserve_storage(shared_slice_reborrow_frame_v1())?;
     resources.reserve_storage(
         std::mem::size_of::<LocalProvenanceV1>()
             + 3 * std::mem::size_of::<Vec<Vec<usize>>>()
@@ -112,6 +177,13 @@ pub(super) fn local_provenance_with_resources_v1(
             let stable_source = match assignment.value().kind() {
                 SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Cast { operand, .. } => {
                     simple_operand_local(operand)
+                }
+                SemanticRvalueKindV1::Borrow { .. }
+                    if assignment.destination().ty() == assignment.value().result_type()
+                        && function.locals()[destination].ty()
+                            == assignment.value().result_type() =>
+                {
+                    exact_shared_slice_reborrow_source_v1(types, function, assignment.value())
                 }
                 _ => None,
             };

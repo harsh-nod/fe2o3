@@ -31,6 +31,12 @@ import re
 import tomllib
 from typing import Any
 
+_expectation_spec = importlib.util.spec_from_file_location(
+    "tutorial_source_expectations", Path(__file__).with_name("tutorial_source_expectations.py"))
+assert _expectation_spec is not None and _expectation_spec.loader is not None
+_expectations = importlib.util.module_from_spec(_expectation_spec)
+_expectation_spec.loader.exec_module(_expectations)
+
 
 TOP_LEVEL_KEYS = {
     "schema",
@@ -1518,19 +1524,9 @@ def validate_source_item(
         name = require_string(row["testFunction"], f"{label}.testFunction")
         if RUST_IDENTIFIER.fullmatch(name) is None or driver_names.count(name) != 1:
             fail(f"{label} must identify one existing driver test function")
-        expectation = require_object(row["expectation"], f"{label}.expectation")
-        kind = require_string(expectation.get("kind"), f"{label}.expectation.kind")
-        if kind not in {"verified-bundle-export", "rejected"}:
-            fail(f"{label} has an unsupported expectation")
-        keys = {"kind", "bundleVersion"} | ({"diagnosticContains", "outputArtifact"} if kind == "rejected" else set())
-        require_exact_keys(expectation, keys, f"{label}.expectation")
-        version = expectation["bundleVersion"]
-        if type(version) is not int or not 1 <= version <= 6:
-            fail(f"{label} has an unsupported bundle version")
-        if kind == "rejected":
-            diagnostic = require_string(expectation["diagnosticContains"], f"{label}.diagnosticContains")
-            if len(diagnostic) > 512 or expectation["outputArtifact"] != "absent":
-                fail(f"{label} requires an exact refusal and absent artifact")
+        _expectations.validate_source_expectation(
+            row["expectation"], label, require_object=require_object, require_string=require_string,
+            require_exact_keys=require_exact_keys, fail=fail)
         validate_compiler_input_data(
             repo_root, {**shared, "features": row["features"], "kernelSymbols": [symbol]}, label, cache,
             feature_scoped_includes=True,

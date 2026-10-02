@@ -279,8 +279,15 @@
   "crates/fe2o3-compiler-execution-coordinator/src/native_activation_tests.rs": {
     "block": 4
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt_tests.rs": {
+    "function": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint.rs": {
-    "block": 5,
+    "block": 7,
     "function": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint_tests.rs": {
@@ -325,6 +332,16 @@
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_root_issuer_tests.rs": {
     "block": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_request.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_request_preexec_process_tests.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_request_process_tests.rs": {
+    "block": 4
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_tests.rs": {
     "block": 1
@@ -1138,6 +1155,9 @@
   "crates/fe2o3-protected-service-spawn/src/launch_io_tests.rs": {
     "block": 3
   },
+  "crates/fe2o3-protected-service-spawn/src/native_cgroup_mount_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-protected-service-spawn/src/native_child.rs": {
     "function": 1
   },
@@ -1151,24 +1171,32 @@
   "crates/fe2o3-protected-service-spawn/src/native_compiler_exec_tests.rs": {
     "block": 2
   },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_personality.rs": {
+    "block": 9,
+    "function": 6
+  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_restrictions.rs": {
     "block": 1,
     "function": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_restrictions_exec_tests.rs": {
-    "block": 6
+    "block": 12
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn.rs": {
     "function": 2
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn_tests.rs": {
-    "block": 3
+    "block": 4
   },
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn.rs": {
     "function": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn_tests.rs": {
     "block": 2
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_namespace_restrictions.rs": {
+    "block": 1,
+    "function": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_namespace_spawn.rs": {
     "function": 1

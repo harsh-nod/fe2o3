@@ -2098,4 +2098,6 @@ mod bounds_extent_preparation_controls {
     fn extent_projection_helpers_have_independent_nested_frames() {
         extent::test_access::audit_projection_frame_rows();
     }
+
+    include!("root_bounds_shared_slice_reborrow_v1_tests.rs");
 }

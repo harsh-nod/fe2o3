@@ -172,6 +172,7 @@ fn check_inserted_lifecycle(
         let sidecar = &inserted.root.pending.sidecars.rows[witness.instance.index()];
         let event = sidecar.lifecycle_events.as_ref().unwrap().rows[witness.event];
         let kind = match event.kind {
+            DeferredLifecycleKindV29::Tile(_) => panic!("lifecycle-only fixture produced a tile"),
             DeferredLifecycleKindV29::Issue { result } => {
                 assert_eq!(
                     operation.results,

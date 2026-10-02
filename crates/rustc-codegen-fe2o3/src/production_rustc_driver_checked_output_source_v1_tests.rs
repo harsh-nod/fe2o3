@@ -34,6 +34,8 @@ mod conditional_ranked_output;
 mod fixed_census_lifecycle;
 #[path = "production_rustc_driver_fixed_census_observation_v1_tests.rs"]
 mod fixed_census_observation;
+#[path = "production_rustc_driver_formal_memory_diagnostic_v1_tests.rs"]
+mod formal_memory_diagnostic;
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
@@ -454,26 +456,11 @@ fn ordinary_rust_source_cases(
         .stdout,
     )
     .unwrap();
-    let built = output(clean_command(cargo).current_dir(&workspace)
-        .args(["check", "--offline", "--locked", "--release", "-Zbuild-std=core",
-            "-p", "fe2o3-device", "--target", "amdgcn-amd-amdhsa",
-            "--message-format=json-render-diagnostics", "--target-dir"])
-        .arg(&target)
-        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            format!("-Zalways-encode-mir -Ctarget-cpu={} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32", profile.cpu())));
-    let messages: Vec<serde_json::Value> = built
-        .stdout
-        .split(|b| *b == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).unwrap())
-        .collect();
-    let device = artifact(&messages, "fe2o3_device");
-    let core = artifact(&messages, "core");
-    let builtins = artifact(&messages, "compiler_builtins");
-    assert!(device.starts_with(&target));
-    let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let sysroot = output(clean_command(&rustc).args(["--print", "sysroot"]));
-    let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+    let crate::production_rustc_driver_checked_output_source_helpers_v1_tests::AmdSourceDependenciesV1 {
+        device, core, builtins, rustc, sysroot,
+    } = crate::production_rustc_driver_checked_output_source_helpers_v1_tests::amd_source_dependencies_v1(
+        &workspace, &target, profile,
+    );
     let mut private_helper_needs_retained_mir = true;
     let mut fixed_erased_observed = false;
     for case in cases {

@@ -28,18 +28,20 @@ use fe2o3_compiler_lineage::{
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
 };
+#[cfg(test)]
+use fe2o3_kernel_ir::InertFormalMemoryReceiptFormatV4;
 use fe2o3_kernel_ir::{
-    FunctionRole, InertFormalMemoryReceiptFormatV4, Module, ProductionSemanticDebugAvailabilityV1,
-    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugProducerGapV1,
-    ProductionSemanticDebugReceiptExtensionV1, VerifiedCanonicalKernelIrErrorV8,
-    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
+    FunctionRole, Module, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
+    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
-    ProductionCanonicalKernelIrIdentityV1, ProductionCanonicalKernelIrVersionV1,
-    ProductionCorrespondenceEvidenceErrorV4, ProductionCorrespondenceEvidenceErrorV5,
-    ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, ProductionCanonicalKernelIrIdentityV1,
+    ProductionCanonicalKernelIrVersionV1, ProductionCorrespondenceEvidenceErrorV4,
+    ProductionCorrespondenceEvidenceErrorV5, ProductionFormalMemoryEvidenceErrorV4,
+    ProductionFormalMemoryOwnerV1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -62,6 +64,9 @@ use crate::protected_rustc_invocation::{
 
 const CODE_OBJECT_VERSION_V3: u16 = 6;
 const WAVE_WIDTH_BITS_V3: u16 = 64;
+
+#[path = "production_semantic_lineage_execution_discharge_v1.rs"]
+mod execution_discharge;
 
 fn validate_final_llvm_layout(llvm: &str) -> Result<(), ProductionSemanticLineageErrorV3> {
     let expected_header = format!(
@@ -309,9 +314,7 @@ fn prepare_lineage_evidence_v1(
         let induction =
             fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
-        let formal_receipt =
-            InertFormalMemoryReceiptFormatV4::from_current_obligations(formal.obligations())
-                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        let formal_receipt = execution_discharge::prepare_root(admitted, ordinal as usize)?;
         let correspondence = encode_correspondence_root_payload_v1(
             admitted.semantic_kir().correspondence(),
             *semantic_root,
@@ -333,7 +336,7 @@ fn prepare_lineage_evidence_v1(
                 .to_vec()
                 .into_boxed_slice(),
             correspondence: correspondence.into_boxed_slice(),
-            formal_memory: formal_receipt.canonical_bytes().to_vec().into_boxed_slice(),
+            formal_memory: formal_receipt,
             verus_execution: verus.canonical_bytes().to_vec().into_boxed_slice(),
         });
     }
@@ -356,10 +359,8 @@ fn prepare_lineage_evidence_v1(
             admitted.semantic_kir(),
             verification.semantic_u32_induction(),
         )?;
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
-        if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir
-            || formal.canonical_kernel_ir_identity() != neutral_kir
-        {
+        let formal = execution_discharge::prepare_singleton(admitted, neutral_kir, &workgroups)?;
+        if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "singleton lineage names a different neutral KIR",
             ));
@@ -860,8 +861,11 @@ fn validate_lineage_roster_envelope_v1(
                 )?;
             }
             LineageRosterPayloadV1::FormalMemory => {
-                InertFormalMemoryReceiptFormatV4::decode_current(root.payload().to_vec()).map_err(
-                    |error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()),
+                execution_discharge::validate_root(
+                    root.payload(),
+                    neutral_kir,
+                    ordinal as usize,
+                    root.kernel_id(),
                 )?;
             }
             LineageRosterPayloadV1::VerusExecution => {
@@ -1104,8 +1108,10 @@ impl PreparedProductionSemanticLineageV3 {
                 let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
                     self.mir_to_kir_correspondence.canonical_preimage(),
                 )?;
-                let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
+                execution_discharge::validate_singleton(
                     self.formal_memory.canonical_preimage(),
+                    self.neutral_kir_custody,
+                    &self.workgroups,
                 )?;
                 if correspondence
                     .nested_v4()
@@ -1114,13 +1120,11 @@ impl PreparedProductionSemanticLineageV3 {
                     != self.semantic_mir.identity().sha256()
                     || correspondence.nested_v4().canonical_kernel_ir_identity()
                         != self.neutral_kir_custody
-                    || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody
                     || correspondence.grants_authority()
                     || correspondence
                         .nested_v4()
                         .semantic_u32_induction()
                         .grants_authority()
-                    || formal.grants_authority()
                 {
                     return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                         "lossless semantic correspondence custody changed before final handoff",

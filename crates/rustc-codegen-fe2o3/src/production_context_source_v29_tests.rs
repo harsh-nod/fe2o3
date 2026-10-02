@@ -657,8 +657,31 @@ fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Deb
     child: &str,
     tag: &str,
     program: impl Fn(&str) -> String,
+    validate: impl FnMut(u8, u8, &str, T, &mut std::collections::BTreeMap<String, T>),
+) {
+    run_actual_source_variants(
+        cases,
+        profiles,
+        &vec![child; cases.len()],
+        tag,
+        program,
+        validate,
+    );
+}
+
+fn run_actual_source_variants<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(
+    cases: &[(&str, &str)],
+    profiles: &[(u8, u8)],
+    children: &[&str],
+    tag: &str,
+    program: impl Fn(&str) -> String,
     mut validate: impl FnMut(u8, u8, &str, T, &mut std::collections::BTreeMap<String, T>),
 ) {
+    assert_eq!(
+        cases.len(),
+        children.len(),
+        "one compiler child per source case"
+    );
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -804,7 +827,7 @@ fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Deb
                 std::fs::write(&request, serde_json::to_vec(&args).unwrap()).unwrap();
                 let child = clean_command(env::current_exe().unwrap())
                     .current_dir(&workspace)
-                    .args(["--exact", child, "--ignored", "--nocapture"])
+                    .args(["--exact", children[ordinal], "--ignored", "--nocapture"])
                     .env(ARGS, &request)
                     .env(RESULT, &response)
                     .env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path)

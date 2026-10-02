@@ -14,8 +14,16 @@ use fe2o3_verifier::{
 #[path = "support/inert_invocation_v3.rs"]
 mod inert_invocation_v3;
 
+#[path = "production_extraction_driver_v1/source_failure_mir_v1.rs"]
+mod source_failure_mir_v1;
+
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
 include!("production_extraction_driver_v1/source_census_tests.rs");
+include!("production_extraction_driver_v1/core_checked_add_tests.rs");
+include!("production_extraction_driver_v1/core_slice_get_tests.rs");
+include!("production_extraction_driver_v1/core_scalar_enum_payload_tests.rs");
+include!("production_extraction_driver_v1/core_scalar_enum_return_tests.rs");
+include!("production_extraction_driver_v1/typed_indirect_constant_tests.rs");
 
 struct ScratchTarget {
     path: PathBuf,

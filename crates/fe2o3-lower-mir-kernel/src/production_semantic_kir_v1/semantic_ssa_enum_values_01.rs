@@ -261,7 +261,7 @@ fn analyze_promoted_enum_variants_v1(
     let mut promoted_enums = BTreeSet::new();
     for (local, promoted) in &control_flow_ssa.promoted {
         budget.charge_work(1)?;
-        if promoted.transport.uses_structural_enum_transport()
+        if promoted.transport.tracks_enum_variant_v1()
             && types
                 .get(promoted.semantic_type.index() as usize)
                 .is_some_and(|declaration| {

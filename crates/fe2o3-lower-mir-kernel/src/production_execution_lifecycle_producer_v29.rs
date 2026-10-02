@@ -43,13 +43,23 @@ impl<'a> ExecutionLifecycleSourceV29<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredLifecycleSourceV29 {
-    Issuance { root: usize },
-    Derive { event: usize },
-    Return { event: usize },
+    Issuance {
+        root: usize,
+    },
+    Derive {
+        event: usize,
+    },
+    Return {
+        event: usize,
+    },
+    Intrinsic {
+        callee: fe2o3_mir_model::semantic_mir_v1::SemanticCallableIdV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredLifecycleKindV29 {
+    Tile(DeferredTileEventV29),
     Issue {
         result: SemanticExecutionIdentityV29,
     },
@@ -251,6 +261,14 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
                     .get(call.callee().index() as usize)
                     .ok_or_else(execution_lifecycle_error_v29)?;
                 match declaration {
+                    SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::Execution(operation),
+                        ..
+                    } if is_execution_tile_operation_v29(*operation) => {
+                        return Ok(Some(DeferredLifecycleSourceV29::Intrinsic {
+                            callee: call.callee(),
+                        }));
+                    }
                     SemanticCallableDeclV1::CompilerIntrinsic {
                         operation:
                             SemanticCompilerIntrinsicOperationV1::Execution(
@@ -455,6 +473,14 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
                     binding: found, operation, context: input, workgroup: output
                 }) if *found == binding.identity() && operation == operation_identity
                     && input == context && output == workgroup),
+            SemanticCompilerIntrinsicOperationV1::Execution(operation)
+                if is_execution_tile_operation_v29(*operation) =>
+            {
+                matches!(
+                    self.source.input.classes.get(callable.index() as usize),
+                    Some(ProductionScopeCallableCandidateV29::Ordinary)
+                )
+            }
             _ => false,
         };
         if !valid {
@@ -507,6 +533,9 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
             || matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
         {
             return Err(execution_lifecycle_error_v29());
+        }
+        if is_execution_tile_operation_v29(operation) {
+            return self.produce_tile_v29(lowering, source, block, call, operation, operations);
         }
         let occurrence = ProductionCallOccurrenceV1 {
             caller: self.pending.instance,
@@ -645,6 +674,18 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
         )?;
         for row in &self.pending.rows {
             let value = match row.kind {
+                DeferredLifecycleKindV29::Tile(event) => {
+                    if event.producer
+                        != (ProductionCallOccurrenceV1 {
+                            caller: self.pending.instance,
+                            block: row.block,
+                        })
+                        || event.result_range()?.end > lowering.next_value
+                    {
+                        return Err(execution_lifecycle_error_v29());
+                    }
+                    continue;
+                }
                 DeferredLifecycleKindV29::Issue { result }
                 | DeferredLifecycleKindV29::Derive { result, .. } => result,
                 DeferredLifecycleKindV29::End { workgroup } => workgroup,

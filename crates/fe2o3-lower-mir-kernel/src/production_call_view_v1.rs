@@ -136,6 +136,45 @@ impl<'a> ProductionCallResultV1<'a> {
     }
 }
 
+/// A semantic discriminant or variant-qualified scalar payload location.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionCallEnumResultSlotV1 {
+    /// The semantic discriminant, independent of the Rust memory-layout tag.
+    Tag,
+    /// A scalar leaf in one specific variant's field.
+    Payload {
+        /// Canonical semantic variant index.
+        variant: u32,
+        /// Canonical field index within that variant.
+        field: u32,
+        /// Depth-first scalar ordinal within the field's tuple/array structure.
+        leaf: u32,
+    },
+}
+
+/// A checked logical enum result component; it has no host byte-offset claim.
+#[derive(Clone, Copy, Debug)]
+pub struct ProductionCallEnumResultV1<'a> {
+    slot: ProductionCallEnumResultSlotV1,
+    semantic_type: SemanticTypeIdV1,
+    value: &'a ValueDef,
+}
+
+impl<'a> ProductionCallEnumResultV1<'a> {
+    /// Logical tag or variant-qualified scalar location.
+    pub const fn slot(self) -> ProductionCallEnumResultSlotV1 {
+        self.slot
+    }
+    /// Admitted semantic type of this physical scalar.
+    pub const fn semantic_type(self) -> SemanticTypeIdV1 {
+        self.semantic_type
+    }
+    /// Actual result definition in the caller's KIR graph.
+    pub const fn value(self) -> &'a ValueDef {
+        self.value
+    }
+}
+
 /// One result structure node, including zero-sized fields and composite parents.
 pub struct ProductionCallResultNodeV1<'a> {
     semantic_type: SemanticTypeIdV1,
@@ -259,6 +298,35 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
             value: &self.operation.results[component],
         })
     }
+    /// Looks up a logical enum component without representing it as a host field path.
+    pub fn enum_result_component(
+        &self,
+        component: usize,
+    ) -> Option<ProductionCallEnumResultV1<'s>> {
+        let component_shape = self
+            .result_shape
+            .scalar_enum
+            .as_ref()?
+            .components
+            .get(component)?;
+        let slot = match component_shape.slot {
+            ScalarEnumResultSlotV1::Tag => ProductionCallEnumResultSlotV1::Tag,
+            ScalarEnumResultSlotV1::Payload {
+                variant,
+                field,
+                leaf,
+            } => ProductionCallEnumResultSlotV1::Payload {
+                variant,
+                field,
+                leaf,
+            },
+        };
+        Some(ProductionCallEnumResultV1 {
+            slot,
+            semantic_type: component_shape.semantic_type,
+            value: self.operation.results.get(component)?,
+        })
+    }
     /// Looks up an explicit result ordinal, not an edge slot. Missing immediate
     /// transport is not evidence that this result was discarded.
     pub fn result_transport(
@@ -286,6 +354,14 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
             ProductionCallResultNodeV1<'n>,
         ) -> Result<(), ProductionSemanticKirErrorV1>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.result_shape.scalar_enum.is_some() {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "logical enum results have no host argument structure",
+            ));
+        }
         let mut visitor_error = None;
         let results = &self.operation.results;
         let result = self.entry.data.visit_result_structure_v1(

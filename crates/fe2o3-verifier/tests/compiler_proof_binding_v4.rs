@@ -378,7 +378,11 @@ fn guarded_policy_two_inputs_reimport_exact_source_and_signed_test_evidence() {
     let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
     let validated = validate(&binding, &receipts).unwrap();
     assert_eq!(
-        validated.formal_memory().validation_policy(),
+        validated
+            .formal_memory()
+            .legacy_v4()
+            .unwrap()
+            .validation_policy(),
         FormalMemoryAdmissionValidationPolicyV4::GuardedV2
     );
     assert_eq!(

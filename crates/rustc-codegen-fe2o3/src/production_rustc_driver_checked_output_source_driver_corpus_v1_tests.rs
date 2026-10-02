@@ -49,6 +49,18 @@ enum Expectation {
         #[serde(rename = "outputArtifact")]
         output_artifact: String,
     },
+    DiagnosticKirExportV1 {
+        #[serde(rename = "canonicalKirVersion")]
+        canonical_kir_version: u8,
+        #[serde(rename = "diagnosticTileOrders")]
+        diagnostic_tile_orders: Vec<String>,
+        authority: String,
+    },
+}
+
+fn diagnostic_orders_valid(orders: &[String]) -> bool {
+    matches!(orders, [order] if order == "blocked" || order == "striped")
+        || matches!(orders, [blocked, striped] if blocked == "blocked" && striped == "striped")
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,6 +266,7 @@ fn source_driver_selections(bytes: &[u8]) -> Result<Vec<Selected>, SourceFailure
     let mut lessons = BTreeSet::new();
     let mut selected = Vec::new();
     let mut positives = BTreeMap::new();
+    let mut diagnostics = BTreeMap::new();
     let mut negatives = BTreeSet::new();
     let mut profiles = [0; 2];
     let mut items = 0;
@@ -271,7 +284,11 @@ fn source_driver_selections(bytes: &[u8]) -> Result<Vec<Selected>, SourceFailure
             let Some(item) = tab.source_item else {
                 continue;
             };
-            items += 1;
+            // This fixed P4 corpus owns only the legacy verified/refused cases.
+            // Diagnostic-only items still undergo shape and inventory checks.
+            items += usize::from(item.cases.iter().any(|case| {
+                !matches!(&case.expectation, Expectation::DiagnosticKirExportV1 { .. })
+            }));
             if items > 2
                 || lesson.role != "executable"
                 || tab.kind != "kernel"
@@ -313,6 +330,10 @@ fn source_driver_selections(bytes: &[u8]) -> Result<Vec<Selected>, SourceFailure
                     "gfx950" => 1,
                     _ => return Err(invalid("source-driver target profile differs")),
                 };
+                let kernel_id = format!(
+                    "source-driver:{}:{ordinal}:{}",
+                    lesson.lesson_id, case.kernel_symbol
+                );
                 match &case.expectation {
                     Expectation::VerifiedBundleExport { bundle_version }
                         if (1..=6).contains(bundle_version) => {}
@@ -330,12 +351,21 @@ fn source_driver_selections(bytes: &[u8]) -> Result<Vec<Selected>, SourceFailure
                         }
                         continue;
                     }
+                    Expectation::DiagnosticKirExportV1 {
+                        canonical_kir_version,
+                        diagnostic_tile_orders,
+                        authority,
+                    } if *canonical_kir_version == 18
+                        && diagnostic_orders_valid(diagnostic_tile_orders)
+                        && authority == "observation_only" =>
+                    {
+                        if diagnostics.insert(selection, kernel_id).is_some() {
+                            return Err(invalid("duplicate diagnostic source selection"));
+                        }
+                        continue;
+                    }
                     _ => return Err(invalid("source-driver expectation differs")),
                 }
-                let kernel_id = format!(
-                    "source-driver:{}:{ordinal}:{}",
-                    lesson.lesson_id, case.kernel_symbol
-                );
                 if positives.insert(selection.clone(), kernel_id).is_some() {
                     return Err(invalid("duplicate positive selection"));
                 }
@@ -417,6 +447,13 @@ fn source_driver_selections(bytes: &[u8]) -> Result<Vec<Selected>, SourceFailure
         .iter()
         .cloned()
         .collect();
+    for (selection, kernel_id) in diagnostics {
+        if positives.insert(selection, kernel_id).is_some() {
+            return Err(invalid(
+                "diagnostic source selection aliases a verified selection",
+            ));
+        }
+    }
     if inventory_positive != positives
         || inventory_fixture != expected_fixtures
         || inventory_negative != negatives

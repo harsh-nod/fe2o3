@@ -126,7 +126,6 @@ impl SemanticExecutionBindingV29 {
         })
     }
 
-    #[cfg(test)]
     fn tile(
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
@@ -149,7 +148,6 @@ impl SemanticExecutionBindingV29 {
         })
     }
 
-    #[cfg(test)]
     fn fragment(
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,

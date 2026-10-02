@@ -79,6 +79,8 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_helper_effect_diagnostic_v1.rs");
+include!("production_scalar_enum_payload_v1.rs");
 include!("production_bf16_call_parameters_v1.rs");
 include!("production_bf16_call_capture_v1.rs");
 include!("production_bf16_call_full_wave_v1.rs");
@@ -196,6 +198,8 @@ include!("production_private_array_consumers_v1.rs");
 include!("production_argument_shapes_v1.rs");
 include!("production_argument_structure_v1.rs");
 include!("production_call_correspondence_v1.rs");
+include!("production_enum_result_v1.rs");
+include!("production_enum_result_emission_v1.rs");
 include!("production_call_emission_v1.rs");
 include!("production_call_storage_v1.rs");
 include!("production_call_validation_v1.rs");
@@ -876,6 +880,8 @@ pub enum ProductionSemanticKirErrorV1 {
         function: u32,
         /// Helper declaration provenance, not a caller or effect-operation span.
         declaration_source: Box<SemanticSourceProvenanceV1>,
+        /// Fixed categories from the actual already-computed decision, not admission.
+        effect_diagnostic: ProductionHelperEffectDiagnosticV1,
     },
     /// A later stage does not yet consume the checked source-local helper relation.
     LocalHelperSourceConsumerUnavailable {
@@ -1048,12 +1054,14 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             Self::HelperEffectsUnavailable {
                 function,
                 declaration_source,
+                effect_diagnostic,
             } => {
                 write!(
                     formatter,
                     "semantic-to-Kernel-IR lowering rejected function {function}: reachable deterministic scalar helper is not interprocedurally complete and pure\n  = helper declaration at ",
                 )?;
                 fmt_semantic_source_location_v1(formatter, **declaration_source)?;
+                write!(formatter, "\n  = {effect_diagnostic}")?;
                 formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
             }
             Self::LocalHelperSourceConsumerUnavailable { consumer } => write!(
@@ -12247,6 +12255,15 @@ fn lower_single_root_module(
         closure_budget,
     )?);
     for function_id in closure.iter().copied().skip(1) {
+        let output = semantic.functions()[function_id.index() as usize]
+            .abi()
+            .source_output_type();
+        if matches!(
+            semantic.types()[output.index() as usize].shape(),
+            SemanticTypeShapeV1::Enum { .. }
+        ) {
+            prepay_helper_result_shape_v1(semantic.types(), output, call_budget)?;
+        }
         let plan = match admission {
             HelperLoweringAdmissionV1::PendingBf16Nominal(state) => bf16_parameter_plan_v1(
                 state.source,
@@ -12525,10 +12542,8 @@ fn lower_single_root_module(
             let effects = analyze_interprocedural_effects_v1(&module)
                 .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
             for plan in plans.iter().skip(1) {
-                if !effects
-                    .function(&plan.kernel_ir_function)
-                    .is_some_and(|decision| decision.is_complete_and_pure())
-                {
+                let decision = effects.function(&plan.kernel_ir_function);
+                if !decision.is_some_and(|decision| decision.is_complete_and_pure()) {
                     // This private pending category is not an effect summary.
                     // The only producer holds the live checked BF16 relation,
                     // and cannot return an owner until exact nominal replay.
@@ -12569,6 +12584,9 @@ fn lower_single_root_module(
                     return Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
                         function: plan.semantic_function.index(),
                         declaration_source: Box::new(declaration_source),
+                        effect_diagnostic: ProductionHelperEffectDiagnosticV1::from_decision(
+                            decision,
+                        ),
                     });
                 }
             }
@@ -12671,6 +12689,7 @@ include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_call_sink_v29.rs");
 include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_lifecycle_producer_v29.rs");
+include!("production_execution_tile_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
 include!("production_scoped_source_slots_v29.rs");
@@ -12697,6 +12716,10 @@ include!("production_scoped_module_v29.rs");
 include!("production_scoped_owned_input_v29.rs");
 include!("production_scoped_source_replay_v29.rs");
 include!("production_pending_scoped_source_v29.rs");
+include!("production_scoped_tile_schedule_v29.rs");
+include!("production_scoped_tile_materialization_v29.rs");
+include!("production_scoped_tile_materialization_replay_v29.rs");
+include!("production_scoped_tile_observation_v29.rs");
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source replay remains gated")
@@ -12739,6 +12762,7 @@ struct SemanticFunctionLoweringV1<'a> {
     enum_payload_dominance: SemanticEnumPayloadDominanceV1,
     enum_payload_storage: BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
     enum_payload_sources: BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
+    scalar_enum_payloads: Vec<ScalarEnumPayloadV1>,
     enum_payload_requires_compile_time_custody: BTreeSet<(u32, u32, u32)>,
     enum_payload_compile_time_custody: BTreeMap<(u32, u32, u32), SemanticEnumPayloadCustodyV1>,
     enum_payload_allocas_emitted: bool,
@@ -12964,6 +12988,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
+            if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                && let Some(budget) = self.emission_work.as_deref_mut()
+            {
+                prepay_scalar_enum_emission_shape_v1(self.types, promoted.semantic_type, budget)?;
+            }
             if promoted.transport == SemanticPromotedTransportV1::Execution {
                 self.with_emission_budget_v1(|_, budget| {
                     for value in parameters {
@@ -13032,6 +13061,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .is_some_and(|cursor| cursor.cfg.nominal_locals[*local as usize] != 0)
             {
                 continue;
+            }
+            if self
+                .control_flow_ssa
+                .promoted
+                .get(local)
+                .is_some_and(|promoted| {
+                    promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                })
+                && let Some(budget) = self.emission_work.as_deref_mut()
+            {
+                prepay_scalar_enum_emission_shape_v1(
+                    self.types,
+                    self.function.locals()[*local as usize].ty(),
+                    budget,
+                )?;
             }
             let binding = self
                 .semantic_ssa_bindings
@@ -13206,9 +13250,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let Some(promoted) = self.control_flow_ssa.promoted.get(&local) else {
             return Ok(());
         };
-        if !promoted.transport.uses_structural_enum_transport() {
+        if !promoted.transport.tracks_enum_variant_v1() {
             return Ok(());
         }
+        let scalar_enum_result =
+            promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult;
         let Some(declaration) = self.types.get(promoted.semantic_type.index() as usize) else {
             return Err(unsupported(
                 0,
@@ -13250,6 +13296,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             discriminant,
             discriminant_ty,
             semantic_type,
+            payloads,
             ..
         } = binding
         else {
@@ -13260,6 +13307,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "variant-refined local is not an enum SSA binding",
             ));
         };
+        if scalar_enum_result {
+            self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
+                discriminant,
+                discriminant_ty,
+                semantic_type,
+                variant: Some(variant),
+                payloads,
+            });
+            return Ok(());
+        }
         let variant_definition = variants.get(variant as usize).ok_or_else(|| {
             unsupported(
                 0,
@@ -13277,6 +13334,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .enumerate()
         {
             let key = (local, variant, field as u32);
+            if let Some(source) = self.scalar_enum_payload_v1(key, Some(block))? {
+                restorations.push(SemanticEnumPayloadRestoreV1::UniqueSource(source));
+                continue;
+            }
             let storage = self.enum_payload_storage.get(&key).cloned();
             let compile_time_custody = self
                 .enum_payload_compile_time_custody
@@ -13606,10 +13667,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         )
                     })?;
                 let promoted = &self.control_flow_ssa.promoted[&local];
-                let values = promoted
-                    .transport
-                    .transport_values(binding, &promoted.kernel_types)
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                    && let Some(budget) = self.emission_work.as_deref_mut()
+                {
+                    prepay_scalar_enum_emission_shape_v1(
+                        self.types,
+                        promoted.semantic_type,
+                        budget,
+                    )?;
+                }
+                let values = if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                {
+                    scalar_enum_result_values_v1(
+                        self.types,
+                        promoted.semantic_type,
+                        binding,
+                        &promoted.kernel_types,
+                    )
+                } else {
+                    promoted
+                        .transport
+                        .transport_values(binding, &promoted.kernel_types)
+                }
+                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
                 (values, promoted.kernel_types.len())
             };
             if values.len() != expected_count {
@@ -21831,6 +21911,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.scalar_enum_result_local_v1(destination.local().index()) {
+            if !destination.projections().is_empty() {
+                return Err(scalar_enum_result_producer_error_v1());
+            }
+            let value = self.complete_scalar_enum_result_v1(destination.ty(), value, operations)?;
+            return self.bind_destination(block, statement, destination, value);
+        }
         if self.retained_array_slot_v1(destination.local()).is_some() {
             self.store_retained_array_place_v1(
                 block,
@@ -21946,6 +22033,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         for (variant, fields) in retained_payloads {
             for (field, binding) in fields.iter().enumerate() {
                 let key = (local.index(), variant, field as u32);
+                if let Some(source) = self.scalar_enum_payload_v1(key, None)? {
+                    if !scalar_enum_values_match_v1(&source, binding) {
+                        return Err(scalar_enum_payload_error_v1());
+                    }
+                    continue;
+                }
                 if self.enum_payload_sources.contains_key(&key)
                     && semantic_binding_can_restore_from_unique_source_v1(binding)
                 {
@@ -24495,188 +24588,6 @@ fn lower_workgroup_collective_scratch_transport_v1(
     ])
 }
 
-#[allow(clippy::type_complexity)]
-fn plan_enum_payload_storage_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
-    sources: &BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
-    next_value: &mut u32,
-) -> Result<
-    (
-        BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
-        BTreeSet<(u32, u32, u32)>,
-    ),
-    ProductionSemanticKirErrorV1,
-> {
-    let mut storage = BTreeMap::new();
-    let mut requires_compile_time_custody = BTreeSet::new();
-    let mut component_count = 0_usize;
-    for (local, promoted) in &control_flow_ssa.promoted {
-        if !promoted.transport.uses_structural_enum_transport() {
-            continue;
-        }
-        let declaration = types
-            .get(promoted.semantic_type.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "promoted enum type is missing"))?;
-        let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
-            continue;
-        };
-        if function.locals().get(*local as usize).is_none() {
-            return Err(unsupported(0, None, None, "promoted enum local is missing"));
-        }
-        for (variant, definition) in variants.iter().enumerate() {
-            for (field, semantic_type) in definition.fields().fields().iter().copied().enumerate() {
-                let mut components = Vec::new();
-                let key = (*local, variant as u32, field as u32);
-                let exact_enum_variant = sources.get(&key).and_then(|source| {
-                    exact_enum_variant_for_source_v1(function, source, semantic_type)
-                });
-                let compiler_issued_binding = exact_enum_variant
-                    .is_none()
-                    .then(|| {
-                        control_flow_ssa
-                            .compiler_issued_bindings
-                            .get(&semantic_type)
-                            .copied()
-                    })
-                    .flatten();
-                let component_types = match exact_enum_variant {
-                    Some(exact_variant) => {
-                        lower_exact_enum_components_v1(types, semantic_type, exact_variant)
-                    }
-                    None => match compiler_issued_binding {
-                        Some(
-                            binding @ SemanticPromotedBindingV1::WorkgroupCollectiveScratch {
-                                ..
-                            },
-                        ) => {
-                            let semantic_components =
-                                lower_ssa_value_components_v1(types, semantic_type)?;
-                            let transport = binding.transport_types(types, semantic_type)?;
-                            if semantic_components.len() != transport.len() {
-                                return Err(unsupported(
-                                    0,
-                                    None,
-                                    None,
-                                    "compiler-issued enum payload transport arity changed",
-                                ));
-                            }
-                            Ok(semantic_components
-                                .into_iter()
-                                .zip(transport)
-                                .map(|((semantic_type, _), transport)| (semantic_type, transport))
-                                .collect())
-                        }
-                        Some(
-                            SemanticPromotedBindingV1::Ordinary
-                            | SemanticPromotedBindingV1::MatrixFragment { .. }
-                            | SemanticPromotedBindingV1::AccumulatorFragment { .. }
-                            | SemanticPromotedBindingV1::Gfx950LdsTransposeTile { .. },
-                        )
-                        | None => lower_ssa_value_components_v1(types, semantic_type),
-                        Some(
-                            SemanticPromotedBindingV1::DynamicLds { .. }
-                            | SemanticPromotedBindingV1::WorkgroupPipeline { .. },
-                        ) => Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "linear workgroup storage cannot be stored in a promoted enum payload",
-                        )),
-                        Some(
-                            SemanticPromotedBindingV1::MathContext
-                            | SemanticPromotedBindingV1::CollectiveContext
-                            | SemanticPromotedBindingV1::WorkgroupLdsScope
-                            | SemanticPromotedBindingV1::MatrixContext
-                            | SemanticPromotedBindingV1::WaveLane { .. }
-                            | SemanticPromotedBindingV1::IndexWitness { .. }
-                            | SemanticPromotedBindingV1::OptionIndexWitness { .. }
-                            | SemanticPromotedBindingV1::GridLeader { .. }
-                            | SemanticPromotedBindingV1::OptionGridLeader { .. }
-                            | SemanticPromotedBindingV1::ComponentWitness { .. }
-                            | SemanticPromotedBindingV1::OptionComponentWitness { .. }
-                            | SemanticPromotedBindingV1::OptionPointer { .. },
-                        ) => Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "compiler-issued authority cannot be reconstructed from an enum payload",
-                        )),
-                    },
-                };
-                let component_types = match component_types {
-                    Ok(components) => components,
-                    Err(ProductionSemanticKirErrorV1::Unsupported {
-                        detail: "type has no bounded aggregate SSA representation",
-                        ..
-                    }) => continue,
-                    Err(error) => return Err(error),
-                };
-                if component_types
-                    .iter()
-                    .any(|(_, kernel_type)| !kernel_type.is_storable())
-                {
-                    if sources.contains_key(&key) {
-                        requires_compile_time_custody.insert(key);
-                        continue;
-                    }
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "enum payload component is not storable in private memory and has no unique source",
-                    ));
-                }
-                for (component_type, kernel_type) in component_types {
-                    component_count = component_count.checked_add(1).ok_or_else(|| {
-                        unsupported(0, None, None, "enum payload storage count overflow")
-                    })?;
-                    if component_count > MAX_ENUM_PAYLOAD_STORAGE_COMPONENTS_V1 {
-                        return Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "enum payload storage exceeds the component limit",
-                        ));
-                    }
-                    let alignment = types
-                        .get(component_type.index() as usize)
-                        .and_then(|ty| u32::try_from(ty.layout().alignment_bytes()).ok())
-                        .filter(|alignment| *alignment != 0)
-                        .ok_or_else(|| {
-                            unsupported(
-                                0,
-                                None,
-                                None,
-                                "enum payload component alignment is unsupported",
-                            )
-                        })?;
-                    let pointer = ValueId(*next_value);
-                    *next_value = next_value.checked_add(1).ok_or_else(|| {
-                        unsupported(0, None, None, "enum payload SSA identity overflow")
-                    })?;
-                    components.push(SemanticEnumPayloadComponentStorageV1 {
-                        pointer,
-                        kernel_type,
-                        alignment,
-                    });
-                }
-                storage.insert(
-                    key,
-                    SemanticEnumPayloadFieldStorageV1 {
-                        semantic_type,
-                        exact_enum_variant,
-                        compiler_issued_binding,
-                        components: components.into_boxed_slice(),
-                    },
-                );
-            }
-        }
-    }
-    Ok((storage, requires_compile_time_custody))
-}
-
 fn plan_unique_enum_payload_sources_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -26046,6 +25957,10 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    include!("production_enum_result_v1_tests.rs");
+    mod scalar_enum_payload_tests_v1 {
+        include!("production_scalar_enum_payload_v1_tests.rs");
+    }
     mod paid_translation_attachment_v1_tests {
         include!("production_semantic_kir_v1/paid_translation_attachment_v1_tests.rs");
     }
@@ -26713,7 +26628,7 @@ mod resource_tests {
                 BTreeSet::new(),
                 1,
                 false,
-                max_operations.max(2),
+                ProductionSemanticKirLimitsV1::default().max_operations,
             )
             .unwrap();
             lowering.max_operations = max_operations;

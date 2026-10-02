@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
@@ -72,4 +72,46 @@ pub(crate) fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
         }
     }
     panic!("missing metadata for actual Cargo artifact {name}");
+}
+
+pub(crate) struct AmdSourceDependenciesV1 {
+    pub(crate) device: PathBuf,
+    pub(crate) core: PathBuf,
+    pub(crate) builtins: PathBuf,
+    pub(crate) rustc: std::ffi::OsString,
+    pub(crate) sysroot: String,
+}
+
+pub(crate) fn amd_source_dependencies_v1(
+    workspace: &Path,
+    target: &Path,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) -> AmdSourceDependenciesV1 {
+    let built = output(clean_command(env!("CARGO")).current_dir(workspace)
+        .args(["check", "--offline", "--locked", "--release", "-Zbuild-std=core",
+            "-p", "fe2o3-device", "--target", "amdgcn-amd-amdhsa",
+            "--message-format=json-render-diagnostics", "--target-dir"])
+        .arg(target)
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            format!("-Zalways-encode-mir -Ctarget-cpu={} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32", profile.cpu())));
+    let messages: Vec<serde_json::Value> = built
+        .stdout
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect();
+    let device = artifact(&messages, "fe2o3_device");
+    let core = artifact(&messages, "core");
+    let builtins = artifact(&messages, "compiler_builtins");
+    assert!(device.starts_with(target));
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let sysroot = output(clean_command(&rustc).args(["--print", "sysroot"]));
+    let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+    AmdSourceDependenciesV1 {
+        device,
+        core,
+        builtins,
+        rustc,
+        sysroot,
+    }
 }

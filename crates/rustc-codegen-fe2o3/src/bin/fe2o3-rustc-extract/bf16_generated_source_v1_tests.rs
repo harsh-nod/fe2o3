@@ -36,6 +36,7 @@ fn generated_bf16_and_direct_source_modes_are_disjoint() {
 
 #[test]
 fn generated_bf16_rejects_all_alternate_modes_and_binding_sidecar() {
+    use fe2o3_lower_mir_kernel::ProductionScopedTileObservationOrderV29 as Order;
     let p = || OsString::from("other");
     for mode in [
         ExtractionModeV1::RankedMemory,
@@ -51,6 +52,8 @@ fn generated_bf16_rejects_all_alternate_modes_and_binding_sidecar() {
         ExtractionModeV1::SimulationBundleV6(p()),
         ExtractionModeV1::DiagnosticKirV16(p()),
         ExtractionModeV1::DiagnosticKirV17(p()),
+        ExtractionModeV1::DiagnosticKirV18(p(), Order::Blocked),
+        ExtractionModeV1::DiagnosticKirV18(p(), Order::Striped),
         ExtractionModeV1::DiagnosticKirV19(p()),
         ExtractionModeV1::PhysicalEntryDiagnosticV20(p()),
         ExtractionModeV1::PhysicalGlobalCopyDiagnosticV21(p()),
@@ -142,7 +145,73 @@ fn generated_bf16_cannot_publish_or_select_origin_or_normal_composition() {
 #[test]
 fn generated_bf16_opt_in_does_not_escape_to_rustc_passthrough() {
     let command = passthrough_command("real-rustc".into(), vec!["--version".into()]);
-    assert!(command.get_envs().any(|(name, value)| name
-        == EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1
-        && value.is_none()));
+    for key in [
+        EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1,
+        scoped_tile_v18::OUTPUT_ENV,
+        scoped_tile_v18::ORDER_ENV,
+    ] {
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none())
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn generated_bf16_v18_chains_preserve_standalone_and_refuse_both_orders() {
+    use fe2o3_lower_mir_kernel::ProductionScopedTileObservationOrderV29 as Order;
+    for order in [Order::Blocked, Order::Striped] {
+        for (tile, generated) in [(false, false), (true, false), (false, true), (true, true)] {
+            for tile_first in [false, true] {
+                let selected = selected_compile("unit", &["actual-cargo-metadata"]);
+                let binding = selected.crate_binding;
+                let observation = selected.metadata_observation;
+                let args = selected.args.clone();
+                let prepared = PreparedExtractionV1::Selected(selected);
+                let select_tile = |prepared| {
+                    scoped_tile_v18::select_mode(
+                        prepared,
+                        tile.then(|| "tile.kir".into()),
+                        tile.then_some(order),
+                    )
+                };
+                let select_generated = |prepared| {
+                    select_bf16_generated_source_v1_mode(
+                        prepared,
+                        generated.then(|| "generated-source".into()),
+                    )
+                };
+                let result = if tile_first {
+                    select_tile(prepared).and_then(select_generated)
+                } else {
+                    select_generated(prepared).and_then(select_tile)
+                };
+                if tile && generated {
+                    assert!(result.is_err());
+                    continue;
+                }
+                let PreparedExtractionV1::Selected(actual) = result.unwrap() else {
+                    panic!("lost selected source")
+                };
+                assert_eq!(actual.crate_binding, binding);
+                assert_eq!(actual.metadata_observation, observation);
+                assert_eq!(actual.args, args);
+                match (tile, generated) {
+                    (true, false) => assert!(matches!(
+                        actual.mode,
+                        ExtractionModeV1::DiagnosticKirV18(path, got)
+                            if path == "tile.kir" && got == order
+                    )),
+                    (false, true) => assert!(matches!(
+                        actual.mode,
+                        ExtractionModeV1::Bf16GeneratedSourceV1(path) if path == "generated-source"
+                    )),
+                    (false, false) => assert!(matches!(actual.mode, ExtractionModeV1::KernelIr)),
+                    (true, true) => unreachable!(),
+                }
+            }
+        }
+    }
 }

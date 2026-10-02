@@ -248,6 +248,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let enum_payload_sources =
             plan_unique_enum_payload_sources_v1(types, function, &control_flow_ssa);
+        let scalar_enum_payloads = match emission_work.as_deref_mut() {
+            Some(budget) => plan_scalar_enum_payloads_v1(
+                types,
+                function,
+                semantic_ssa,
+                &control_flow_ssa,
+                &locals,
+                ScalarEnumRestorationFactsV1 {
+                    dominance: &enum_payload_dominance,
+                    variants: &promoted_enum_variant_by_value,
+                },
+                budget,
+            )?,
+            None => Vec::new(),
+        };
         let (enum_payload_storage, enum_payload_requires_compile_time_custody) =
             plan_enum_payload_storage_v1(
                 types,
@@ -255,6 +270,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 &control_flow_ssa,
                 &enum_payload_sources,
                 &mut next_value,
+                &scalar_enum_payloads,
+                emission_work.as_deref_mut(),
             )?;
         let pending_semantic_ssa_definitions = control_flow_ssa
             .definition_values
@@ -294,6 +311,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             enum_payload_dominance,
             enum_payload_storage,
             enum_payload_sources,
+            scalar_enum_payloads,
             enum_payload_requires_compile_time_custody,
             enum_payload_compile_time_custody: BTreeMap::new(),
             enum_payload_allocas_emitted: false,

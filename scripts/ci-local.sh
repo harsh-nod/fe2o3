@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
+source "${SCRIPT_DIR}/ci-phase-target.sh"
+source "${SCRIPT_DIR}/ci-generic-core.sh"
 DEFAULT_CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
 if [[ "${DEFAULT_CARGO_TARGET_ROOT}" != /* ]]; then
   DEFAULT_CARGO_TARGET_ROOT="${REPO_ROOT}/${DEFAULT_CARGO_TARGET_ROOT}"
@@ -152,6 +154,8 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core    Run generic validation except codegen integration shards
+  generic-core-phases  List all required generic-core phases in order
+  generic-core-phase <id>  Run one partial generic-core phase, not the full gate
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -835,32 +839,38 @@ run_standalone_lockfiles() {
 }
 
 run_runtime_pure_rust_policy() {
+  local -a cache_ticket=()
+  local runtime_target="${RUNTIME_PURE_RUST_TARGET_DIR}"
+  ci_phase_target_begin cache_ticket "${CARGO_TARGET_DIR:-${REPO_ROOT}/target}" runtime || return
+  if ((${#cache_ticket[@]})); then
+    runtime_target="${cache_ticket[2]}"
+  fi
   run_step runtime-pure-rust-audit-tests \
-    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}" || return
   run_step runtime-identity-oracle-parser-tests \
-    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}"
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}" || return
   run_step virtual-runtime-no-gpu-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
       --root fe2o3-virtual-runtime \
       --root fe2o3-virtual-runtime-cli \
-      --root fe2o3-sim-differential
+      --root fe2o3-sim-differential || return
   run_step virtual-runtime-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-virtual-runtime-cli \
-        --bin fe2o3-virtual-runtime
+        --bin fe2o3-virtual-runtime || return
   run_step virtual-runtime-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-virtual-runtime"
+      --input "${runtime_target}/debug/fe2o3-virtual-runtime" || return
   run_step sim-differential-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-sim-differential \
-        --bin fe2o3-sim-differential
+        --bin fe2o3-sim-differential || return
   run_step sim-differential-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential"
+      --input "${runtime_target}/debug/fe2o3-sim-differential" || return
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
@@ -871,17 +881,17 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-aql \
       --root fe2o3-runtime \
       --root fe2o3-runtime-model \
-      --root fe2o3-sim-runtime
+      --root fe2o3-sim-runtime || return
   run_step sim-runtime-no-gpu-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${SIM_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
-      --root fe2o3-sim-runtime
+      --root fe2o3-sim-runtime || return
   run_step sim-runtime-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-sim-runtime \
-        --example sim-runtime-evidence
+        --example sim-runtime-evidence || return
   run_step runtime-pure-rust-kfd-examples-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-kfd \
         --example kfd-version \
         --example kfd-topology \
@@ -889,47 +899,48 @@ run_runtime_pure_rust_policy() {
         --example kfd-host-visible-memory-policy \
         --example kfd-shared-gtt-memory-policy \
         --example kfd-queue-resources \
-        --example kfd-compute-aql-queue-policy
+        --example kfd-compute-aql-queue-policy || return
   run_step runtime-pure-rust-dispatch-diagnostic-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-runtime --features hardware-diagnostic \
-        --example gfx942-lds-diagnostic
+        --example gfx942-lds-diagnostic || return
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-version"
+      --input "${runtime_target}/debug/examples/kfd-version" || return
   run_step runtime-pure-rust-kfd-topology-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-topology"
+      --input "${runtime_target}/debug/examples/kfd-topology" || return
   run_step runtime-pure-rust-kfd-device-identity-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
+      --input "${runtime_target}/debug/examples/kfd-device-identity" || return
   run_step runtime-pure-rust-dispatch-diagnostic-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/gfx942-lds-diagnostic"
+      --input "${runtime_target}/debug/examples/gfx942-lds-diagnostic" || return
   run_step sim-runtime-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${SIM_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence"
+      --input "${runtime_target}/debug/examples/sim-runtime-evidence" || return
   run_step runtime-pure-rust-kfd-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-host-visible-memory-policy"
+      --input "${runtime_target}/debug/examples/kfd-host-visible-memory-policy" || return
   run_step runtime-pure-rust-kfd-shared-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-shared-gtt-memory-policy"
+      --input "${runtime_target}/debug/examples/kfd-shared-gtt-memory-policy" || return
   run_step runtime-pure-rust-kfd-queue-resources-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-queue-resources"
+      --input "${runtime_target}/debug/examples/kfd-queue-resources" || return
   run_step runtime-pure-rust-kfd-compute-aql-queue-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-compute-aql-queue-policy"
+      --input "${runtime_target}/debug/examples/kfd-compute-aql-queue-policy" || return
+  ci_phase_target_finish cache_ticket run_step runtime-pure-rust-cache-clean cargo || return
 }
 
 run_runtime_identity_oracle() {
@@ -961,15 +972,6 @@ load_rustc_codegen_shard_targets() {
   destination=()
   # shellcheck disable=SC2034  # The destination is written through a nameref.
   mapfile -t destination <<<"${output}"
-}
-
-run_rustc_codegen_lib_tests() {
-  # Do not combine this with integration targets: Cargo can emit a test rlib
-  # and an unversioned backend dylib with different Rust symbol hashes.
-  # Keep the aggregate rustc-private harness bounded like the isolated targets;
-  # full debuginfo can exceed the executable identity measurement limit.
-  run_step rustc-codegen-lib-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
 }
 
 run_rustc_codegen_target() {
@@ -1232,46 +1234,6 @@ run_parity_matrix_checks() {
     bash scripts/tests/hosted-parity-ci.sh
 }
 
-run_generic_core() {
-  run_workspace_dependency_policy
-  run_standalone_lockfiles
-  run_runtime_pure_rust_policy
-  run_step example-manifest \
-    cargo run --quiet --locked -p cargo-fe2o3 -- examples check
-  run_step bounded-moe-docs \
-    python3 scripts/test-bounded-moe-docs.py
-  run_shard_policy
-  run_parity_matrix_checks
-  run_format
-  run_check
-  run_backend_build
-  run_step simulation-expectation-tests \
-    python3 -I -B scripts/tests/simulation_expectation.py
-  run_step tutorial-scalar-gemm-corpus-tests \
-    python3 -I -B scripts/tests/tutorial_scalar_gemm_corpus.py
-  run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
-  run_step kernel-compile-matrix-shell-tests \
-    bash scripts/tests/kernel-compile-matrix.sh
-  run_step tutorial-cpu-reference-tests \
-    python3 -B scripts/tests/tutorial_cpu_reference.py
-  run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
-  run_step kir-sim-capability-matrix \
-    cargo test --locked -p fe2o3-kir-sim --test capability_matrix
-  run_step kir-sim-scalar-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      --seed-start 0 --cases 256
-  run_step kir-sim-semantic-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      semantic-run-v2 --seed 0
-  run_step kir-sim-f32-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      f32-run-v3
-  run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
-  run_cpu_tests
-  run_rustc_codegen_lib_tests
-  run_auxiliary_tests
-}
-
 run_generic() {
   run_generic_core
   run_all_rustc_codegen_shards
@@ -1455,6 +1417,16 @@ run_rocm_compile() {
         --test production_neutral_workgroup_reduce_driver_v1 \
         ordinary_row_affine_source_matches_oracle_and_replay -- \
         --ignored --exact
+  run_step rocm-production-mixed-tile-host-oracle \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml \
+        --no-default-features --test mixed_tile -- --test-threads=1
+  run_step rocm-production-scoped-tile-public-cpu-cli \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_scoped_tile_cpu_driver_v1 \
+        ordinary_mixed_tile_source_executes_public_cpu_cli_paths -- \
+        --ignored --exact --test-threads=1
   run_step rocm-production-simulation-bundle-v3-typed-layouts \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
@@ -1587,6 +1559,7 @@ run_parity_production_immutable() {
 }
 
 main() {
+  ci_phase_target_validate_mode || return
   cd "${REPO_ROOT}"
   mkdir -p "${LOG_DIR}"
   validate_private_directory 'CI log directory' "${LOG_DIR}"
@@ -1594,6 +1567,8 @@ main() {
   case "${1:-}" in
     generic) run_generic ;;
     generic-core) run_generic_core ;;
+    generic-core-phases) shift; list_generic_core_phases "$@" ;;
+    generic-core-phase) shift; run_generic_core_phase "$@" ;;
     workspace-policy) run_workspace_dependency_policy ;;
     hygiene-delta)
       if (($# != 3)); then

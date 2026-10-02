@@ -14,6 +14,8 @@ const OUTPUT_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const OUTPUT_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
 const DIAGNOSTIC_KIR_ENV_V16: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V16";
 const DIAGNOSTIC_KIR_ENV_V17: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V17";
+const DIAGNOSTIC_KIR_ENV_V18: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V18";
+const DIAGNOSTIC_TILE_ORDER_ENV_V18: &str = "FE2O3_EXTRACT_DIAGNOSTIC_TILE_ORDER_V18";
 #[path = "fe2o3-export-sim/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
 
@@ -40,6 +42,7 @@ enum ExportFormat {
     SimulationBundle(u16),
     DiagnosticKirV16,
     DiagnosticKirV17,
+    DiagnosticKirV18,
 }
 
 impl ExportFormat {
@@ -54,6 +57,7 @@ impl ExportFormat {
             Self::SimulationBundle(_) => unreachable!("parser admits only bundle versions 1--6"),
             Self::DiagnosticKirV16 => DIAGNOSTIC_KIR_ENV_V16,
             Self::DiagnosticKirV17 => DIAGNOSTIC_KIR_ENV_V17,
+            Self::DiagnosticKirV18 => DIAGNOSTIC_KIR_ENV_V18,
         }
     }
 
@@ -62,6 +66,7 @@ impl ExportFormat {
             Self::SimulationBundle(_) => "simulation bundle",
             Self::DiagnosticKirV16 => "diagnostic canonical KIR V16",
             Self::DiagnosticKirV17 => "diagnostic canonical KIR V17",
+            Self::DiagnosticKirV18 => "diagnostic canonical KIR V18",
         }
     }
 
@@ -71,6 +76,9 @@ impl ExportFormat {
             // Raw logical diagnostics do not request source-variable capture.
             Self::DiagnosticKirV16 => fixed_target_rustflags(target, 1),
             Self::DiagnosticKirV17 => fixed_target_rustflags(target, 1),
+            Self::DiagnosticKirV18 => {
+                fixed_target_rustflags(target, 1) + " -Zmir-opt-level=0 -Coverflow-checks=on"
+            }
         }
     }
 }
@@ -83,6 +91,7 @@ struct Options {
     target_profile: ProductionAmdTargetProfileV1,
     format: ExportFormat,
     diagnostic_ordered_origin: Option<PathBuf>,
+    diagnostic_tile_order: Option<String>,
     cargo_args: Vec<OsString>,
 }
 
@@ -94,6 +103,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
     let mut bundle_version = None;
     let mut diagnostic_kir_v16 = false;
     let mut diagnostic_kir_v17 = false;
+    let mut diagnostic_kir_v18 = false;
+    let mut diagnostic_tile_order = None;
     let mut diagnostic_ordered_origin = None;
     let mut cargo_args = Vec::new();
     let mut args = args.into_iter();
@@ -105,6 +116,12 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         let Some(argument) = argument.to_str() else {
             return Err("options before `--` must be valid UTF-8".to_owned());
         };
+        if argument == "--diagnostic-kir-v18" {
+            if std::mem::replace(&mut diagnostic_kir_v18, true) {
+                return Err("--diagnostic-kir-v18 may be specified only once".to_owned());
+            }
+            continue;
+        }
         if argument == "--diagnostic-kir-v17" {
             if std::mem::replace(&mut diagnostic_kir_v17, true) {
                 return Err("--diagnostic-kir-v17 may be specified only once".to_owned());
@@ -123,6 +140,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             | "--target"
             | "--target-dir"
             | "--bundle-version"
+            | "--diagnostic-tile-order"
             | "--diagnostic-ordered-origin-v1" => args
                 .next()
                 .ok_or_else(|| format!("{argument} requires a value"))?,
@@ -130,6 +148,17 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             _ => return Err(format!("unknown option {argument:?}\n{}", usage())),
         };
         match argument {
+            "--diagnostic-tile-order" => {
+                let value = value
+                    .to_str()
+                    .filter(|value| matches!(*value, "blocked" | "striped"))
+                    .ok_or_else(|| {
+                        "--diagnostic-tile-order must be exactly blocked or striped".to_owned()
+                    })?;
+                if diagnostic_tile_order.replace(value.to_owned()).is_some() {
+                    return Err("--diagnostic-tile-order may be specified only once".to_owned());
+                }
+            }
             "--crate" => {
                 let value = value
                     .into_string()
@@ -189,7 +218,20 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             _ => unreachable!("closed option table"),
         }
     }
-    let format = if diagnostic_kir_v17 {
+    if diagnostic_kir_v18 != diagnostic_tile_order.is_some() {
+        return Err(
+            "--diagnostic-kir-v18 and --diagnostic-tile-order must be supplied together".to_owned(),
+        );
+    }
+    let format = if diagnostic_kir_v18 {
+        if diagnostic_kir_v16 || diagnostic_kir_v17 || bundle_version.is_some() {
+            return Err(
+                "--diagnostic-kir-v18 is mutually exclusive with V16, V17 and --bundle-version"
+                    .to_owned(),
+            );
+        }
+        ExportFormat::DiagnosticKirV18
+    } else if diagnostic_kir_v17 {
         if diagnostic_kir_v16 || bundle_version.is_some() {
             return Err("--diagnostic-kir-v17, --diagnostic-kir-v16 and --bundle-version are mutually exclusive".to_owned());
         }
@@ -257,6 +299,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         target_profile,
         format,
         diagnostic_ordered_origin,
+        diagnostic_tile_order,
         cargo_args,
     })
 }
@@ -368,6 +411,9 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     if let Some(origin) = options.diagnostic_ordered_origin.as_deref() {
         command.env(ordered_origin_v1::OUTPUT_ENV, origin);
     }
+    if let Some(order) = options.diagnostic_tile_order.as_deref() {
+        command.env(DIAGNOSTIC_TILE_ORDER_ENV_V18, order);
+    }
     let status = command
         .status()
         .map_err(|error| format!("failed to execute Cargo extraction: {error}"))?;
@@ -439,7 +485,7 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 15] {
+const fn conflicting_extraction_environment() -> [&'static str; 17] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
@@ -449,6 +495,8 @@ const fn conflicting_extraction_environment() -> [&'static str; 15] {
         OUTPUT_ENV_V6,
         DIAGNOSTIC_KIR_ENV_V16,
         DIAGNOSTIC_KIR_ENV_V17,
+        DIAGNOSTIC_KIR_ENV_V18,
+        DIAGNOSTIC_TILE_ORDER_ENV_V18,
         ordered_origin_v1::OUTPUT_ENV,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
@@ -481,13 +529,14 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted.\n       fe2o3-export-sim --diagnostic-kir-v17 --crate <rustc-crate-name> --output <program.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V17 is raw pre-ranked CPU/debug input for the closed one-to-sixteen-step ordered u32 program. V16, V17 and --bundle-version are mutually exclusive; raw diagnostics carry no source authentication, production resume or proof/artifact/load/launch authority. No production fallback is attempted.\nOptional --diagnostic-ordered-origin-v1 <fresh.json> is accepted only with --diagnostic-kir-v17 and emits a separate bounded, inert region-origin report; no source authentication, fine-step ancestry or physical-register lifetime authority is granted."
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted.\n       fe2o3-export-sim --diagnostic-kir-v17 --crate <rustc-crate-name> --output <program.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V17 is raw pre-ranked CPU/debug input for the closed one-to-sixteen-step ordered u32 program. V16, V17 and --bundle-version are mutually exclusive; raw diagnostics carry no source authentication, production resume or proof/artifact/load/launch authority. No production fallback is attempted.\nOptional --diagnostic-ordered-origin-v1 <fresh.json> is accepted only with --diagnostic-kir-v17 and emits a separate bounded, inert region-origin report; no source authentication, fine-step ancestry or physical-register lifetime authority is granted.\n       fe2o3-export-sim --diagnostic-kir-v18 --diagnostic-tile-order blocked|striped --crate <rustc-crate-name> --output <tile.kir> [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\nV18 exports exact scalarized bytes from the existing scoped tile source observer. Both flags are required; all other output modes are excluded. Orders are diagnostic distributions, not equivalent whole-kernel schedules. Raw bytes retain inert storage metadata but grant no source/proof/native/artifact/load/launch authority."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     include!("fe2o3-export-sim/ordered_program_v17_tests.rs");
+    include!("fe2o3-export-sim/scoped_tile_v18_tests.rs");
 
     fn diagnostic_args() -> Vec<OsString> {
         [

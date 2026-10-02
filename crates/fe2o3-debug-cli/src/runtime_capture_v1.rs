@@ -81,6 +81,9 @@ pub(super) fn capture(
     String,
 > {
     if observed {
+        if input.module.identity().wire_version() == 18 {
+            return Err("runtime observations v1 are not exposed for diagnostic KIR V18".into());
+        }
         if input.module.identity().wire_version() == 19 {
             return Err("runtime observations v1 are not exposed for diagnostic KIR V19".into());
         }

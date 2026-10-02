@@ -25,12 +25,12 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
-    InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    InertCanonicalMirToKirCorrespondenceEvidenceV5, MirToKirSyntheticRuleEvidenceV4,
+    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV3,
+    InertCanonicalMirToKirCorrespondenceEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
+    InertFormalMemoryAdmissionEvidenceFormatV5, MirToKirSyntheticRuleEvidenceV4,
     ProductionCanonicalKernelIrVersionV1, ProductionCorrespondenceEvidenceErrorV4,
     ProductionCorrespondenceEvidenceErrorV5, ProductionFormalMemoryEvidenceErrorV4,
-    ProductionLineageEvidenceErrorV3,
+    ProductionFormalMemoryEvidenceErrorV5, ProductionLineageEvidenceErrorV3,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,
@@ -47,6 +47,9 @@ use crate::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     ProductionMirPlironVerusExecutionEvidenceErrorV1,
 };
+
+#[path = "compiler_formal_execution_discharge_v1.rs"]
+pub(crate) mod formal_execution_discharge;
 
 /// Independently decoded and cross-checked V3 compiler proof inputs.
 ///
@@ -92,7 +95,7 @@ pub struct ValidatedCompilerProofInputsV4 {
     middle_end: InertProductionMiddleEndEvidenceV5,
     kernel_ir: VerifiedCanonicalKernelIrV8,
     correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
+    formal_memory: InertFormalMemoryAdmissionEvidenceFormatV5,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
 }
@@ -239,8 +242,9 @@ impl ValidatedCompilerProofInputsV4 {
         &self.correspondence
     }
 
-    /// Returns the independently decoded exact formal-memory admission.
-    pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryAdmissionEvidenceV4 {
+    /// Returns exact current formal evidence, preserving legacy V4 or replayed V5 content.
+    /// V5 replay checks execution-conflict consistency, not completeness or runtime authority.
+    pub const fn formal_memory(&self) -> &InertFormalMemoryAdmissionEvidenceFormatV5 {
         &self.formal_memory
     }
 
@@ -555,7 +559,7 @@ struct DecodedCompilerProofStagesV4 {
     middle_end: InertProductionMiddleEndEvidenceV5,
     kernel_ir: VerifiedCanonicalKernelIrV8,
     correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
+    formal_memory: InertFormalMemoryAdmissionEvidenceFormatV5,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
 }
 
@@ -588,9 +592,10 @@ fn decode_and_cross_check_stages_v4(
         InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
             .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?
     };
-    let decoded_formal_memory =
-        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(formal_memory.canonical_preimage())
-            .map_err(CompilerProofInputValidationErrorV3::FormalMemoryV4Decode)?;
+    let decoded_formal_memory = formal_execution_discharge::decode_singleton_v1(
+        formal_memory.canonical_preimage(),
+        &kernel_module,
+    )?;
 
     let semantic_identity = decoded_semantic_mir.semantic_sha256();
     for (actual, field) in [
@@ -1424,6 +1429,8 @@ pub enum CompilerProofInputValidationErrorV3 {
     FormalMemoryDecode(ProductionLineageEvidenceErrorV3),
     /// Exact current formal-memory admission evidence could not be decoded.
     FormalMemoryV4Decode(ProductionFormalMemoryEvidenceErrorV4),
+    /// Execution-conditioned formal evidence failed exact current-graph replay.
+    FormalMemoryV5Replay(ProductionFormalMemoryEvidenceErrorV5),
     /// Deterministic semantic induction replay failed on decoded MIR.
     SemanticInductionAnalysis(SemanticU32InductionAnalysisErrorV1),
     /// Replayed semantic induction evidence could not be canonicalized.
@@ -1494,6 +1501,10 @@ impl fmt::Display for CompilerProofInputValidationErrorV3 {
                 formatter,
                 "cannot decode current compiler formal-memory evidence: {error}"
             ),
+            Self::FormalMemoryV5Replay(error) => write!(
+                formatter,
+                "cannot replay execution-conditioned formal-memory evidence: {error}"
+            ),
             Self::SemanticInductionAnalysis(error) => write!(
                 formatter,
                 "cannot replay semantic induction analysis: {error}"
@@ -1530,6 +1541,7 @@ impl Error for CompilerProofInputValidationErrorV3 {
             Self::CorrespondenceV4Decode(error) => Some(error),
             Self::CorrespondenceV5Decode(error) => Some(error),
             Self::FormalMemoryV4Decode(error) => Some(error),
+            Self::FormalMemoryV5Replay(error) => Some(error),
             Self::SemanticInductionAnalysis(error) => Some(error),
             Self::SemanticInductionEvidence(error) => Some(error),
             Self::ProofBindingIdentityMismatch { .. }

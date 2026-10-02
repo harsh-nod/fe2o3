@@ -38,6 +38,10 @@ fn bf16_source_rejects_other_outputs_and_binding_sidecar() {
         ExtractionModeV1::SimulationBundleV6(p()),
         ExtractionModeV1::DiagnosticKirV16(p()),
         ExtractionModeV1::DiagnosticKirV17(p()),
+        ExtractionModeV1::DiagnosticKirV18(
+            p(),
+            fe2o3_lower_mir_kernel::ProductionScopedTileObservationOrderV29::Blocked,
+        ),
         ExtractionModeV1::DiagnosticKirV19(p()),
         ExtractionModeV1::PhysicalEntryDiagnosticV20(p()),
         ExtractionModeV1::PhysicalGlobalCopyDiagnosticV21(p()),
@@ -61,7 +65,7 @@ fn bf16_source_rejects_other_outputs_and_binding_sidecar() {
 }
 #[test]
 fn bf16_source_disjointness_covers_every_diagnostic_bit() {
-    for mask in 0..128u8 {
+    for mask in 0..256u16 {
         let others = std::array::from_fn(|bit| mask & (1 << bit) != 0);
         assert_eq!(
             require_disjoint_bf16_tile_source_v1(true, others).is_ok(),
@@ -117,6 +121,10 @@ fn bf16_source_promotion_requires_its_explicit_mode() {
         ExtractionModeV1::KernelIr,
         ExtractionModeV1::OrderedCompositionDiagnosticV1("out".into()),
         ExtractionModeV1::DiagnosticKirV17("out".into()),
+        ExtractionModeV1::DiagnosticKirV18(
+            "out".into(),
+            fe2o3_lower_mir_kernel::ProductionScopedTileObservationOrderV29::Blocked,
+        ),
         ExtractionModeV1::AmdgpuCompilerHandoff("out".into()),
     ] {
         assert!(

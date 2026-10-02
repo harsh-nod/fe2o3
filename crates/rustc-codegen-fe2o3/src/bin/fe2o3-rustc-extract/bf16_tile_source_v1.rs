@@ -4,9 +4,9 @@ const EXTRACT_BF16_TILE_SOURCE_DIRECTORY_ENV_V1: &str =
 const EXTRACT_BF16_TILE_PROMOTION_REQUEST_ENV_V1: &str =
     "FE2O3_EXTRACT_BF16_TILE_PROMOTION_REQUEST_V1";
 
-fn require_disjoint_bf16_tile_source_v1(selected: bool, others: [bool; 7]) -> Result<(), String> {
+fn require_disjoint_bf16_tile_source_v1(selected: bool, others: [bool; 8]) -> Result<(), String> {
     if selected && others.into_iter().any(|value| value) {
-        Err("BF16 source action is mutually exclusive with V16/V17/V19/V20/V21/V22 and ordered composition diagnostics".into())
+        Err("BF16 source action is mutually exclusive with V16/V17/V18/V19/V20/V21/V22 and ordered composition diagnostics".into())
     } else {
         Ok(())
     }

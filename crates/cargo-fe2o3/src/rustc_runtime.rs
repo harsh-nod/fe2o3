@@ -350,6 +350,89 @@ fn hash_field(hash: &mut Sha256, value: &[u8]) {
 }
 
 #[cfg(test)]
+pub(crate) fn run_in_isolated_lib_tree_test_process() -> bool {
+    use crate::pinned_executable_test_directory::TestDirectory;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const SENTINEL: &str = "FE2O3_RUSTC_LIB_TREE_ISOLATED_TEST_V1";
+    const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
+    let thread = std::thread::current();
+    let test_name = thread.name().expect("libtest must name its test thread");
+    match std::env::var_os(SENTINEL) {
+        None => {}
+        Some(value) if value == std::ffi::OsStr::new(test_name) => return false,
+        Some(value) => panic!("mismatched isolated rustc lib-tree test sentinel: {value:?}"),
+    }
+
+    // Create watched fixtures only after exec: unrelated parallel tests must not inherit
+    // their transient writable descriptors and close them after journal installation.
+    let directory = TestDirectory::new();
+    let stdout_path = directory.path().join("stdout");
+    let stderr_path = directory.path().join("stderr");
+    let stdout = File::create_new(&stdout_path).unwrap();
+    let stderr = File::create_new(&stderr_path).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(SENTINEL, test_name)
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone().unwrap())
+        .stderr(stderr.try_clone().unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let result = loop {
+        let output_within_bound = [&stdout, &stderr].into_iter().try_for_each(|file| {
+            let size = file.metadata().map_err(|error| error.to_string())?.len();
+            if size > MAX_OUTPUT_BYTES {
+                return Err("isolated rustc lib-tree test exceeded its output bound".to_owned());
+            }
+            Ok(())
+        });
+        if let Err(error) = output_within_bound {
+            break Err(error);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None) => break Err("isolated rustc lib-tree test exceeded its deadline".to_owned()),
+            Err(error) => break Err(format!("isolated rustc lib-tree test wait failed: {error}")),
+        }
+    };
+    if result.is_err() {
+        let killed = child.kill();
+        let reaped = child.wait();
+        assert!(
+            reaped.is_ok(),
+            "isolated test cleanup failed: {killed:?}; {reaped:?}"
+        );
+    }
+    let read_output = |path| {
+        let mut bytes = Vec::new();
+        File::open(path)
+            .unwrap()
+            .take(MAX_OUTPUT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(
+            bytes.len() as u64 <= MAX_OUTPUT_BYTES,
+            "isolated test output exceeded its bound"
+        );
+        String::from_utf8(bytes).unwrap()
+    };
+    let stdout = read_output(stdout_path);
+    let stderr = read_output(stderr_path);
+    assert!(
+        result.as_ref().is_ok_and(|status| status.success())
+            && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+        "isolated rustc lib-tree test {test_name} failed: {result:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+    );
+    true
+}
+
+#[cfg(test)]
 mod tests {
     use super::PinnedRustcLibTree;
     use crate::project::PinnedDirectory;
@@ -390,6 +473,9 @@ mod tests {
 
     #[test]
     fn persistent_lib_tree_content_substitution_fails_revalidation() {
+        if super::run_in_isolated_lib_tree_test_process() {
+            return;
+        }
         let tree = TestTree::new();
         let pinned = tree.pin();
         fs::write(tree.0.join("librustc_driver.so"), b"attacker").unwrap();
@@ -399,6 +485,9 @@ mod tests {
 
     #[test]
     fn transient_same_bytes_lib_tree_mutation_is_recorded() {
+        if super::run_in_isolated_lib_tree_test_process() {
+            return;
+        }
         let tree = TestTree::new();
         let pinned = tree.pin();
         let path = tree.0.join("nested/libstd.so");
@@ -415,6 +504,9 @@ mod tests {
 
     #[test]
     fn lib_tree_subdirectory_replacement_is_recorded_even_when_content_matches() {
+        if super::run_in_isolated_lib_tree_test_process() {
+            return;
+        }
         let tree = TestTree::new();
         let pinned = tree.pin();
         fs::rename(tree.0.join("nested"), tree.0.join("displaced")).unwrap();
@@ -426,5 +518,33 @@ mod tests {
                 .unwrap_err()
                 .contains("mutation journal")
         );
+    }
+
+    #[test]
+    fn clean_lib_tree_fixture_pins_and_revalidates() {
+        if super::run_in_isolated_lib_tree_test_process() {
+            return;
+        }
+        let tree = TestTree::new();
+        let pinned = tree.pin();
+        pinned.assert_unmutated().unwrap();
+        pinned.revalidate().unwrap();
+    }
+
+    #[test]
+    fn retained_writable_descriptor_close_is_recorded_without_content_changes() {
+        if super::run_in_isolated_lib_tree_test_process() {
+            return;
+        }
+        let tree = TestTree::new();
+        let path = tree.0.join("nested/libstd.so");
+        let original = fs::read(&path).unwrap();
+        let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let pinned = tree.pin();
+        pinned.revalidate().unwrap();
+        drop(writer);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let error = pinned.revalidate().unwrap_err();
+        assert!(error.contains("mutation journal") && error.contains("CLOSE_WRITE"));
     }
 }

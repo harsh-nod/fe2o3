@@ -196,7 +196,7 @@ impl<'s> ExtentDecisionsV1<'_, 's, '_, '_, '_, '_> {
         };
         let mut current = receiver;
         // Stable scalar provenance also follows casts. Metadata equality needs
-        // the stronger whole-value, identical-type copy/move chain below.
+        // an identical-type copy/move or exact whole-slice shared reborrow.
         for _ in 0..64 {
             self.meter.work(16)?;
             let index = current.index() as usize;
@@ -228,15 +228,28 @@ impl<'s> ExtentDecisionsV1<'_, 's, '_, '_, '_, '_> {
             let Some(value) = definition.value else {
                 return Ok(false);
             };
-            let SemanticRvalueKindV1::Use(operand) = value.kind() else {
-                return Ok(false);
+            let source = match value.kind() {
+                SemanticRvalueKindV1::Use(operand) => {
+                    let source = self.operand_local(operand)?;
+                    if operand.ty() != ty {
+                        return Ok(false);
+                    }
+                    source
+                }
+                SemanticRvalueKindV1::Borrow { .. } => {
+                    self.meter.work(16)?;
+                    bf16_nominal_source_algorithms_v1::exact_shared_slice_reborrow_source_v1(
+                        types, function, value,
+                    )
+                }
+                _ => None,
             };
-            let Some(source) = self.operand_local(operand)? else {
-                return Ok(false);
-            };
-            if value.result_type() != ty || operand.ty() != ty {
+            if value.result_type() != ty {
                 return Ok(false);
             }
+            let Some(source) = source else {
+                return Ok(false);
+            };
             current = source;
         }
         Ok(false)
@@ -462,7 +475,7 @@ fn call_frame_v1<T>(locals: usize) -> Result<usize, Error> {
         size_of::<Result<T, Error>>(),
     ])
 }
-const EXTENT_FRAME_ROWS_V1: usize = 22;
+const EXTENT_FRAME_ROWS_V1: usize = 23;
 fn extent_frame_roster_v1() -> Result<[usize; EXTENT_FRAME_ROWS_V1], Error> {
     Ok([
         // 0: persistent physical destination owner (not spare call-frame space).
@@ -697,6 +710,8 @@ fn extent_frame_roster_v1() -> Result<[usize; EXTENT_FRAME_ROWS_V1], Error> {
             bool,
             Option<&SemanticPlaceV1>,
         )>())?,
+        // 22: exact shared reborrow classification is a distinct nested call.
+        bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1(),
     ])
 }
 pub(super) fn extent_frame_v1() -> Result<usize, Error> {
@@ -731,7 +746,7 @@ pub(super) mod test_access {
             locals + 2 * size_of::<T>() + 2 * size_of::<Result<T, Error>>()
         }
         let rows = extent_frame_roster_v1().unwrap();
-        assert_eq!(rows.len(), 22);
+        assert_eq!(rows.len(), 23);
         assert_eq!(rows[0], size_of::<BoundsExtentArgumentsV1>());
         // Independently spell the live shared-call inputs and retained outputs:
         // even without the remaining branch locals, neither may use another
@@ -787,7 +802,26 @@ pub(super) mod test_access {
             sum = sum.checked_add(row).unwrap();
         }
         assert_eq!(extent_frame_v1().unwrap(), sum);
-        assert!(rows[1..22].iter().all(|n| *n > 0));
+        assert!(rows[1..23].iter().all(|n| *n > 0));
+        let reborrow_inputs = size_of::<(
+            &[SemanticTypeDeclV1],
+            &SemanticFunctionDeclV1,
+            &SemanticRvalueV1,
+            &SemanticPlaceV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1,
+            &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+            SemanticProjectionKindV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1,
+            &SemanticTypeShapeV1,
+            Option<SemanticLocalIdV1>,
+            Option<SemanticLocalIdV1>,
+        )>();
+        assert!(rows[22] >= reborrow_inputs);
+        assert_eq!(
+            rows[22],
+            bf16_nominal_source_algorithms_v1::shared_slice_reborrow_frame_v1()
+        );
     }
     pub(in crate::production_ranked_projection_v1) fn audit_projection_frame_rows() {
         let rows = extent_frame_roster_v1().unwrap();

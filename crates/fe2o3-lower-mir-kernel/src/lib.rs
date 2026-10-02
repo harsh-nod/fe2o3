@@ -13,6 +13,8 @@ mod production_correspondence_evidence_v5;
 mod production_execution_discharge_v29;
 mod production_execution_source_input_v29;
 mod production_formal_memory_evidence_v4;
+mod production_formal_memory_evidence_v5;
+mod production_formal_memory_execution_discharge_v1;
 mod production_formal_memory_v1;
 mod production_lineage_evidence_v3;
 mod production_masked_shift_query_v1;
@@ -29,6 +31,10 @@ pub use production_correspondence_evidence_v5::*;
 pub use production_execution_discharge_v29::*;
 pub use production_execution_source_input_v29::*;
 pub use production_formal_memory_evidence_v4::*;
+pub use production_formal_memory_evidence_v5::*;
+pub use production_formal_memory_execution_discharge_v1::{
+    ProductionFormalMemoryExecutionDischargeV1, ProductionFormalMemoryExecutionWitnessV1,
+};
 pub use production_formal_memory_v1::*;
 pub use production_lineage_evidence_v3::*;
 pub use production_masked_shift_query_v1::*;

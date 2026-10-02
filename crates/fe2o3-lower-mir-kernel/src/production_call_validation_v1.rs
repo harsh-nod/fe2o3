@@ -346,19 +346,16 @@ fn check_call_signature_v1(
                 return Err(mismatch());
             }
             with_canonical_call_scratch_v1(budget, |budget| {
-                prepay_typed_shape_v1(
+                prepay_helper_result_shape_v1(
                     semantic.types(),
                     source.abi().source_output_type(),
-                    0,
                     budget,
                 )?;
                 let shape = helper_result_components_v1(semantic.types(), source, function)?;
-                if shape.components.len() != target.signature.results.len() {
+                if shape.component_count() != target.signature.results.len() {
                     return Err(mismatch());
                 }
-                for ((_, _, expected, _, _), actual) in
-                    shape.components.iter().zip(&target.signature.results)
-                {
+                for (expected, actual) in shape.component_types().zip(&target.signature.results) {
                     if !call_types_equal_v1(expected, actual, budget)? {
                         return Err(mismatch());
                     }

@@ -590,3 +590,181 @@ fn same_type_slice_reborrow_phi_transports_one_paired_carrier_from_each_source()
         check_phi_carrier(mutability);
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+enum RawSourceLifetime {
+    Live,
+    Moved,
+    Dead,
+}
+
+fn raw_slice_source_owner(lifetime: RawSourceLifetime) -> ProductionSemanticMirOwnerV1 {
+    let original_owner = source_owner(Shape::SameBlock, SemanticMutabilityV1::Immutable);
+    let semantic = original_owner.semantic();
+    let original = &semantic.functions()[0];
+    let source_type = SemanticTypeIdV1::from_index(3);
+    let raw_type = SemanticTypeIdV1::from_index(6);
+    let mut types = semantic.types().to_vec();
+    assert_eq!(types.len(), raw_type.index() as usize);
+    types.push(
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(188)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(188)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::scalar_pair(
+                    SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                    ),
+                    SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                    ),
+                ),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    SemanticTypeIdV1::from_index(2),
+                    SemanticPointerKindV1::Raw,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::SliceLength,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
+                None,
+            ),
+        ),
+    );
+    let mut locals = original.locals().to_vec();
+    let old = &locals[3];
+    locals[3] = SemanticLocalDeclV1::new(old.identity(), raw_type, old.role(), old.source());
+    let mut statements = Vec::new();
+    match lifetime {
+        RawSourceLifetime::Live => {}
+        RawSourceLifetime::Moved => {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(183)),
+                source_type,
+                SemanticLocalRoleV1::Temporary,
+                SemanticSourceProvenanceV1::unavailable(),
+            ));
+            statements.push(assignment(
+                6,
+                source_type,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(local_place(1, source_type))),
+            ));
+        }
+        RawSourceLifetime::Dead => statements.push(SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)),
+        )),
+    }
+    statements.push(assignment(
+        3,
+        raw_type,
+        SemanticRvalueKindV1::AddressOf {
+            mutability: SemanticMutabilityV1::Immutable,
+            place: whole_slice_place(1),
+        },
+    ));
+    statements.push(assignment(
+        4,
+        SemanticTypeIdV1::from_index(5),
+        SemanticRvalueKindV1::Unary {
+            operation: SemanticUnaryOpV1::PointerMetadata,
+            operand: SemanticOperandV1::Copy(local_place(3, raw_type)),
+        },
+    ));
+    // Keep the existing indexed thin-reference consumer; the raw address must
+    // preserve its one paired data/length carrier rather than create storage.
+    statements.push(projections(SemanticBorrowKindV1::Shared).remove(1));
+    let function = SemanticFunctionDeclV1::new(
+        original.identity(),
+        original.role(),
+        original.item_definition_identity(),
+        original.monomorphization_identity(),
+        original.generic_type_arguments_identity(),
+        original.const_generic_arguments_identity(),
+        original.source(),
+        original.abi().clone(),
+        locals,
+        original.entry(),
+        vec![block(184, statements, SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap()
+    .with_kernel_entry(original.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new(
+        semantic.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+#[test]
+fn shared_slice_raw_address_preserves_read_only_data_length_and_correspondence() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        raw_slice_source_owner(RawSourceLifetime::Live),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    let function = &lowered.module().functions[0];
+    assert_eq!(
+        function.signature.parameters,
+        vec![
+            slice_type(SemanticMutabilityV1::Immutable),
+            Type::Scalar(ScalarType::U64)
+        ]
+    );
+    let body = function.body.as_ref().unwrap();
+    assert_eq!(body.blocks.len(), 1);
+    assert_zero_reborrow_span(&lowered, 0);
+    assert_projected_pair(
+        &body.blocks[0],
+        body.parameters[0],
+        body.parameters[1],
+        SemanticMutabilityV1::Immutable,
+    );
+    assert!(!lowered.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn shared_slice_raw_address_cannot_revive_moved_or_dead_source() {
+    for (lifetime, expected_event) in [(RawSourceLifetime::Moved, 3), (RawSourceLifetime::Dead, 1)]
+    {
+        assert!(
+            matches!(
+                ProductionSemanticSsaOwnerV1::try_new(
+                    raw_slice_source_owner(lifetime),
+                    ProductionSemanticSsaLimitsV1::default(),
+                ),
+                Err(ProductionSemanticSsaErrorV1::Planner {
+                    function,
+                    error: SsaPlannerErrorV1::UndefinedAtUse { block, event, variable },
+                }) if function.index() == 0 && block == SsaBlockIdV1::new(0)
+                    && event == expected_event && variable == SsaVariableIdV1::new(1)
+            ),
+            "{lifetime:?}"
+        );
+    }
+}

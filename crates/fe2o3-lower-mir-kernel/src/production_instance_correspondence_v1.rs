@@ -721,6 +721,10 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         Ok(())
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Retained ordinary no-roster comparison path")
+    )]
     fn splice(
         &mut self,
         call: &ProductionInstanceCallV1<'_>,
@@ -734,6 +738,10 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Retained ordinary no-roster comparison path")
+    )]
     fn splice_with_scoped_frame_v29(
         &mut self,
         call: &ProductionInstanceCallV1<'_>,
@@ -745,7 +753,16 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<SplicedCallInstanceV1> {
         self.check_live_ledger_v1(budget)?;
-        let result = self.splice_inner(call, caller, callee, entry, continuation, frame, budget);
+        let result = self.splice_inner(
+            call,
+            caller,
+            callee,
+            entry,
+            continuation,
+            frame,
+            None,
+            budget,
+        );
         self.failed = result.is_err();
         result
     }
@@ -759,6 +776,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         entry: BlockId,
         continuation: BlockId,
         frame: Option<&scoped_slot_relocation_v29::FramePermitV29<'_, '_>>,
+        sidecars: Option<&[PendingInstanceSidecarsV29]>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<SplicedCallInstanceV1> {
         let occurrence = call.occurrence();
@@ -853,24 +871,44 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             return Err(InstanceCorrespondenceErrorV1::SpanCoverage);
         }
         self.controls.reserve(2, budget, &mut self.storage)?;
-        let result = match frame {
-            Some(frame) => splice_production_call_instance_with_scoped_frame_v29(
+        let result = if let Some(sidecars) = sidecars {
+            let caller_parts = ScopedDeferredScalarViewV29::for_container(
+                self, sidecars, container, &caller, budget,
+            )
+            .map_err(instance_anchor_error_v1)?;
+            let callee_parts =
+                ScopedDeferredScalarViewV29::for_container(self, sidecars, child, &callee, budget)
+                    .map_err(instance_anchor_error_v1)?;
+            splice_production_call_instance_with_scoped_parts_v29(
                 caller,
                 callee,
                 site,
                 entry,
                 continuation,
-                Some(frame.for_child(self.plan, child)),
+                frame.map(|frame| frame.for_child(self.plan, child)),
+                Some((&caller_parts, &callee_parts)),
                 budget,
-            ),
-            None => splice_production_call_instance_v1(
-                caller,
-                callee,
-                site,
-                entry,
-                continuation,
-                budget,
-            ),
+            )
+        } else {
+            match frame {
+                Some(frame) => splice_production_call_instance_with_scoped_frame_v29(
+                    caller,
+                    callee,
+                    site,
+                    entry,
+                    continuation,
+                    Some(frame.for_child(self.plan, child)),
+                    budget,
+                ),
+                None => splice_production_call_instance_v1(
+                    caller,
+                    callee,
+                    site,
+                    entry,
+                    continuation,
+                    budget,
+                ),
+            }
         }?;
         let checked =
             self.check_new_edges(occurrence, child, anchor_index, child_seed, &result, budget);

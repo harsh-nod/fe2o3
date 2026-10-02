@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+export FE2O3_CI_EPHEMERAL_SUBTARGETS=0
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${TEST_SCRIPT_DIR}/../ci-local.sh"
+source "${TEST_SCRIPT_DIR}/ci-local-generic-core-phases.sh"
 
 TIMEOUT_TEST_ROOT="$(mktemp -d)"
 readonly TIMEOUT_TEST_ROOT
@@ -12,6 +14,55 @@ cleanup_timeout_test_root() {
   rm -rf -- "${TIMEOUT_TEST_ROOT}"
 }
 trap cleanup_timeout_test_root EXIT
+
+bash "${TEST_SCRIPT_DIR}/ci-phase-target.sh"
+(
+  export CARGO_TARGET_DIR="${TIMEOUT_TEST_ROOT}/phase-cargo"
+  mkdir -m 700 "${CARGO_TARGET_DIR}"
+  phase_log="${TIMEOUT_TEST_ROOT}/phase-default.log"
+  fail_step=''
+  observed_target=''
+  cargo() {
+    [[ "$*" == "clean --locked --offline --target-dir ${runtime_target}" ]] || return
+    rm -rf -- "${runtime_target}"
+  }
+  run_step() {
+    local step="$1" argument
+    shift
+    observed_target="${runtime_target}"
+    printf '%s' "${step}" >>"${phase_log}"
+    for argument in "$@"; do
+      printf ' %q' "${argument//"${runtime_target}"/"${RUNTIME_PURE_RUST_TARGET_DIR}"}" >>"${phase_log}"
+    done
+    printf '\n' >>"${phase_log}"
+    [[ "${step}" != "${fail_step}" ]] || return 37
+    if [[ "${step}" == runtime-pure-rust-cache-clean ]]; then
+      [[ -d "${runtime_target}" ]]
+      "$@"
+    fi
+  }
+  run_runtime_pure_rust_policy
+  [[ "$(wc -l <"${phase_log}")" == 21 ]]
+  [[ "${observed_target}" == "${RUNTIME_PURE_RUST_TARGET_DIR}" ]]
+  [[ -z "$(find "${CARGO_TARGET_DIR}" -mindepth 1 -print -quit)" ]]
+  export FE2O3_CI_EPHEMERAL_SUBTARGETS=1
+  phase_log="${TIMEOUT_TEST_ROOT}/phase-enabled.log"
+  run_runtime_pure_rust_policy
+  [[ "$(wc -l <"${phase_log}")" == 22 && ! -e "${observed_target}" ]]
+  cmp "${TIMEOUT_TEST_ROOT}/phase-default.log" <(head -n 21 "${phase_log}")
+  [[ "$(tail -n 1 "${phase_log}")" == 'runtime-pure-rust-cache-clean cargo clean --locked --offline --target-dir '* ]]
+  [[ "$(sed -n '21p' "${phase_log}")" == runtime-pure-rust-kfd-compute-aql-queue-elf* ]]
+  [[ "${CARGO_TARGET_DIR}" == "${TIMEOUT_TEST_ROOT}/phase-cargo" ]]
+  for fail_step in virtual-runtime-no-gpu-build runtime-pure-rust-kfd-compute-aql-queue-elf runtime-pure-rust-cache-clean; do
+    phase_log="${TIMEOUT_TEST_ROOT}/${fail_step}-failed.log"
+    status=0
+    run_runtime_pure_rust_policy || status=$?
+    [[ "${status}" == 37 && -d "${observed_target}" ]]
+    if [[ "${fail_step}" != runtime-pure-rust-cache-clean ]]; then
+      ! rg -q '^runtime-pure-rust-cache-clean' "${phase_log}"
+    fi
+  done
+)
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
@@ -665,10 +716,7 @@ assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'generic backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -722,10 +770,7 @@ assert_equals \
   'full workspace tests did not retain the descriptor-safe artifact-transaction bound'
 assert_step_count fe2o3-artifact-transaction-tests 1 \
   'full workspace tests did not run artifact-transaction tests exactly once'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'full workspace backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -746,6 +791,10 @@ assert_equals \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
+assert_step_count source-formal-execution-discharge 0 'integration shard ran a library source parent'
+assert_step_count source-slice-constant-index 0 'integration shard ran the slice-pattern library parent'
+assert_step_count rustc-codegen-extractor-bin-tests 0 'integration shard ran extractor binary tests'
+assert_step_count rustc-codegen-exporter-bin-tests 0 'integration shard ran exporter binary tests'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
     [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
@@ -819,6 +868,10 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
+  source-formal-execution-discharge \
+  source-slice-constant-index \
+  rustc-codegen-extractor-bin-tests \
+  rustc-codegen-exporter-bin-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -970,6 +1023,8 @@ for core_step in "${STEP_NAMES[@]}"; do
 done
 assert_no_codegen_test_driver
 
+assert_generic_core_phases
+
 STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
@@ -979,8 +1034,7 @@ assert_runtime_release_gate
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
-assert_step_count rustc-codegen-lib-tests 1 \
-  'serial generic gate did not run backend library tests exactly once'
+assert_codegen_lib_steps
 assert_step_count tutorial-cpu-reference-tests 1 \
   'serial generic gate did not run tutorial CPU runner protocols exactly once'
 assert_step_count cpu-reference-tiled-gemm-paired-default 1 \
@@ -1258,6 +1312,8 @@ for production_step in \
   rocm-production-simulation-bundle-v5-wave-debugger \
   rocm-production-simulation-bundle-v5-workgroup-cpu \
   rocm-production-row-affine-source-sim \
+  rocm-production-mixed-tile-host-oracle \
+  rocm-production-scoped-tile-public-cpu-cli \
   rocm-production-simulation-bundle-v6-nested-control-flow; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
@@ -1271,6 +1327,14 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_neutral_workgroup_reduce_driver_v1 ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact' \
   "$(step_command rocm-production-row-affine-source-sim)" \
   'ROCm compile omitted the exact row-affine source/SIM regression'
+assert_equals \
+  'env cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml --no-default-features --test mixed_tile -- --test-threads=1' \
+  "$(step_command rocm-production-mixed-tile-host-oracle)" \
+  'ROCm compile omitted the separate mixed-tile host oracle tests'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_scoped_tile_cpu_driver_v1 ordinary_mixed_tile_source_executes_public_cpu_cli_paths -- --ignored --exact --test-threads=1' \
+  "$(step_command rocm-production-scoped-tile-public-cpu-cli)" \
+  'ROCm compile omitted the exact public scoped-tile CPU CLI regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 write_only_witness_mappings_retain_exact_ranked_predicates -- --ignored --exact' \
   "$(step_command rocm-production-write-only-witness-mappings)" \

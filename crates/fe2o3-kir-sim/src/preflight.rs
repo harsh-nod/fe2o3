@@ -320,7 +320,7 @@ pub enum SimulationPreflightErrorV1 {
     PhysicalLdsExchangeAliasedArgumentsV22,
     PhysicalGlobalCopyAliasedArgumentsV21,
     InvalidLimits(SimulationLimitsErrorV1),
-    /// Typed storage is outside every existing simulation profile.
+    /// Module-owned storage tables require exact V18 simulation admission.
     StorageProfileNotAdmitted,
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
@@ -524,7 +524,8 @@ pub(crate) fn preflight(
     let limits = limits
         .validate()
         .map_err(SimulationPreflightErrorV1::InvalidLimits)?;
-    if !module.storage_layouts.is_empty() {
+    if !module.storage_layouts.is_empty() && wire_version != fe2o3_kernel_ir::KERNEL_IR_VERSION_V18
+    {
         return Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted);
     }
     let input_peak = conservative_preflight_input_bytes(admitted_resident_bytes, module, request)

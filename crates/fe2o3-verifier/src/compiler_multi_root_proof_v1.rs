@@ -24,6 +24,9 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
 };
+use fe2o3_lower_mir_kernel::{
+    InertCanonicalFormalMemoryAdmissionEvidenceV5, ProductionFormalMemoryEvidenceErrorV5,
+};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,
     SemanticFunctionIdV1, SemanticLocalRoleV1, SemanticMirDecodeErrorV1, SemanticMirLimitsV1,
@@ -114,6 +117,7 @@ pub struct ValidatedCompilerMultiRootProofRootV1 {
     middle_end: InertProductionMiddleEndEvidenceV5,
     semantic_u32_induction: InertCanonicalSemanticU32InductionEvidenceV1,
     formal_memory: InertFormalMemoryReceiptFormatV4,
+    execution_discharge: Option<InertCanonicalFormalMemoryAdmissionEvidenceV5>,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
 }
 
@@ -171,6 +175,14 @@ impl ValidatedCompilerMultiRootProofRootV1 {
     /// Returns the independently decoded formal-memory obligation receipt.
     pub const fn formal_memory(&self) -> &InertFormalMemoryReceiptFormatV4 {
         &self.formal_memory
+    }
+
+    /// Returns the full replayed execution-discharge envelope, when present.
+    /// The raw obligation receipt remains available without deleting any conflict rows.
+    pub const fn execution_discharge(
+        &self,
+    ) -> Option<&InertCanonicalFormalMemoryAdmissionEvidenceV5> {
+        self.execution_discharge.as_ref()
     }
 
     /// Returns the independently imported signed Verus execution evidence.
@@ -542,8 +554,13 @@ pub fn validate_compiler_multi_root_proof_inputs_v1(
             });
         }
 
-        let decoded_formal =
-            decode_formal_root_payload_v1(ordinal, roster_root.kernel_id(), formal_root.payload())?;
+        let (decoded_formal, execution_discharge) =
+            crate::compiler_proof_binding_v3::formal_execution_discharge::decode_multi_root_v1(
+                ordinal,
+                roster_root.kernel_id(),
+                formal_root.payload(),
+                &kernel_ir_module,
+            )?;
 
         let decoded_verus =
             CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(verus_root.payload())
@@ -574,6 +591,7 @@ pub fn validate_compiler_multi_root_proof_inputs_v1(
             middle_end: decoded_middle_end,
             semantic_u32_induction,
             formal_memory: decoded_formal,
+            execution_discharge,
             verus_execution: decoded_verus,
         });
     }
@@ -608,7 +626,7 @@ fn content_identity_matches(
     actual.sha256() == *sha256 && actual.byte_len() == byte_len
 }
 
-fn decode_formal_root_payload_v1(
+pub(crate) fn decode_formal_root_payload_v1(
     ordinal: usize,
     kernel_id: &str,
     payload: &[u8],
@@ -1687,6 +1705,10 @@ pub enum CompilerMultiRootProofValidationErrorV1 {
         root: usize,
         source: FormalMemoryReceiptErrorV1,
     },
+    FormalMemoryExecutionReplay {
+        root: usize,
+        source: ProductionFormalMemoryEvidenceErrorV5,
+    },
     VerusPayload {
         root: usize,
         source: ProductionMirPlironVerusExecutionEvidenceErrorV1,
@@ -1741,6 +1763,12 @@ impl fmt::Display for CompilerMultiRootProofValidationErrorV1 {
             Self::FormalMemoryPayload { root, source } => {
                 write!(formatter, "formal-memory payload {root} failed: {source}")
             }
+            Self::FormalMemoryExecutionReplay { root, source } => {
+                write!(
+                    formatter,
+                    "formal-memory execution replay {root} failed: {source}"
+                )
+            }
             Self::VerusPayload { root, source } => {
                 write!(formatter, "Verus payload {root} failed: {source}")
             }
@@ -1764,6 +1792,7 @@ impl Error for CompilerMultiRootProofValidationErrorV1 {
             Self::SemanticInductionAnalysis { source, .. } => Some(source),
             Self::SemanticInductionEvidence { source, .. } => Some(source),
             Self::FormalMemoryPayload { source, .. } => Some(source),
+            Self::FormalMemoryExecutionReplay { source, .. } => Some(source),
             Self::VerusPayload { source, .. } => Some(source),
             Self::ProofBindingIdentityMismatch { .. }
             | Self::RosterMismatch(_)

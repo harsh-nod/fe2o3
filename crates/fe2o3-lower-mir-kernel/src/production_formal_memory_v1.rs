@@ -171,6 +171,7 @@ pub struct ProductionFormalMemoryKernelV1 {
     obligations: FormalMemoryObligations,
     ranked_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
     compiler_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
+    execution_discharges: Box<[crate::ProductionFormalMemoryExecutionDischargeV1]>,
 }
 
 impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
@@ -183,8 +184,9 @@ impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
 }
 
 impl ProductionFormalMemoryOwnerV1 {
-    /// Consumes verified semantic KIR and requires complete, conflict-free
-    /// formal extraction for the production witness extent.
+    /// Consumes verified semantic KIR and requires every incomplete reason and
+    /// raw conflict to be discharged by exact owner-held checks for the
+    /// production witness extent. The raw obligations remain retained.
     pub fn try_admit(
         semantic_kir: ProductionSemanticKirOwnerV1,
     ) -> Result<Self, ProductionFormalMemoryErrorV1> {
@@ -322,6 +324,11 @@ impl ProductionFormalMemoryOwnerV1 {
 }
 
 impl ProductionFormalMemoryKernelV1 {
+    /// Exact singleton exclusions; raw conflict obligations remain unchanged.
+    pub fn execution_discharges(&self) -> &[crate::ProductionFormalMemoryExecutionDischargeV1] {
+        &self.execution_discharges
+    }
+
     /// Borrows this kernel's complete formal obligations.
     pub const fn obligations(&self) -> &FormalMemoryObligations {
         &self.obligations
@@ -606,18 +613,17 @@ fn derive_admitted_obligations_for_kernel(
             )
         }
     };
-    if !obligations.inter_invocation_conflicts().is_empty() {
-        return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
-            conflicts: obligations
-                .inter_invocation_conflicts()
-                .to_vec()
-                .into_boxed_slice(),
-        });
-    }
+    let execution_discharges =
+        crate::production_formal_memory_execution_discharge_v1::derive_execution_discharges_v1(
+            module,
+            kernel,
+            &obligations,
+        )?;
     Ok(ProductionFormalMemoryKernelV1 {
         obligations,
         ranked_discharged_reasons,
         compiler_discharged_reasons,
+        execution_discharges,
     })
 }
 

@@ -1,5 +1,5 @@
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticLocalIdV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticLocalIdV1, SemanticMirErrorV1, SemanticProjectionKindV1, SemanticProjectionV1,
 };
 
 fn geometry_projection(
@@ -137,6 +137,17 @@ fn table_geometry_enum_paths_require_original_variant_before_field() {
 
 #[test]
 fn table_geometry_rejects_foreign_owner_dynamic_and_invalid_fixed_paths() {
+    assert_eq!(
+        SemanticProjectionV1::new(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 0,
+                minimum_length: 4,
+                from_end: true,
+            },
+            PAIR,
+        ),
+        Err(SemanticMirErrorV1::InvalidProjectionShape),
+    );
     let owner = owner();
     let foreign = owner_with(types());
     let mut work = work();
@@ -161,11 +172,6 @@ fn table_geometry_rejects_foreign_owner_dynamic_and_invalid_fixed_paths() {
             offset: 4,
             minimum_length: 5,
             from_end: false,
-        },
-        SemanticProjectionKindV1::ConstantIndex {
-            offset: 0,
-            minimum_length: 4,
-            from_end: true,
         },
         SemanticProjectionKindV1::ConstantIndex {
             offset: 1,

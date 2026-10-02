@@ -1,4 +1,7 @@
 use super::*;
+#[path = "production_scoped_tile_schedule_v29_tests.rs"]
+mod tile_schedule_tests;
+
 mod owner_parameter_tests {
     include!("production_execution_owner_parameter_v29_tests.rs");
 }
@@ -339,6 +342,9 @@ enum ScopedFixture {
     Plain,
     Assertion,
     Repeated,
+    TilePartsRepeated,
+    TilePartsRepeatedSlots,
+    TilePartsEntrySlots,
     RepeatedSlots,
     RootAssertionSlot,
     Initialization(InitializationFixtureV29),
@@ -392,6 +398,9 @@ fn run_lifecycle(
     let repeated = matches!(
         fixture,
         ScopedFixture::Repeated
+            | ScopedFixture::TilePartsRepeated
+            | ScopedFixture::TilePartsRepeatedSlots
+            | ScopedFixture::TilePartsEntrySlots
             | ScopedFixture::RepeatedSlots
             | ScopedFixture::RootAssertionSlot
             | ScopedFixture::Initialization(_)
@@ -417,6 +426,18 @@ fn run_lifecycle(
             ScopedFixture::Repeated => {
                 assert!(!branches);
                 scoped_root_tests::fixtures::repeated_owner()
+            }
+            ScopedFixture::TilePartsRepeated => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_repeated_owner()
+            }
+            ScopedFixture::TilePartsRepeatedSlots => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_repeated_slot_owner()
+            }
+            ScopedFixture::TilePartsEntrySlots => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::tile_parts_entry_slot_owner()
             }
             ScopedFixture::RepeatedSlots => {
                 assert!(!branches);
@@ -526,6 +547,14 @@ fn run_lifecycle(
         }
         if matches!(fixture, ScopedFixture::CallDestinations { .. }) {
             classes.push(ProductionScopeCallableCandidateV29::Ordinary);
+        }
+        if matches!(
+            fixture,
+            ScopedFixture::TilePartsRepeated
+                | ScopedFixture::TilePartsRepeatedSlots
+                | ScopedFixture::TilePartsEntrySlots
+        ) {
+            classes.extend([ProductionScopeCallableCandidateV29::Ordinary; 3]);
         }
         let SemanticTerminatorKindV1::Call(derive) =
             semantic.functions()[1].blocks()[0].terminator().kind()

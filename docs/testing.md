@@ -36,6 +36,79 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+`generic-core` runs the same core without the separately required codegen
+integration shards. For resource-constrained hosts, its complete ordered phase
+roster and a single partial phase are available through:
+
+```text
+scripts/ci-local.sh generic-core-phases
+scripts/ci-local.sh generic-core-phase <id>
+```
+
+The phases are `policy`, `build`, `source-simulation`, `cpu`, `codegen-lib`, and
+`auxiliary`. The default `generic-core` command still executes all six in that
+order, with unchanged commands and per-step timeouts. A successful individual
+phase is not a generic-core pass. A split qualification must retain successful
+results for every phase, in order, at the same source, toolchain and
+configuration; codegen integration shards remain separately required. Use a
+distinct retained `CI_LOG_DIR` for each independent invocation.
+
+Fresh `build` invocations recheck standalone locks, and fresh `cpu` invocations
+bootstrap and authenticate the production driver. The CPU phase keeps its
+initial package partition, all selected tests and final source-projection
+rescans together. Splitting does not change package selection, test filters or
+profiles, and does not establish that a cold phase fits a particular disk cap.
+
+No new phase command performs cache cleanup. A host supervisor may reclaim
+owned reproducible Cargo caches only between complete invocations, after it
+has reaped the entire owned process tree and checked that no users remain.
+Preserve logs, source and raw evidence outside the cache being retired. A shell
+exit alone is not evidence that descendants have stopped. Bound each whole
+phase separately as well as retaining the existing per-step deadlines; do not
+apply the per-step timeout as a deadline for an entire multi-step phase. The
+existing opt-in runtime/export subtarget lifecycle remains unchanged.
+
+The required `source-simulation` phase also selects ten ignored production
+source-compiler controls explicitly: checked unsigned addition, core branch
+hints, and shared-slice `get`, with genuine-source and source-safety refusal
+parents for each family, plus ordinary scalar enum payload transport and typed
+indirect constants, scalar-data enum helper returns, and their pointer/capability
+return refusals. The enum
+parent checks a non-Option enum with an immutable entry scalar and an absent
+variant on both AMD targets at opt0/opt3, inspects the actual exported helper's
+purity, and compares CPU results with an independent flag/value oracle.
+The typed-constant parent covers nested tuple/array padding, noncontiguous signed
+enum discriminants, and scalar niches with absent and active payloads on both
+targets at opt0/opt3, comparing all output lanes to an independent scalar oracle.
+The helper-return parent requires joined constructors and copied results with
+distinct scalar payload variants to compile and match an independent CPU oracle.
+The separate refusal parent checks the unsupported pointer/capability result
+boundary; it does not replace the required shared-slice `get` positive.
+The `codegen-lib` phase separately selects an exact slice-pattern construction
+parent. It checks prefix, suffix, and combined patterns through genuine AMD
+rustc callbacks on gfx942/gfx950 at opt0/opt3, preserving original projection
+fields, element types, local mappings, and source coordinates. It shares the
+checked-output tests' pinned dependency builder. This establishes semantic body
+construction, not dynamic bounds proof, borrowed-result lowering, or GPU execution.
+The phase also runs the `fe2o3-rustc-extract` and `fe2o3-export-sim` binary
+unit suites in separate bounded-debug Cargo invocations. These cover actual
+mode selection and diagnostic controls without combining backend library,
+binary, and integration artifacts in an `--all-targets` build.
+Optional failure-only MIR replays are diagnostic observations, not proof that
+the original source export succeeded or that a source shape survived optimization.
+These use the existing pinned nightly `rust-src`
+fixture and locked offline dependency graph, and run serially with
+`--ignored --exact --test-threads=1`. Cargo/libtest JSON must prove exactly one
+named test passed; an empty selection is a failure. Raw JSON receipts remain in
+private directories under external `TMPDIR` (or `/tmp` for a source-internal
+temporary directory), including on failure, and are mirrored into the existing
+CI step log. Each retained and logged JSON prefix is capped at 10 MiB;
+overflow fails the step without restricting compiler artifacts. They export real
+source and simulate on the CPU or check rejection diagnostics; they do not
+require ROCm or a GPU and do not establish native qualification. Default codegen
+shards still run separately;
+their non-ignored selection does not replace these required controls.
+
 The target-independent generic SSA planner has a focused executable lit-style
 corpus:
 

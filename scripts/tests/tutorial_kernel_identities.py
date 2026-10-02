@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import runpy
 import unittest
 from unittest import mock
 
@@ -1193,5 +1194,7 @@ class FixtureDisplayTests(unittest.TestCase):
                 self.validate(False)
 
 
+load_tests = runpy.run_path(str(Path(__file__).with_name("_tutorial_kernel_function_cache_tests.py")))["make_loader"](FixtureDisplayTests, IDENTITIES)
+load_tests = runpy.run_path(str(Path(__file__).with_name("_tutorial_kernel_item_cache_tests.py")))["make_loader"](FixtureDisplayTests, IDENTITIES, load_tests)
 if __name__ == "__main__":
     unittest.main()

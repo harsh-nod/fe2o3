@@ -2,6 +2,7 @@
 
 set -Eeuo pipefail
 umask 077
+export FE2O3_CI_EPHEMERAL_SUBTARGETS=0
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -10,7 +11,7 @@ readonly REPO_ROOT
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-quickstart-test.XXXXXXXX")"
 readonly FIXTURE
 trap 'rm -rf -- "${FIXTURE}"' EXIT
-mkdir "${FIXTURE}/bin" "${FIXTURE}/tmp"
+mkdir "${FIXTURE}/bin" "${FIXTURE}/tmp" "${FIXTURE}/target"
 LOG="${FIXTURE}/cargo.log"
 readonly LOG
 
@@ -31,6 +32,8 @@ printf '\n' >>"${QUICKSTART_TEST_LOG}"
 
 output=
 request=
+phase_target=
+bundle_input=
 simulator=0
 doctor=0
 for ((index = 1; index <= $#; index++)); do
@@ -41,16 +44,35 @@ for ((index = 1; index <= $#; index++)); do
   elif [[ "${argument}" == --request ]]; then
     next=$((index + 1))
     request="${!next}"
+  elif [[ "${argument}" == --target-dir ]]; then
+    next=$((index + 1))
+    phase_target="${!next}"
+  elif [[ "${argument}" == --bundle || "${argument}" == --bundle-v5 ]]; then
+    next=$((index + 1))
+    bundle_input="${!next}"
   elif [[ "${argument}" == fe2o3-kir-sim ]]; then
     simulator=1
   elif [[ "${argument}" == cargo-fe2o3 ]]; then
     doctor=1
   fi
 done
+if [[ "$1" == clean ]]; then
+  [[ "$*" == "clean --locked --offline --target-dir ${phase_target}" ]]
+  [[ "${phase_target}" == "${CARGO_TARGET_DIR}/.fe2o3-ci-phase-export."* ]]
+  [[ "${QUICKSTART_TEST_MODE:-}" != clean-fail ]] || exit 37
+  rm -rf -- "${phase_target}"
+  exit 0
+fi
 if [[ -n "${output}" ]]; then
+  if [[ "${FE2O3_CI_EPHEMERAL_SUBTARGETS:-0}" == 1 ]]; then
+    [[ -d "${phase_target}" ]]
+    printf 'cache\n' >"${phase_target}/artifact"
+  fi
+  [[ "${QUICKSTART_TEST_MODE:-}" != export-fail ]] || exit 31
   printf 'mock-bundle' >"${output}"
 fi
 if ((simulator)); then
+  [[ -z "${bundle_input}" || -f "${bundle_input}" ]]
   [[ -z "${output}" ]] || {
     printf '%s\n' 'mock cargo: simulator must use stdout, not exporter --output' >&2
     exit 93
@@ -107,6 +129,7 @@ chmod 700 "${FIXTURE}/bin/cargo"
 run_quickstart() {
   env \
     CARGO="${FIXTURE}/bin/cargo" \
+    CARGO_TARGET_DIR="${FIXTURE}/target" \
     QUICKSTART_TEST_LOG="${LOG}" \
     QUICKSTART_TEST_MODE="${QUICKSTART_TEST_MODE:-valid}" \
     TMPDIR="${FIXTURE}/tmp" \
@@ -281,5 +304,71 @@ set -e
 [[ "${status}" -eq 2 ]]
 grep -F -- '--bundle-version must be exactly 1 or 5' \
   "${FIXTURE}/invalid-version.stderr" >/dev/null
+
+: >"${LOG}"
+checked_fill --output "${FIXTURE}/default-phase.bundle" \
+  >"${FIXTURE}/default-phase.stdout" 2>"${FIXTURE}/default-phase.stderr"
+cp "${LOG}" "${FIXTURE}/default-phase.log"
+[[ "$(wc -l <"${LOG}")" == 3 ]]
+! grep -q '^cargo clean ' "${LOG}"
+grep -F -- "--target-dir ${FIXTURE}/target/fe2o3-sim-export" "${LOG}" >/dev/null
+mkdir "${FIXTURE}/target/fe2o3-sim-export" "${FIXTURE}/target/runtime-pure-rust-policy"
+printf 'sentinel\n' >"${FIXTURE}/target/fe2o3-sim-export/sentinel"
+: >"${LOG}"
+FE2O3_CI_EPHEMERAL_SUBTARGETS=1 checked_fill --output "${FIXTURE}/ephemeral.bundle" \
+  >"${FIXTURE}/ephemeral.stdout" 2>"${FIXTURE}/ephemeral.stderr"
+cmp "${FIXTURE}/default-phase.stdout" "${FIXTURE}/ephemeral.stdout"
+[[ "$(cat "${FIXTURE}/ephemeral.bundle")" == mock-bundle ]]
+[[ "$(cat "${FIXTURE}/target/fe2o3-sim-export/sentinel")" == sentinel ]]
+python3 -I -B - "${FIXTURE}/default-phase.log" "${LOG}" "${FIXTURE}/target" <<'PY'
+import pathlib
+import shlex
+import sys
+
+before, after, root = sys.argv[1:]
+old = [shlex.split(line) for line in pathlib.Path(before).read_text().splitlines()]
+new = [shlex.split(line) for line in pathlib.Path(after).read_text().splitlines()]
+assert len(old) == 3 and len(new) == 4
+assert new[2][:5] == ["cargo", "clean", "--locked", "--offline", "--target-dir"]
+target = new[2][5]
+assert target.startswith(root + "/.fe2o3-ci-phase-export.")
+assert not pathlib.Path(target).exists()
+assert new[1][new[1].index("--target-dir") + 1] == target
+for commands in [old, [new[0], new[1], new[3]]]:
+    for command in commands:
+        for flag in ["--target-dir", "--output", "--bundle"]:
+            if flag in command:
+                command[command.index(flag) + 1] = "<path>"
+assert old == [new[0], new[1], new[3]]
+PY
+for mode in export-fail clean-fail; do
+  : >"${LOG}"
+  status=0
+  FE2O3_CI_EPHEMERAL_SUBTARGETS=1 QUICKSTART_TEST_MODE="${mode}" \
+    checked_fill --output "${FIXTURE}/${mode}.bundle" \
+      >"${FIXTURE}/${mode}.stdout" 2>"${FIXTURE}/${mode}.stderr" || status=$?
+  expected=31
+  [[ "${mode}" != clean-fail ]] || expected=37
+  [[ "${status}" == "${expected}" && ! -s "${FIXTURE}/${mode}.stdout" ]]
+  ! grep -q -- '--bin fe2o3-kir-sim --' "${LOG}"
+  if [[ "${mode}" == export-fail ]]; then
+    ! grep -q '^cargo clean ' "${LOG}"
+  else
+    [[ "$(cat "${FIXTURE}/${mode}.bundle")" == mock-bundle ]]
+  fi
+  python3 -I -B - "${LOG}" <<'PY'
+import pathlib
+import shlex
+import sys
+export = shlex.split(pathlib.Path(sys.argv[1]).read_text().splitlines()[1])
+target = pathlib.Path(export[export.index("--target-dir") + 1])
+assert (target / "artifact").read_text() == "cache\n"
+PY
+done
+: >"${LOG}"
+status=0
+FE2O3_CI_EPHEMERAL_SUBTARGETS=invalid run_quickstart no-gpu \
+  >"${FIXTURE}/invalid-phase.stdout" 2>"${FIXTURE}/invalid-phase.stderr" || status=$?
+[[ "${status}" == 2 && ! -s "${LOG}" && ! -s "${FIXTURE}/invalid-phase.stdout" ]]
 
 printf '%s\n' 'quickstart shell tests passed'

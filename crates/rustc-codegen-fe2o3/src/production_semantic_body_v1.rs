@@ -28,6 +28,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1,
     SemanticUncheckedBinaryRvalueV1, SemanticUnwindActionV1, SemanticVolatilityV1,
 };
+use rustc_abi::Size;
 use rustc_hir::Mutability;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
@@ -50,6 +51,7 @@ use crate::production_safe_core_shift_v1::NormalizedCallV1;
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 mod function_commitments_v29;
+mod indirect_constant_v1;
 pub(crate) mod receiver_materialization_v1;
 pub(crate) mod receiver_reborrow_v1;
 pub(crate) use function_commitments_v29::ExpectedFunctionCommitmentV29;
@@ -69,6 +71,10 @@ mod construction_work_tests;
 #[cfg(test)]
 #[path = "production_semantic_body_v1/receiver_construction_tests.rs"]
 mod receiver_construction_tests;
+
+#[cfg(test)]
+#[path = "production_semantic_body_v1/slice_constant_index_source_v1_tests.rs"]
+mod slice_constant_index_source_v1_tests;
 
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
 
@@ -2708,9 +2714,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     min_length,
                     from_end,
                 } => {
-                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..) | TyKind::Slice(..)) {
                         return Err(unsupported(
-                            "ConstantIndex projection on a non-array place",
+                            "ConstantIndex projection on a non-array/slice place",
                             block,
                             statement,
                         ));
@@ -2839,22 +2845,20 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     }
                 }
                 let raw = allocation.inspect_with_uninit_and_ptr_outside_interpreter(start..end);
-                self.owner
-                    .charge(SemanticMirResourceV1::ValidationWork, raw.len())?;
-                let mut bytes = try_vec_v1(size, SemanticMirResourceV1::ConstantBytes)?;
-                for (index, byte) in raw.iter().copied().enumerate() {
-                    if !allocation
-                        .init_mask()
-                        .get(rustc_abi::Size::from_bytes(start + index))
-                    {
-                        return Err(unsupported(
-                            "indirect constant with uninitialized bytes",
-                            block,
-                            statement,
-                        ));
-                    }
-                    bytes.push(byte);
-                }
+                let initialized =
+                    |index| allocation.init_mask().get(Size::from_bytes(start + index));
+                let bytes = indirect_constant_v1::canonicalize(
+                    self.tcx,
+                    layout,
+                    raw,
+                    initialized,
+                    |work| {
+                        self.owner
+                            .charge(SemanticMirResourceV1::ValidationWork, work)
+                    },
+                    block,
+                    statement,
+                )?;
                 Ok(SemanticConstantValueV1::Bytes(
                     SemanticConstantBytesV1::new(bytes)?,
                 ))

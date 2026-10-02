@@ -1138,7 +1138,8 @@ fn checked_operand_limits_accumulate_across_statements_and_functions() {
 
 #[test]
 fn checked_validation_work_has_an_exact_admission_boundary() {
-    const EXACT_CHECKED_VALIDATION_WORK: u64 = 159;
+    // Includes the single post-closure function visit for unchecked proofs.
+    const EXACT_CHECKED_VALIDATION_WORK: u64 = 160;
     let exact = SemanticMirLimitsV1::default()
         .with_limit(
             SemanticMirResourceV1::ValidationWork,

@@ -7,6 +7,8 @@ use crate::{
 };
 use std::mem::size_of;
 
+#[path = "execution_condition_v1.rs"]
+pub(super) mod execution_condition_v1;
 #[path = "runtime_slice_read_v1.rs"]
 mod runtime_slice_read_v1;
 
@@ -206,10 +208,18 @@ impl GuardedControlV1 {
         function: &Function,
         flow: &IndexedControlFlow,
     ) -> Result<Option<Self>, ResourceError> {
+        Self::collect_with_ledger(function, flow, GuardLedger::new(flow.work().total)?, false)
+    }
+
+    fn collect_with_ledger(
+        function: &Function,
+        flow: &IndexedControlFlow,
+        mut ledger: GuardLedger,
+        force: bool,
+    ) -> Result<Option<Self>, ResourceError> {
         let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
-        let mut ledger = GuardLedger::new(flow.work().total)?;
         ledger.charge(32)?;
-        let mut selected = false;
+        let mut selected = force;
         for block in &body.blocks {
             ledger.charge(2)?;
             for operation in &block.operations {
@@ -360,6 +370,28 @@ impl<'module> GuardedAnalysisV1<'module> {
         result
             .ledger
             .sort(&mut result.parameters, 1, |a, b| a.value.cmp(&b.value))?;
+        result.collect_truths(function, entry)?;
+        result.collect_runtime_reads(definitions, function)?;
+        result
+            .ledger
+            .reserve(&mut result.recipes, result.definitions.len())?;
+        for index in 0..result.definitions.len() {
+            result.ledger.charge(2)?;
+            let row = result.definitions[index];
+            if !matches!(row.operation.kind, OperationKind::GetElementPointer { .. }) {
+                continue;
+            }
+            if let Some(recipe) = result.recipe(row.value, row.operation)? {
+                result.recipes.push(recipe);
+            }
+        }
+        // Definition order is ValueId order; filtering preserves the recipe index order.
+        Ok(result)
+    }
+
+    fn collect_truths(&mut self, function: &Function, entry: BlockId) -> Result<(), ResourceError> {
+        let result = self;
+        let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
         result
             .ledger
             .reserve(&mut result.truths, body.blocks.len())?;
@@ -457,22 +489,7 @@ impl<'module> GuardedAnalysisV1<'module> {
                 result.truths[i].ambiguous = true;
             }
         }
-        result.collect_runtime_reads(definitions, function)?;
-        result
-            .ledger
-            .reserve(&mut result.recipes, result.definitions.len())?;
-        for index in 0..result.definitions.len() {
-            result.ledger.charge(2)?;
-            let row = result.definitions[index];
-            if !matches!(row.operation.kind, OperationKind::GetElementPointer { .. }) {
-                continue;
-            }
-            if let Some(recipe) = result.recipe(row.value, row.operation)? {
-                result.recipes.push(recipe);
-            }
-        }
-        // Definition order is ValueId order; filtering preserves the recipe index order.
-        Ok(result)
+        Ok(())
     }
 
     fn definition(&mut self, value: ValueId) -> Result<Option<&'module Operation>, ResourceError> {

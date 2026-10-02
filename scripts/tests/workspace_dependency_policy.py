@@ -198,6 +198,98 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
         self.assertEqual([{"from": "fe2o3-verifier", "to": "fe2o3-kernel-opt",
                            "kinds": ["normal", "dev"]}], edges)
 
+    def test_verifier_helper_exceptions_are_exact_and_normal_only(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        condition = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+        helpers = ("fe2o3-protected-service-spawn", "fe2o3-protected-static-executable")
+        cases = [("fe2o3-verifier", target, kind, kind is None)
+                 for target in helpers for kind in (None, "dev", "build")]
+        cases += [(source, target, kind, False)
+                  for source in ("fe2o3-service-verus", "fe2o3-mir-model",
+                                 "fe2o3-lower-mir-kernel")
+                  for target in helpers for kind in (None, "dev", "build")]
+        cases += [("fe2o3-verifier", target, kind, False)
+                  for target in ("fe2o3-runtime", "fe2o3-host", "fe2o3-kfd",
+                                 "fe2o3-hsa-runtime")
+                  for kind in (None, "dev", "build")]
+        layers = {name: row["name"] for row in reviewed["layers"]
+                  for name in row["packages"]}
+        for helper in helpers:
+            self.assertEqual("host-runtime", layers[helper])
+        for source, target, kind, allowed in cases:
+            with self.subTest(source=source, target=target, kind=kind):
+                edge = dependency(target, f"crates/{target}", kind)
+                edge["target"] = condition
+                packages = [package(source, f"crates/{source}", [edge]),
+                    package(target, f"crates/{target}")]
+                violations, stats = CHECKER.check_policy(metadata(packages), reviewed)
+                expected = [] if allowed else [
+                    "forbidden dependency: "
+                    f"{source} [{layers[source]}] -> {target} [host-runtime] "
+                    f"({kind or 'normal'}, target {condition}; crates/{source}/Cargo.toml)"
+                ]
+                self.assertEqual(expected, violations)
+                self.assertEqual(1, stats["internal_dependencies"])
+
+    def test_verifier_helper_edges_match_only_the_linux_x86_64_manifest(self) -> None:
+        root = CHECKER_PATH.parents[1]
+        manifest = tomllib.loads(
+            (root / "crates/fe2o3-verifier/Cargo.toml").read_text(encoding="utf-8")
+        )
+        helpers = ("fe2o3-protected-service-spawn", "fe2o3-protected-static-executable")
+        helper_target = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+        tables = [(None, manifest), *manifest.get("target", {}).items()]
+        for helper in helpers:
+            declared = [(target, kind, table[kind][helper])
+                        for target, table in tables
+                        for kind in ("dependencies", "dev-dependencies", "build-dependencies")
+                        if helper in table.get(kind, {})]
+            self.assertEqual(
+                [(helper_target, "dependencies", {"workspace": True})], declared
+            )
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        host_packages = next(row["packages"] for row in reviewed["layers"]
+                             if row["name"] == "host-runtime")
+        edges = [row for row in reviewed["allowed_dependency_edges"]
+                 if row["from"] == "fe2o3-verifier" and row["to"] in host_packages]
+        self.assertEqual(
+            [{"from": "fe2o3-verifier", "to": helper, "kinds": ["normal"],
+              "target": helper_target}
+             for helper in helpers], edges
+        )
+
+    def test_static_executable_format_is_a_pure_contract_without_host_edges(self) -> None:
+        root = CHECKER_PATH.parents[1]
+        name = "fe2o3-static-executable-format"
+        manifest = tomllib.loads(
+            (root / f"crates/{name}/Cargo.toml").read_text(encoding="utf-8")
+        )
+        self.assertEqual({"sha2": {"workspace": True}}, manifest["dependencies"])
+        for table in ("dev-dependencies", "build-dependencies", "target"):
+            self.assertEqual({}, manifest.get(table, {}))
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        self.assertEqual(["canonical-contracts"], [row["name"]
+                         for row in reviewed["layers"] if name in row["packages"]])
+        consumers = ("fe2o3-verifier", "fe2o3-protected-static-executable")
+        for consumer in consumers:
+            packages = [package(consumer, f"crates/{consumer}", [
+                dependency(name, f"crates/{name}")]), package(name, f"crates/{name}")]
+            violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+            self.assertEqual([], violations)
+        for target in ("fe2o3-runtime", "fe2o3-protected-service-spawn",
+                       "fe2o3-protected-static-executable"):
+            for kind in (None, "dev", "build"):
+                with self.subTest(target=target, kind=kind):
+                    packages = [package(name, f"crates/{name}", [
+                        dependency(target, f"crates/{target}", kind)]),
+                        package(target, f"crates/{target}")]
+                    violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+                    self.assertEqual([
+                        "forbidden dependency: "
+                        f"{name} [canonical-contracts] -> {target} [host-runtime] "
+                        f"({kind or 'normal'}; crates/{name}/Cargo.toml)"
+                    ], violations)
+
     def test_rejects_exception_that_does_not_cross_a_forbidden_direction(self) -> None:
         invalid = policy()
         invalid["allowed_dependency_edges"] = [

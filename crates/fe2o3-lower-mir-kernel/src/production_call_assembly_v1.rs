@@ -59,10 +59,9 @@ fn with_checked_call_site_v1<'w, R>(
     let callee = site.callee.semantic_function;
     let result_function = &semantic.functions()[callee.index() as usize];
     budget.charge_work(result_function.locals().len())?;
-    prepay_typed_shape_v1(
+    prepay_helper_result_shape_v1(
         semantic.types(),
         result_function.abi().source_output_type(),
-        0,
         budget,
     )?;
     let result_shape = helper_result_components_v1(semantic.types(), result_function, callee)?;

@@ -24,6 +24,10 @@ mod relocation_tests {
     include!("production_scoped_slot_relocation_v29_tests.rs");
 }
 
+mod tile_call_index_tests {
+    include!("production_execution_tile_call_index_v29_tests.rs");
+}
+
 const STOP: &str = "test stopped after scoped source-slot validation";
 thread_local! {
     static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -46,6 +50,16 @@ fn check_receipt(
     emitted: &[Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
+) {
+    check_receipt_with_scalar_local(instances, emitted, receipt, budget, 2);
+}
+
+fn check_receipt_with_scalar_local(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    receipt: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+    scalar_local: u32,
 ) {
     OBSERVED.set(OBSERVED.get() + 1);
     assert!(receipt.ledger == budget.work_ledger_identity_v1());
@@ -158,7 +172,7 @@ fn check_receipt(
                         assert_eq!(*count, None);
                         assert_eq!(operation_index, 0);
                         assert_eq!(source.function(), SemanticFunctionIdV1::from_index(3));
-                        assert_eq!(row.origin.local, 2);
+                        assert_eq!(row.origin.local, scalar_local);
                     }
                 }
             }

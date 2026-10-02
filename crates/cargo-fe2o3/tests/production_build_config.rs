@@ -202,7 +202,7 @@ fn wrapper_authenticates_before_configuration_io_and_attempt_creation() {
         "CapabilityBindingV3::from_environment_for_client",
         "authenticate_pinned_rustc(&pinned_rustc",
         "validate_rustc_lib_tree_descriptor(capability_binding)?",
-        "receive_validated_compiler_capabilities(capability_binding)?",
+        "receive_validated_compiler_capabilities(capability_binding, profile_family)?",
         "PreparedProductionBuildConfig::from_environment()",
         "validate_expected_build_config_identity(",
         "let source_isa_selection =",

@@ -32,6 +32,32 @@ mod projection_capacity_tests;
 #[path = "production_pending_context_observer_v29.rs"]
 mod pending_observer_v29;
 
+#[path = "production_scoped_tile_context_observer_v29.rs"]
+mod scoped_tile_observer_v29;
+
+fn pending_source_owner_v29(
+    entries: &RetainedContextEntriesV29,
+    ssa: ProductionSemanticSsaOwnerV1,
+    launch: ProductionSourceLaunchRosterV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29, ProductionPipelineError>
+{
+    let source = execution_source_v29(entries, &ssa, budget)?.ok_or(
+        ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::RootCensus),
+    )?;
+    with_projected_execution_source_v29(&source, budget, |input, budget| {
+        Ok(fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29::try_materialize_with_budget(
+            ssa,
+            launch,
+            input,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            budget,
+        ))
+    })
+    .map_err(ProductionPipelineError::ContextHandoff)?
+    .map_err(ProductionPipelineError::PendingScopedSource)
+}
+
 fn project_boundary(source: &CallBoundaryV29) -> ProductionContextCallBoundaryV29 {
     let (block, statement_count) = source.location();
     let (destination, destination_type) = source.destination();
