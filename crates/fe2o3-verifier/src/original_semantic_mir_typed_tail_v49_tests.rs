@@ -321,6 +321,7 @@ fn original_source_typed_tail_forwards_genuine_same_value_branch_stores() {
         assert!(text.contains("forwarding_store_fact_v46"));
         assert!(text.contains("proof fn typed_final_native_source_trace_"));
         assert!(text.contains("typed_source_observation_transport_"));
+        assert_forwarding_reuses_exact_parent_byte_functions_v55(text);
         assert!(!text.contains("assume("));
         complete = true;
     });
@@ -339,6 +340,7 @@ fn original_source_typed_tail_preserves_exact_cut_entry_and_shared_middle_state(
         assert_eq!(text.matches("mod typed_prefix_v49 {").count(), 1);
         assert_eq!(text.matches("struct TypedSourceBoundaryV49 {").count(), 1);
         assert_eq!(text.matches("mod forwarding_v46 {").count(), 1);
+        assert_forwarding_reuses_exact_parent_byte_functions_v55(text);
         for root in 0..2 {
             assert!(text.contains(&format!("proof fn typed_source_original_block_{root}_v49")));
             assert!(text.contains(&format!(
@@ -380,6 +382,41 @@ fn original_source_typed_tail_preserves_exact_cut_entry_and_shared_middle_state(
         result.0
     );
     result.0.unwrap();
+}
+
+fn assert_forwarding_reuses_exact_parent_byte_functions_v55(text: &str) {
+    let (_, forwarding) = text.split_once("mod forwarding_v46 {").unwrap();
+    let mut aliases = 0usize;
+    for line in forwarding.lines() {
+        let Some((source, target)) = line.trim().split_once(" as byte_operation_") else {
+            continue;
+        };
+        if !source.starts_with("byte_operation_") {
+            continue;
+        }
+        let target = format!("byte_operation_{}", target.strip_suffix(',').unwrap());
+        assert_eq!(text.matches(&format!("open spec fn {source}(")).count(), 1);
+        assert!(!forwarding.contains(&format!("open spec fn {target}(")));
+        assert!(forwarding.contains(&format!(
+            "ensures super::{source}(s, little_endian) == {target}(s, little_endian),"
+        )));
+        aliases += 1;
+    }
+    assert!(aliases > 0);
+    assert_eq!(
+        forwarding
+            .matches("proof fn forwarding_shared_operation_")
+            .count(),
+        aliases
+    );
+    assert_eq!(
+        forwarding.matches("proof fn forwarding_operation_").count(),
+        aliases
+    );
+    assert_eq!(
+        forwarding.matches("open spec fn byte_operation_").count(),
+        aliases
+    );
 }
 
 #[test]

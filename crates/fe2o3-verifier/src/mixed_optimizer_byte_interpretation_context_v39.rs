@@ -21,6 +21,24 @@ pub(crate) struct ByteInterpretationContextV39<'a, 'owner> {
 }
 
 impl<'a, 'owner> ByteInterpretationContextV39<'a, 'owner> {
+    pub(super) fn same_descriptor(&self, other: &ByteInterpretationContextV39<'_, '_>) -> bool {
+        self.width == other.width
+            && match (self.views, other.views) {
+                (Views::Native, Views::Native) => true,
+                (
+                    Views::Classified {
+                        contracts: left,
+                        namespace: a,
+                    },
+                    Views::Classified {
+                        contracts: right,
+                        namespace: b,
+                    },
+                ) => std::ptr::eq(left, right) && a == b,
+                _ => false,
+            }
+    }
+
     pub(crate) const fn native(width: FormalIndexWidth) -> Self {
         Self {
             width,

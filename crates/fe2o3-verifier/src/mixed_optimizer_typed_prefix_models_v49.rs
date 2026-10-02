@@ -612,6 +612,20 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             let original_allocations = self.view(AllocationSideV48::Original, out)?;
             let prefix_allocations = self.view(AllocationSideV48::Prefix, out)?;
             let relocated_allocations = self.view(AllocationSideV48::Relocated, out)?;
+            let mut emitted_relocated = if forwarded.is_some() {
+                let (physical, contracts) = relocated.ok_or_else(mismatch)?;
+                Some(super::super::super::byte_function_v30::EmittedByteFunctionsV55::new(
+                    self.output,
+                    physical,
+                    &relocated_allocations,
+                    super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(
+                        width, contracts, registry_namespace,
+                    ),
+                    out,
+                )?)
+            } else {
+                None
+            };
             emit!(out, "mod typed_prefix_v49 {{\n use super::*;\n");
             self.emit_transport([0, 1, 2], out)?;
             for (function, association) in self.prefix.rows().functions.iter().enumerate() {
@@ -664,19 +678,19 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                         super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(width, contracts, registry_namespace),
                         &relocated_allocations, out,
                     )?;
-                    model
-                        .emit(
-                            input
-                                .functions()
-                                .len()
-                                .checked_add(output.functions().len())
-                                .and_then(|n| n.checked_add(function))
-                                .ok_or(Resource::Arithmetic)?,
-                            out,
-                        )
-                        .map_err(|error| {
-                            out.source_section_error(error, "typed LICM output byte functions")
-                        })?;
+                    let namespace = input
+                        .functions()
+                        .len()
+                        .checked_add(output.functions().len())
+                        .and_then(|n| n.checked_add(function))
+                        .ok_or(Resource::Arithmetic)?;
+                    let emitted = match emitted_relocated.as_mut() {
+                        Some(index) => index.emit(&model, namespace, out),
+                        None => model.emit(namespace, out),
+                    };
+                    emitted.map_err(|error| {
+                        out.source_section_error(error, "typed LICM output byte functions")
+                    })?;
                     drop(model);
                 }
                 out.budget.release_storage(
@@ -738,6 +752,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     width,
                     registry_namespace,
                     &relocated_allocations,
+                    emitted_relocated.as_ref().ok_or_else(mismatch)?,
                     &segments,
                     relation,
                     out,
@@ -745,6 +760,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                 .map_err(|error| out.source_section_error(error, "typed forwarding composition"))?;
             }
             emit!(out, "}}\n");
+            drop(emitted_relocated);
             drop((
                 segments,
                 original_allocations,
