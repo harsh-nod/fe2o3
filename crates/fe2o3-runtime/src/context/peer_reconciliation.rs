@@ -13,6 +13,14 @@ pub(super) struct DirectedPeerStateV1 {
     pub(super) terminal: Option<BackendPollV1>,
 }
 
+// The planner must observe an ordinary producer, never traverse its dependencies
+// or infer completion from the success of its consumer.
+const ORDINARY_PEER_OBSERVATION_LEAF_V1: DirectedPeerStateV1 = DirectedPeerStateV1 {
+    depth: 1,
+    cursor: 0,
+    terminal: None,
+};
+
 enum CompletionStepV1 {
     Observe {
         id: RuntimeSubmissionIdV1,
@@ -29,11 +37,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if let Some(root) = self.producer_launches.get(&id) {
             Some((&root.dependencies, &root.state))
         } else {
-            self.scalar_peer_copies.get(&id).and_then(|root| {
-                root.directed
-                    .as_ref()
-                    .map(|state| (root.dependencies.as_slice(), state))
-            })
+            self.scalar_peer_copies
+                .get(&id)
+                .map(|root| match root.directed.as_ref() {
+                    Some(state) => (root.dependencies.as_slice(), state),
+                    None => (&[][..], &ORDINARY_PEER_OBSERVATION_LEAF_V1),
+                })
         }
     }
 
@@ -85,6 +94,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
         self.check_operation_custody_v1(id)?;
+        if self
+            .scalar_peer_copies
+            .get(&id)
+            .is_some_and(|root| root.directed.is_none())
+        {
+            return Ok(());
+        }
         let Some((dependencies, state)) = self.producer_completion_parts_v1(id) else {
             return Ok(());
         };

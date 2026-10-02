@@ -101,9 +101,9 @@ impl<B: RuntimeProducerAwareLaunchBackendV1> RuntimeContextV1<B> {
     /// Queue a typed consumer of exact earlier producer outputs without a graph reservation.
     ///
     /// Requires a version journal and producers admitted through this same profile
-    /// or the directed peer-copy profile. Ordinary scalar peers must already be
-    /// reconciled as successful and quiescent. Backend support is still required;
-    /// the KFD router currently rejects pending peer-to-compute execution.
+    /// or a scalar peer-copy profile. Pending scalar outputs retain an exact writer
+    /// reservation, not initialized-data or completion authority. Backend support
+    /// is still required for deferred peer-to-compute execution.
     /// Pure reads retain whole-allocation custody; every original pending read
     /// range must be covered by its named producer's writable ranges. Full-allocation
     /// Write outputs can queue behind an exact latest writer from this profile,
@@ -227,9 +227,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             // Eligibility for a new consumer is checked separately at admission.
             return Ok(state.depth);
         }
-        if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
-            return Err(RuntimeValidationErrorV1::Unsupported);
+        if record.status == RuntimeCompletionStatusV1::Succeeded && !record.quiescent {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
         }
+        // An ordinary peer is an observation leaf, not a success-gated ancestry.
+        // Its retained identity remains valid after a later failed/discarded result.
         Ok(1)
     }
 

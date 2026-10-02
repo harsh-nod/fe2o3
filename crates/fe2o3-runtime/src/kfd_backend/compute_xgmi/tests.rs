@@ -6,6 +6,7 @@ use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 mod lifecycle;
+mod queued_consumer;
 
 const BYTES: usize = 64;
 const STAGES: [Stage; 6] = [

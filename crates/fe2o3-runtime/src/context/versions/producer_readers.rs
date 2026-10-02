@@ -438,7 +438,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .or_else(|| {
                             self.scalar_peer_copies
                                 .get(&dependency.submission)
-                                .filter(|producer| producer.directed.is_some())
                                 .map(|producer| producer.covers_input_v1(*binding))
                         })
                         .unwrap_or(false)

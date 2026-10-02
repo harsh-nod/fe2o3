@@ -248,6 +248,23 @@ Run only after fresh shared-host endpoint admission. This command is a correctne
 witness, not a performance benchmark or an independently verified machine-code
 refinement. No new formal-verification claim follows from existing source guards.
 
+The optional leading `--queued-consumer` flag enables the version journal and
+admits the destination's exact typed consumer before progressing the copy:
+
+```sh
+cargo +nightly-2026-04-03 run --locked -p fe2o3-runtime \
+  --features hardware-qualification --example gfx942-runtime-compute-xgmi-smoke \
+  -- --queued-consumer 0xSOURCE_UNIQUE_ID 0xDESTINATION_UNIQUE_ID
+```
+
+That mode releases the public copy event after admission, checks consumer poll
+and zero-time wait remain Pending and expired drain is rejected, then drains
+only the consumer until its backend and version-journal reconciliation finish.
+It does not separately drive the copy. The original four exact launches,
+sentinel, native completion count of one, 13 full-buffer readbacks and explicit
+cleanup remain required. Neither mode has current hardware acceptance. Run the
+default explicit-copy-drain mode first, then this additional dependency gate.
+
 At the preceding synchronous checkpoint `d2ff52f63`, CPU testing passes 12
 scripted runtime route tests, two example tests, and the focused KFD
 initialization, transfer, paired-restoration and allocation-policy regressions.
@@ -292,13 +309,29 @@ hardware validation of the asynchronous custody path, persistent peer mappings
 and multi-packet copies remain open. The current route does not qualify a
 general native runtime pipeline.
 
-The first two-GPU witness does not require accepting a consumer while its
-ordinary native peer copy is pending: it drains and validates the copy before
-launching either consumer. Queued-consumer support is a separate implementation
-gate. It must defer child compute admission until peer queue retirement, both
-allocation restorations and endpoint release. Merely relaxing `Busy` or the
-directed-provenance checks can acquire child allocation custody that blocks the
-copy producer itself. The existing rejection behavior remains intentional.
+The default two-GPU witness drains and validates the copy before launching
+either consumer. The additional producer-aware path now queues an exact typed
+consumer as router-owned host metadata until peer queue retirement, both
+allocation restorations and endpoint release. It holds no child allocation
+custody before that point. It supports covered read ranges and aliases of the
+copy destination, or an exact control-only dependency. Public event release
+does not release the retained producer. This metadata-only admission is not
+permission for concurrent native work within an occupied child.
+
+There is at most one deferred head per stream. Ordinary `launch` still rejects
+pending-copy inputs, and deferred-compute events are not supported as exact
+downstream producer-aware inputs. Failure of a never-dispatched consumer does
+not invent an observation of its parent's logical result. The changed ordinary
+observation-leaf adapter is not covered by the prior completion-reconciliation
+proof's exact unchanged-adapter correspondence. These restrictions and the
+unchanged qualification-only native copy profile prevent treating the feature
+as general dependency, native runtime or formally verified pipeline parity.
+
+The [queued-consumer CPU packet](evidence/dev-multigpu-queued-consumer-cpu-2026-10-02/README.md)
+records 1,980 passing runtime tests, zero failures, 32 existing ignores, all
+25 new test functions, strict combined Clippy and three passing witness CLI
+tests. It preserves earlier rejected controller and fixture attempts. This
+CPU result does not substitute for either native witness mode's hardware gate.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

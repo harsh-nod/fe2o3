@@ -366,6 +366,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let (actual, child, cooperative) = match event {
                 RoutedEventV1::CooperativeCopy { submission, child } => (submission, child, true),
                 RoutedEventV1::Native { submission, route } => (submission, route.child, false),
+                RoutedEventV1::DeferredCompute { .. } => {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::Unsupported,
+                        "directed copy does not admit deferred compute events",
+                    ));
+                }
             };
             let intact = match self.submissions.get(&actual) {
                 Some(RoutedSubmissionV1::CooperativeCopy(copy)) => {
@@ -374,7 +380,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 Some(RoutedSubmissionV1::Native { route, .. }) => {
                     !cooperative && child == route.child
                 }
-                None => false,
+                Some(RoutedSubmissionV1::DeferredCompute(_)) | None => false,
             };
             if !intact {
                 return Err(self.directed_corruption_v1());

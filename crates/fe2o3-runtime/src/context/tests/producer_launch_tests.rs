@@ -5,6 +5,7 @@ use fe2o3_runtime_model::{ContextProducerReadStatusV1, ContextWriterStateV1};
 use std::sync::{Arc, Mutex};
 
 mod completion_faults;
+mod ordinary_peers;
 mod peer_producers;
 mod pending_peers;
 mod queued_outputs;
@@ -166,6 +167,16 @@ impl MockBackend {
         // Execute the physical graph without manufacturing Context observations.
         let mut stack = vec![(id, false)];
         while let Some((current, visited)) = stack.pop() {
+            if !self.directed_routes.contains_key(&current)
+                && (self.pending_copies.contains_key(&current)
+                    || self.producer_launch.completed_copies.get(&current)
+                        == Some(&BackendPollV1::Succeeded))
+            {
+                self.finish_submission(current, true);
+                // The physical copy has completed; the next ordinary poll is conclusive.
+                *self.polls.get_mut(&current).unwrap() = 1;
+                continue;
+            }
             if self.producer_launch.completed.contains_key(&current)
                 || self.producer_launch.completed_copies.contains_key(&current)
             {
@@ -288,6 +299,39 @@ impl MockBackend {
         self.finish_producer_launch_test_v1(id, true);
         Ok(self.producer_launch.completed[&id])
     }
+
+    pub(super) fn observe_ordinary_copy_fault_test_v1(
+        &mut self,
+        id: u64,
+    ) -> Option<Result<BackendPollV1, RuntimeBackendFailureV1<MockError>>> {
+        if !self.pending_copies.contains_key(&id)
+            && !self.producer_launch.completed_copies.contains_key(&id)
+        {
+            return None;
+        }
+        let observation = self.producer_launch.observations.remove(&id)?;
+        self.producer_launch.calls.push(("ordinary-poll", id));
+        Some(match observation {
+            Observation::Pending => Ok(BackendPollV1::Pending),
+            Observation::Failed => {
+                self.finish_submission(id, false);
+                Ok(BackendPollV1::Failed { code: 7 })
+            }
+            Observation::Rejected => Err(RuntimeBackendFailureV1::Rejected(MockError(
+                "ordinary copy poll rejected",
+            ))),
+            Observation::Quiescent => {
+                self.finish_submission(id, false);
+                Err(RuntimeBackendFailureV1::Quiescent(MockError(
+                    "ordinary copy poll quiescent",
+                )))
+            }
+            Observation::Terminal => Err(RuntimeBackendFailureV1::Terminal(MockError(
+                "ordinary copy poll terminal",
+            ))),
+            Observation::Panic => panic!("ordinary copy poll panic"),
+        })
+    }
 }
 
 impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
@@ -304,6 +348,9 @@ impl RuntimeProducerAwareLaunchBackendV1 for MockBackend {
                     .contains_key(&dependency.producer_submission)
                     && !self
                         .directed_routes
+                        .contains_key(&dependency.producer_submission)
+                    && !self
+                        .pending_copies
                         .contains_key(&dependency.producer_submission)
                     && self
                         .producer_launch

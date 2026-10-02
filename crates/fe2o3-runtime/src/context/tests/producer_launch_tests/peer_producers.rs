@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn peer_launch_rejects_unsettled_failed_and_unknown_copy_results_without_effects() {
-    for outcome in 0..4 {
+fn peer_launch_rejects_failed_and_unknown_copy_results_without_effects() {
+    for outcome in 1..3 {
         let mut f = Fixture::new(8);
-        f.context.backend.deferred_copies = outcome != 3;
+        f.context.backend.deferred_copies = true;
         let remote = f.context.devices()[1].id();
         let source = f
             .context
@@ -41,14 +41,11 @@ fn peer_launch_rejects_unsettled_failed_and_unknown_copy_results_without_effects
                 vec![span(f.allocations[0], RuntimeAccessV1::Read, 0, 8)],
                 &[event],
             ),
-            RuntimeValidationErrorV1::Unsupported,
+            RuntimeValidationErrorV1::ContextReserved,
         );
         assert_eq!(f.snapshot(), before);
         f.context.backend.wait_observation = None;
         f.context.backend.first_wait_failure = MockWaitFailure::None;
-        if outcome == 0 || outcome == 3 {
-            f.context.wait(&mut copy, Duration::from_secs(1)).unwrap();
-        }
         assert!(f.context.cleanup().is_complete());
     }
 }

@@ -4513,6 +4513,9 @@ mod tests {
             if self.directed_routes.contains_key(&submission) {
                 return self.observe_directed_test_v1("poll", submission);
             }
+            if let Some(result) = self.observe_ordinary_copy_fault_test_v1(submission) {
+                return result;
+            }
             let polls = self.polls.get_mut(&submission).unwrap();
             *polls += 1;
             Ok(if *polls == 1 {

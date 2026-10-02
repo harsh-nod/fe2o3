@@ -94,6 +94,7 @@ mod multi_qualification;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_launch_payload;
+mod deferred_compute;
 use compute_launch_payload::RetainedComputeLaunchV1;
 mod compute_peer_gate;
 mod compute_quiescence_control;
@@ -910,6 +911,7 @@ enum ComputeInputAdmissionV1 {
     ExactProducers,
 }
 
+#[derive(Debug)]
 struct CollectedComputeDependenciesV1 {
     minimum_dependency_depth: usize,
     ordered_predecessor: Option<u64>,
@@ -5787,6 +5789,15 @@ impl KfdRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
         collected: CollectedComputeDependenciesV1,
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.submit_collected_compute_with_payload_v1(launch, collected, None)
+    }
+
+    fn submit_collected_compute_with_payload_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+        collected: CollectedComputeDependenciesV1,
+        retained: Option<Arc<RetainedComputeLaunchV1>>,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let CollectedComputeDependenciesV1 {
             minimum_dependency_depth,
             ordered_predecessor,
@@ -5836,8 +5847,12 @@ impl KfdRuntimeBackendV1 {
             &peer_dma,
         )?;
 
-        let owned_launch =
-            RetainedComputeLaunchV1::copy_from(launch, self.launch_payload_account.as_ref())?;
+        let owned_launch = match retained {
+            Some(retained) => retained,
+            None => {
+                RetainedComputeLaunchV1::copy_from(launch, self.launch_payload_account.as_ref())?
+            }
+        };
         let bindings = &*owned_launch.bindings;
         let mut retained_allocations = Vec::new();
         retained_allocations
@@ -6947,6 +6962,7 @@ struct RoutedHandleV1 {
 enum RoutedSubmissionV1 {
     Native { route: RoutedHandleV1, stream: u64 },
     CooperativeCopy(Box<CooperativeCopySubmissionV1>),
+    DeferredCompute(Box<deferred_compute::DeferredComputeV1>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -6956,6 +6972,10 @@ enum RoutedEventV1 {
         submission: u64,
     },
     CooperativeCopy {
+        submission: u64,
+        child: usize,
+    },
+    DeferredCompute {
         submission: u64,
         child: usize,
     },
@@ -7054,6 +7074,7 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     cooperative_allocation_owners: HashMap<RoutedHandleV1, Vec<u64>>,
     cooperative_dependency_retain_counts: HashMap<u64, usize>,
     peer_launch_retains: PeerLaunchRetainsV1,
+    deferred_compute_retains: deferred_compute::DeferredComputeRetainsV1,
     cooperative_stream_pending_counts: HashMap<u64, usize>,
     cooperative_stream_tails: HashMap<u64, u64>,
     native_stream_submission_counts: HashMap<u64, usize>,
@@ -8003,6 +8024,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             cooperative_allocation_owners: HashMap::new(),
             cooperative_dependency_retain_counts: HashMap::new(),
             peer_launch_retains: PeerLaunchRetainsV1::default(),
+            deferred_compute_retains: deferred_compute::DeferredComputeRetainsV1::default(),
             cooperative_stream_pending_counts: HashMap::new(),
             cooperative_stream_tails: HashMap::new(),
             native_stream_submission_counts: HashMap::new(),
@@ -8028,6 +8050,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.cooperative_allocation_owners.is_empty()
             || !self.cooperative_dependency_retain_counts.is_empty()
             || !self.peer_launch_retains.is_empty()
+            || !self.deferred_compute_retains.is_empty()
             || !self.cooperative_stream_pending_counts.is_empty()
             || !self.cooperative_stream_tails.is_empty()
             || !self.native_stream_submission_counts.is_empty()
@@ -8193,6 +8216,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "unknown multi-device KFD event",
             )
         })? {
+            RoutedEventV1::DeferredCompute {
+                submission,
+                child: event_child,
+            } => {
+                self.deferred_event_dependency_v1(submission, event_child, child)?;
+                Ok(None)
+            }
             RoutedEventV1::Native { route, .. } if route.child == child => Ok(Some(route.local)),
             RoutedEventV1::Native { .. } => Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::WrongDevice,
@@ -8204,7 +8234,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             } if event_child == child => {
                 let status = match self.submissions.get(&submission) {
                     Some(RoutedSubmissionV1::CooperativeCopy(copy)) => copy.status(),
-                    Some(RoutedSubmissionV1::Native { .. }) | None => {
+                    Some(
+                        RoutedSubmissionV1::Native { .. } | RoutedSubmissionV1::DeferredCompute(_),
+                    )
+                    | None => {
                         return Err(KfdRuntimeBackendV1::rejected(
                             KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                             "copy event does not retain its cooperative submission",
@@ -8244,6 +8277,33 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })?;
         let (event_route, event_submission) = match event {
             RoutedEventV1::Native { route, submission } => (route, submission),
+            RoutedEventV1::DeferredCompute {
+                submission,
+                child: event_child,
+            } => {
+                if submission != dependency.producer_submission {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "deferred event does not name the exact producer",
+                    ));
+                }
+                let root = self.deferred_compute_v1(submission).ok_or_else(|| {
+                    KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "deferred event lost its exact producer",
+                    )
+                })?;
+                if event_child != child || root.child != child {
+                    return Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::WrongDevice,
+                        "deferred producer belongs to another device",
+                    ));
+                }
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "exact producer-aware launch does not admit deferred compute events",
+                ));
+            }
             RoutedEventV1::CooperativeCopy {
                 submission,
                 child: event_child,
@@ -8296,7 +8356,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
         let producer_route = match self.submissions.get(&dependency.producer_submission) {
             Some(RoutedSubmissionV1::Native { route, .. }) => *route,
-            Some(RoutedSubmissionV1::CooperativeCopy(_)) => {
+            Some(
+                RoutedSubmissionV1::CooperativeCopy(_) | RoutedSubmissionV1::DeferredCompute(_),
+            ) => {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
                     "producer-aware launch requires a native KFD producer",
@@ -8480,6 +8542,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     #[cfg(test)]
     fn assert_cooperative_indexes_consistent(&self) {
+        self.assert_deferred_compute_indexes_consistent_v1();
         let mut expected_allocation_owners = HashMap::<RoutedHandleV1, Vec<u64>>::new();
         let mut expected_dependency_counts = HashMap::<u64, usize>::new();
         let mut expected_stream_counts = HashMap::<u64, usize>::new();
@@ -8490,6 +8553,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let copy = match record {
                 RoutedSubmissionV1::Native { stream, .. } => {
                     *expected_native_stream_counts.entry(*stream).or_insert(0) += 1;
+                    continue;
+                }
+                RoutedSubmissionV1::DeferredCompute(root) => {
+                    *expected_native_stream_counts
+                        .entry(root.stream)
+                        .or_insert(0) += 1;
                     continue;
                 }
                 RoutedSubmissionV1::CooperativeCopy(copy) => copy,
@@ -8572,7 +8641,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         for event in self.events.values() {
             let submission = match event {
                 RoutedEventV1::Native { submission, .. }
-                | RoutedEventV1::CooperativeCopy { submission, .. } => *submission,
+                | RoutedEventV1::CooperativeCopy { submission, .. }
+                | RoutedEventV1::DeferredCompute { submission, .. } => *submission,
             };
             *expected_event_counts.entry(submission).or_insert(0) += 1;
         }
@@ -8641,6 +8711,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
             RoutedSubmissionV1::CooperativeCopy(_) => None,
+            RoutedSubmissionV1::DeferredCompute(_) => {
+                return self.observe_deferred_compute_v1(submission);
+            }
         };
         match native_route {
             Some(route) => {
@@ -8658,7 +8731,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
             None => Ok(match &self.submissions[&submission] {
                 RoutedSubmissionV1::CooperativeCopy(copy) => copy.status(),
-                RoutedSubmissionV1::Native { .. } => unreachable!(),
+                RoutedSubmissionV1::Native { .. } | RoutedSubmissionV1::DeferredCompute(_) => {
+                    unreachable!()
+                }
             }),
         }
     }
@@ -8746,7 +8821,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             )
         })? {
             RoutedSubmissionV1::CooperativeCopy(copy) => copy.phase,
-            RoutedSubmissionV1::Native { .. } => {
+            RoutedSubmissionV1::Native { .. } | RoutedSubmissionV1::DeferredCompute(_) => {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                     "native submission routed through cooperative copy progress",
@@ -8800,7 +8875,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     RoutedSubmissionV1::CooperativeCopy(copy) => {
                         copy.dependencies.get(copy.dependency_cursor).copied()
                     }
-                    RoutedSubmissionV1::Native { .. } => unreachable!(),
+                    RoutedSubmissionV1::Native { .. } | RoutedSubmissionV1::DeferredCompute(_) => {
+                        unreachable!()
+                    }
                 };
                 if let Some(dependency) = dependency {
                     match self.observe_dependency(dependency) {
@@ -9014,6 +9091,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             destination.allocation,
             "unknown destination KFD allocation",
         )?;
+        self.require_no_deferred_stream_v1(stream)?;
+        if self.allocation_retained_by_deferred_compute_v1(source_route)
+            || self.allocation_retained_by_deferred_compute_v1(destination_route)
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "copy endpoint is retained by a deferred compute consumer",
+            ));
+        }
         let distinct_devices = source_route.child != destination_route.child;
         if distinct_devices != require_distinct_devices
             || destination_route.child != stream_route.child
@@ -11752,6 +11838,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.require_no_deferred_stream_v1(stream)?;
         if self.cooperative_stream_pending_counts.contains_key(&stream) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -11850,7 +11937,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
-        if self.allocation_retained_by_cooperative_copy(route) {
+        if self.allocation_retained_by_router_v1(route) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "allocation is retained by a pending cooperative copy",
@@ -11875,7 +11962,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
-        if self.allocation_retained_by_cooperative_copy(route) {
+        if self.allocation_retained_by_router_v1(route) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "allocation is retained by a pending cooperative copy",
@@ -11899,7 +11986,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
-        if self.allocation_retained_by_cooperative_copy(route) {
+        if self.allocation_retained_by_router_v1(route) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "allocation is retained by a pending cooperative copy",
@@ -11935,6 +12022,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let route = Self::route(&self.modules, module, "unknown multi-device KFD module")?;
+        if self.deferred_compute_retains.modules.contains_key(&route) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "module is retained by a deferred compute consumer",
+            ));
+        }
         self.require_compute_xgmi_child_available_v1(route.child)?;
         let result = self.children[route.child].unload_module_v1(route.local);
         self.latch(result)?;
@@ -11987,6 +12080,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             launch.stream,
             "unknown multi-device KFD stream",
         )?;
+        self.require_no_deferred_stream_v1(launch.stream)?;
         self.require_compute_xgmi_child_available_v1(stream.child)?;
         let kernel = Self::route(
             &self.kernels,
@@ -12023,7 +12117,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     "kernel binding belongs to another KFD device",
                 ));
             }
-            if self.allocation_retained_by_cooperative_copy(allocation) {
+            if self.allocation_retained_by_router_v1(allocation) {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
                     "kernel binding is retained by a pending cooperative copy",
@@ -12093,6 +12187,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
             RoutedSubmissionV1::CooperativeCopy(_) => None,
+            RoutedSubmissionV1::DeferredCompute(_) => {
+                return self.observe_deferred_compute_v1(submission);
+            }
         };
         match native_route {
             Some(route) => {
@@ -12132,6 +12229,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
             RoutedSubmissionV1::CooperativeCopy(_) => None,
+            RoutedSubmissionV1::DeferredCompute(_) => {
+                return self.drain_deferred_compute_v1(submission, deadline, false);
+            }
         };
         match native_route {
             Some(route) => {
@@ -12170,6 +12270,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         self.check_directed_if_present_v1(submission)?;
+        if self.deferred_compute_v1(submission).is_some() {
+            return self.release_deferred_compute_v1(submission);
+        }
         let (native_route, native_stream, cooperative_stream, cooperative_quiescent) =
             match self.submissions.get(&submission).ok_or_else(|| {
                 KfdRuntimeBackendV1::rejected(
@@ -12179,6 +12282,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             })? {
                 RoutedSubmissionV1::Native { route, stream } => {
                     (Some(*route), Some(*stream), None, true)
+                }
+                RoutedSubmissionV1::DeferredCompute(_) => {
+                    unreachable!("deferred release handled above")
                 }
                 RoutedSubmissionV1::CooperativeCopy(copy) => (
                     None,
@@ -12262,9 +12368,19 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 "unknown multi-device KFD submission",
             )
         })?;
+        if let RoutedSubmissionV1::DeferredCompute(root) = submission_route {
+            if root.stream != stream {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::WrongDevice,
+                    "deferred submission belongs to another stream",
+                ));
+            }
+            return self.record_deferred_compute_event_v1(submission, stream_route.child);
+        }
         let submission_route = match submission_route {
             RoutedSubmissionV1::Native { route, .. } => (Some(*route), None),
             RoutedSubmissionV1::CooperativeCopy(copy) => (None, Some(copy.stream)),
+            RoutedSubmissionV1::DeferredCompute(_) => unreachable!("deferred event handled above"),
         };
         let stream_matches = match submission_route {
             (Some(route), None) => route.child == stream_route.child,
@@ -12348,7 +12464,8 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         }
         let submission = match route {
             RoutedEventV1::Native { submission, .. }
-            | RoutedEventV1::CooperativeCopy { submission, .. } => submission,
+            | RoutedEventV1::CooperativeCopy { submission, .. }
+            | RoutedEventV1::DeferredCompute { submission, .. } => submission,
         };
         self.events.remove(&event);
         Self::decrement_indexed_count(
@@ -12377,6 +12494,10 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         self.require_submission_capacity_v1()?;
+        self.require_no_deferred_stream_v1(request.stream)?;
+        if let Some(id) = self.try_submit_deferred_compute_v1(request)? {
+            return Ok(id);
+        }
         let stream = Self::route(
             &self.streams,
             request.stream,
@@ -12415,6 +12536,12 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::WrongDevice,
                     "kernel binding belongs to another KFD device",
+                ));
+            }
+            if self.allocation_retained_by_deferred_compute_v1(allocation) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "kernel binding is retained by a deferred compute consumer",
                 ));
             }
             bindings.push(BackendBindingV1 {
@@ -12464,7 +12591,14 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             }
             match self.exact_launch_dependency_for_child(*dependency, stream.child)? {
                 Some(local) => dependencies.push(local),
-                None => peer_producers.push(dependency.producer_submission),
+                None if matches!(
+                    self.events.get(&dependency.event),
+                    Some(RoutedEventV1::CooperativeCopy { .. })
+                ) =>
+                {
+                    peer_producers.push(dependency.producer_submission)
+                }
+                None => {}
             }
         }
         let child_launch = BackendLaunchV1 {
@@ -12521,7 +12655,7 @@ impl RuntimeProducerAwareLaunchBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     .expect("captured peer state names the exact child consumer"),
             );
         } else if bindings.iter().any(|binding| {
-            self.allocation_retained_by_cooperative_copy(RoutedHandleV1 {
+            self.allocation_retained_by_router_v1(RoutedHandleV1 {
                 child: stream.child,
                 local: binding.region.allocation,
             })
@@ -13202,6 +13336,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         self.require_submission_capacity_v1()?;
+        self.require_no_deferred_stream_v1(stream)?;
         let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
         let source_route = Self::route(
             &self.allocations,
@@ -13224,8 +13359,8 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     "mixed cooperative/native stream ordering requires quiescing prior cooperative work",
                 ));
             }
-            if self.allocation_retained_by_cooperative_copy(source_route)
-                || self.allocation_retained_by_cooperative_copy(destination_route)
+            if self.allocation_retained_by_router_v1(source_route)
+                || self.allocation_retained_by_router_v1(destination_route)
             {
                 return Err(KfdRuntimeBackendV1::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
@@ -13281,6 +13416,10 @@ impl RuntimeFlushBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        if let Some(submission) = self.deferred_stream_head_v1(stream) {
+            self.progress_deferred_compute_v1(submission)?;
+            return Ok(());
+        }
         self.flush_peer_launch_roots_v1(stream)?;
         if let Some(local) = self.children[route.child]
             .pending_compute_streams
@@ -13364,6 +13503,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             )
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
+            RoutedSubmissionV1::DeferredCompute(_) => {
+                return self.cancel_deferred_compute_v1(submission);
+            }
             RoutedSubmissionV1::CooperativeCopy(copy) => {
                 if copy
                     .compute_xgmi
@@ -13413,6 +13555,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             )
         })? {
             RoutedSubmissionV1::Native { route, .. } => Some(*route),
+            RoutedSubmissionV1::DeferredCompute(_) => {
+                return self.drain_deferred_compute_v1(submission, deadline, true);
+            }
             RoutedSubmissionV1::CooperativeCopy(copy) => {
                 if deadline <= Instant::now() || copy.is_quiescent() {
                     return Ok(copy.status());

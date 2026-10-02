@@ -163,7 +163,7 @@ broad KFD qualification remains incomplete. Strict combined Clippy and all
 32 source-control commands pass, with 76 executable proof files unchanged.
 The latest SSH receipt is still a DNS failure before remote execution.
 
-The next increment composes production persistent transfer, genuine model-pair
+Checkpoint `91bb34744`, pushed to both repositories, composes production persistent transfer, genuine model-pair
 loans, memory transitions and SDMA publication/polling in CPU tests. Seven test
 functions cover 85 loop cases, including independent physical extents, accounting,
 mapping and publication errors, panics, closing currentness and model retake.
@@ -173,11 +173,11 @@ not GPU payload movement or full concrete Linux/public-wrapper qualification.
 
 Six additional runtime tests exercise public expired/resumed drain, opposite
 directions, disjoint success/cancellation/uncertainty, retained owned-group
-shutdown and rejection of a consumer behind a pending ordinary native copy.
+shutdown and rejection of an ordinary `launch` consumer behind a pending native copy.
 The native witness now drives the copy through public drain and checks an
 expired deadline before progress. First hardware acceptance still uses explicit
-copy drain before consumers; queued-consumer admission is a separate follow-up
-because premature child allocation custody can deadlock its producer. The
+copy drain before consumers; the subsequent queued-consumer increment below
+keeps child allocation custody deferred so it cannot deadlock its producer. The
 [lifecycle CPU packet](evidence/dev-multigpu-async-lifecycle-cpu-2026-10-02/README.md)
 records exact scope. The fresh SSH attempt at `2026-10-02T01:47:50Z` again fails
 DNS before remote execution; this attempt creates no scratch or workload and
@@ -192,6 +192,37 @@ and the no-default runtime check pass; the native witness builds but has not
 run on GPUs. All 32 source-control commands pass after metadata-only source
 binding updates; all 76 executable proof files remain unchanged. This is not
 new formal qualification and does not close A3.
+
+The current increment admits a typed `launch_producer_aware_v1` consumer behind
+an exact pending ordinary native peer-copy event. The router retains the launch,
+producer identities, bindings, module and stream as host metadata until native
+queue retirement and both allocation restorations. Only then does it transfer
+the consumer to the child compute scheduler. Public event release does not drop
+producer custody; poll and wait remain observers. The Context adapter observes
+the ordinary copy's actual result without giving it directed-copy semantics.
+
+This is a narrow dependency pipeline, not general graph or overlap parity.
+There is one deferred head per stream. Ordinary `launch` still rejects pending
+copy inputs, and a deferred consumer's event is not admitted as an exact
+downstream producer. Native copy eligibility remains the existing full-extent,
+initialized PUBLIC, single-packet R57 qualification profile. The optional leading
+`--queued-consumer` witness mode drives the copy through consumer-only drain;
+the default explicit-copy-drain witness remains the first hardware gate.
+Both require four exact launches, 13 full-buffer readbacks and explicit cleanup.
+The changed Context adapter is outside the earlier exact-source completion
+proof's unchanged-adapter boundary; unchanged proof bodies or source-control
+metadata do not formally qualify this increment. Hardware execution and A3
+completion remain open.
+
+Final-source CPU qualification passes 1,980 runtime tests with no failures and
+32 existing ignores, including all 25 new Context/router/integration tests.
+Strict combined Clippy, the no-default runtime check and three witness CLI tests
+pass. All 32 source-control commands pass after separately reviewed identity
+updates; 76 executable proof files remain unchanged, without new formal
+qualification. The [queued-consumer CPU packet](evidence/dev-multigpu-queued-consumer-cpu-2026-10-02/README.md)
+records the corrected executable selection, cleanup fixture and earlier rejected
+attempts. The fresh `2026-10-02T02:51:48Z` SSH retry still fails DNS before remote
+execution; no shared-host resources were created or admitted.
 
 ## Latest Qualification
 
