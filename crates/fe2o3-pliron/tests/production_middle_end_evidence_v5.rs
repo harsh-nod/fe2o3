@@ -1521,6 +1521,197 @@ fn live_v5_total_output_gate_stages_one_typed_output_without_authority() {
     assert!(!report.grants_artifact_load_launch_or_hardware_authority());
 }
 
+fn conditional_output_refinement_input(
+    extent_argument: u32,
+    trap: bool,
+) -> ProductionRankedKernelLoweringInputV1 {
+    let template = total_output_refinement_input();
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let mut operations = template.kernel().blocks()[0].operations()[..8].to_vec();
+    let ProductionRankedOperationV1::ExecutionLayout {
+        global_extents,
+        workgroup_extents,
+        subgroup_size,
+        ..
+    } = &mut operations[0]
+    else {
+        unreachable!()
+    };
+    *global_extents = [0, 1, 1];
+    *workgroup_extents = [64, 1, 1];
+    *subgroup_size = 64;
+    let ProductionRankedOperationV1::ViewInSpace {
+        shape,
+        dynamic_extents,
+        ..
+    } = &mut operations[1]
+    else {
+        unreachable!()
+    };
+    *shape = vec![DYNAMIC_EXTENT];
+    *dynamic_extents = vec![ProductionRankedValueV1::Argument(extent_argument)];
+    operations[2] = ProductionRankedOperationV1::InvocationIndex {
+        result: ProductionRankedValueIdV1::new(1),
+        dimension: 0,
+        launch_extent: 0,
+    };
+    let ProductionRankedOperationV1::OwnershipContract { coverage, .. } = &mut operations[7] else {
+        unreachable!()
+    };
+    *coverage = OwnershipCoverageAttr::ExactEffectDomain;
+    let contract = ProductionEffectRefinementContractV2::new(
+        73,
+        ProductionGpuWriteSiteV2::new(1, 0),
+        ProductionReferenceOutputSiteV2::new(7, 0, 0),
+        local(0),
+        vec![local(1)],
+        vec![local(5)],
+        vec![local(5)],
+        local(4),
+        local(4),
+        local(4),
+        local(4),
+        local(2),
+        local(3),
+    )
+    .unwrap();
+    let skeleton = ProductionRankedKernelV1::new(
+        "conditional_output",
+        2,
+        vec![
+            ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::IndexLessThan {
+                    lhs: local(1),
+                    rhs: ProductionRankedValueV1::Argument(extent_argument),
+                    true_block: 1,
+                    false_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ValueAccess {
+                        kind: AccessKindAttr::Write,
+                        view: local(0),
+                        indices: vec![local(1)],
+                        value: local(2),
+                    },
+                    ProductionRankedOperationV1::RequestEffectRefinement {
+                        contract,
+                        subjects: functional_subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            ),
+            ProductionRankedBlockV1::new(
+                vec![],
+                if trap {
+                    ProductionRankedTerminatorV1::Trap
+                } else {
+                    ProductionRankedTerminatorV1::Return
+                },
+            ),
+        ],
+    )
+    .unwrap();
+    let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+        &skeleton.blocks()[1].operations()[1]
+    else {
+        unreachable!()
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        &skeleton,
+        1,
+        1,
+        contract,
+        functional_subjects(),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(obligation);
+    let bound = skeleton
+        .bind_functional_refinement_request_v2(1, 1, proof)
+        .unwrap();
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+        ProductionConstructionV1::ranked_kernel("conditional_output", bound).unwrap(),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap()
+}
+
+#[test]
+fn conditional_output_staging_survives_real_materialization_without_total_view_authority() {
+    let input = conditional_output_refinement_input(1, false);
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let staged = fe2o3_pliron::require_conditional_output_staging_v1(&input, &evidence).unwrap();
+    assert_eq!(staged.coverage().ranked_extent_argument(), 1);
+    assert_eq!(staged.coverage().static_global_x_extent(), None);
+    assert_eq!(staged.reference_output_argument(), 7);
+    assert_eq!(staged.evidence_identity(), evidence.identity().sha256());
+    assert!(!staged.grants_artifact_or_launch_authority());
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
+    );
+    assert_eq!(evidence.typed_semantic_summary().expression_roots, 4);
+    assert!(evidence.typed_semantic_reconciliation().is_exact());
+    assert_eq!(
+        require_total_output_staging_v2(&input, &evidence),
+        Err(fe2o3_pliron::ProductionTotalOutputStagingErrorV2::MissingTotalViewProof)
+    );
+    let decoded = InertProductionMiddleEndEvidenceV5::decode(evidence.canonical_bytes()).unwrap();
+    assert_eq!(decoded.coverage_summary().total_view_declared(), 0);
+    assert_eq!(decoded.coverage_summary().total_view_proved(), 0);
+    assert!(!decoded.claims_verus_verification());
+}
+
+#[test]
+fn conditional_output_staging_rejects_substituted_extent_and_unclassified_control_flow() {
+    let input = conditional_output_refinement_input(0, false);
+    let other = conditional_output_refinement_input(1, false);
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    assert!(matches!(
+        fe2o3_pliron::require_conditional_output_staging_v1(&other, &evidence),
+        Err(
+            fe2o3_pliron::ProductionConditionalOutputStagingErrorV1::Common(
+                fe2o3_pliron::ProductionTotalOutputStagingErrorV2::EvidenceIdentityMismatch
+            )
+        )
+    ));
+    let trap = conditional_output_refinement_input(0, true);
+    assert!(trap.all_mandatory_reports_are_clean());
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &trap, RANKED_IR).unwrap();
+    assert!(matches!(
+        fe2o3_pliron::require_conditional_output_staging_v1(&trap, &evidence),
+        Err(fe2o3_pliron::ProductionConditionalOutputStagingErrorV1::MissingExactConditionalOutput)
+    ));
+    let total = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &total, RANKED_IR).unwrap();
+    assert!(matches!(
+        fe2o3_pliron::require_conditional_output_staging_v1(&total, &evidence),
+        Err(fe2o3_pliron::ProductionConditionalOutputStagingErrorV1::MissingExactConditionalOutput)
+    ));
+    let no_effect = ranked_input(7);
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &no_effect, RANKED_IR).unwrap();
+    assert!(matches!(
+        fe2o3_pliron::require_conditional_output_staging_v1(&no_effect, &evidence),
+        Err(
+            fe2o3_pliron::ProductionConditionalOutputStagingErrorV1::Common(
+                fe2o3_pliron::ProductionTotalOutputStagingErrorV2::MissingEffectProof
+            )
+        )
+    ));
+}
+
 fn semantic_contract_for_total_output(
     input: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,

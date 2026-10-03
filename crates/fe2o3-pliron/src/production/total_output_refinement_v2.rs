@@ -197,6 +197,13 @@ pub fn require_total_output_staging_v2(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
 ) -> Result<ProductionTotalOutputStagingReportV2, ProductionTotalOutputStagingErrorV2> {
+    validate_observed_facts_v2(observe_staging_facts_v2(ranked, evidence)?)
+}
+
+fn observe_staging_facts_v2(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+) -> Result<ObservedTotalOutputFactsV2, ProductionTotalOutputStagingErrorV2> {
     if derive_ranked_kernel_identity(ranked) != *evidence.ranked_kernel_identity()
         || !evidence
             .identity()
@@ -260,7 +267,7 @@ pub fn require_total_output_staging_v2(
     if evidence.typed_semantic_summary() != facts.typed {
         return Err(ProductionTotalOutputStagingErrorV2::TypedSummaryMismatch);
     }
-    validate_observed_facts_v2(facts)
+    Ok(facts)
 }
 
 fn validate_observed_facts_v2(
@@ -271,6 +278,25 @@ fn validate_observed_facts_v2(
     }
     if facts.total_view_declared == 0 || facts.total_view_declared != facts.total_view_proved {
         return Err(ProductionTotalOutputStagingErrorV2::MissingTotalViewProof);
+    }
+    let arithmetic = validate_common_staging_facts_v2(facts)?;
+    Ok(ProductionTotalOutputStagingReportV2 {
+        total_view_contracts: facts.total_view_declared,
+        reference_obligations: facts.reference_declared,
+        effect_contracts: facts.effect_declared,
+        collective_contracts: facts.collective_declared,
+        typed_expression_roots: as_u64(facts.typed.expression_roots)?,
+        retained_receipts: facts.retained_receipts,
+        arithmetic,
+        evidence_identity: facts.evidence_identity,
+    })
+}
+
+fn validate_common_staging_facts_v2(
+    facts: ObservedTotalOutputFactsV2,
+) -> Result<ProductionStagedArithmeticCoverageV2, ProductionTotalOutputStagingErrorV2> {
+    if !facts.reports_clean {
+        return Err(ProductionTotalOutputStagingErrorV2::MandatoryReportNotClean);
     }
     if facts.effect_declared == 0 || facts.effect_declared != facts.effect_proved {
         return Err(ProductionTotalOutputStagingErrorV2::MissingEffectProof);
@@ -313,15 +339,116 @@ fn validate_observed_facts_v2(
             return Err(ProductionTotalOutputStagingErrorV2::MissingTypedSemanticProof);
         }
     };
-    Ok(ProductionTotalOutputStagingReportV2 {
-        total_view_contracts: facts.total_view_declared,
-        reference_obligations: facts.reference_declared,
-        effect_contracts: facts.effect_declared,
-        collective_contracts: facts.collective_declared,
-        typed_expression_roots: typed_roots,
-        retained_receipts: facts.retained_receipts,
-        arithmetic,
+    Ok(arithmetic)
+}
+
+/// Distinct staging for one guarded dynamic output. It retains a pending launch
+/// condition; it cannot be supplied to any unconditional total-output API.
+/// Like total-output staging, caller-selected receipt policies can satisfy this
+/// report. Neither protected aggregate verification nor host ABI binding follows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionConditionalOutputStagingV1 {
+    coverage: fe2o3_kernel_analysis::GuardedIdentityCoverageV1,
+    reference_output_argument: u32,
+    evidence_identity: [u8; 32],
+    arithmetic: ProductionStagedArithmeticCoverageV2,
+}
+
+impl ProductionConditionalOutputStagingV1 {
+    pub const fn coverage(&self) -> &fe2o3_kernel_analysis::GuardedIdentityCoverageV1 {
+        &self.coverage
+    }
+    /// Logical reference output ordinal, not a validated physical ABI offset.
+    pub const fn reference_output_argument(&self) -> u32 {
+        self.reference_output_argument
+    }
+    pub const fn evidence_identity(&self) -> &[u8; 32] {
+        &self.evidence_identity
+    }
+    pub const fn staged_arithmetic_coverage(&self) -> ProductionStagedArithmeticCoverageV2 {
+        self.arithmetic
+    }
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductionConditionalOutputStagingErrorV1 {
+    Common(ProductionTotalOutputStagingErrorV2),
+    MissingExactConditionalOutput,
+}
+
+impl fmt::Display for ProductionConditionalOutputStagingErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Common(error) => write!(formatter, "conditional output staging: {error}"),
+            Self::MissingExactConditionalOutput => formatter.write_str(
+                "conditional output staging requires one exact guarded dynamic output and its matching reference-effect contract",
+            ),
+        }
+    }
+}
+
+impl Error for ProductionConditionalOutputStagingErrorV1 {}
+
+/// Reconciles the actual owner-held coverage record, effect contract, policy-
+/// checked receipts and typed expression commitments, without asserting TotalView.
+pub fn require_conditional_output_staging_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+) -> Result<ProductionConditionalOutputStagingV1, ProductionConditionalOutputStagingErrorV1> {
+    use ProductionConditionalOutputStagingErrorV1 as E;
+    let facts = observe_staging_facts_v2(ranked, evidence).map_err(E::Common)?;
+    let arithmetic = validate_common_staging_facts_v2(facts).map_err(E::Common)?;
+    let [coverage] = ranked.ownership_report().conditional_coverage() else {
+        return Err(E::MissingExactConditionalOutput);
+    };
+    if facts.total_view_declared != 0
+        || facts.total_view_proved != 0
+        || facts.effect_declared != 1
+        || facts.collective_declared != 0
+        || facts.reference_declared != 0
+        || facts.collective_contributions_declared != 0
+    {
+        return Err(E::MissingExactConditionalOutput);
+    }
+    let mut contracts = ranked
+        .kernel()
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            super::ProductionRankedOperationV1::RequireEffectRefinement { contract, .. } => {
+                Some(contract)
+            }
+            _ => None,
+        });
+    let contract = contracts.next().ok_or(E::MissingExactConditionalOutput)?;
+    if contracts.next().is_some()
+        || ranked.live_ranked_view_name(contract.view()) != Some(coverage.view_name())
+        || usize::try_from(contract.gpu_write_site().block()).ok()
+            != Some(coverage.write_location().block())
+    {
+        return Err(E::MissingExactConditionalOutput);
+    }
+    let actual = super::typed_semantic_commitment_reconciliation_v2(ranked)
+        .map_err(|error| E::Common(ProductionTotalOutputStagingErrorV2::RankedKernel(error)))?;
+    let retained = evidence.typed_semantic_reconciliation();
+    if actual.recipe_expression_roots() as u64 != retained.recipe_expression_roots()
+        || actual.pliron_commitment_roots() as u64 != retained.pliron_commitment_roots()
+        || actual.ordered_commitments_sha256() != retained.ordered_commitments_sha256()
+        || !actual.is_exact()
+    {
+        return Err(E::Common(
+            ProductionTotalOutputStagingErrorV2::TypedSemanticReconciliationMismatch,
+        ));
+    }
+    Ok(ProductionConditionalOutputStagingV1 {
+        coverage: coverage.clone(),
+        reference_output_argument: contract.reference_output_site().argument(),
         evidence_identity: facts.evidence_identity,
+        arithmetic,
     })
 }
 

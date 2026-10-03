@@ -27,7 +27,8 @@ pub use production::{
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
     PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5, PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2,
     ProductionCheckedNonCanonicalLoopProofImportV1, ProductionCollectiveSemanticContractV1,
-    ProductionCollectiveSemanticKindV1, ProductionConstructionV1,
+    ProductionCollectiveSemanticKindV1, ProductionConditionalOutputStagingErrorV1,
+    ProductionConditionalOutputStagingV1, ProductionConstructionV1,
     ProductionCooperativeTensorBindingV1, ProductionEffectRefinementContractV2,
     ProductionFunctionalRefinementAdmissionErrorV2, ProductionGpuWriteSiteV2,
     ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
@@ -77,9 +78,9 @@ pub use production::{
     production_dynamic_loop_bound_identity_v1, production_effect_contract_identity_v1,
     production_loop_transition_identity_v1, production_loop_variant_identity_v1,
     production_ranked_value_identity_v1, reconcile_ranked_kernel_with_safe_reference_mir_v1,
-    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
-    require_total_output_staging_v2, typed_semantic_commitment_reconciliation_v2,
-    typed_semantic_obligation_summary_v2,
+    require_conditional_output_staging_v1, require_mir_pliron_semantic_contract_v1,
+    require_parallel_reference_contract_v1, require_total_output_staging_v2,
+    typed_semantic_commitment_reconciliation_v2, typed_semantic_obligation_summary_v2,
 };
 pub use production::{
     ProductionSemanticSsaConstantOccurrenceV1, ProductionSemanticSsaEdgeDefinitionOccurrenceV1,

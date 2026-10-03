@@ -544,7 +544,7 @@ fn run_write_only_proof_extraction(
 }
 
 #[test]
-#[ignore = "acceptance target: dynamic write-only output still needs total-view coverage; requires pinned Verus and AMD target"]
+#[ignore = "acceptance target: conditional output still needs signed aggregate and source-to-machine admission; requires pinned Verus and AMD target"]
 fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
     let target = ScratchTarget::new();
     let handoff_output = target.path().join("write-only-semantic.handoff");
@@ -608,7 +608,7 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
 
 #[test]
 #[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
-fn write_only_output_genuine_value_proof_reaches_the_dynamic_coverage_gate() {
+fn write_only_output_genuine_value_proof_reaches_the_conditional_aggregate_gate() {
     let target = ScratchTarget::new();
     let handoff_output = target.path().join("unproved-coverage.handoff");
     let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
@@ -618,9 +618,11 @@ fn write_only_output_genuine_value_proof_reaches_the_dynamic_coverage_gate() {
         "unproved total coverage was admitted"
     );
     assert!(
-        stderr.contains("source-to-proof V2 ranked admission failed: error[FE2O3-OWN-002]")
-            && stderr.contains("launch dimension 0 is dynamic"),
-        "positive value proof did not reach the separate coverage gate:\n{stderr}"
+        stderr.contains(
+            "conditional output 0 has live guarded coverage and policy-checked value staging"
+        ) && stderr
+            .contains("signed conditional aggregate and packed launch discharge are required"),
+        "positive value proof did not reach the separate conditional aggregate gate:\n{stderr}"
     );
     assert!(!stderr.contains("functional-refinement Verus execution failed"));
     assert!(

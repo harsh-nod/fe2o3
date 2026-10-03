@@ -111,6 +111,7 @@ pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
     kernel: ProductionRankedKernelV1,
     requests: Vec<CompilerOwnedReferenceEffectSiteV2>,
     proof_timeout_seconds: u32,
+    conditional_output: Option<ProductionRankedValueV1>,
 }
 
 struct CompilerOwnedReferenceEffectSiteV2 {
@@ -190,13 +191,15 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, bound).map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
             })?;
-        compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+        let lowering = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
             construction,
             ProductionSessionLimitsV1::default(),
             imported_proofs,
             policy,
         )
-        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))
+        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))?;
+        require_reference_coverage_v2(&lowering, self.conditional_output)?;
+        Ok(lowering)
     }
 }
 
@@ -388,6 +391,12 @@ pub(crate) fn prepare_reference_effect_request_v2(
     )
     .map_err(|error| ProductionReferenceEffectJoinErrorV2::Subjects(error.to_string()))?;
 
+    let conditional_output = match prepared.as_slice() {
+        [output] if is_dynamic_output_candidate_v2(&kernel, output.write.view) => {
+            Some(output.write.view)
+        }
+        _ => None,
+    };
     let mut blocks = kernel.blocks().to_vec();
     let mut owned_views = BTreeSet::new();
     let existing_ownership = blocks
@@ -452,7 +461,11 @@ pub(crate) fn prepare_reference_effect_request_v2(
         }
         entry_operations.push(ProductionRankedOperationV1::OwnershipContract {
             view: output.write.view,
-            coverage: OwnershipCoverageAttr::TotalView,
+            coverage: if conditional_output == Some(output.write.view) {
+                OwnershipCoverageAttr::ExactEffectDomain
+            } else {
+                OwnershipCoverageAttr::TotalView
+            },
             partition: OwnershipPartitionAttr::ExactSets,
         });
     }
@@ -554,7 +567,73 @@ pub(crate) fn prepare_reference_effect_request_v2(
         kernel,
         requests,
         proof_timeout_seconds,
+        conditional_output,
     })
+}
+
+// This only selects a candidate. Acceptance requires the independent classifier
+// on the final, materialized, nine-pass owner after reference effects are joined.
+fn is_dynamic_output_candidate_v2(
+    kernel: &ProductionRankedKernelV1,
+    view: ProductionRankedValueV1,
+) -> bool {
+    kernel
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .any(|operation| match operation {
+            ProductionRankedOperationV1::View {
+                result,
+                shape,
+                dynamic_extents,
+                writable: true,
+                ..
+            }
+            | ProductionRankedOperationV1::ViewInSpace {
+                result,
+                shape,
+                dynamic_extents,
+                writable: true,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                ..
+            } => {
+                ProductionRankedValueV1::Local(*result) == view
+                    && shape == &[DYNAMIC_EXTENT]
+                    && matches!(
+                        dynamic_extents.as_slice(),
+                        [ProductionRankedValueV1::Argument(_)]
+                    )
+            }
+            _ => false,
+        })
+}
+
+fn require_reference_coverage_v2(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    conditional_output: Option<ProductionRankedValueV1>,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    let Some(view) = conditional_output else {
+        return Ok(());
+    };
+    let [coverage] = lowering.ownership_report().conditional_coverage() else {
+        return Err(ProductionReferenceEffectJoinErrorV2::MissingConditionalCoverage);
+    };
+    if !lowering.all_mandatory_reports_are_clean()
+        || lowering.live_ranked_view_name(view) != Some(coverage.view_name())
+        || lowering
+            .ownership_report()
+            .coverage_summary()
+            .total_view_declared()
+            != 0
+        || lowering
+            .ownership_report()
+            .coverage_summary()
+            .total_view_proved()
+            != 0
+    {
+        return Err(ProductionReferenceEffectJoinErrorV2::MissingConditionalCoverage);
+    }
+    Ok(())
 }
 
 fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
@@ -1462,6 +1541,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         detail: String,
     },
     AmbiguousOwnership,
+    MissingConditionalCoverage,
     WriteLocation,
     InvalidReservedValueCount {
         expected: usize,
@@ -1531,6 +1611,9 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             ),
             Self::AmbiguousOwnership => formatter.write_str(
                 "source-to-proof V2 output view already has an ownership contract; one compiler-owned contract is required",
+            ),
+            Self::MissingConditionalCoverage => formatter.write_str(
+                "source-to-proof V2 dynamic output lacks exact guarded identity coverage in the final live PLIRON owner",
             ),
             Self::WriteLocation => {
                 formatter.write_str("source-to-proof V2 GPU write location is outside the ranked CFG")

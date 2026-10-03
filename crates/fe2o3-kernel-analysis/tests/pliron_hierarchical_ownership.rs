@@ -610,6 +610,245 @@ fn exact_effect_domain_accepts_a_guarded_runtime_extent_without_whole_view_cover
     let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
     assert!(report.is_clean(), "{:#?}", report.findings());
     assert!(report.regions().is_empty());
+    let [conditional] = report.conditional_coverage() else {
+        panic!("missing conditional coverage: {report:?}");
+    };
+    assert_eq!(conditional.ranked_extent_argument(), 0);
+    assert_eq!(conditional.static_global_x_extent(), Some(8));
+    assert_eq!(conditional.allocation_origin(), 17);
+    assert_eq!(conditional.element_width(), 32);
+    assert!(!conditional.grants_artifact_or_launch_authority());
+    assert!(!report.all_total_view_contracts_are_proved());
+    assert_eq!(report.coverage_summary().total_view_declared(), 0);
+    assert_eq!(report.coverage_summary().total_view_proved(), 0);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConditionalMutation {
+    None,
+    WrongExtent,
+    WrongIndex,
+    WrongLaunch,
+    WrongDimension,
+    WrongView,
+    MissingGuard,
+    MissingWrite,
+    DuplicateWrite,
+    FalseWrite,
+    BypassWrite,
+    Trap,
+    Cycle,
+    Unreachable,
+    ExtraRead,
+    ExtraAllocationEffect,
+    UnknownBranch,
+    ForeignSuccessor,
+    MissingOrigin,
+}
+
+fn conditional_fixture(
+    context: &mut Context,
+    global: u64,
+    mutation: ConditionalMutation,
+) -> FuncOp {
+    use ConditionalMutation as M;
+    let (function, args) = function(context, "conditional", 2);
+    let entry = function.get_entry_block(context);
+    let body = block(context, &function, "write");
+    let skip = block(context, &function, "skip");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, [global, 1, 1], [64, 1, 1], 64);
+    append(context, entry, &execution);
+    let invocation = InvocationIndexOp::new(
+        context,
+        u32::from(matches!(mutation, M::WrongDimension)),
+        if matches!(mutation, M::WrongLaunch) {
+            128
+        } else {
+            global
+        },
+    );
+    append(context, entry, &invocation);
+    let origin = if matches!(mutation, M::MissingOrigin) {
+        0
+    } else {
+        17
+    };
+    let output = view_with_allocation(
+        context,
+        vec![0],
+        vec![args[0]],
+        MemorySpaceAttr::Global,
+        origin,
+        origin,
+    );
+    append(context, entry, &output);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::ExactEffectDomain,
+    );
+    append(context, entry, &ownership);
+    let zero = IndexConstantOp::new(context, 0);
+    append(context, entry, &zero);
+    let store_view = if matches!(mutation, M::WrongView) {
+        let second = view_with_allocation(
+            context,
+            vec![0],
+            vec![args[0]],
+            MemorySpaceAttr::Global,
+            18,
+            18,
+        );
+        append(context, entry, &second);
+        second.result(context)
+    } else {
+        output.result(context)
+    };
+    if matches!(mutation, M::BypassWrite) {
+        let guarded = block(context, &function, "guarded");
+        let split = dialect_kernel::AnalysisSplitOp::new(context, guarded, exit);
+        append(context, entry, &split);
+        let guard =
+            IndexLessThanBranchOp::new(context, invocation.result(context), args[0], body, skip);
+        append(context, guarded, &guard);
+    } else if matches!(mutation, M::MissingGuard) {
+        let branch = BranchOp::new(context, body);
+        append(context, entry, &branch);
+    } else if matches!(mutation, M::UnknownBranch) {
+        let branch = dialect_kernel::AnalysisSplitOp::new(context, body, skip);
+        append(context, entry, &branch);
+    } else {
+        let guard = IndexLessThanBranchOp::new(
+            context,
+            invocation.result(context),
+            args[usize::from(matches!(mutation, M::WrongExtent))],
+            body,
+            skip,
+        );
+        append(context, entry, &guard);
+    }
+    let index = if matches!(mutation, M::WrongIndex) {
+        zero.result(context)
+    } else {
+        invocation.result(context)
+    };
+    let destination = if matches!(mutation, M::FalseWrite) {
+        skip
+    } else {
+        body
+    };
+    if !matches!(mutation, M::MissingWrite) {
+        let store = write(context, store_view, vec![index]);
+        append(context, destination, &store);
+    }
+    if matches!(mutation, M::DuplicateWrite) {
+        let store = write(context, store_view, vec![index]);
+        append(context, body, &store);
+    }
+    if matches!(mutation, M::ExtraRead) {
+        let load =
+            RankedAccessOp::new(context, AccessKindAttr::Read, store_view, vec![index]).unwrap();
+        append(context, body, &load);
+    }
+    if matches!(mutation, M::ExtraAllocationEffect) {
+        let effect = AllocationEffectOp::new(
+            context,
+            AccessKindAttr::Read,
+            MemorySpaceAttr::Global,
+            99,
+            99,
+        )
+        .unwrap();
+        append(context, body, &effect);
+    }
+    let next = if matches!(mutation, M::Cycle) {
+        body
+    } else {
+        exit
+    };
+    let branch = BranchOp::new(context, next);
+    append(context, body, &branch);
+    if matches!(mutation, M::Trap) {
+        let trap = TrapOp::new(context);
+        append(context, skip, &trap);
+    } else {
+        let next = if matches!(mutation, M::ForeignSuccessor) {
+            BasicBlock::new(context, None, vec![])
+        } else {
+            exit
+        };
+        let branch = BranchOp::new(context, next);
+        append(context, skip, &branch);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, exit, &ret);
+    if matches!(mutation, M::Unreachable) {
+        let dead = block(context, &function, "unreachable");
+        let ret = ReturnOp::new(context);
+        append(context, dead, &ret);
+    }
+    function
+}
+
+#[test]
+fn conditional_identity_coverage_retains_symbolic_launch_without_materializing_it() {
+    for global in [0, 64, 128, 1_u64 << 40] {
+        let context = &mut setup();
+        let function = conditional_fixture(context, global, ConditionalMutation::None);
+        let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
+        assert!(report.is_clean(), "global={global}: {report:?}");
+        let [coverage] = report.conditional_coverage() else {
+            panic!("global={global}: {report:?}");
+        };
+        assert_eq!(
+            coverage.static_global_x_extent(),
+            (global != 0).then_some(global)
+        );
+        assert_eq!(coverage.ranked_extent_argument(), 0);
+        assert_eq!(coverage.guard_location().block(), 0);
+        assert_eq!(coverage.write_location().block(), 1);
+        assert_eq!(coverage.workgroup_extents(), [64, 1, 1]);
+        assert_eq!(report.coverage_summary().total_view_proved(), 0);
+    }
+}
+
+#[test]
+fn conditional_identity_coverage_rejects_incomplete_or_different_write_domains() {
+    use ConditionalMutation as M;
+    for mutation in [
+        M::WrongExtent,
+        M::WrongIndex,
+        M::WrongLaunch,
+        M::WrongDimension,
+        M::WrongView,
+        M::MissingGuard,
+        M::MissingWrite,
+        M::DuplicateWrite,
+        M::FalseWrite,
+        M::BypassWrite,
+        M::Trap,
+        M::Cycle,
+        M::Unreachable,
+        M::ExtraRead,
+        M::ExtraAllocationEffect,
+        M::UnknownBranch,
+        M::ForeignSuccessor,
+        M::MissingOrigin,
+    ] {
+        let context = &mut setup();
+        let function = conditional_fixture(context, 0, mutation);
+        let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
+        assert!(
+            report.conditional_coverage().is_empty(),
+            "{mutation:?}: {report:?}"
+        );
+        assert_eq!(
+            report.coverage_summary().total_view_proved(),
+            0,
+            "{mutation:?}"
+        );
+    }
 }
 
 #[test]

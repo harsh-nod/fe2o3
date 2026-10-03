@@ -30,6 +30,9 @@ use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 use crate::{PresburgerCoverageDecisionV1, PresburgerFiniteImageV1};
 
+mod conditional;
+pub use conditional::GuardedIdentityCoverageV1;
+
 /// Maximum logical output elements materialized by one exact coverage proof.
 pub const MAX_HIERARCHICAL_OWNERSHIP_ELEMENTS_V1: usize = 1_048_576;
 /// Maximum independently contracted output views in one function.
@@ -589,6 +592,7 @@ pub struct HierarchicalOwnershipReportV1 {
     findings: Vec<HierarchicalOwnershipFindingV1>,
     regions: Vec<HierarchicalOwnershipRegionV1>,
     coverage_summary: HierarchicalCoverageProofSummaryV1,
+    conditional_coverage: Vec<GuardedIdentityCoverageV1>,
 }
 
 impl HierarchicalOwnershipReportV1 {
@@ -614,6 +618,12 @@ impl HierarchicalOwnershipReportV1 {
 
     pub const fn coverage_summary(&self) -> HierarchicalCoverageProofSummaryV1 {
         self.coverage_summary
+    }
+
+    /// Exact guarded write domains, still conditional on the launch covering
+    /// the runtime extent. These are not total-view or launch authorization.
+    pub fn conditional_coverage(&self) -> &[GuardedIdentityCoverageV1] {
+        &self.conditional_coverage
     }
 
     /// True only for a clean report containing at least one proved total-view
@@ -834,6 +844,14 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
 
     let mut findings = Vec::new();
     let mut regions = Vec::new();
+    let conditional_coverage = match contracts.as_slice() {
+        [contract] if needs_effect_domain => {
+            conditional::classify_guarded_identity_v1(context, &inventory, layout, contract)
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    };
     for contract in contracts {
         let (extents, element_count) = match contract.coverage {
             OwnershipCoverageAttr::ExactView | OwnershipCoverageAttr::TotalView => {
@@ -897,6 +915,11 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         findings.push(HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail });
     }
     HierarchicalOwnershipReportV1 {
+        conditional_coverage: if findings.is_empty() {
+            conditional_coverage
+        } else {
+            Vec::new()
+        },
         findings,
         regions,
         coverage_summary,
@@ -1492,6 +1515,7 @@ fn first_coordinate_matching(
 
 fn clean() -> HierarchicalOwnershipReportV1 {
     HierarchicalOwnershipReportV1 {
+        conditional_coverage: Vec::new(),
         findings: Vec::new(),
         regions: Vec::new(),
         coverage_summary: HierarchicalCoverageProofSummaryV1::default(),
@@ -1507,6 +1531,7 @@ fn one_with_summary(
     coverage_summary: HierarchicalCoverageProofSummaryV1,
 ) -> HierarchicalOwnershipReportV1 {
     HierarchicalOwnershipReportV1 {
+        conditional_coverage: Vec::new(),
         findings: vec![finding],
         regions: Vec::new(),
         coverage_summary,
