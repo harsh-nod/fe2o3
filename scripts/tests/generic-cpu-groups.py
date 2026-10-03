@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 import os
+import stat
+import sys
 import re
 import subprocess
 import tempfile
@@ -155,7 +158,7 @@ class CpuGroupTests(unittest.TestCase):
                     f"cpu-{group}-workspace-dependencies",
                     "cargo", "fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml"),
                 ))
-                self.assertEqual(rows[1], ("driver-bootstrap", f"cpu-{group}"))
+                self.assertEqual(rows[1], ("driver-bootstrap", f"cpu-{group}", "create-private"))
                 self.assertEqual(rows[-1][0], f"cpu-{group}-tests")
                 self.assertEqual(self.package_command(rows[-1]), expected[group])
                 self.assertEqual(len(rows), 4 if group == "pliron" else 3)
@@ -252,6 +255,309 @@ class CpuGroupTests(unittest.TestCase):
                     capture_output=True, check=False, timeout=10,
                 )
                 self.assertEqual(result.returncode == 0, statuses == ("success", "success"))
+
+
+COLD_HARNESS = r'''
+set -Eeuo pipefail
+source "$1"
+shift
+run_step() {
+  printf 'stage:%s\n' "$1"
+  shift
+  "$@"
+}
+stat() {
+  if [[ "${@: -1}" == "${CARGO_TARGET_DIR}" ]]; then
+    if [[ "$2" == %a && "${CUSTODY_FAULT:-}" == mode ]] ||
+      [[ "$2" == %u && "${CUSTODY_FAULT:-}" == owner ]]; then
+      return 41
+    fi
+    if [[ "$2" == %u && "${FAKE_FOREIGN_OWNER:-0}" == 1 ]]; then
+      printf '%s\n' "$(( $(id -u) + 1 ))"
+      return
+    fi
+  fi
+  command stat "$@"
+}
+id() {
+  if [[ "${CUSTODY_FAULT:-}" == uid ]]; then return 41; fi
+  command id "$@"
+}
+if [[ -n "${REALPATH_STATUS:-}" ]]; then
+  realpath() {
+    if [[ "${@: -1}" == "${CARGO_TARGET_DIR}" ]]; then
+      return "${REALPATH_STATUS}"
+    fi
+    command realpath "$@"
+  }
+fi
+if [[ "${COLD_ENTRY:-group}" == resolve ]]; then
+  resolved="$(resolve_cargo_target_directory)"
+  printf '%s\n' "${resolved}"
+else
+  run_cpu_package_group "$1"
+  validate_cargo_fe2o3_driver
+  printf 'sealed:%s\n' "${CARGO_FE2O3_BINARY}"
+  printf 'sealed-mode:%s:%s\n' \
+    "$(stat -c '%a' -- "${CARGO_FE2O3_DRIVER_ROOT}")" \
+    "$(stat -c '%a' -- "${CARGO_FE2O3_BINARY}")"
+  if [[ "${TAMPER_SEAL:-0}" == 1 ]]; then
+    chmod 700 -- "${CARGO_FE2O3_BINARY}"
+    printf '# changed\n' >>"${CARGO_FE2O3_BINARY}"
+    chmod 500 -- "${CARGO_FE2O3_BINARY}"
+    validate_cargo_fe2o3_driver
+  fi
+fi
+'''
+COLD_CARGO = r'''#!__PYTHON__
+import json
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+calls = Path(os.environ["COLD_CALLS"])
+prior = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+with calls.open("a") as output:
+    print(json.dumps(arguments), file=output)
+command = arguments[0]
+if command == "fetch":
+    sys.exit(int(os.environ.get("FETCH_STATUS", "0")))
+if command == "metadata":
+    if os.environ.get("INVALID_METADATA"):
+        print("not JSON")
+        sys.exit(0)
+    target = os.environ["CARGO_TARGET_DIR"]
+    if os.environ.get("METADATA_TARGET"):
+        target = os.environ["METADATA_TARGET"]
+    if os.environ.get("METADATA_DRIFT") and any(row[0] == "metadata" for row in prior):
+        target += "/substituted"
+    root = Path(os.environ["COLD_REPO"])
+    print(json.dumps({
+        "target_directory": target,
+        "packages": [{
+            "id": "cargo-fe2o3#fixture",
+            "name": "cargo-fe2o3",
+            "manifest_path": str(root / "crates/cargo-fe2o3/Cargo.toml"),
+            "targets": [{
+                "name": "cargo-fe2o3", "kind": ["bin"],
+                "src_path": str(root / "crates/cargo-fe2o3/src/main.rs"),
+            }],
+        }],
+    }))
+    sys.exit(0)
+if command == "build":
+    target = Path(os.environ["CARGO_TARGET_DIR"])
+    if not target.is_dir() or target.is_symlink():
+        sys.exit(81)
+    status = int(os.environ.get("BUILD_STATUS", "0"))
+    if status:
+        sys.exit(status)
+    binary = target / "debug/cargo-fe2o3"
+    binary.parent.mkdir(mode=0o700)
+    binary.write_text("#!/usr/bin/env bash\nexit 0\n")
+    binary.chmod(0o700)
+    print(json.dumps({
+        "reason": "compiler-artifact",
+        "package_id": "hostile#fixture" if os.environ.get("WRONG_RECEIPT") else "cargo-fe2o3#fixture",
+        "target": {
+            "name": "cargo-fe2o3", "kind": ["bin"], "crate_types": ["bin"],
+            "src_path": str(Path(os.environ["COLD_REPO"]) / "crates/cargo-fe2o3/src/main.rs"),
+        },
+        "profile": {"test": False, "opt_level": "0"},
+        "executable": str(binary),
+    }))
+    sys.exit(0)
+if command == "test":
+    sys.exit(0)
+sys.exit(82)
+'''
+
+
+class ColdTargetBootstrapTests(unittest.TestCase):
+    """Run the real directory, receipt and seal path with a fixture Cargo tool."""
+
+    def invoke(self, group="finalize", *, shape="cold", entry="group", **overrides):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-cpu-cold-") as directory:
+            root = Path(directory).resolve()
+            target = root / "nested/target"
+            sentinel = root / "retained"
+            sentinel.write_bytes(b"unrelated retained file\n")
+            real = root / "real"
+            if shape in ("private", "public", "foreign"):
+                target.mkdir(parents=True, mode=0o700)
+                target.chmod(0o755 if shape == "public" else 0o700)
+            elif shape == "file":
+                target.parent.mkdir(mode=0o700)
+                target.write_bytes(b"not a directory\n")
+            elif shape in ("symlink", "dangling"):
+                target.parent.mkdir(mode=0o700)
+                if shape == "symlink":
+                    real.mkdir(mode=0o700)
+                target.symlink_to(real, target_is_directory=True)
+            elif shape == "parent-symlink":
+                real.mkdir(mode=0o700)
+                target.parent.symlink_to(real, target_is_directory=True)
+            binary_dir = root / "bin"
+            binary_dir.mkdir(mode=0o700)
+            cargo = binary_dir / "cargo"
+            cargo.write_text(COLD_CARGO.replace("__PYTHON__", sys.executable))
+            cargo.chmod(0o700)
+            calls = root / "calls.jsonl"
+            temporary = root / "private-tmp"
+            temporary.mkdir(mode=0o700)
+            environment = {
+                "PATH": f"{binary_dir}:{os.environ['PATH']}",
+                "HOME": os.environ["HOME"],
+                "CARGO_TARGET_DIR": str(target),
+                "CI_LOG_DIR": str(root / "separate-logs"),
+                "TMPDIR": str(temporary),
+                "COLD_REPO": str(ROOT),
+                "COLD_CALLS": str(calls),
+                "COLD_ENTRY": entry,
+                **overrides,
+            }
+            if shape == "foreign":
+                environment["FAKE_FOREIGN_OWNER"] = "1"
+            result = subprocess.run(
+                ["bash", "-c", COLD_HARNESS, "bash", str(SCRIPT), group],
+                cwd=ROOT, env=environment, capture_output=True, text=True,
+                check=False, timeout=30,
+            )
+            observed = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+            target_mode = stat.S_IMODE(target.lstat().st_mode) if target.exists() or target.is_symlink() else None
+            sealed_modes = [
+                (int(parent, 8), int(binary, 8))
+                for parent, binary in re.findall(r"^sealed-mode:([0-7]+):([0-7]+)$",
+                                                result.stdout, re.MULTILINE)
+            ]
+            self.assertEqual(list(temporary.glob("fe2o3-ci-driver-*")), [])
+            self.assertEqual(sentinel.read_bytes(), b"unrelated retained file\n")
+            if shape in ("symlink", "dangling"):
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(target.readlink(), real)
+                self.assertFalse((real / "debug").exists())
+            if shape == "parent-symlink":
+                self.assertTrue(target.parent.is_symlink())
+                self.assertFalse((real / "target").exists())
+            if shape == "file":
+                self.assertEqual(target.read_bytes(), b"not a directory\n")
+            return result, observed, target_mode, sealed_modes
+
+    def test_all_package_groups_bootstrap_from_a_real_missing_target(self):
+        for group in PACKAGE_GROUPS:
+            with self.subTest(group=group):
+                result, calls, mode, sealed = self.invoke(group)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(mode, 0o700)
+                self.assertEqual(sealed, [(0o500, 0o500)])
+                commands = [row[0] for row in calls]
+                self.assertEqual(commands[:4], ["fetch", "metadata", "metadata", "build"])
+                self.assertTrue(all(command == "test" for command in commands[4:]))
+                self.assertEqual(commands.count("test"), 2 if group == "pliron" else 1)
+                build = next(row for row in calls if row[0] == "build")
+                self.assertEqual(build, [
+                    "build", "--locked", "-p", "cargo-fe2o3", "--bin", "cargo-fe2o3",
+                    "--message-format=json-render-diagnostics",
+                ])
+                self.assertIn("sealed:", result.stdout)
+
+    def test_existing_private_target_and_legacy_existing_only_policy(self):
+        result, _, mode, sealed = self.invoke(shape="private")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((mode, sealed), (0o700, [(0o500, 0o500)]))
+        result, calls, mode, sealed = self.invoke(entry="resolve")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not a real directory", result.stderr)
+        self.assertEqual([row[0] for row in calls], ["metadata"])
+        self.assertIsNone(mode)
+        self.assertEqual(sealed, [])
+
+    def test_symlinks_non_directories_and_public_targets_are_not_repaired(self):
+        for shape in ("symlink", "dangling", "parent-symlink", "file", "public"):
+            for entry in ("group", "resolve"):
+                with self.subTest(shape=shape, entry=entry):
+                    result, calls, mode, sealed = self.invoke(shape=shape, entry=entry)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    expected = ["fetch", "metadata"] if entry == "group" else ["metadata"]
+                    self.assertEqual([row[0] for row in calls], expected)
+                    self.assertEqual(sealed, [])
+                    if entry == "resolve":
+                        self.assertEqual(result.stdout, "")
+                    if shape == "public":
+                        self.assertEqual(mode, 0o755)
+
+    def test_foreign_target_owner_refuses_before_driver_build(self):
+        for entry in ("group", "resolve"):
+            with self.subTest(entry=entry):
+                result, calls, mode, sealed = self.invoke(shape="foreign", entry=entry)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("owner-held, and private", result.stderr)
+                expected = ["fetch", "metadata"] if entry == "group" else ["metadata"]
+                self.assertEqual([row[0] for row in calls], expected)
+                self.assertEqual((mode, sealed), (0o700, []))
+                if entry == "resolve":
+                    self.assertEqual(result.stdout, "")
+
+    def test_invalid_metadata_and_changed_target_cannot_reach_build(self):
+        for target in ("relative/target", "/first\n/second"):
+            with self.subTest(target=target):
+                result, calls, mode, sealed = self.invoke(METADATA_TARGET=target)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid target directory", result.stderr)
+                self.assertEqual([row[0] for row in calls], ["fetch", "metadata"])
+                self.assertEqual((mode, sealed), (None, []))
+        result, calls, _, sealed = self.invoke(METADATA_DRIFT="1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("target_directory changed", result.stderr)
+        self.assertNotIn("build", [row[0] for row in calls])
+        self.assertEqual(sealed, [])
+
+    def test_fetch_build_and_receipt_failures_never_run_package_tests(self):
+        for fault, status, expected in (
+            ({"FETCH_STATUS": "29"}, 29, ["fetch"]),
+            ({"BUILD_STATUS": "31"}, 31, ["fetch", "metadata", "metadata", "build"]),
+            ({"WRONG_RECEIPT": "1"}, 1, ["fetch", "metadata", "metadata", "build"]),
+        ):
+            with self.subTest(fault=fault):
+                result, calls, _, sealed = self.invoke(**fault)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual([row[0] for row in calls], expected)
+                self.assertEqual(sealed, [])
+
+    def test_metadata_and_realpath_failures_propagate_without_target_or_build(self):
+        for fault, status in (({"INVALID_METADATA": "1"}, 1), ({"REALPATH_STATUS": "37"}, 37)):
+            for shape, entry in (("cold", "group"), ("private", "group"), ("private", "resolve")):
+                with self.subTest(fault=fault, shape=shape, entry=entry):
+                    result, calls, mode, sealed = self.invoke(shape=shape, entry=entry, **fault)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    expected = ["fetch", "metadata"] if entry == "group" else ["metadata"]
+                    self.assertEqual([row[0] for row in calls], expected)
+                    self.assertEqual(sealed, [])
+                    if shape == "cold":
+                        self.assertIsNone(mode)
+                    if entry == "resolve":
+                        self.assertEqual(result.stdout, "")
+
+    def test_custody_query_failures_propagate_inside_both_resolver_assignments(self):
+        for fault in ("mode", "owner", "uid"):
+            for entry in ("group", "resolve"):
+                with self.subTest(fault=fault, entry=entry):
+                    result, calls, mode, sealed = self.invoke(
+                        shape="private", entry=entry, CUSTODY_FAULT=fault)
+                    self.assertEqual(result.returncode, 41, result.stderr)
+                    expected = ["fetch", "metadata"] if entry == "group" else ["metadata"]
+                    self.assertEqual([row[0] for row in calls], expected)
+                    self.assertEqual((mode, sealed), (0o700, []))
+                    if entry == "resolve":
+                        self.assertEqual(result.stdout, "")
+
+    def test_real_sealed_driver_validator_still_rejects_changed_bytes(self):
+        result, calls, _, sealed = self.invoke(TAMPER_SEAL="1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("test", [row[0] for row in calls])
+        self.assertEqual(sealed, [(0o500, 0o500)])
+        self.assertIn("sealed driver identity or private custody changed", result.stderr)
 
 
 if __name__ == "__main__":

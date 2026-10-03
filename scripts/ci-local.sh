@@ -260,18 +260,19 @@ run_step() {
 validate_private_directory() {
   local label="$1"
   local directory="$2"
-  local canonical mode owner
+  local canonical mode owner current_owner
 
   [[ "${directory}" == /* && -d "${directory}" && ! -L "${directory}" ]] || {
     printf '%s must be an absolute non-symlink directory: %s\n' \
       "${label}" "${directory}" >&2
     return 2
   }
-  canonical="$(realpath --canonicalize-existing -- "${directory}")"
-  mode="$(stat -c '%a' -- "${directory}")"
-  owner="$(stat -c '%u' -- "${directory}")"
+  canonical="$(realpath --canonicalize-existing -- "${directory}")" || return $?
+  mode="$(stat -c '%a' -- "${directory}")" || return $?
+  owner="$(stat -c '%u' -- "${directory}")" || return $?
+  current_owner="$(id -u)" || return $?
   if [[ "${canonical}" != "${directory}" ]] ||
-    ((8#${mode} & 8#077)) || [[ "${owner}" != "$(id -u)" ]]; then
+    ((8#${mode} & 8#077)) || [[ "${owner}" != "${current_owner}" ]]; then
     printf '%s must be canonical, owner-held, and private: %s\n' \
       "${label}" "${directory}" >&2
     return 2
@@ -279,29 +280,44 @@ validate_private_directory() {
 }
 
 resolve_cargo_target_directory() {
-  local target_directory canonical
+  local target_directory canonical mode="${1-existing}"
+  case "${mode}" in
+    existing | create-private) ;;
+    *) printf 'unknown Cargo target preparation mode: %s\n' "${mode}" >&2; return 2 ;;
+  esac
   target_directory="$(
     cargo metadata --locked --no-deps --format-version 1 |
       python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
-  )"
+  )" || return $?
   if [[ "${target_directory}" != /* ]] ||
     [[ "${target_directory}" == *$'\n'* ]]; then
     printf 'Cargo reported an invalid target directory: %q\n' \
       "${target_directory}" >&2
     return 2
   fi
+  # Cold package lanes have no preceding build to create this metadata-bound root.
+  if [[ "${mode}" == create-private && ! -e "${target_directory}" &&
+    ! -L "${target_directory}" ]]; then
+    canonical="$(realpath --canonicalize-missing -- "${target_directory}")" || return $?
+    [[ "${canonical}" == "${target_directory}" ]] || {
+      printf 'new Cargo target directory must be canonical: %s\n' \
+        "${target_directory}" >&2
+      return 2
+    }
+    mkdir -p -m 700 -- "${target_directory}" || return $?
+  fi
   [[ -d "${target_directory}" && ! -L "${target_directory}" ]] || {
     printf 'Cargo target directory is not a real directory: %s\n' \
       "${target_directory}" >&2
     return 2
   }
-  canonical="$(realpath --canonicalize-existing -- "${target_directory}")"
+  canonical="$(realpath --canonicalize-existing -- "${target_directory}")" || return $?
   if [[ "${canonical}" != "${target_directory}" ]]; then
     printf 'Cargo target directory must already be canonical: %s\n' \
       "${target_directory}" >&2
     return 2
   fi
-  validate_private_directory 'Cargo target directory' "${canonical}"
+  validate_private_directory 'Cargo target directory' "${canonical}" || return $?
   printf '%s\n' "${canonical}"
 }
 
@@ -402,6 +418,7 @@ prepare_private_tmp_root() {
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
   local driver_profile="$2"
+  local target_mode="${3-existing}"
   local metadata_receipt receipt built_binary built_sha256
   local -a driver_identity feature_args=()
 
@@ -415,7 +432,7 @@ prepare_cargo_fe2o3_driver() {
   esac
   CARGO_FE2O3_DRIVER_PROFILE=
 
-  CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory)"
+  CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory "${target_mode}")"
   prepare_private_tmp_root
   metadata_receipt="$(mktemp -- "${TMPDIR}/cargo-fe2o3-metadata.XXXXXX.json")"
   cargo metadata --locked --no-deps --format-version 1 >"${metadata_receipt}"
@@ -506,7 +523,7 @@ ensure_production_cargo_fe2o3_driver() {
       validate_cargo_fe2o3_driver
       ;;
     "")
-      prepare_cargo_fe2o3_driver "${step_prefix}" production
+      prepare_cargo_fe2o3_driver "${step_prefix}" production "${2-existing}"
       ;;
     *)
       printf 'CPU tests cannot reuse %s cargo-fe2o3 driver as production\n' \
@@ -778,7 +795,7 @@ run_cpu_package_group() {
   local -a packages cargo_args=(test --locked)
   load_cpu_package_group "${group}" packages
   run_workspace_dependency_bootstrap "cpu-${group}"
-  ensure_production_cargo_fe2o3_driver "cpu-${group}"
+  ensure_production_cargo_fe2o3_driver "cpu-${group}" create-private
   for package in "${packages[@]}"; do
     cargo_args+=(-p "${package}")
   done
