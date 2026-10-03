@@ -536,6 +536,7 @@ pub(crate) fn validate_provisioned_file(
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime_listener::RuntimeListenerError;
     use rustix::{
         fs::AtFlags,
         net::{SocketAddrAny, SocketAddrUnix},
@@ -548,6 +549,24 @@ mod tests {
     use super::*;
 
     const TEST_SOCKET_ENTRY_V1: &str = "listener.sock";
+
+    fn listener_fixture() -> tempfile::TempDir {
+        // Unix socket paths are bounded even when the build's TMPDIR is long.
+        let fixture = tempfile::Builder::new()
+            .prefix("f2-listener-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        assert!(
+            fixture
+                .path()
+                .join(TEST_SOCKET_ENTRY_V1)
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                <= 107
+        );
+        fixture
+    }
 
     #[test]
     fn inherited_descriptor_contract_is_dense_unique_and_fixed() {
@@ -596,7 +615,7 @@ mod tests {
 
     #[test]
     fn constructed_listener_is_exactly_bound_and_non_listening() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = listener_fixture();
         let socket_path = fixture.path().join(TEST_SOCKET_ENTRY_V1);
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();
@@ -635,13 +654,13 @@ mod tests {
 
     #[test]
     fn constructed_listener_rejects_an_occupied_fixed_path_without_replacement() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = listener_fixture();
         let socket_path = fixture.path().join(TEST_SOCKET_ENTRY_V1);
         fs::write(&socket_path, b"occupied").unwrap();
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();
 
-        assert!(
+        assert!(matches!(
             ConstructedRuntimeListenerV1::construct(
                 admit_test_runtime_root(fixture.path()),
                 &socket_path,
@@ -649,20 +668,23 @@ mod tests {
                 uid,
                 gid,
                 0o660,
-            )
-            .is_err()
-        );
+            ),
+            Err(RuntimeListenerError::Invalid {
+                role: "compiler-execution listener",
+                reason: "fixed pathname already exists",
+            })
+        ));
         assert_eq!(fs::read(&socket_path).unwrap(), b"occupied");
     }
 
     #[test]
     fn constructed_listener_cleans_the_path_on_post_bind_error() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = listener_fixture();
         let socket_path = fixture.path().join(TEST_SOCKET_ENTRY_V1);
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();
 
-        assert!(
+        assert!(matches!(
             ConstructedRuntimeListenerV1::construct(
                 admit_test_runtime_root(fixture.path()),
                 &socket_path,
@@ -670,15 +692,56 @@ mod tests {
                 uid,
                 gid,
                 0o10_000,
-            )
-            .is_err()
-        );
+            ),
+            Err(RuntimeListenerError::Invalid {
+                role: "compiler-execution listener",
+                reason: "pathname type, owner, group, mode, links, length, or identity is not exact",
+            })
+        ));
         assert!(!socket_path.exists());
     }
 
     #[test]
+    fn constructed_listener_enforces_exact_unix_path_length_boundary() {
+        let fixture = listener_fixture();
+        let prefix_bytes = fixture.path().as_os_str().as_encoded_bytes().len();
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+        for socket_bytes in [107, 108] {
+            let padding = socket_bytes - prefix_bytes - TEST_SOCKET_ENTRY_V1.len() - 2;
+            let runtime_root = fixture.path().join("r".repeat(padding));
+            fs::create_dir(&runtime_root).unwrap();
+            let socket_path = runtime_root.join(TEST_SOCKET_ENTRY_V1);
+            assert_eq!(
+                socket_path.as_os_str().as_encoded_bytes().len(),
+                socket_bytes
+            );
+            let result = ConstructedRuntimeListenerV1::construct(
+                admit_test_runtime_root(&runtime_root),
+                &socket_path,
+                TEST_SOCKET_ENTRY_V1,
+                uid,
+                gid,
+                0o660,
+            );
+            if socket_bytes == 107 {
+                drop(result.expect("maximum-length Unix socket path must bind"));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(RuntimeListenerError::Invalid {
+                        role: "compiler-execution listener",
+                        reason: "socket path is not the fixed runtime-root entry",
+                    })
+                ));
+            }
+            assert!(!socket_path.exists());
+        }
+    }
+
+    #[test]
     fn listener_cleanup_does_not_unlink_a_replacement_inode() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = listener_fixture();
         let socket_path = fixture.path().join(TEST_SOCKET_ENTRY_V1);
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();
@@ -700,7 +763,7 @@ mod tests {
 
     #[test]
     fn listener_revalidation_rejects_any_path_xattr_when_supported() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = listener_fixture();
         let socket_path = fixture.path().join(TEST_SOCKET_ENTRY_V1);
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();
