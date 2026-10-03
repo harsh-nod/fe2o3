@@ -119,6 +119,11 @@ jobs:
           python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
           -p 'test_xgmi_retained_wait_cadence*.py'
 
+      - name: Selected-device smoke controllers (no GPU or network)
+        run: >-
+          python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
+          -p 'test_*_smoke.py'
+
       - name: Recorded wait arithmetic diagnostics (no fresh proof)
         run: |
           python3 -I -B docs/evidence/dev-monotonic-wait-arithmetic-2026-10-01/check-recorded-diagnostics.py

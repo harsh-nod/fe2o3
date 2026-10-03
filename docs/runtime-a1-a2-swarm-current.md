@@ -30,7 +30,9 @@ without relaxing journal Unknown handling. Ordered settled-source lists into
 one destination now pass three-GPU qualification, including overlaps, early
 source disposal, full-frame D2H and prequeued/late compute consumers. Pending
 compute sources now also compose with ordered destination lists on three GPUs,
-with independently retained source and destination dependencies. Earlier matched
+with independently retained source and destination dependencies. Pending list
+frames now also feed checked scalar peer windows and guarded whole-target D2H
+on three GPUs, in prequeued and late-admitted copy-only pipelines. Earlier matched
 wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
@@ -48,7 +50,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered settled/pending-compute-source destination lists and full-frame consumers on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, pending-list-frame forwarding, eight-GPU coverage and post-arm/native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
@@ -71,18 +73,23 @@ must not become a prerequisite for running their already-admitted smoke tests.
    passes native transfers in both directions and host-staged controls, with
    fresh endpoint observations, exact binary identity, full-byte checks and cleanup.
    Do not use the generic hardware-smoke job's all-device examples on this host.
-2. Close pending list-frame forwarding: an initialized gathered frame on GPU B
-   must feed a queued checked-window peer copy to GPU C, without a host join.
-   Retain the exact latest writer, frame ancestry and event dependencies; do not
-   substitute a compute producer for a frame or broaden scalar coverage.
-3. Qualify post-arm failure isolation and group cleanup. Indeterminate native
-   effects remain fail-stop until recovery has its own evidence. No resets or
-   destructive fault injection on the shared machine.
-4. In a separate admission lane, enable the first ordinary application kernel
+2. Pending list-frame forwarding now passes the
+   [eight-case three-GPU checkpoint](evidence/dev-pending-frame-forward-2026-10-03/README.md).
+   An initialized gathered frame on GPU B feeds a queued checked-window peer
+   copy to GPU C and whole-target D2H, without a host join. Exact latest-writer,
+   frame and event custody are retained; frame provenance is not compute authority.
+3. Next functional priority: enable the first ordinary application kernel
    through actual source/KIR/machine refinement and protected invocation custody.
    [Actual-emission capture](evidence/dev-checked-u32-emission-capture-2026-10-03/README.md)
    is now CPU-qualified; it is not a value-equality theorem or authorization to
-   launch a kernel.
+   launch a kernel. The next bounded proof packet is straight-line checked-u32
+   source/KIR prefix value simulation. Machine/ABI/memory/continuation refinement
+   and a deployment-approved production verifier still follow; no fixture
+   authority can substitute for them.
+4. Qualify post-arm failure isolation and group cleanup as a separate resilience
+   gate. It is not a prerequisite for already-admitted healthy copy/finite-compute
+   execution. Indeterminate native effects remain fail-stop until recovery has
+   its own evidence. No resets or destructive fault injection on the shared host.
 
 Distributed milestones, broader collective coverage, eight-device campaigns and
 performance optimization are outside this immediate critical path. Reuse

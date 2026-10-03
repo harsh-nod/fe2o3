@@ -126,6 +126,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         || self
                             .compute_peer_destination_frame_v1(submission, source_route, source)
                             .is_some()
+                        || self.peer_frame_destination_covers_v1(submission, source)
                 }
             {
                 return Ok(true);

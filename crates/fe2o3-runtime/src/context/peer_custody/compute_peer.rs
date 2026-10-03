@@ -1,7 +1,8 @@
-//! Exact pending compute output consumed by an ordinary scalar peer copy.
+//! Exact pending compute output or segmented frame consumed by a scalar peer.
 
 use super::*;
 use crate::context::peer_reconciliation::DirectedPeerStateV1;
+use crate::context::peer_segments::SegmentedPeerFrameV1;
 
 #[cfg(test)]
 thread_local! {
@@ -11,10 +12,31 @@ thread_local! {
 pub(in crate::context) struct ComputePeerInputV1 {
     pub(in crate::context) producer: ScalarPeerDependencyV1,
     pub(in crate::context) state: DirectedPeerStateV1,
+    origin: ScalarPeerSourceV1,
     regions: [RuntimeMemoryRegionV1; 2],
     extents: [u64; 2],
     predecessor: Option<usize>,
     preserves_frame: bool,
+}
+
+enum ScalarPeerSourceV1 {
+    Compute,
+    SegmentedFrame(SegmentedPeerFrameV1),
+}
+
+impl ComputePeerInputV1 {
+    pub(in crate::context) fn is_segmented_frame_v1(&self) -> bool {
+        matches!(self.origin, ScalarPeerSourceV1::SegmentedFrame(_))
+    }
+
+    pub(in crate::context) fn matches_segmented_frame_v1(
+        &self,
+        root: &SegmentedPeerCopyRootV1,
+        source: ContextReadSourceV1,
+    ) -> bool {
+        matches!(&self.origin, ScalarPeerSourceV1::SegmentedFrame(frame)
+            if frame.matches_v1(root, source))
+    }
 }
 
 impl ScalarPeerCopyRootV1 {
@@ -102,11 +124,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.scalar_peer_copies
             .get(&dependency.submission)
             .is_some_and(|previous| {
-                previous
-                    .compute
-                    .as_ref()
-                    .is_some_and(|compute| compute.preserves_frame)
-                    && previous.directed.is_none()
+                previous.compute.as_ref().is_some_and(|compute| {
+                    compute.preserves_frame && matches!(compute.origin, ScalarPeerSourceV1::Compute)
+                }) && previous.directed.is_none()
                     && previous.stream == root.stream
                     && previous.destination.region.allocation == root.destination.region.allocation
                     && previous.destination.record == root.destination.record
@@ -119,24 +139,46 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         root: &mut ScalarPeerCopyRootV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
         if self.versions.is_none()
-            || !self.backend.supports_pending_compute_peer_copy_v1()
+            && self.backend.supports_pending_segment_frame_peer_copy_v1()
+            && root.dependencies.iter().any(|dependency| {
+                let record = self.submissions[&dependency.submission];
+                record.status == RuntimeCompletionStatusV1::Pending
+                    && record.segmented_destination == Some(root.source.region.allocation)
+            })
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        if self.versions.is_none()
+            || !(self.backend.supports_pending_compute_peer_copy_v1()
+                || self.backend.supports_pending_segment_frame_peer_copy_v1())
             || !bounded_device_endpoints(root)
         {
             return Ok(());
         }
-        let selected = root
-            .dependencies
-            .iter()
-            .find(|dependency| {
-                self.submissions[&dependency.submission].status
-                    == RuntimeCompletionStatusV1::Pending
-                    && self
-                        .producer_launches
-                        .get(&dependency.submission)
-                        .is_some_and(|launch| exact_written_source(launch, root.source))
-            })
-            .copied();
-        let Some(producer) = selected else {
+        let selected = root.dependencies.iter().find_map(|dependency| {
+            if self.submissions[&dependency.submission].status != RuntimeCompletionStatusV1::Pending
+            {
+                return None;
+            }
+            if self.backend.supports_pending_compute_peer_copy_v1()
+                && self
+                    .producer_launches
+                    .get(&dependency.submission)
+                    .is_some_and(|launch| exact_written_source(launch, root.source))
+            {
+                return Some((*dependency, ScalarPeerSourceV1::Compute));
+            }
+            self.backend
+                .supports_pending_segment_frame_peer_copy_v1()
+                .then(|| {
+                    self.segmented_peer_copies
+                        .get(&dependency.submission)?
+                        .destination_frame_v1(root.source)
+                        .map(|frame| (*dependency, ScalarPeerSourceV1::SegmentedFrame(frame)))
+                })
+                .flatten()
+        });
+        let Some((producer, origin)) = selected else {
             return Ok(());
         };
         let mut depth = 1;
@@ -151,13 +193,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if dependency.device != root.source.record.device {
                     return Err(RuntimeValidationErrorV1::WrongDevice);
                 }
-                if record.quiescent || !record.producer_launch {
+                if record.quiescent
+                    || match &origin {
+                        ScalarPeerSourceV1::Compute => !record.producer_launch,
+                        ScalarPeerSourceV1::SegmentedFrame(_) => !record.segmented_peer_copy,
+                    }
+                {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
             } else if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
                 if record.status != RuntimeCompletionStatusV1::Pending
                     || record.quiescent
                     || predecessor.is_some()
+                    || !matches!(origin, ScalarPeerSourceV1::Compute)
                     || !self.backend.supports_ordered_compute_peer_copy_v1()
                     || !self.compute_peer_predecessor_matches_v1(root, dependency)
                 {
@@ -182,7 +230,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 root.destination.record.byte_len,
             ],
             predecessor,
-            preserves_frame: self.backend.supports_ordered_compute_peer_copy_v1(),
+            preserves_frame: match &origin {
+                ScalarPeerSourceV1::Compute => self.backend.supports_ordered_compute_peer_copy_v1(),
+                ScalarPeerSourceV1::SegmentedFrame(_) => true,
+            },
+            origin,
             state: DirectedPeerStateV1 {
                 depth,
                 cursor: 0,
@@ -213,7 +265,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     root.destination.record.byte_len,
                 ]
             || compute.state.depth < 2
-            || compute.preserves_frame && !self.backend.supports_ordered_compute_peer_copy_v1()
+            || match &compute.origin {
+                ScalarPeerSourceV1::Compute => {
+                    compute.preserves_frame && !self.backend.supports_ordered_compute_peer_copy_v1()
+                }
+                ScalarPeerSourceV1::SegmentedFrame(frame) => {
+                    !self.backend.supports_pending_segment_frame_peer_copy_v1()
+                        || !frame.covers_v1(root.source)
+                        || compute.predecessor.is_some()
+                        || !compute.preserves_frame
+                }
+            }
             || compute.predecessor.is_some() && !compute.preserves_frame
             || compute.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
             || compute.state.cursor > root.dependencies.len()
@@ -277,14 +339,29 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(invalid);
             }
             if dependency == &compute.producer {
-                self.validate_producer_launch_custody_v1(dependency.submission)?;
-                if !record.producer_launch
-                    || self
-                        .producer_launches
-                        .get(&dependency.submission)
-                        .is_none_or(|launch| !exact_written_source(launch, root.source))
-                {
-                    return Err(invalid);
+                match &compute.origin {
+                    ScalarPeerSourceV1::Compute => {
+                        self.validate_producer_launch_custody_v1(dependency.submission)?;
+                        if !record.producer_launch
+                            || self
+                                .producer_launches
+                                .get(&dependency.submission)
+                                .is_none_or(|launch| !exact_written_source(launch, root.source))
+                        {
+                            return Err(invalid);
+                        }
+                    }
+                    ScalarPeerSourceV1::SegmentedFrame(frame) => {
+                        self.validate_segmented_peer_custody_v1(dependency.submission)?;
+                        if !record.segmented_peer_copy
+                            || self
+                                .segmented_peer_copies
+                                .get(&dependency.submission)
+                                .is_none_or(|peer| !frame.matches_v1(peer, root.source))
+                        {
+                            return Err(invalid);
+                        }
+                    }
                 }
             } else if compute.predecessor == Some(index) {
                 if !record.scalar_peer_copy

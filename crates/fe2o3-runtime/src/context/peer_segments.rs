@@ -2,7 +2,7 @@
 
 use super::*;
 mod custody;
-pub(super) use custody::SegmentedPeerCopyRootV1;
+pub(super) use custody::{SegmentedPeerCopyRootV1, SegmentedPeerFrameV1};
 use fe2o3_runtime_model::{
     OrderedPeerCopyAdmissionErrorV1, validate_ordered_peer_copy_segments_v1,
 };
@@ -116,7 +116,7 @@ impl<B: RuntimePeerCopySegmentsBackendV1> RuntimeContextV1<B> {
         let mechanism = PeerTransferMechanismV1::DeclaredPeerCopy {
             contract_identity: identity,
         };
-        self.submit_context_operation_v1(
+        let submission = self.submit_context_operation_v1(
             stream,
             prepared.stream_record,
             &[destination.allocation],
@@ -137,6 +137,13 @@ impl<B: RuntimePeerCopySegmentsBackendV1> RuntimeContextV1<B> {
                     &prepared.dependencies,
                 )
             },
-        )
+        )?;
+        // The handle is not exposed until this journal-independent identity is
+        // retained; admission cannot register a callback for the fresh result.
+        self.submissions
+            .get_mut(&submission.id)
+            .expect("accepted segment submission retained")
+            .segmented_destination = Some(destination.allocation);
+        Ok(submission)
     }
 }

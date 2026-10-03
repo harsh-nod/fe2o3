@@ -9,6 +9,9 @@ mod ordered;
 #[path = "ordered_compute_segment_tests.rs"]
 mod ordered_compute;
 
+#[path = "frame_peer_tests.rs"]
+mod frame_peer;
+
 use super::window::initialize_bytes;
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};

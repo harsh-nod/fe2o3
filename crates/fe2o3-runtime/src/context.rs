@@ -749,6 +749,31 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to a scalar peer read of an exact pending segmented destination frame.
+    ///
+    /// Context requires its version journal, the latest writer's explicit event,
+    /// and a retained immutable frame identity with strictly older dependency ranks.
+    /// The source is a checked Read window of the original initialized DeviceLocal
+    /// frame, including preserved gaps, not a fabricated compute producer or a
+    /// claim that the descriptor envelope wrote every byte. The destination is a
+    /// fresh initialized DeviceLocal allocation with an equally sized Write window.
+    /// Preserve its initialized complement. Opted-in pending readbacks may consume
+    /// that whole destination only behind this scalar copy's exact retained event,
+    /// successful completion, and original-owner restoration.
+    ///
+    /// Retain the frame, original endpoint identities, and every dependency after
+    /// public event release. Admission and observation are inert, including after
+    /// native publication, when both original endpoint ownership markers must be
+    /// authenticated. Explicit dependent progress services the bounded chain; no
+    /// source extraction or peer effect may begin until every dependency actually
+    /// succeeds and original owners are restored. Quiescence alone is not success.
+    /// Failure, cancellation, and Unknown cannot authorize a consumer or commit a
+    /// destination version. No staged fallback, pending destination writer, list
+    /// consumer, or kernel authority is granted by this capability.
+    fn supports_pending_segment_frame_peer_copy_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered lists sharing one initialized destination frame.
     ///
     /// Requires `supports_peer_copy_segments_frame_v1` and Context's version
@@ -1293,6 +1318,7 @@ struct SubmissionRecordV1 {
     producer_launch: bool,
     same_device_copy: bool,
     segmented_peer_copy: bool,
+    segmented_destination: Option<RuntimeAllocationIdV1>,
     dependency_retains: usize,
 }
 
@@ -4275,6 +4301,7 @@ mod tests {
         pending_compute_peer: bool,
         pending_compute_segments: bool,
         peer_segments_frame: bool,
+        pending_segment_frame_peer_copy: bool,
         ordered_peer_segments: bool,
         ordered_pending_compute_segments: bool,
         ordered_compute_peer: bool,
@@ -4926,6 +4953,10 @@ mod tests {
 
         fn supports_peer_copy_segments_frame_v1(&self) -> bool {
             self.peer_segments_frame
+        }
+
+        fn supports_pending_segment_frame_peer_copy_v1(&self) -> bool {
+            self.pending_segment_frame_peer_copy
         }
 
         fn supports_ordered_peer_copy_segments_v1(&self) -> bool {

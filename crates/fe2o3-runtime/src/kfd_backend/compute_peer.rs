@@ -73,7 +73,7 @@ enum Origin {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AllocationIdentity {
+pub(super) struct AllocationIdentity {
     device: u64,
     kind: RuntimeMemoryKindV1,
     bytes: usize,
@@ -221,7 +221,7 @@ impl DestinationPredecessor {
 }
 
 impl AllocationIdentity {
-    fn of(record: &AllocationRecordV1) -> Self {
+    pub(super) fn of(record: &AllocationRecordV1) -> Self {
         Self {
             device: record.device,
             kind: record.kind,
@@ -277,6 +277,22 @@ enum SegmentFrameOrigin {
 }
 
 impl SegmentDestinationFrame {
+    pub(super) fn poison_retained_children_v1(&self, backend: &mut KfdMultiDeviceRuntimeBackendV1) {
+        // Failure containment uses the immutable held chain, never corrupted
+        // occupancy markers. This does not authorize progress or restoration.
+        let mut frame = self;
+        for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            backend.poison_compute_xgmi_children_v1([frame.source.1.child, frame.endpoint.1.child]);
+            let Some(prior) = &frame.predecessor else {
+                return;
+            };
+            if prior.frame.depth == 0 || prior.frame.depth >= frame.depth {
+                return;
+            }
+            frame = &prior.frame;
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn is_settled_source_for_test_v1(&self) -> bool {
         matches!(self.origin, SegmentFrameOrigin::Settled)
@@ -1118,7 +1134,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         self.compute_peer_dependency_depth_v1(id)
     }
 
-    fn compute_peer_dependency_succeeded_v1(&self, id: u64) -> bool {
+    pub(super) fn compute_peer_dependency_succeeded_v1(&self, id: u64) -> bool {
         match self.submissions.get(&id) {
             Some(RoutedSubmissionV1::Native { route, .. }) => {
                 let child = &self.children[route.child];
@@ -1351,6 +1367,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             else {
                 return Err(current);
             };
+            if let Some(source) = &copy.frame_source {
+                return source
+                    .is_intact(self, current, copy)
+                    .then_some(())
+                    .ok_or(current);
+            }
             if let Some(frame) = copy
                 .compute_xgmi
                 .as_ref()
@@ -1411,10 +1433,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     pub(super) fn validate_compute_peer_v1(&mut self, id: u64) -> Result<(), Failure> {
         if let Err(invalid) = self.compute_peer_chain_intact_v1(id) {
+            let retained = match self.submissions.get(&id) {
+                Some(RoutedSubmissionV1::CooperativeCopy(copy)) => copy
+                    .frame_source
+                    .as_ref()
+                    .map(|source| source.retained_poison_roots_v1()),
+                _ => None,
+            };
             self.terminal = true;
-            for affected in [id, invalid] {
-                if let Some(endpoints) = self.compute_xgmi_endpoints_v1(affected) {
-                    self.poison_compute_xgmi_children_v1(endpoints);
+            if let Some((endpoints, frame)) = retained {
+                // Mutable routes may be the corruption just detected. The held
+                // frame profile quarantines only its original admitted pairs.
+                self.poison_compute_xgmi_children_v1(endpoints);
+                frame.poison_retained_children_v1(self);
+            } else {
+                for affected in [id, invalid] {
+                    if let Some(endpoints) = self.compute_xgmi_endpoints_v1(affected) {
+                        self.poison_compute_xgmi_children_v1(endpoints);
+                    }
                 }
             }
             Err(RuntimeBackendFailureV1::Terminal(

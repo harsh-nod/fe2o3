@@ -346,9 +346,40 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
             }
             ProducerReadRequestV1::Queued(request) => {
                 let reference = self.root.queued_references[0];
+                let frame_matches = match self.root.domain {
+                    ProducerReadDomainV1::Copy => {
+                        self.context
+                            .scalar_peer_copies
+                            .get(&producer.submission)
+                            .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
+                            || self
+                                .context
+                                .segmented_peer_copies
+                                .get(&producer.submission)
+                                .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
+                    }
+                    ProducerReadDomainV1::ComputePeer => self
+                        .context
+                        .scalar_peer_copies
+                        .get(&self.id)
+                        .is_some_and(|peer| {
+                            peer.compute.as_ref().is_some_and(|input| {
+                                self.context
+                                    .segmented_peer_copies
+                                    .get(&producer.submission)
+                                    .is_some_and(|parent| {
+                                        input.matches_segmented_frame_v1(parent, source)
+                                    })
+                            })
+                        }),
+                    ProducerReadDomainV1::SegmentedPeer => true,
+                    _ => false,
+                };
                 if !matches!(
                     self.root.domain,
-                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::SegmentedPeer
+                    ProducerReadDomainV1::Copy
+                        | ProducerReadDomainV1::ComputePeer
+                        | ProducerReadDomainV1::SegmentedPeer
                 ) || self.root.queued_requests[0] != request
                     || reference.consumer != self.consumer
                     || request.producer.key != producer_key
@@ -357,17 +388,7 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
                     || request.allocation.byte_extent != source.record.byte_len
                     || request.byte_offset != source.region.byte_offset
                     || request.byte_len != source.region.byte_len
-                    || self.root.domain == ProducerReadDomainV1::Copy
-                        && !self
-                            .context
-                            .scalar_peer_copies
-                            .get(&producer.submission)
-                            .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
-                        && !self
-                            .context
-                            .segmented_peer_copies
-                            .get(&producer.submission)
-                            .is_some_and(|peer| peer.preserves_destination_frame_v1(source))
+                    || !frame_matches
                     || self.observe_queued_lookup(reference)? != request
                 {
                     return Err(E::InvalidReference);
@@ -605,6 +626,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })
             .copied()
             .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+        // The new frame-forwarding contract covers scalar copies and their
+        // readbacks, not a new pending compute-consumer profile.
+        if launch.is_some()
+            && self
+                .scalar_peer_copies
+                .get(&dependency.submission)
+                .and_then(|peer| peer.compute.as_ref())
+                .is_some_and(|input| input.is_segmented_frame_v1())
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
         let queued_launch = (launch.is_some() || segmented_peer.is_some())
             && self.producer_launches.contains_key(&dependency.submission);
         let queued_frame_input = (copy.is_some() || launch.is_some())
@@ -615,7 +647,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 || self
                     .segmented_peer_copies
                     .get(&dependency.submission)
-                    .is_some_and(|producer| producer.preserves_destination_frame_v1(source)));
+                    .is_some_and(|producer| producer.preserves_destination_frame_v1(source)))
+            || compute_peer
+                .and_then(|peer| peer.compute.as_ref())
+                .is_some_and(|input| {
+                    self.segmented_peer_copies
+                        .get(&dependency.submission)
+                        .is_some_and(|producer| input.matches_segmented_frame_v1(producer, source))
+                });
         if queued && !queued_launch && !queued_frame_input {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
@@ -680,18 +719,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .compute
                 .as_ref()
                 .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
-            let producer = self
-                .producer_launches
-                .get(&dependency.submission)
-                .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
             if dependency != compute.producer
                 || source.region != peer.source.region
                 || source.record != peer.source.record
-                || !producer.covers_input_v1(source)
             {
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
-            let result = self.validate_pending_producer_launch_roots_v1(dependency.submission);
+            let result = if compute.is_segmented_frame_v1() {
+                if self
+                    .segmented_peer_copies
+                    .get(&dependency.submission)
+                    .is_none_or(|producer| !compute.matches_segmented_frame_v1(producer, source))
+                {
+                    return Err(RuntimeValidationErrorV1::ContextReserved);
+                }
+                self.validate_pending_segmented_peer_roots_v1(dependency.submission)
+            } else {
+                if self
+                    .producer_launches
+                    .get(&dependency.submission)
+                    .is_none_or(|producer| !producer.covers_input_v1(source))
+                {
+                    return Err(RuntimeValidationErrorV1::ContextReserved);
+                }
+                self.validate_pending_producer_launch_roots_v1(dependency.submission)
+            };
             self.journal_result_v1(result)?;
         } else if let Some(copy) = copy {
             let covered = self
@@ -1116,6 +1168,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .scalar_peer_copies
                     .get(&id)
                     .is_some_and(|root| root.compute.is_some());
+                let frame_peer = context
+                    .scalar_peer_copies
+                    .get(&id)
+                    .and_then(|root| root.compute.as_ref())
+                    .is_some_and(|input| input.is_segmented_frame_v1());
                 let segmented_peer = context.segmented_peer_copies.contains_key(&id);
                 let versions = context
                     .versions
@@ -1157,7 +1214,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         &mut prepared.output,
                     )?;
                 } else {
-                    if root.domain != ProducerReadDomainV1::Copy
+                    if !(root.domain == ProducerReadDomainV1::Copy
+                        || root.domain == ProducerReadDomainV1::ComputePeer && frame_peer)
                         || !root.requests.is_empty()
                         || root.queued_requests.len() != 1
                     {
@@ -1314,7 +1372,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Some(ProducerReadRequestV1::Queued(_)) => {
                 matches!(
                     root.domain,
-                    ProducerReadDomainV1::Copy | ProducerReadDomainV1::SegmentedPeer
+                    ProducerReadDomainV1::Copy
+                        | ProducerReadDomainV1::ComputePeer
+                        | ProducerReadDomainV1::SegmentedPeer
                 ) && root.references.is_empty()
                     && root.requests.is_empty()
                     && root.queued_requests.len() == 1

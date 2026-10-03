@@ -208,6 +208,7 @@ fn fixture(queued: &[bool], launch: bool, record_present: bool) -> Owner {
                 producer_launch: launch,
                 same_device_copy: false,
                 segmented_peer_copy: false,
+                segmented_destination: None,
                 dependency_retains: 1,
             },
         );

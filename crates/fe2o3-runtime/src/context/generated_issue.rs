@@ -234,6 +234,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 producer_launch: false,
                 same_device_copy: false,
                 segmented_peer_copy: false,
+                segmented_destination: None,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));

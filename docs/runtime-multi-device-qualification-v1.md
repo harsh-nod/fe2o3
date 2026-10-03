@@ -29,8 +29,12 @@ overlaps, source disposal after predecessor settlement and late compute admissio
 The [pending-source destination checkpoint](evidence/dev-pending-destination-segments-2026-10-03/README.md)
 now composes pending compute sources with that destination ordering. All 21
 three-GPU cases pass, including independent source/predecessor events, late
-consumers and two lists of 4096 descriptors. Broader application-kernel authority,
-pending-list-frame forwarding, post-arm native faults and performance remain open.
+consumers and two lists of 4096 descriptors. The
+[frame-forwarding checkpoint](evidence/dev-pending-frame-forward-2026-10-03/README.md)
+adds pending initialized list frames feeding scalar peer windows and guarded
+whole-target D2H on three GPUs. Eight queued/late overlap/packet cases pass with
+forward and reversed rosters. Broader application-kernel authority, post-arm
+native faults and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
 
 ## Selected-Pair Smoke
@@ -71,6 +75,51 @@ fields and post-run observations are required, including explicit cleanup.
 This is a selected-pair correctness entrypoint, not compute, native-fault,
 physical-overlap, eight-device, formal-refinement or performance qualification.
 Do not substitute the generic all-device hardware-smoke job on a shared host.
+
+## Pending Frame Forwarding
+
+`supports_pending_segment_frame_peer_copy_v1` is a separate default-false
+capability. With a version journal, an initialized segmented destination frame
+on GPU B can feed a scalar peer window on GPU C behind the exact latest list
+event. The retained frame is a distinct source origin, not a compute producer.
+Ordered overlapping lists preserve initialized gaps, including bytes outside
+their descriptor envelope. Source and target offsets and allocation lengths
+may differ; the transferred window lengths must match.
+
+The target must be initialized and have no pending writer. Its untouched bytes
+remain part of its preserved frame, allowing an event-bound full-target D2H.
+No copy begins before actual parent success and original-owner restoration.
+Public event release does not discard dependencies; late admission also checks
+both native parent ownership markers. Corruption poisons the retained parent
+pairs as well as the successor, without restoring uncertain owners. This profile
+does not add pending compute consumers, list-to-list forwarding, kernel authority,
+staged fallback, or general native-fault recovery.
+
+The witness uses production deny-all kernel authority. Two changed rounds reuse
+one Context and allocations: two ordered source-to-frame lists, one checked
+frame-to-target scalar copy, then guarded full-target readback. Prequeued cases
+advance only the final readback stream. Late cases first observe native list
+publication, then use final-readback-only progress. CPU tests also cover a
+compute-backed list source; the native witness itself launches no kernels.
+
+```sh
+cargo +nightly-2026-04-03 build --locked --offline -p fe2o3-runtime \
+  --no-default-features --features hardware-qualification \
+  --example gfx942-runtime-destination-segments-smoke
+python3 -I -B benchmarks/runtime_gfx942/forward_window_smoke.py \
+  --allow-hardware \
+  --binary "$PWD/target/debug/examples/gfx942-runtime-destination-segments-smoke" \
+  --binary-sha256 "$BINARY_SHA256" \
+  --device "$SOURCE_DEVICE" --device "$FRAME_DEVICE" --device "$TARGET_DEVICE" \
+  --output "$NEW_RESULT_DIRECTORY"
+```
+
+The device tuples and safety checks are the same as the selected-pair controller,
+but exactly three devices are required. Eight cases cover overlap and packet-tail
+shapes, prequeued and late admission, and reversed routes. The controller reuses
+the pinned process/observation helpers and independently reconstructs full-byte
+digests. Direct witness modes are `--forward-window` and `--late-forward-window`,
+followed by three UIDs and `overlap` or `packets`. Legacy modes remain unchanged.
 
 ## Ordered Destination Lists
 

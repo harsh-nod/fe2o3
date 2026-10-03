@@ -5,6 +5,8 @@ use crate::context::peer_segments::SegmentedPeerSourceV1;
 
 #[path = "ordered_compute.rs"]
 mod compute;
+#[path = "forward.rs"]
+mod forward;
 
 fn windows() -> Vec<RuntimePeerCopySegmentV1> {
     vec![

@@ -1244,6 +1244,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 producer_launch,
                 same_device_copy,
                 segmented_peer_copy,
+                segmented_destination: None,
                 dependency_retains: 0,
             },
         );

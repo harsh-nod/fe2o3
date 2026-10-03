@@ -8,6 +8,9 @@ use fe2o3_kfd::{GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942ComputeXgmiPacketPla
 use fe2o3_runtime::*;
 use sha2::{Digest, Sha256};
 
+#[path = "destination_segments/forward_window.rs"]
+mod forward_window;
+
 type Context = RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>;
 type ResultV1<T> = Result<T, String>;
 type Receipts = Arc<Mutex<Vec<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>>>;
@@ -19,7 +22,7 @@ const ROUNDS: usize = 2;
 const WAIT: Duration = Duration::from_secs(180);
 const TICKS: usize = 100_000;
 const DOMAIN: &[u8] = b"fe2o3.destination-peer-segments.full-bytes.v1\0";
-const USAGE: &str = "usage: gfx942-runtime-destination-segments-smoke [--dispose-source] <0xsource0> <0xsource1> <0xdestination> <disjoint|overlap|duplicates|packets>";
+const USAGE: &str = "usage: gfx942-runtime-destination-segments-smoke [--dispose-source] <0xsource0> <0xsource1> <0xdestination> <disjoint|overlap|duplicates|packets>; or <--forward-window|--late-forward-window> <0xsource> <0xframe> <0xtarget> <overlap|packets>";
 
 #[derive(Debug)]
 struct NoCompute;
@@ -55,13 +58,19 @@ struct Options {
     ids: [u64; 3],
     case: Case,
     dispose_source: bool,
+    forward_window: Option<bool>,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
+    let forward_window = match arguments.first().map(String::as_str) {
+        Some("--forward-window") => Some(false),
+        Some("--late-forward-window") => Some(true),
+        _ => None,
+    };
     let dispose_source = arguments
         .first()
         .is_some_and(|arg| arg == "--dispose-source");
-    let arguments = if dispose_source {
+    let arguments = if dispose_source || forward_window.is_some() {
         &arguments[1..]
     } else {
         arguments
@@ -76,6 +85,9 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         "packets" => Case::Packets,
         _ => return Err(USAGE.into()),
     };
+    if forward_window.is_some() && !matches!(case, Case::Overlap | Case::Packets) {
+        return Err(USAGE.into());
+    }
     let mut ids = [0; 3];
     for (index, text) in arguments[..3].iter().enumerate() {
         let hex = text
@@ -91,6 +103,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         ids,
         case,
         dispose_source,
+        forward_window,
     })
 }
 
@@ -760,7 +773,11 @@ fn run(options: Options) -> ResultV1<()> {
     let context = Context::open_with_version_journal_members_v1(backend, 32, 16, 64)
         .map_err(|error| failure("context-open", error))?;
     let mut context = ManuallyDrop::new(context);
-    match exercise(&mut context, &options, &layout) {
+    let result = match options.forward_window {
+        Some(late) => forward_window::exercise(&mut context, &options, &layout, late),
+        None => exercise(&mut context, &options, &layout),
+    };
+    match result {
         Ok(report) => {
             let mut backend = ManuallyDrop::into_inner(context)
                 .shutdown()

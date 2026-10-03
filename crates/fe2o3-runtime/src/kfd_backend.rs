@@ -131,6 +131,7 @@ mod compute_peer;
 mod compute_xgmi;
 mod cooperative_directed;
 mod native_reconcile;
+mod peer_frame;
 use native_reconcile::NativeReconciliationV1;
 mod scale_capacity;
 use scale_capacity::{RuntimeDispatchCapacityV1, RuntimeDispatchStateV1};
@@ -7020,6 +7021,7 @@ struct CooperativeCopySubmissionV1 {
     directed: Option<cooperative_directed::Root>,
     compute_xgmi: Option<Box<compute_xgmi::Root>>,
     compute_producer: Option<compute_peer::Producer>,
+    frame_source: Option<peer_frame::Source>,
     stream: u64,
     prior_stream_submission: Option<u64>,
     source: RoutedHandleV1,
@@ -8419,6 +8421,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             );
             copy.phase = phase;
             copy.compute_producer = None;
+            copy.frame_source = None;
             let staging = core::mem::take(&mut copy.staging);
             let released_staging_bytes = u64::try_from(staging.len())
                 .expect("cooperative staging length was admitted as u64");
@@ -9150,6 +9153,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         } else {
             None
         };
+        let frame_source = if directed.is_none() && segments.is_none() && compute_producer.is_none()
+        {
+            self.prepare_peer_frame_source_v1(
+                [(source_route, source), (destination_route, destination)],
+                dependencies,
+            )?
+        } else {
+            None
+        };
         if compute_producer
             .as_ref()
             .is_some_and(|producer| !producer.orders_on_stream(stream))
@@ -9267,6 +9279,30 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 })?);
             }
         }
+        if let Some(frame) = &frame_source {
+            if !frame.controls_succeeded(self, &dependency_submissions) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "frame peer requires already successful unrelated controls",
+                ));
+            }
+            for dependency in &dependency_submissions {
+                let depth = if *dependency == frame.id() {
+                    frame.depth()
+                } else {
+                    self.segment_frame_dependency_depth_v1(*dependency)
+                        .ok_or_else(|| {
+                            KfdRuntimeBackendV1::rejected(
+                                KfdRuntimeBackendErrorKindV1::Unsupported,
+                                "frame peer control has no retained dependency rank",
+                            )
+                        })?
+                };
+                dependency_depth = dependency_depth.max(depth.checked_add(1).ok_or_else(|| {
+                    KfdRuntimeBackendV1::capacity("frame peer dependency depth overflow")
+                })?);
+            }
+        }
         // A legacy settled list can retain completed controls whose historical
         // depth was not part of its transfer-only rank. Preserve that acceptance
         // if the stricter frame-consumer rank cannot be represented.
@@ -9318,6 +9354,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .is_none_or(|owners| {
                 owners.iter().all(|owner| {
                     dependency_set.contains(owner)
+                        || frame_source.as_ref().is_some_and(|frame| {
+                            frame.orders_owner(self, source_route, *owner)
+                        })
                         || readback_frame.is_some_and(|producer| {
                             producer.orders_destination_owner(self, *owner)
                         })
@@ -9389,6 +9428,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 source_route,
                 destination_route,
                 producer.window(),
+            )?)
+        } else if let Some(frame) = &frame_source {
+            Some(self.prepare_compute_xgmi_plan_v1(
+                source_route,
+                destination_route,
+                frame.window(),
             )?)
         } else {
             self.prepare_compute_xgmi_v1(
@@ -9602,6 +9647,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     directed,
                     compute_xgmi,
                     compute_producer,
+                    frame_source,
                     stream,
                     prior_stream_submission: stream_tail,
                     source: source_route,
@@ -12632,6 +12678,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     }
 
     fn supports_pending_compute_peer_copy_v1(&self) -> bool {
+        true
+    }
+
+    fn supports_pending_segment_frame_peer_copy_v1(&self) -> bool {
+        // The exact retained whole-list frame gates one native scalar window;
+        // its envelope is never treated as scalar produced-byte coverage.
         true
     }
 

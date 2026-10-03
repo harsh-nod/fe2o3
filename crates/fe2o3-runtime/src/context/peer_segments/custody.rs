@@ -4,6 +4,7 @@ use super::*;
 use crate::context::peer_custody::ScalarPeerDependencyV1;
 use crate::context::peer_reconciliation::DirectedPeerStateV1;
 
+#[cfg_attr(test, derive(Clone))]
 struct SegmentedPeerPlanV1 {
     stream: RuntimeStreamIdV1,
     backend_stream: u64,
@@ -13,6 +14,34 @@ struct SegmentedPeerPlanV1 {
     origin: SegmentedPeerSourceV1,
     predecessor: Option<(ScalarPeerDependencyV1, std::sync::Arc<SegmentedPeerPlanV1>)>,
     _segments: std::sync::Arc<Vec<RuntimePeerCopySegmentV1>>,
+}
+
+pub(in crate::context) struct SegmentedPeerFrameV1 {
+    plan: std::sync::Arc<SegmentedPeerPlanV1>,
+}
+
+impl SegmentedPeerFrameV1 {
+    pub(in crate::context) fn covers_v1(&self, source: ContextReadSourceV1) -> bool {
+        source.record == self.plan.destination.record
+            && source.region.allocation == self.plan.destination.region.allocation
+            && source.region.access == RuntimeAccessV1::Read
+            && source.region.byte_len != 0
+            && source
+                .region
+                .byte_offset
+                .checked_add(source.region.byte_len)
+                .is_some_and(|end| end <= self.plan.destination.record.byte_len)
+    }
+
+    pub(in crate::context) fn matches_v1(
+        &self,
+        root: &SegmentedPeerCopyRootV1,
+        source: ContextReadSourceV1,
+    ) -> bool {
+        std::sync::Arc::ptr_eq(&self.plan, &root.plan)
+            && self.covers_v1(source)
+            && root.preserves_destination_frame_v1(source)
+    }
 }
 
 pub(in crate::context) struct SegmentedPeerCopyRootV1 {
@@ -31,6 +60,21 @@ pub(in crate::context) struct SegmentedPeerCopyRootV1 {
 }
 
 impl SegmentedPeerCopyRootV1 {
+    #[cfg(test)]
+    pub(in crate::context) fn replace_plan_identity_for_test_v1(&mut self) {
+        self.plan = std::sync::Arc::new((*self.plan).clone());
+    }
+
+    pub(in crate::context) fn destination_frame_v1(
+        &self,
+        source: ContextReadSourceV1,
+    ) -> Option<SegmentedPeerFrameV1> {
+        self.preserves_destination_frame_v1(source)
+            .then(|| SegmentedPeerFrameV1 {
+                plan: std::sync::Arc::clone(&self.plan),
+            })
+    }
+
     pub(in crate::context) fn destination_predecessor_v1(&self) -> Option<ScalarPeerDependencyV1> {
         self.predecessor
     }
