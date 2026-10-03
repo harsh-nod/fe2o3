@@ -67,7 +67,7 @@ jobs:
       - name: Verify authenticated runtime model
         run: crates/fe2o3-runtime-model/verus/verify-verus.sh
 
-      - name: Verify shared gfx942 unsigned-add arithmetic and negative controls
+      - name: Verify shared gfx942 unsigned-add arithmetic, register state and negative controls
         run: bash crates/fe2o3-kernel-analysis/verus/run-gfx942-add-u32.sh
 
       - name: Verify shared native peer window arithmetic and negative controls

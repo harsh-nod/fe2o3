@@ -385,8 +385,9 @@ The expedited practical multi-GPU priority order is:
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
    general runtime authority. The [local integer refinement component](gfx942-local-integer-refinement-v1.md)
-   adds shared-body unsigned-add arithmetic and a conditional MIR/KIR/machine
-   obligation. Retained local-to-SSA and SSA-to-register correspondence,
+   adds shared-body unsigned-add arithmetic, the conditional projected-register
+   transition and a conditional MIR/KIR/machine obligation. Retained
+   local-to-SSA and SSA-to-register correspondence,
    LLVM/CFG/ABI/effect composition and application authority remain open. The
    CPU-qualified [Context argument API](runtime-context-arguments-v1.md) removes
    manual scalar/slice ABI packing, not storage or authority boundaries. Its
@@ -397,9 +398,15 @@ The expedited practical multi-GPU priority order is:
    ABI demonstration. A source-owned integer copy is the initial application
    target: avoid floating-point and collective obligations until the entry ABI,
    register values, EXEC masks, addresses, memory frame and completion semantics
-   compose. The next independent machine-value proof task is the actual shared
-   `Gfx942SAddU32V1::execute` register transition, including old-input aliasing,
-   SCC and untouched-register framing, then bounded decoded MOV/ADD composition.
+   compose. The [register-state checkpoint](evidence/dev-gfx942-state-transition-2026-10-03/README.md)
+   proves the actual shared `Gfx942SAddU32V1::execute` body under valid-index
+   preconditions, including old-input aliasing, SCC and untouched-register
+   framing. It passes 813 CPU tests, 30 doctests, both LLVM-MC compatibility
+   checks and eight required logical mutants; 12 existing tests remain ignored.
+   The next machine-value task is bounded decoded MOV-prefix/ADD composition,
+   retaining explicit span-entry equalities. The current single-add obligation
+   records decoded coordinates and reaching definitions; it does not yet execute
+   or compose the instruction semantics.
    Physical reaching definitions and deterministic LLVM replay do not discharge
    unresolved entry-value equalities or prove final-machine execution. Existing
    compiler-owned SSA and physical-copy work must be reused without treating its

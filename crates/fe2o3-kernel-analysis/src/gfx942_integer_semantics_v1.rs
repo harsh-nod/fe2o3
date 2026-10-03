@@ -27,6 +27,7 @@ pub struct Gfx942U32AddResultV1 {
 }
 
 include!("gfx942_integer_semantics_v1/add_u32_body.rs");
+include!("gfx942_integer_semantics_v1/execute_body.rs");
 
 /// Arithmetic used by the executable model and the separate arithmetic proof.
 pub fn gfx942_add_u32_v1(a: u32, b: u32) -> Gfx942U32AddResultV1 {
@@ -164,16 +165,7 @@ impl Gfx942SAddU32V1 {
     /// Execute one local step; source/destination aliasing reads the old values.
     /// All other ordinary SGPRs are preserved and incoming SCC is not an input.
     pub fn execute(&self, state: &mut Gfx942ScalarIntegerStateV1) -> Gfx942U32AddResultV1 {
-        let read = |source| match source {
-            Gfx942U32SourceV1::Sgpr(index) => state.registers[usize::from(index)],
-            Gfx942U32SourceV1::Constant(value) => value,
-        };
-        let left = read(self.sources[0]);
-        let right = read(self.sources[1]);
-        let result = gfx942_add_u32_v1(left, right);
-        state.registers[usize::from(self.destination)] = result.value;
-        state.scc = result.scc;
-        result
+        gfx942_s_add_u32_execute_body_v1!(self, state)
     }
 
     pub const fn grants_launch_authority(&self) -> bool {

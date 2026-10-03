@@ -20,7 +20,7 @@ Its projected state contains 102 ordinary scalar registers and SCC, not PC,
 memory, scheduling state or a complete GPU wave. Both operands are read before
 the destination is written, including when registers alias.
 
-## Arithmetic Proof
+## Arithmetic And State Proofs
 
 Rust execution and Verus include the same arithmetic macro. For every pair of
 `u32` inputs, the theorem establishes:
@@ -29,15 +29,27 @@ Rust execution and Verus include the same arithmetic macro. For every pair of
 - SCC is true exactly when the mathematical sum is at least `2^32`.
 - Result and carry reconstruct the mathematical sum exactly.
 
-The runner checks the pinned Verus release closure, unchanged source inputs,
-structured solver results and owned-process cleanup. Three required mutants
-discard carry, narrow the result incorrectly or substitute an operand. Each
-must fail the intended postcondition; compilation errors and timeouts do not
-count as successful negative controls.
+The production `execute` method and Verus also include the same register-state
+transition macro. Given an instruction with valid ordinary-register indices,
+the theorem establishes that both operands use the incoming state, including
+all alias cases; the returned value and carry equal the arithmetic result;
+only the destination register changes; and SCC is replaced by the new carry.
+The proof checks the same 102-register array, source variants, result fields and
+instruction fields as production. Constant operands range over all `u32` values.
 
-This proves the shared arithmetic body only. It does not prove the decoder,
-register-state framing, ISA conformance, compiler correspondence or hardware
-execution. Alias and frame behavior have separate CPU tests.
+The runner checks the pinned Verus release closure, unchanged source inputs,
+structured solver results and owned-process cleanup. Three arithmetic mutants
+discard carry, narrow the result incorrectly or substitute an operand. Five
+additional mutants challenge the register-state transition. Each must fail
+the intended postcondition; compilation errors and timeouts do not count as
+successful negative controls. Source controls reject schema drift, alternate
+includes and disconnected production/proof forwarding.
+
+These proofs cover the shared arithmetic and projected-state execute bodies
+under valid-index preconditions. They do not prove that decoding establishes
+those preconditions, ISA conformance, compiler correspondence or hardware
+execution. CPU tests separately exercise decoding, every destination register,
+register/literal aliases, incoming SCC and instruction identity.
 
 ## Compiler Obligation
 
@@ -66,10 +78,13 @@ Worker V3 application refinement backend. This API creates no such authority.
 
 ## Validation
 
-The [qualification record](evidence/dev-gfx942-integer-refinement-2026-10-02/README.md)
+The [initial qualification record](evidence/dev-gfx942-integer-refinement-2026-10-02/README.md)
 separates arithmetic proof, CPU fixtures, authenticated **test-worker** custody
-and real LLVM-MC compatibility checks. LLVM assembly/disassembly is not native
-GPU execution; its synthetic trace envelope is not production analyzer evidence.
+and real LLVM-MC compatibility checks. The
+[state-transition checkpoint](evidence/dev-gfx942-state-transition-2026-10-03/README.md)
+adds the shared execute theorem and requalifies the complete selected analysis
+and verifier suites. LLVM assembly/disassembly is not native GPU execution;
+its synthetic trace envelope is not production analyzer evidence.
 
 Run the pinned proof and required negative controls with an absolute `VERUS`
 path:

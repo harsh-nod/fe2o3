@@ -326,6 +326,75 @@ fn execution_reads_integer_constants_without_incoming_scc() {
     }
 }
 
+#[test]
+fn execution_frame_and_read_before_write_cover_every_destination_and_alias_class() {
+    for destination in 0..GFX942_ORDINARY_SGPR_COUNT_V1 as u8 {
+        let next = (destination + 1) % GFX942_ORDINARY_SGPR_COUNT_V1 as u8;
+        let other = (destination + 2) % GFX942_ORDINARY_SGPR_COUNT_V1 as u8;
+        for (left, right) in [
+            (destination, destination),
+            (destination, next),
+            (next, destination),
+            (next, next),
+            (next, other),
+        ] {
+            let instruction = Gfx942SAddU32V1::decode(
+                &TraceFixture::registers(destination, left, right).instruction(),
+            )
+            .unwrap();
+            let original_instruction = instruction.clone();
+            for seed in [0, 1, 0x7fff_ffff, 0x8000_0000, u32::MAX] {
+                let before = std::array::from_fn(|index| {
+                    seed.wrapping_add((index as u32).wrapping_mul(0x9e37_79b9))
+                });
+                let expected = before[left as usize].overflowing_add(before[right as usize]);
+                let mut reference = before;
+                reference[destination as usize] = expected.0;
+                for old_scc in [false, true] {
+                    let mut state = Gfx942ScalarIntegerStateV1::new(before, old_scc);
+                    let result = instruction.execute(&mut state);
+                    assert_eq!((result.value, result.scc), expected);
+                    assert_eq!(state.registers(), &reference);
+                    assert_eq!(state.scc(), expected.1);
+                    assert_eq!(instruction, original_instruction);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn execution_literal_aliases_preserve_full_frame_and_overwrite_incoming_scc() {
+    for destination in [0, 51, 101] {
+        for literal in [0, 1, 0x8000_0000, u32::MAX] {
+            for (left, right) in [(destination, 255), (255, destination), (255, 255)] {
+                let instruction = Gfx942SAddU32V1::decode(
+                    &selected(destination, left, right, literal).instruction(),
+                )
+                .unwrap();
+                let before = std::array::from_fn(|index| u32::MAX - index as u32);
+                let read = |selector: u8| {
+                    if selector == 255 {
+                        literal
+                    } else {
+                        before[selector as usize]
+                    }
+                };
+                let expected = read(left).overflowing_add(read(right));
+                let mut reference = before;
+                reference[destination as usize] = expected.0;
+                for old_scc in [false, true] {
+                    let mut state = Gfx942ScalarIntegerStateV1::new(before, old_scc);
+                    let result = instruction.execute(&mut state);
+                    assert_eq!((result.value, result.scc), expected);
+                    assert_eq!(state.registers(), &reference);
+                    assert_eq!(state.scc(), expected.1);
+                }
+            }
+        }
+    }
+}
+
 fn mc(tool: &Path, disassemble: bool, input: &str) -> String {
     let mut command = Command::new(tool);
     command
