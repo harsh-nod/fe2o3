@@ -161,7 +161,8 @@ Usage: scripts/ci-local.sh <command>
 
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
-  generic-core [policy|cpu|auxiliary]  Run all core validation or one required group
+  generic-core [group]  Run all core validation or policy, cpu, auxiliary, or cpu-<group>
+                         CPU groups: foundation, analysis, lowering, pliron, finalize, integration
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -720,7 +721,85 @@ run_workspace_dependency_bootstrap() {
     cargo fetch --locked --manifest-path "${REPO_ROOT}/Cargo.toml"
 }
 
+# Keep one package roster. Unlisted ordinary CPU packages enter foundation;
+# isolate the existing expensive suites without selecting individual tests.
+load_cpu_package_group() {
+  if (($# != 2)); then
+    printf 'CPU package group requires a group and destination\n' >&2
+    return 2
+  fi
+  local requested="$1" package group
+  # shellcheck disable=SC2178  # The destination is a caller-owned array nameref.
+  local -n selected="$2"
+  local -A seen=()
+  case "${requested}" in
+    foundation | analysis | lowering | pliron | finalize) ;;
+    *) printf 'unknown CPU package group: %s\n' "${requested}" >&2; return 2 ;;
+  esac
+  selected=()
+  for package in "${CPU_TEST_PACKAGES[@]}"; do
+    if [[ -z "${package}" ]]; then
+      printf 'empty CPU package in the required roster\n' >&2
+      return 2
+    fi
+    if [[ -n "${seen[${package}]+selected}" ]]; then
+      printf 'duplicate CPU package: %s\n' "${package}" >&2
+      return 2
+    fi
+    seen["${package}"]=1
+    case "${package}" in
+      fe2o3-kernel-analysis | fe2o3-kernel-ir | fe2o3-mir-model | fe2o3-verifier)
+        group=analysis ;;
+      fe2o3-lower-mir-kernel) group=lowering ;;
+      fe2o3-pliron | fe2o3-pliron-conformance) group=pliron ;;
+      fe2o3-hsaco-finalize) group=finalize ;;
+      *) group=foundation ;;
+    esac
+    [[ "${group}" != "${requested}" ]] || selected+=("${package}")
+  done
+  if ((${#selected[@]} == 0)); then
+    printf 'empty CPU package group: %s\n' "${requested}" >&2
+    return 2
+  fi
+}
+
+run_pliron_default_api_tests() {
+  run_step fe2o3-pliron-default-api-ui \
+    cargo test --locked -p fe2o3-pliron --no-default-features \
+      --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+}
+
+run_cpu_package_group() {
+  if (($# != 1)); then
+    printf 'CPU package tests require exactly one group\n' >&2
+    return 2
+  fi
+  local group="$1" package
+  local -a packages cargo_args=(test --locked)
+  load_cpu_package_group "${group}" packages
+  run_workspace_dependency_bootstrap "cpu-${group}"
+  ensure_production_cargo_fe2o3_driver "cpu-${group}"
+  for package in "${packages[@]}"; do
+    cargo_args+=(-p "${package}")
+  done
+  if [[ "${group}" == pliron ]]; then
+    run_pliron_default_api_tests
+  fi
+  run_step "cpu-${group}-tests" \
+    env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+}
+
 run_cpu_tests() {
+  if (($# > 1)); then
+    printf 'CPU tests accept at most one mode\n' >&2
+    return 2
+  fi
+  local mode="${1-all}" package_step=cpu-tests
+  case "${mode}" in
+    all) ;;
+    integration) package_step=cpu-integration-tests ;;
+    *) printf 'unknown CPU test mode: %s\n' "${mode}" >&2; return 2 ;;
+  esac
   run_workspace_dependency_bootstrap cpu
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
@@ -730,9 +809,11 @@ run_cpu_tests() {
   local package
   run_host_reference_tests
   ensure_production_cargo_fe2o3_driver cpu-tests
-  for package in "${CPU_TEST_PACKAGES[@]}"; do
-    cargo_args+=(-p "${package}")
-  done
+  if [[ "${mode}" == all ]]; then
+    for package in "${CPU_TEST_PACKAGES[@]}"; do
+      cargo_args+=(-p "${package}")
+    done
+  fi
   load_example_packages cpu-test-raw raw_cpu_examples "${CARGO_FE2O3_BINARY}"
   load_example_packages cpu-test-wrapper-managed wrapper_cpu_examples \
     "${CARGO_FE2O3_BINARY}"
@@ -762,11 +843,14 @@ run_cpu_tests() {
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
       --test worker_v3_load_envelope_vertical --test worker_v3_load_envelope_v2 -- --test-threads=1
-  run_step fe2o3-pliron-default-api-ui \
-    cargo test --locked -p fe2o3-pliron --no-default-features \
-      --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+  if [[ "${mode}" == all ]]; then
+    run_pliron_default_api_tests
+  fi
   run_artifact_transaction_tests
-  run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  # Empty dynamic raw examples must never become workspace-wide Cargo.
+  if [[ "${mode}" == all ]] || ((${#raw_cpu_examples[@]} > 0)); then
+    run_step "${package_step}" env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  fi
   run_runtime_release_tests
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
@@ -1298,6 +1382,14 @@ run_generic_core() {
       run_cpu_tests
       return
       ;;
+    cpu-foundation | cpu-analysis | cpu-lowering | cpu-pliron | cpu-finalize)
+      run_cpu_package_group "${group#cpu-}"
+      return
+      ;;
+    cpu-integration)
+      run_cpu_tests integration
+      return
+      ;;
     auxiliary)
       run_rustc_codegen_lib_tests
       run_auxiliary_tests
@@ -1344,6 +1436,8 @@ run_generic_core() {
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_step generic-core-group-tests \
     python3 -I -B scripts/tests/generic-core-groups.py
+  run_step generic-cpu-group-tests \
+    python3 -I -B scripts/tests/generic-cpu-groups.py
   if [[ "${group}" == all ]]; then
     run_generic_core cpu
     run_generic_core auxiliary

@@ -16,6 +16,16 @@ ROOT = Path(__file__).resolve().parents[2]
 CI_PATH = ROOT / ".github/workflows/ci.yml"
 ROW_PATH = ROOT / ".github/workflows/row-softmax-v1.yml"
 PREPARE_NAME = "Prepare external private temporary directory"
+CORE_GROUPS = (
+    "policy",
+    "cpu-foundation",
+    "cpu-analysis",
+    "cpu-lowering",
+    "cpu-pliron",
+    "cpu-finalize",
+    "cpu-integration",
+    "auxiliary",
+)
 PROFILE_LINES = (
     "      CARGO_PROFILE_DEV_DEBUG: '1'",
     "      CARGO_PROFILE_TEST_DEBUG: '1'",
@@ -66,10 +76,7 @@ def core_groups(source: str) -> None:
         "      fail-fast: false\n"
         "      matrix:\n"
         "        group:\n"
-        "          - policy\n"
-        "          - cpu\n"
-        "          - auxiliary\n"
-    )
+    ) + "".join(f"          - {group}\n" for group in CORE_GROUPS)
     if owner.count("    strategy:\n") != 1 or owner.count(strategy + "    env:\n") != 1:
         raise ValueError("core matrix must run each required group exactly once")
     for required in (
@@ -161,9 +168,16 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_core_group_mutations_cannot_omit_or_duplicate_work(self) -> None:
         core_groups(self.ci)
+        for group in CORE_GROUPS:
+            entry = f"          - {group}\n"
+            self.assertEqual(job(self.ci, "generic-core").count(entry), 1)
+            for replacement in ("", entry + entry):
+                with self.subTest(group=group, replacement=replacement):
+                    changed = self.ci.replace(entry, replacement, 1)
+                    self.assertNotEqual(changed, self.ci)
+                    with self.assertRaises(ValueError):
+                        core_groups(changed)
         for old, new in (
-            ("          - cpu\n", ""),
-            ("          - auxiliary\n", "          - auxiliary\n          - cpu\n"),
             ("          - policy\n", "          - all\n"),
             ("      fail-fast: false\n", "      fail-fast: true\n"),
             ("          - auxiliary\n", "          - auxiliary\n        exclude: []\n"),
@@ -173,8 +187,10 @@ class WorkflowContractTests(unittest.TestCase):
             ("name: Generic core (${{ matrix.group }})\n", "name: Generic core\n    if: false\n"),
         ):
             with self.subTest(old=old, new=new):
+                changed = self.ci.replace(old, new, 1)
+                self.assertNotEqual(changed, self.ci)
                 with self.assertRaises(ValueError):
-                    core_groups(self.ci.replace(old, new, 1))
+                    core_groups(changed)
 
 
 class TemporaryDirectoryShellTests(unittest.TestCase):

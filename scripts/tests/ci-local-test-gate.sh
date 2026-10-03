@@ -875,6 +875,7 @@ for core_step in \
   kir-sim-scalar-differential \
   kir-sim-semantic-differential \
   ci-local-test-gate \
+  generic-cpu-group-tests \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
   fe2o3-pliron-default-api-ui \

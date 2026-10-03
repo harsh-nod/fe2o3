@@ -109,7 +109,12 @@ jobs:
       matrix:
         group:
           - policy
-          - cpu
+          - cpu-foundation
+          - cpu-analysis
+          - cpu-lowering
+          - cpu-pliron
+          - cpu-finalize
+          - cpu-integration
           - auxiliary
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core-${{ matrix.group }}

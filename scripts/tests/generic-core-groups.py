@@ -37,6 +37,7 @@ POLICY = [
     "kir-sim-f32-differential",
     "ci-local-test-gate",
     "generic-core-group-tests",
+    "generic-cpu-group-tests",
 ]
 GROUPS = {
     "policy": POLICY,
@@ -87,7 +88,7 @@ class GenericCoreGroupTests(unittest.TestCase):
         self.assert_trace(self.invoke("run_generic_core", "all"), ALL)
         self.assert_trace(self.invoke("main", "generic-core"), ALL)
 
-    def test_hosted_groups_partition_the_same_ordered_work_exactly_once(self) -> None:
+    def test_legacy_groups_partition_the_same_ordered_work_exactly_once(self) -> None:
         actual = []
         for group, expected in GROUPS.items():
             with self.subTest(group=group):
