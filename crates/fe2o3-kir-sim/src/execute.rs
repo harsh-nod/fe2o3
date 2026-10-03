@@ -62,6 +62,8 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 
 #[path = "execute_alloca_v1.rs"]
 mod alloca_v1;
+#[path = "execute_execution_lifecycle_v18.rs"]
+pub(crate) mod execution_lifecycle_v18;
 #[path = "execute_generic_exposure_v18.rs"]
 mod generic_exposure_v18;
 #[path = "execute_matrix_bf16_exact_v1.rs"]
@@ -1335,6 +1337,7 @@ impl AdmittedSimulationModuleV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeValue {
     Scalar(ScalarBitsV1),
+    Execution(execution_lifecycle_v18::Token),
     Pointer(PointerValue),
     StoragePointer(StoragePointerValueV18),
     Slice(SliceValue),
@@ -1968,7 +1971,9 @@ enum CallTarget {
 
 fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
     Some(match value {
-        RuntimeValue::PhysicalEntry(_) | RuntimeValue::StoragePointer(_) => return None,
+        RuntimeValue::PhysicalEntry(_)
+        | RuntimeValue::StoragePointer(_)
+        | RuntimeValue::Execution(_) => return None,
         RuntimeValue::Scalar(value) => SimulationDebugValueV1::Scalar(*value),
         RuntimeValue::Pointer(value) => SimulationDebugValueV1::Pointer {
             allocation: value.allocation,
@@ -2043,7 +2048,7 @@ fn capture_debug_stack(
         }
         for (value, observed) in ordered {
             let Some(observed) = debug_value(observed) else {
-                // Tagged storage and unsupported symbolic bindings have no legacy DTO.
+                // Tagged storage, execution roles and symbolic bindings have no legacy DTO.
                 // Never erase their type identity or silently omit a binding.
                 return SimulationDebugCollectionV1::Unavailable {
                     reason: SimulationDebugUnavailableReasonV1::NotCaptured,
@@ -6507,7 +6512,9 @@ fn advance_non_control_operation<'a>(
     operation: &Operation,
     site: CompactSite,
 ) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
-    if physical_lds_exchange_v22::is_operation(&operation.kind) {
+    if matches!(operation.kind, OperationKind::Execution(_)) {
+        execution_lifecycle_v18::execute_and_bind(engine, frame, operation, site)?;
+    } else if physical_lds_exchange_v22::is_operation(&operation.kind) {
         physical_lds_exchange_v22::execute_and_bind(engine, &mut frame.values, operation, &site)?;
     } else if physical_global_copy_v21::is_operation(&operation.kind) {
         physical_global_copy_v21::execute_and_bind(engine, &mut frame.values, operation, &site)?;
@@ -8078,6 +8085,7 @@ fn bind_runtime_value(
 fn runtime_type(value: &RuntimeValue) -> Type {
     match value {
         RuntimeValue::Scalar(value) => Type::Scalar(value.ty()),
+        RuntimeValue::Execution(value) => value.ty(),
         RuntimeValue::PhysicalEntry(value) => Type::Scalar(value.scalar_type()),
         RuntimeValue::Pointer(pointer) => Type::pointer(
             Type::Scalar(pointer.element),

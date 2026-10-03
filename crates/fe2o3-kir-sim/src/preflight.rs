@@ -1810,6 +1810,14 @@ fn scan_operation(
         };
     }
     for result in &operation.results {
+        // This flag is issued only for exact V18 admission. A result is allowed
+        // only on its closed lifecycle producer; signatures and block arguments
+        // still follow the ordinary execution-role refusal.
+        if ordered_profiles.storage_scalar
+            && crate::execute::execution_lifecycle_v18::supports_operation(operation)
+        {
+            continue;
+        }
         if ordered_profiles.storage_scalar
             && crate::storage_scalar_v18::private_pointer(module, &result.ty, target).is_some()
         {
@@ -1822,7 +1830,13 @@ fn scan_operation(
         }
     }
     match &operation.kind {
-        OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
+        OperationKind::Execution(_) => {
+            if !ordered_profiles.storage_scalar
+                || !crate::execute::execution_lifecycle_v18::supports_operation(operation)
+            {
+                reject!(UnsupportedFeatureV1::InertExecutionV15);
+            }
+        }
         OperationKind::Storage(storage) => {
             if !ordered_profiles.storage_scalar
                 || !crate::storage_scalar_v18::supports_operation(
@@ -2826,6 +2840,7 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("preflight_execution_lifecycle_v18_tests.rs");
 
     #[test]
     fn execution_v15_raw_preflight_has_no_execution_plan() {

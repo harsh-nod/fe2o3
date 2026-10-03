@@ -183,10 +183,11 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
         .filter(|row| {
             row.kir_wire_version != SimulationKirWireVersionV1::V21
                 && row.kir_wire_version != SimulationKirWireVersionV1::V22
+                && row.kir_wire_version != SimulationKirWireVersionV1::V18
                 && row.operation == SimulationOperationSurfaceV1::Execution
         })
         .collect();
-    assert_eq!(rows.len(), 4 * 10); // Four target profiles, ten wire versions.
+    assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine unchanged wire versions.
     assert!(rows.iter().all(|row| matches!(
         &row.capability,
         SimulationCapabilityDispositionV1::Unsupported {
@@ -533,12 +534,13 @@ fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
 }
 
 #[test]
-fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
+fn v18_storage_and_lifecycle_keep_remaining_dispositions_and_exact_legacy_projection() {
     let matrix = semantic_capability_matrix_v1();
     assert_eq!(matrix.top_level_rows.len(), 2_352);
     assert_eq!(matrix.pointer_rows.len(), 336);
     let mut rows = 0;
     let mut storage = 0;
+    let mut lifecycle = 0;
     let mut added_bytes = 0;
     for row in matrix
         .top_level_rows
@@ -568,6 +570,18 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
                 reason: SimulationUnsupportedReasonCodeV1::InertStorage,
             };
             storage += 1;
+        } else if row.operation == SimulationOperationSurfaceV1::Execution {
+            assert_eq!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Owned {
+                    owner: fe2o3_kir_sim::SimulationSemanticOwnerV1::ControlFlow,
+                    typed_rejections: &[SimulationUnsupportedReasonCodeV1::InertExecutionV15],
+                }
+            );
+            projected.capability = SimulationCapabilityDispositionV1::Unsupported {
+                reason: SimulationUnsupportedReasonCodeV1::InertExecutionV15,
+            };
+            lifecycle += 1;
         }
         assert_eq!(
             serde_json::to_vec(&projected).unwrap(),
@@ -576,7 +590,7 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
         added_bytes += serde_json::to_vec(row).unwrap().len() + 1;
         rows += 1;
     }
-    assert_eq!((rows, storage), (196, 4));
+    assert_eq!((rows, storage, lifecycle), (196, 4, 4));
     let mut pointers = 0;
     for row in matrix.pointer_rows.iter().filter(|row| {
         row.kir_wire_version == SimulationKirWireVersionV1::V18
@@ -601,7 +615,7 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
         pointers += 1;
     }
     assert_eq!(pointers, 4);
-    assert_eq!(added_bytes, 35_662); // Four storage rows each add 29 JSON bytes.
+    assert_eq!(added_bytes, 35_778); // Four storage and four lifecycle rows add 29 bytes each.
     let exposure_bytes: usize = matrix
         .pointer_rows
         .iter()

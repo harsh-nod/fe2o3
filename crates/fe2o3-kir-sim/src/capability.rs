@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_158_661;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_158_777;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -851,6 +851,11 @@ fn top_level_capability(
         }
         Surface::PhysicalEntryDeclaration | Surface::PhysicalEntryStep => {
             unsupported(Reason::PhysicalEntryProfile)
+        }
+        // Only affine context/empty-workgroup lifecycle state is interpreted.
+        // Unscheduled tiles, fragments and descendant disposal remain inert.
+        Surface::Execution if kir_wire_version == SimulationKirWireVersionV1::V18 => {
+            owned(Owner::ControlFlow, &[Reason::InertExecutionV15])
         }
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::Storage => unsupported(Reason::InertStorage),
