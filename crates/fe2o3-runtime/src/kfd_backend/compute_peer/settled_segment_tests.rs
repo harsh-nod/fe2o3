@@ -21,6 +21,15 @@ fn settled(direct: bool, readback: bool, readback_will_run: bool) -> PendingList
 }
 
 pub(super) fn return_and_readback(p: &mut PendingList, consumer: u64) -> (u64, u64) {
+    let destination = p.f.allocations[0][3];
+    return_and_readback_to(p, consumer, destination)
+}
+
+pub(super) fn return_and_readback_to(
+    p: &mut PendingList,
+    consumer: u64,
+    destination: u64,
+) -> (u64, u64) {
     let event = p.f.event(1, consumer);
     p.f.backend.compute_xgmi_routes.insert(
         (1, 0),
@@ -43,7 +52,7 @@ pub(super) fn return_and_readback(p: &mut PendingList, consumer: u64) -> (u64, u
                 BackendMemoryRegionV1 {
                     byte_offset: 7,
                     byte_len: 47,
-                    ..region(p.f.allocations[0][3], RuntimeAccessV1::Write)
+                    ..region(destination, RuntimeAccessV1::Write)
                 },
                 &[event],
             )
@@ -57,7 +66,7 @@ pub(super) fn return_and_readback(p: &mut PendingList, consumer: u64) -> (u64, u
                 BackendMemoryRegionV1 {
                     byte_offset: 7,
                     byte_len: 47,
-                    ..region(p.f.allocations[0][3], RuntimeAccessV1::Read)
+                    ..region(destination, RuntimeAccessV1::Read)
                 },
                 BackendMemoryRegionV1 {
                     byte_offset: 9,

@@ -28,7 +28,9 @@ producer result or source event. Narrow pre-arm host preparation recovery now
 also passes four-GPU qualification with an independent retained pair and retry,
 without relaxing journal Unknown handling. Ordered settled-source lists into
 one destination now pass three-GPU qualification, including overlaps, early
-source disposal, full-frame D2H and prequeued/late compute consumers. Earlier matched
+source disposal, full-frame D2H and prequeued/late compute consumers. Pending
+compute sources now also compose with ordered destination lists on three GPUs,
+with independently retained source and destination dependencies. Earlier matched
 wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
@@ -46,7 +48,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered settled-source destination lists and full-frame consumers on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Pending-compute-source destination-list chains, native generated-argument qualification, application kernel authority, eight-GPU coverage and post-arm/native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered settled/pending-compute-source destination lists and full-frame consumers on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, pending-list-frame forwarding, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
@@ -363,6 +365,19 @@ rejected; the final campaign repeats every case with a larger maximum-size
 allowance. No runtime currentness guard was relaxed. No performance, new solver
 or whole-adapter refinement acceptance follows.
 
+The [pending-source destination checkpoint](evidence/dev-pending-destination-segments-2026-10-03/README.md)
+now composes pending full-write compute sources with those ordered lists. Each
+list retains its source producer independently of its latest destination writer;
+settled and compute-backed origins can mix without host compute joins. All 21
+three-GPU cases pass, including prequeued/late consumers in both orders, two
+4096-descriptor lists and six prior-profile controls. The 189 replayed transport
+receipts confirm independent full-byte oracles and owned cleanup. Fresh checks
+pass 2316 runtime tests (32 unchanged hardware ignores), 42 example tests,
+61 doctests, strict Clippy and all 32 source controls. Prior 1950-test KFD
+qualification is exact-source/executable reuse. No new solver, whole-adapter
+refinement, application authority or matched performance is claimed. A3 remains
+incomplete; the next priority is the first evidence-backed application kernel.
+
 The expedited practical multi-GPU priority order is:
 
 1. Integrate one evidence-backed application kernel. Existing production peer
@@ -379,8 +394,20 @@ The expedited practical multi-GPU priority order is:
    that does not substitute for this production evidence provider.
    Prioritize concrete protected compiler/proof and semantic machine-refinement
    providers with authenticated per-invocation bindings, not another fixture-only
-   ABI demonstration. Pending-compute-source destination-list composition remains
-   a separate extension to the accepted settled-source profile.
+   ABI demonstration. A source-owned integer copy is the initial application
+   target: avoid floating-point and collective obligations until the entry ABI,
+   register values, EXEC masks, addresses, memory frame and completion semantics
+   compose. The next independent machine-value proof task is the actual shared
+   `Gfx942SAddU32V1::execute` register transition, including old-input aliasing,
+   SCC and untouched-register framing, then bounded decoded MOV/ADD composition.
+   Physical reaching definitions and deterministic LLVM replay do not discharge
+   unresolved entry-value equalities or prove final-machine execution. Existing
+   compiler-owned SSA and physical-copy work must be reused without treating its
+   inert handoff as native authority. Independently approved proof/compiler
+   measurements, signer policy and rollback attestation remain deployment gates.
+   Pending-compute-source destination-list composition is now qualified above;
+   further pending-list-frame forwarding is a separate extension, not a
+   substitute for application authority.
 2. Qualify post-arm native partial failures and isolation before broadening
    execution claims. CPU scripted failures and certified pre-arm host capacity
    rejection are not a GPU/driver fault campaign. Native
@@ -391,7 +418,10 @@ The expedited practical multi-GPU priority order is:
    exact slot/generation tickets, contiguous-prefix progress and final-only
    owner restoration. Existing batching owns a different mapping pair per
    request; shared-owner windows require new custody/prefix correspondence,
-   not cached authority across scheduler ticks. Repeated deep-chain ancestry
+   not cached authority across scheduler ticks. Descriptor plans are already
+   validated and counted at admission; review found no per-leaf full-list scan.
+   Measure per-packet publication, fencing and paired currentness costs before
+   optimizing. Repeated deep-chain ancestry
    validation is a separate measured-optimization target. Neither change may
    weaken currentness or treat an operational check as a full closing audit.
 4. Defer same-process reopen, eight-GPU coverage and matched performance until

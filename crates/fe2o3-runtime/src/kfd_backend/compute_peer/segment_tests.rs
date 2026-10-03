@@ -6,6 +6,9 @@ mod settled;
 #[path = "ordered_segment_tests.rs"]
 mod ordered;
 
+#[path = "ordered_compute_segment_tests.rs"]
+mod ordered_compute;
+
 use super::window::initialize_bytes;
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};
@@ -94,6 +97,16 @@ impl PendingList {
         readback: bool,
         readback_will_run: bool,
     ) -> Self {
+        Self::with_additional_source(compute, direct, readback, readback_will_run, None)
+    }
+
+    fn with_additional_source(
+        compute: Option<(bool, bool)>,
+        direct: bool,
+        readback: bool,
+        readback_will_run: bool,
+        additional_source: Option<(usize, u8)>,
+    ) -> Self {
         let mut f = Fixture::with_layout_driver_prefixes_and_readback_progress(
             [BYTES; 2],
             readback.then_some(if direct {
@@ -122,6 +135,10 @@ impl PendingList {
         let (input_id, input) = initialize_bytes(&mut f, input_allocation, 0xc3);
         let (output_id, output) = initialize_bytes(&mut f, output_allocation, 0x49);
         let (return_id, returned) = initialize_bytes(&mut f, returned_allocation, 0xaf);
+        if let Some((index, seed)) = additional_source {
+            let allocation = f.allocations[0][index];
+            initialize_bytes(&mut f, allocation, seed);
+        }
         let producer = compute.map(|(queued, _)| f.launch(0, 0, queued, true));
         let producer_event = producer.map(|id| f.event(0, id));
         if let Some((_, true)) = compute {

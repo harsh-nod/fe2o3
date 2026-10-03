@@ -795,6 +795,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     && self.segmented_predecessor_matches_v1(
                         peer.stream,
                         peer.destination,
+                        peer.origin,
                         *dependency,
                     )
             })

@@ -3,6 +3,9 @@
 use super::*;
 use crate::context::peer_segments::SegmentedPeerSourceV1;
 
+#[path = "ordered_compute.rs"]
+mod compute;
+
 fn windows() -> Vec<RuntimePeerCopySegmentV1> {
     vec![
         RuntimePeerCopySegmentV1 {

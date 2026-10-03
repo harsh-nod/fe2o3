@@ -26,8 +26,11 @@ The [destination-list checkpoint](evidence/dev-destination-segments-2026-10-03/R
 adds ordered settled-source lists into one pending destination frame, followed
 by a full-frame D2H or compute consumer. Eighteen three-GPU cases pass, including
 overlaps, source disposal after predecessor settlement and late compute admission.
-Pending-compute-source destination-list chaining, broader kernel authority,
-post-arm native fault campaigns and performance remain open.
+The [pending-source destination checkpoint](evidence/dev-pending-destination-segments-2026-10-03/README.md)
+now composes pending compute sources with that destination ordering. All 21
+three-GPU cases pass, including independent source/predecessor events, late
+consumers and two lists of 4096 descriptors. Broader application-kernel authority,
+pending-list-frame forwarding, post-arm native faults and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
 
 ## Ordered Destination Lists
@@ -69,9 +72,34 @@ owned cleanup. Fresh CPU checks pass 2294 runtime tests, 40 example tests,
 qualification is explicitly reused through unchanged executable/source identity;
 it is not a fresh run. Existing proof bodies are unchanged, with no new solver
 or whole-adapter refinement claim.
-This profile does not compose pending-compute-source lists behind a pending
+That original profile does not compose pending-compute-source lists behind a pending
 destination writer, permit simultaneous writes to destination slices, isolate
 indeterminate native failures, or establish performance parity.
+
+## Pending Compute Sources
+
+The separate default-false
+`supports_ordered_pending_compute_peer_copy_segments_v1` capability permits
+pending full-write compute sources behind an exact same-stream destination-list
+writer. Each list retains its own source producer and latest destination
+predecessor independently, including mixed settled/compute origins. Bounded
+immutable frame ancestry preserves holes and overwrite order. Failed, cancelled
+or Unknown parents cannot promote a destination version.
+
+The deferred witness adds
+`--pending-destination-segments-compute <first|second|both> <4|65|4096> <S0> <S1> <D>`
+and its `--late-pending-destination-segments-compute` variant. Selected source
+gates remain pending when lists are admitted; only final readback progress drives
+the prequeued pipeline. The unchanged finite R57 authority executes actual
+source and destination compute, followed by native return copy and guarded D2H.
+
+The [pending-source packet](evidence/dev-pending-destination-segments-2026-10-03/README.md)
+accepts all 21 cases on GPUs 1/6/7, with 189 replayed transport receipts and owned
+cleanup. Fresh checks pass 2316 runtime tests, 42 example tests, 61 doctests,
+strict Clippy and all 32 source controls; 32 existing hardware ignores remain.
+The 1950 KFD tests are authenticated historical reuse, not a fresh execution.
+No new solver, whole-adapter refinement, arbitrary application authority or
+matched-performance acceptance follows from this checkpoint.
 
 ## Pre-Arm Recovery
 

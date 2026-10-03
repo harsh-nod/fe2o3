@@ -5,6 +5,7 @@ use fe2o3_runtime::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsV1};
 
 const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--gather-compute|--gather-compute-overlap|--late-gather-compute|--late-gather-compute-overlap> <0xsource-id> <0xsource-id> [more source IDs] <0xsink-id>";
 const SEGMENT_USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--destination-segments-compute|--late-destination-segments-compute> <4|65|4096> <0xsource-id> <0xsource-id> <0xsink-id>";
+const PENDING_SEGMENT_USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--pending-destination-segments-compute|--late-pending-destination-segments-compute> <first|second|both> <4|65|4096> <0xsource-id> <0xsource-id> <0xsink-id>";
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
@@ -12,9 +13,33 @@ struct Options {
     overlap: bool,
     late: bool,
     segments: Option<usize>,
+    pending_sources: u8,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
+    if matches!(
+        arguments.first().map(String::as_str),
+        Some(
+            "--pending-destination-segments-compute"
+                | "--late-pending-destination-segments-compute"
+        )
+    ) {
+        if arguments.len() != 6 {
+            return Err(PENDING_SEGMENT_USAGE.into());
+        }
+        let mask = match arguments[1].as_str() {
+            "first" => 1,
+            "second" => 2,
+            "both" => 3,
+            _ => return Err(PENDING_SEGMENT_USAGE.into()),
+        };
+        let mut settled = vec!["--destination-segments-compute".to_owned()];
+        settled.extend_from_slice(&arguments[2..]);
+        let mut parsed = options(&settled).map_err(|_| PENDING_SEGMENT_USAGE)?;
+        parsed.pending_sources = mask;
+        parsed.late = arguments[0] == "--late-pending-destination-segments-compute";
+        return Ok(parsed);
+    }
     if matches!(
         arguments.first().map(String::as_str),
         Some("--destination-segments-compute" | "--late-destination-segments-compute")
@@ -62,6 +87,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         overlap,
         late,
         segments: None,
+        pending_sources: 0,
     })
 }
 
@@ -197,6 +223,7 @@ struct Resources {
     runs: Vec<DeviceRun>,
     windows: Vec<Window>,
     segments: Option<usize>,
+    pending_sources: u8,
     peer_stream: RuntimeStreamIdV1,
     return_stream: RuntimeStreamIdV1,
     readback_stream: RuntimeStreamIdV1,
@@ -207,6 +234,10 @@ struct Resources {
 impl Resources {
     fn source_count(&self) -> usize {
         self.runs.len() - 1
+    }
+
+    fn source_pending(&self, index: usize) -> bool {
+        self.segments.is_none() || self.pending_sources & (1 << index) != 0
     }
 
     fn source_allocation(&self, index: usize) -> RuntimeAllocationIdV1 {
@@ -239,7 +270,7 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
     let devices: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
     let deadline = Instant::now() + WAIT;
     let mut runs = Vec::new();
-    for &device in &devices {
+    for (index, &device) in devices.iter().enumerate() {
         let stream = context
             .create_stream(device)
             .map_err(|error| failure("gather-stream", error))?;
@@ -278,17 +309,24 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
                 .map_err(|_| "four allocations required")?,
             kernel,
         };
-        setup_compute(&mut context, &run, false, deadline)?;
+        if index != 0 || options.pending_sources & 1 == 0 {
+            setup_compute(&mut context, &run, false, deadline)?;
+        }
         // Preserve source C's actual device-produced identity for its second gate.
         runs.push(run);
     }
     if options.segments.is_some() {
-        // Distinct settled payloads: source 0 keeps C; source 1 finishes D.
-        setup_compute(&mut context, &runs[1], true, deadline)?;
-        for (run, allocation, expected) in [
+        // Selected source gates are admitted only after setup, with their lists.
+        if options.pending_sources & 2 == 0 {
+            setup_compute(&mut context, &runs[1], true, deadline)?;
+        }
+        for (index, (run, allocation, expected)) in [
             (&runs[0], runs[0].allocations[2], expected_c()),
             (&runs[1], runs[1].allocations[3], expected_d()),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             if context
                 .query_stream(run.stream)
                 .map_err(|error| failure("list-source-settled", error))?
@@ -296,7 +334,11 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
             {
                 return Err(failure("list-source-settled", "retained setup result"));
             }
-            verify_initial(&mut context, allocation, &expected)?;
+            // Native readback consumes H2dReady. Leave pending outputs ready for
+            // their producing gate; the final oracle checks every source byte.
+            if options.pending_sources & (1 << index) == 0 {
+                verify_initial(&mut context, allocation, &expected)?;
+            }
         }
     }
     let sink = runs.last().ok_or("missing sink")?;
@@ -358,6 +400,7 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
                 Vec::new()
             },
             segments: options.segments,
+            pending_sources: options.pending_sources,
             peer_stream,
             return_stream,
             readback_stream,
@@ -525,13 +568,18 @@ fn admit(
     let sink = &resources.runs[count];
     let mut ids = Vec::new();
     let mut sources = Vec::new();
-    let mut events = Vec::new();
-    for run in resources.runs[..count]
-        .iter()
-        .filter(|_| resources.segments.is_none())
-    {
-        let arguments = Arguments::new(run.allocations[2], run.allocations[1], run.allocations[3])
-            .map_err(|error| failure("gather-source-arguments", error))?;
+    let mut events = vec![None; count];
+    for (index, run) in resources.runs[..count].iter().enumerate() {
+        if !resources.source_pending(index) {
+            continue;
+        }
+        let first_gate = resources.segments.is_some() && index == 0;
+        let arguments = Arguments::new(
+            run.allocations[if first_gate { 0 } else { 2 }],
+            run.allocations[1],
+            resources.source_allocation(index),
+        )
+        .map_err(|error| failure("gather-source-arguments", error))?;
         let submission = context
             .launch_producer_aware_v1(
                 run.stream,
@@ -543,7 +591,7 @@ fn admit(
             .map_err(|error| failure("gather-source-compute", error))?;
         callback(context, &submission, receipts)?;
         ids.push(submission.id());
-        events.push(
+        events[index] = Some(
             context
                 .record_event(&submission)
                 .map_err(|error| failure("gather-source-event", error))?,
@@ -552,8 +600,8 @@ fn admit(
     }
     let mut peers = Vec::new();
     let mut predecessor = None;
-    for index in 0..count {
-        let mut dependencies = events.get(index).copied().into_iter().collect::<Vec<_>>();
+    for (index, source_event) in events.into_iter().enumerate() {
+        let mut dependencies = source_event.into_iter().collect::<Vec<_>>();
         dependencies.extend(predecessor);
         let submission = if let Some(count) = resources.segments {
             let mut list = descriptors(index, count);
@@ -597,9 +645,9 @@ fn admit(
         };
         ids.push(submission.id());
         let event = submission.observe(context, receipts)?;
-        if let Some(event) = events.get(index) {
+        if let Some(event) = source_event {
             context
-                .release_event(*event)
+                .release_event(event)
                 .map_err(|error| failure("gather-source-event-release", error))?;
         }
         if let Some(event) = predecessor {
@@ -609,6 +657,9 @@ fn admit(
         }
         predecessor = Some(event);
         peers.push(submission);
+    }
+    for submission in &sources {
+        require(context, submission, RuntimeCompletionStatusV1::Pending)?;
     }
     if late {
         seed_oldest(context, &peers, resources.peer_stream, deadline)?;
@@ -702,7 +753,14 @@ fn admit(
         .release_event(event)
         .map_err(|error| failure("gather-return-event-release", error))?;
     for submission in &sources {
-        require(context, submission, RuntimeCompletionStatusV1::Pending)?;
+        if resources.pending_sources != 0 && late {
+            match context.query_submission(submission) {
+                Ok(RuntimeCompletionStatusV1::Pending | RuntimeCompletionStatusV1::Succeeded) => {}
+                status => return Err(failure("pending-source-after-seed", status)),
+            }
+        } else {
+            require(context, submission, RuntimeCompletionStatusV1::Pending)?;
+        }
     }
     for submission in &peers {
         submission.require(context, RuntimeCompletionStatusV1::Pending)?;
@@ -958,6 +1016,29 @@ fn report(options: &Options, output: &str) -> String {
         .collect::<Vec<_>>()
         .join(",");
     if let Some(segments) = options.segments {
+        let (schema, pipeline, producers, source_scope) = match options.pending_sources {
+            0 => (
+                "fe2o3.destination-segments-compute.v1",
+                "settled-list-list-compute-peer-readback",
+                "completed-and-released-before-list-admission",
+                String::new(),
+            ),
+            mask => (
+                "fe2o3.pending-destination-segments-compute.v1",
+                "source-compute-list-list-compute-peer-readback",
+                "selected-pending-others-completed-and-released-at-list-admission",
+                format!(
+                    " pending_sources={}",
+                    match mask {
+                        1 => "first",
+                        2 => "second",
+                        3 => "both",
+                        _ => unreachable!(),
+                    }
+                ),
+            ),
+        };
+        let pending_count = options.pending_sources.count_ones();
         let (admission, progress, publication) = if options.late {
             (
                 "lists-preadmitted-consumer-after-oldest-publication",
@@ -972,8 +1053,11 @@ fn report(options: &Options, output: &str) -> String {
             )
         };
         return format!(
-            "PASS schema=fe2o3.destination-segments-compute.v1 authority=qualification-r57-n3-v2 devices=3 sources=2 unique_ids={ids} lists=2 segments_per_list={segments} descriptors={} elements={ELEMENTS} bytes={BYTES} setup_launches=4 pipeline_launches=1 peer_copies=3 dependent_readbacks=1 completion_receipts=5 pipeline=settled-list-list-compute-peer-readback source_payloads=C,D source_producers=completed-and-released-before-list-admission admission={admission} progress={progress} public_events=released-after-dependent-admission consumer_dependencies=latest-list-only consumer_bindings=full-frame-read-stable-read-full-write descriptor_snapshot=caller-overwritten-after-admission native_transport=NATIVE-XGMI native_counter=0,3 output=full-byte-pass source_preservation=full-byte-pass gathered_frame=full-byte-pass return_guards=full-byte-pass host_guards=full-byte-pass output_sha256={output} digest=domain-and-u64le-length-prefixed-C-source-D-source-C-D-E-host host_output_installations=0 pipeline_host_joins=0 journal=enabled contexts=1 owners=1 batches=1 results_release=reverse-dependencies final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{publication}",
+            "PASS schema={schema} authority=qualification-r57-n3-v2 devices=3 sources=2 unique_ids={ids} lists=2 segments_per_list={segments} descriptors={} elements={ELEMENTS} bytes={BYTES} setup_launches={} pipeline_launches={} peer_copies=3 dependent_readbacks=1 completion_receipts={} pipeline={pipeline} source_payloads=C,D source_producers={producers} admission={admission} progress={progress} public_events=released-after-dependent-admission consumer_dependencies=latest-list-only consumer_bindings=full-frame-read-stable-read-full-write descriptor_snapshot=caller-overwritten-after-admission native_transport=NATIVE-XGMI native_counter=0,3 output=full-byte-pass source_preservation=full-byte-pass gathered_frame=full-byte-pass return_guards=full-byte-pass host_guards=full-byte-pass output_sha256={output} digest=domain-and-u64le-length-prefixed-C-source-D-source-C-D-E-host host_output_installations=0 pipeline_host_joins=0 journal=enabled contexts=1 owners=1 batches=1 results_release=reverse-dependencies final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{publication}{source_scope}",
             segments * 2,
+            4 - pending_count,
+            1 + pending_count,
+            5 + pending_count,
         );
     }
     let windows = windows(count, options.overlap)
@@ -1060,6 +1144,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(parsed.ids, [3, 2, 1]);
                 assert_eq!(parsed.segments, Some(count));
+                assert_eq!(parsed.pending_sources, 0);
                 assert_eq!(parsed.late, mode.starts_with("--late-"));
                 assert!(!parsed.overlap);
                 assert_eq!(
@@ -1082,6 +1167,95 @@ mod tests {
                     .map(str::to_owned)
                     .collect::<Vec<_>>();
                 assert!(options(&arguments).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn pending_destination_segment_cli_preserves_each_selected_source_gate() {
+        for mode in [
+            "--pending-destination-segments-compute",
+            "--late-pending-destination-segments-compute",
+        ] {
+            for (selector, mask) in [("first", 1), ("second", 2), ("both", 3)] {
+                for count in [4, 65, 4096] {
+                    let parsed = options(&[
+                        mode.into(),
+                        selector.into(),
+                        count.to_string(),
+                        "0x3".into(),
+                        "0x2".into(),
+                        "0x1".into(),
+                    ])
+                    .unwrap();
+                    assert_eq!(parsed.ids, [3, 2, 1]);
+                    assert_eq!(parsed.pending_sources, mask);
+                    assert_eq!(parsed.segments, Some(count));
+                    assert_eq!(parsed.late, mode.starts_with("--late-"));
+                    assert!(!parsed.overlap);
+                }
+            }
+            for suffix in [
+                vec!["none", "4", "0x1", "0x2", "0x3"],
+                vec!["both", "4", "0x1", "0x2"],
+                vec!["both", "4", "0x1", "0x2", "0x3", "0x4"],
+                vec!["first", "4", "0x1", "0x2", "0x01"],
+                vec!["second", "4097", "0x1", "0x2", "0x3"],
+                vec!["4", "first", "0x1", "0x2", "0x3"],
+            ] {
+                let args = std::iter::once(mode)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(options(&args).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn pending_destination_segment_report_counts_real_source_work_without_new_authority() {
+        for late in [false, true] {
+            for (pending_sources, name, pending_count) in
+                [(1, "first", 1), (2, "second", 1), (3, "both", 2)]
+            {
+                let parsed = Options {
+                    ids: vec![1, 2, 3],
+                    overlap: false,
+                    late,
+                    segments: Some(65),
+                    pending_sources,
+                };
+                let line = report(&parsed, &"0".repeat(64));
+                let fields: std::collections::BTreeMap<_, _> = line
+                    .strip_prefix("PASS ")
+                    .unwrap()
+                    .split_whitespace()
+                    .map(|field| field.split_once('=').unwrap())
+                    .collect();
+                assert_eq!(fields.len(), line.split_whitespace().count() - 1);
+                assert_eq!(
+                    fields["schema"],
+                    "fe2o3.pending-destination-segments-compute.v1"
+                );
+                assert_eq!(fields["pending_sources"], name);
+                assert_eq!(fields["setup_launches"], (4 - pending_count).to_string());
+                assert_eq!(fields["pipeline_launches"], (1 + pending_count).to_string());
+                assert_eq!(
+                    fields["completion_receipts"],
+                    (5 + pending_count).to_string()
+                );
+                assert_eq!(
+                    fields["source_producers"],
+                    "selected-pending-others-completed-and-released-at-list-admission"
+                );
+                assert_eq!(fields["consumer_dependencies"], "latest-list-only");
+                assert_eq!(fields["native_counter"], "0,3");
+                assert_eq!(fields["authority"], "qualification-r57-n3-v2");
+                assert_eq!(fields["host_output_installations"], "0");
+                assert_eq!(fields["pipeline_host_joins"], "0");
+                assert_eq!(fields["formal_refinement"], "false");
+                assert_eq!(fields["performance_acceptance"], "false");
+                assert_eq!(fields.contains_key("publication_observed"), late);
             }
         }
     }
@@ -1126,6 +1300,7 @@ mod tests {
                 overlap: false,
                 late,
                 segments: Some(65),
+                pending_sources: 0,
             };
             let line = report(&options, &"0".repeat(64));
             let fields: std::collections::BTreeMap<_, _> = line
@@ -1253,6 +1428,7 @@ mod tests {
                     overlap,
                     late: false,
                     segments: None,
+                    pending_sources: 0,
                 };
                 let checked = windows(options.ids.len() - 1, overlap);
                 let oracle = verify(&checked, &expected(&checked)).unwrap();

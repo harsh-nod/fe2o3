@@ -89,10 +89,28 @@ fn exact_source(launch: &ProducerLaunchRootV1, source: ContextReadSourceV1) -> b
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    fn segmented_ordering_supported_v1(
+        &self,
+        origin: SegmentedPeerSourceV1,
+        predecessor: SegmentedPeerSourceV1,
+    ) -> bool {
+        self.backend.supports_ordered_peer_copy_segments_v1()
+            && self.backend.supports_peer_copy_segments_frame_v1()
+            && (origin == SegmentedPeerSourceV1::Settled
+                && predecessor == SegmentedPeerSourceV1::Settled
+                || self
+                    .backend
+                    .supports_pending_compute_peer_copy_segments_v1()
+                    && self
+                        .backend
+                        .supports_ordered_pending_compute_peer_copy_segments_v1())
+    }
+
     pub(in crate::context) fn segmented_predecessor_matches_v1(
         &self,
         stream: RuntimeStreamIdV1,
         destination: ContextReadSourceV1,
+        origin: SegmentedPeerSourceV1,
         dependency: ScalarPeerDependencyV1,
     ) -> bool {
         self.backend.supports_ordered_peer_copy_segments_v1()
@@ -110,7 +128,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .segmented_peer_copies
                 .get(&dependency.submission)
                 .is_some_and(|previous| {
-                    previous.origin == SegmentedPeerSourceV1::Settled
+                    self.segmented_ordering_supported_v1(origin, previous.origin)
                         && previous.stream == stream
                         && dependency.stream == stream
                         && dependency.device == destination.record.device
@@ -199,10 +217,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
-            } else if origin == SegmentedPeerSourceV1::Settled
-                && record.status == RuntimeCompletionStatusV1::Pending
+            } else if record.status == RuntimeCompletionStatusV1::Pending
                 && !record.quiescent
-                && self.segmented_predecessor_matches_v1(stream, destination, *dependency)
+                && self.segmented_predecessor_matches_v1(stream, destination, origin, *dependency)
             {
                 if predecessor.replace(*dependency).is_some() {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
@@ -343,9 +360,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .as_ref()
                     .map(|(dependency, _)| *dependency)
             || root.predecessor.is_some_and(|dependency| {
-                root.origin != SegmentedPeerSourceV1::Settled
-                    || !self.backend.supports_ordered_peer_copy_segments_v1()
-                    || root.state.depth < 2
+                root.plan.predecessor.as_ref().is_none_or(|(_, previous)| {
+                    !self.segmented_ordering_supported_v1(root.origin, previous.origin)
+                }) || root.state.depth < 2
                     || !root.dependencies.contains(&dependency)
             })
             || root.identity != root.plan.identity
@@ -456,6 +473,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if !self.segmented_predecessor_matches_v1(
                     root.stream,
                     root.destination,
+                    root.origin,
                     *dependency,
                 ) || root.plan.predecessor.as_ref().is_none_or(|(_, plan)| {
                     self.segmented_peer_copies

@@ -768,6 +768,25 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to ordered destination-list chains with pending compute sources.
+    ///
+    /// Requires both pending-compute segment support and ordered settled-list
+    /// frame support; neither capability alone implies this composition. Each
+    /// pending source retains its exact current producer-aware full-allocation
+    /// Write/event independently of the latest same-stream destination writer.
+    /// Settled and compute-backed list origins may mix only with exact immutable
+    /// source, destination frame, and predecessor identities and bounded ranks.
+    ///
+    /// Retain both dependency paths after public event release. Do not acquire
+    /// conflicting owners or publish until every dependency actually succeeds
+    /// and restores its owners. Whole-frame consumers wait for the entire chain;
+    /// cancellation, failure, or Unknown cannot promote a destination version.
+    /// Context independently reconciles every logical parent. This grants no
+    /// scalar envelope coverage, kernel authority, or pending unrelated controls.
+    fn supports_ordered_pending_compute_peer_copy_segments_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered partial peer writes into one initialized allocation.
     ///
     /// This additionally requires `supports_pending_compute_peer_copy_v1`. Each
@@ -4257,6 +4276,7 @@ mod tests {
         pending_compute_segments: bool,
         peer_segments_frame: bool,
         ordered_peer_segments: bool,
+        ordered_pending_compute_segments: bool,
         ordered_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
@@ -4910,6 +4930,10 @@ mod tests {
 
         fn supports_ordered_peer_copy_segments_v1(&self) -> bool {
             self.ordered_peer_segments
+        }
+
+        fn supports_ordered_pending_compute_peer_copy_segments_v1(&self) -> bool {
+            self.ordered_pending_compute_segments
         }
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {

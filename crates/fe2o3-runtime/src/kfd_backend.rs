@@ -9133,6 +9133,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         if directed.is_none() {
             self.admit_directed_owner_capacity_v1([source_route, destination_route], false)?;
         }
+        let segment_predecessor = if segments.is_some() {
+            self.prepare_segment_destination_predecessor_v1(stream, destination_route, dependencies)
+        } else {
+            None
+        };
         let compute_producer = if directed.is_none() {
             self.prepare_compute_peer_v1(
                 source_route,
@@ -9140,7 +9145,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 destination_route,
                 destination,
                 dependencies,
-                segments.as_ref(),
+                (segments.as_ref(), segment_predecessor.as_ref()),
             )?
         } else {
             None
@@ -9265,7 +9270,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         // A legacy settled list can retain completed controls whose historical
         // depth was not part of its transfer-only rank. Preserve that acceptance
         // if the stricter frame-consumer rank cannot be represented.
-        let segment_frame_depth = if segments.is_some() && compute_producer.is_none() {
+        let segment_frame_depth = if segments.is_some() {
             dependency_submissions
                 .iter()
                 .try_fold(dependency_depth, |depth, id| {
@@ -9283,6 +9288,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "cooperative copy dependency depth exceeds its admitted bound",
             ));
         }
+        if segments.is_some() && compute_producer.is_some() && segment_frame_depth.is_none() {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "compute-backed segment frame dependency depth exceeds its admitted bound",
+            ));
+        }
         let readback_frame = self.compute_peer_readback_frame_v1(
             source_route,
             source,
@@ -9290,11 +9300,6 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             destination,
             &dependency_submissions,
         );
-        let segment_predecessor = if segments.is_some() && compute_producer.is_none() {
-            self.prepare_segment_destination_predecessor_v1(stream, destination_route, dependencies)
-        } else {
-            None
-        };
         let segment_readback_frame =
             if self.children[destination_route.child].allocations[&destination_route.local].kind
                 == RuntimeMemoryKindV1::HostVisible
@@ -12653,6 +12658,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
         // Exact destination predecessors serialize complete native owners and
         // preserve initialized bytes outside each checked window.
+        true
+    }
+
+    fn supports_ordered_pending_compute_peer_copy_segments_v1(&self) -> bool {
+        // Source-compute custody and exact destination-list ancestry are separate
+        // success dependencies. Neither authorizes extraction before restoration.
         true
     }
 

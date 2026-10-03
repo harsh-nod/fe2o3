@@ -13,8 +13,9 @@ impl RuntimePeerCopySegmentsBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     /// including duplicates and overlapping writes. One queue, mapping pair, and
     /// logical result cover the complete list; no intermediate result is exposed.
     /// A pending source requires its exact producer-aware full-allocation Write
-    /// event. A settled source may follow the exact same-stream destination-list
-    /// event. Downstream reads retain the initialized frame, not its envelope.
+    /// event. Independently, either source profile may follow the exact same-stream
+    /// destination-list event. Downstream reads retain the initialized frame,
+    /// not its envelope.
     fn peer_copy_segments_v1(
         &mut self,
         stream: u64,
