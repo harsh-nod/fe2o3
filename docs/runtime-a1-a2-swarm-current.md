@@ -111,8 +111,8 @@ must not become a prerequisite for running their already-admitted smoke tests.
    Terminal source AST validation and ABI discovery remain open.
    Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
-   follow; no fixture authority can substitute for them. The generated invocation
-   execution path is currently single-device. Exact-child inert preparation is
+   follow; no fixture authority can substitute for them. Exact-child inert
+   preparation is
    now [CPU- and two-GPU-qualified](evidence/dev-multi-preparation-2026-10-03/README.md),
    with both selected-device orders and explicit owner-thread cleanup.
    Nonpublishing reservation, shell registration, native DATA adoption and
@@ -120,8 +120,17 @@ must not become a prerequisite for running their already-admitted smoke tests.
    [two-GPU checkpoint](evidence/dev-multi-adoption-2026-10-03/README.md), with
    private generated routes and exact-child cleanup. Its finite native fixture
    does not qualify protected Worker or public Context application admission.
-   Generated issue/completion routing and authenticated generated-storage peer
-   handoff remain explicit
+   Generated issue/completion routing now also passes its
+   [two-GPU native checkpoint](evidence/dev-multi-issue-2026-10-03/README.md).
+   [Completed-value staging](evidence/dev-result-staging-2026-10-03/README.md)
+   passes synthetic charged data through real uploads and native XGMI; it is not
+   an authenticated application-completion-to-peer witness. The first ordinary
+   application target is now the genuine `fill_write_only` kernel, not a separate
+   checked-add prefix. Its
+   [conditional compiler transport](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
+   passes genuine handoff/import/replay without launch authority. Actual packed
+   coverage discharge, dispatch-wide source/machine refinement and the protected
+   provider precede the complete admitted two-GPU pipeline. Follow the
    [remaining multi-device work](runtime-multi-gpu-critical-path.md#required-multi-device-bridge).
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute

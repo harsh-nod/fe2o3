@@ -774,6 +774,32 @@ impl fmt::Display for FunctionalRefinementImportErrorV2 {
 
 impl Error for FunctionalRefinementImportErrorV2 {}
 
+/// Inspects canonical receipt fields without verifying its signature, result,
+/// boundary, execution or provenance. These values are untrusted import inputs,
+/// never a proof; callers must still use the strict receipt importer.
+#[cfg(feature = "internal-proof-staging")]
+pub fn inspect_untrusted_functional_refinement_receipt_v2(
+    wire: &[u8],
+) -> Result<
+    (FunctionalRefinementBindingV2, VerusToolchainIdentityV2),
+    FunctionalRefinementImportErrorV2,
+> {
+    if wire.len() != FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2 {
+        return Err(FunctionalRefinementImportErrorV2::WrongWireLength {
+            expected: FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2,
+            actual: wire.len(),
+        });
+    }
+    let message = wire[..SIGNED_MESSAGE_BYTES_V2].try_into().map_err(|_| {
+        FunctionalRefinementImportErrorV2::WrongWireLength {
+            expected: FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2,
+            actual: wire.len(),
+        }
+    })?;
+    let decoded = decode_message(message)?;
+    Ok((decoded.binding, decoded.toolchain))
+}
+
 #[cfg(any(test, feature = "internal-proof-staging"))]
 fn decode_message(
     message: &[u8; SIGNED_MESSAGE_BYTES_V2],

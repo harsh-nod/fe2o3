@@ -9,7 +9,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_verifier::{
     validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
-    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
+    validate_compiler_proof_inputs_v4,
 };
 
 #[path = "support/inert_invocation_v3.rs"]
@@ -544,8 +544,8 @@ fn run_write_only_proof_extraction(
 }
 
 #[test]
-#[ignore = "acceptance target: conditional output still needs evidence transport, packed launch discharge and source-to-machine admission; requires pinned Verus and AMD target"]
-fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
+#[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
+fn write_only_output_genuine_conditional_v9_handoff_is_imported_without_launch_authority() {
     let target = ScratchTarget::new();
     let handoff_output = target.path().join("write-only-semantic.handoff");
     let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
@@ -559,7 +559,7 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
     )
     .expect("decode singleton V3 handoff");
     let receipts = handoff.capsule().receipts();
-    let proof = validate_compiler_proof_inputs_v4(
+    let proof = fe2o3_verifier::validate_conditional_compiler_proof_inputs_v1(
         receipts.proof_binding(),
         receipts.semantic_mir(),
         receipts.middle_end(),
@@ -567,7 +567,19 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
         receipts.mir_to_kir_correspondence(),
         receipts.formal_memory(),
     )
-    .expect("admit actual V9 singleton proof inputs without version projection");
+    .expect("import actual conditional V9 singleton proof inputs without version projection");
+    assert!(
+        validate_compiler_proof_inputs_v4(
+            receipts.proof_binding(),
+            receipts.semantic_mir(),
+            receipts.middle_end(),
+            receipts.kernel_ir(),
+            receipts.mir_to_kir_correspondence(),
+            receipts.formal_memory(),
+        )
+        .is_err(),
+        "conditional evidence must never become an unconditional proof owner"
+    );
     assert_eq!(proof.kernel_ir().wire_version(), 9);
     assert!(proof.kernel_ir().as_v9().is_some());
     assert!(proof.kernel_ir().as_v8().is_none());
@@ -576,13 +588,50 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
         receipts.kernel_ir().canonical_preimage()
     );
     assert_eq!(proof.semantic_mir().roots().len(), 1);
-    assert!(proof.authenticates_signed_verus_receipt_under_embedded_key());
+    assert_ne!(
+        proof.semantic_mir().semantic_sha256().as_bytes(),
+        receipts.semantic_mir().identity().sha256(),
+        "semantic-domain identity must not be confused with outer receipt content identity"
+    );
+    assert!(
+        proof
+            .verus_execution()
+            .authenticates_signed_receipt_under_embedded_key()
+    );
+    assert!(proof.requires_packed_extent_and_launch_discharge());
+    let conditional = proof.verus_execution().obligation();
+    assert_eq!(conditional.element_width_bits(), 32);
+    assert_eq!(conditional.workgroup_extents(), [64, 1, 1]);
+    assert_eq!(conditional.static_global_x_extent(), None);
+    assert_eq!(conditional.reference_output_argument(), 0);
+    assert_eq!(
+        conditional.source_semantic_identity().as_bytes(),
+        proof.semantic_mir().semantic_sha256().as_bytes()
+    );
+    assert_eq!(
+        conditional.ranked_kernel_identity().as_bytes(),
+        proof.middle_end().ranked_kernel_identity()
+    );
+    assert_eq!(
+        conditional.middle_end_identity().as_bytes(),
+        proof.middle_end().identity().sha256()
+    );
+    let roundtrip = fe2o3_verifier::CanonicalConditionalOutputEvidenceV1::decode(
+        proof.verus_execution().canonical_bytes(),
+    )
+    .unwrap();
+    assert_eq!(roundtrip.obligation(), conditional);
     assert!(!proof.authenticates_compiler_origin());
     assert!(!proof.establishes_llvm_or_machine_refinement());
     assert!(!proof.grants_runtime_authority());
-    let lineage = validate_compiler_target_lineage_v1(handoff.capsule(), &proof)
-        .expect("replay the actual V9 target lineage");
+    let lineage =
+        fe2o3_verifier::validate_conditional_compiler_target_lineage_v1(handoff.capsule(), &proof)
+            .expect("replay the actual V9 target lineage");
     assert!(lineage.has_exact_kir_to_llvm_replay());
+    assert!(!lineage.establishes_semantic_refinement());
+    assert!(!lineage.establishes_llvm_to_machine_refinement());
+    assert!(!lineage.authenticates_producer());
+    assert!(!lineage.grants_runtime_authority());
     let module = fe2o3_kernel_ir::decode_module_v9(proof.kernel_ir().canonical_bytes()).unwrap();
     assert_eq!(module.kernels.len(), 1);
     assert_eq!(module.kernels[0].entry.as_str(), "fill_write_only");
@@ -603,31 +652,6 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
             ))
             .count(),
         1
-    );
-}
-
-#[test]
-#[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
-fn write_only_output_genuine_conditional_proof_reaches_the_launch_admission_gate() {
-    let target = ScratchTarget::new();
-    let handoff_output = target.path().join("unproved-coverage.handoff");
-    let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
-    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
-    assert!(
-        !output.status.success(),
-        "unproved total coverage was admitted"
-    );
-    assert!(
-        stderr.contains(
-            "conditional output 0 has an authenticated conditional aggregate (boundary SafeReferenceMirToLivePlironConditionalCoverage, signature verified: true)"
-        ) && stderr
-            .contains("conditional evidence transport and packed launch discharge are required"),
-        "positive conditional proof did not reach the separate launch-admission gate:\n{stderr}"
-    );
-    assert!(!stderr.contains("functional-refinement Verus execution failed"));
-    assert!(
-        !handoff_output.exists(),
-        "unproved coverage emitted a handoff"
     );
 }
 

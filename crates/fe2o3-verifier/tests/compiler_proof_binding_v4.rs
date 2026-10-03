@@ -21,6 +21,8 @@ use fe2o3_verifier::{
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
+#[path = "support/conditional_output_evidence.rs"]
+mod conditional_output_evidence;
 #[path = "support/guarded_v9_proof_inputs.rs"]
 mod guarded_v9_proof_inputs;
 use compiler_proof_inputs_v3::{
@@ -34,6 +36,145 @@ struct Receipts {
     kernel_ir: InertKernelIrReceiptV3,
     correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
+}
+
+fn conditional_receipts() -> Receipts {
+    use sha2::{Digest as _, Sha256};
+    let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+    // Synthetic transport fixture only. Genuine live counters and proof execution
+    // are exercised by production_extraction_driver_v1, not this byte mutation.
+    let mut bytes = receipts.middle_end.canonical_preimage().to_vec();
+    let coverage_start = bytes.len() - (22 * 8 + 32 + 32);
+    for counter in [6, 7] {
+        put_u64(&mut bytes, coverage_start + counter * 8, 1);
+    }
+    let terminal = bytes.len() - 32;
+    let mut hash = Sha256::new();
+    hash.update(b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V5\0");
+    hash.update((terminal as u64).to_le_bytes());
+    hash.update(&bytes[..terminal]);
+    bytes[terminal..].copy_from_slice(&hash.finalize());
+    receipts.middle_end = InertMiddleEndReceiptV3::from_canonical_preimage(bytes).unwrap();
+    receipts
+}
+
+fn conditional_evidence(receipts: &Receipts, substitute: Option<usize>) -> Vec<u8> {
+    let middle =
+        InertProductionMiddleEndEvidenceV5::decode(receipts.middle_end.canonical_preimage())
+            .unwrap();
+    let mut identities = [
+        DigestV1::from_untrusted_bytes(*middle.identity().sha256()),
+        DigestV1::from_untrusted_bytes(*middle.source_semantic_identity()),
+        DigestV1::from_untrusted_bytes(*middle.ranked_kernel_identity()),
+        digest(4),
+    ];
+    if let Some(index) = substitute {
+        identities[index] = digest(200);
+    }
+    conditional_output_evidence::signed(&conditional_output_evidence::preimage(identities))
+}
+
+fn validate_conditional(
+    binding: &InertProofBindingReceiptV3,
+    receipts: &Receipts,
+) -> Result<
+    fe2o3_verifier::ValidatedConditionalCompilerProofInputsV1,
+    fe2o3_verifier::ConditionalCompilerProofInputValidationErrorV1,
+> {
+    fe2o3_verifier::validate_conditional_compiler_proof_inputs_v1(
+        binding,
+        &receipts.semantic_mir,
+        &receipts.middle_end,
+        &receipts.kernel_ir,
+        &receipts.correspondence,
+        &receipts.formal_memory,
+    )
+}
+
+#[test]
+fn conditional_transport_retains_v9_without_unconditional_or_runtime_authority() {
+    let receipts = conditional_receipts();
+    let evidence = conditional_evidence(&receipts, None);
+    let binding = proof_binding(&receipts, None, &evidence);
+    let validated = validate_conditional(&binding, &receipts).unwrap();
+    assert_eq!(validated.receipt_identity(), binding.identity());
+    assert_eq!(validated.kernel_ir().wire_version(), 9);
+    assert_eq!(
+        validated.kernel_ir().canonical_bytes(),
+        receipts.kernel_ir.canonical_preimage()
+    );
+    assert_eq!(validated.verus_execution().canonical_bytes(), evidence);
+    assert_eq!(
+        validated
+            .verus_execution()
+            .obligation()
+            .ranked_extent_argument(),
+        2
+    );
+    assert_eq!(
+        validated
+            .verus_execution()
+            .obligation()
+            .reference_output_argument(),
+        0
+    );
+    assert!(validated.has_lossless_mir_to_kir_correspondence());
+    assert!(validated.requires_packed_extent_and_launch_discharge());
+    assert!(!validated.authenticates_compiler_origin());
+    assert!(!validated.establishes_llvm_or_machine_refinement());
+    assert!(!validated.grants_runtime_authority());
+    assert!(validate(&binding, &receipts).is_err());
+    let unconditional = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, unconditional.canonical_bytes());
+    assert!(validate_conditional(&binding, &receipts).is_err());
+}
+
+#[test]
+fn conditional_import_rejects_all_outer_and_signed_identity_substitutions() {
+    use fe2o3_verifier::ConditionalCompilerProofInputValidationErrorV1 as E;
+    let receipts = conditional_receipts();
+    let evidence = conditional_evidence(&receipts, None);
+    for index in 0..5 {
+        let binding = proof_binding(&receipts, Some(index), &evidence);
+        assert!(matches!(
+            validate_conditional(&binding, &receipts),
+            Err(E::Stage(
+                CompilerProofInputValidationErrorV4::ProofBindingIdentityMismatch { .. }
+            ))
+        ));
+    }
+    for index in 0..3 {
+        let evidence = conditional_evidence(&receipts, Some(index));
+        let binding = proof_binding(&receipts, None, &evidence);
+        assert!(matches!(
+            validate_conditional(&binding, &receipts),
+            Err(E::IdentityMismatch(_))
+        ));
+    }
+}
+
+#[test]
+fn conditional_import_requires_nonvacuous_effect_and_exact_correspondence() {
+    use fe2o3_verifier::ConditionalCompilerProofInputValidationErrorV1 as E;
+    let empty = receipts_from(guarded_v9_proof_inputs::inputs(0));
+    let binding = proof_binding(&empty, None, &conditional_evidence(&empty, None));
+    assert!(matches!(
+        validate_conditional(&binding, &empty),
+        Err(E::UnsupportedProfile)
+    ));
+    let mut receipts = conditional_receipts();
+    let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+    bytes[64] ^= 1;
+    replace_correspondence(&mut receipts, bytes);
+    let binding = proof_binding(&receipts, None, &conditional_evidence(&receipts, None));
+    assert!(matches!(
+        validate_conditional(&binding, &receipts),
+        Err(E::Stage(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
+                field: "current production Kernel IR custody"
+            }
+        )))
+    ));
 }
 
 const CORRESPONDENCE_HEADER_BYTES_V4: usize = 124;

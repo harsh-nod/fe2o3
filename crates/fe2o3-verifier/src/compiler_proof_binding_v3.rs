@@ -45,8 +45,9 @@ use fe2o3_mir_model::{
 use fe2o3_pliron::{InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5};
 
 use crate::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
-    ProductionMirPlironVerusExecutionEvidenceErrorV1, ValidatedCompilerKernelIrV1,
+    CanonicalConditionalOutputEvidenceV1, CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    ConditionalOutputEvidenceErrorV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    ValidatedCompilerKernelIrV1,
 };
 
 /// Independently decoded and cross-checked V3 compiler proof inputs.
@@ -382,6 +383,50 @@ pub fn validate_compiler_proof_inputs_v4(
     mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
     formal_memory: &InertFormalMemoryReceiptV3,
 ) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
+    let (association, decoded) = decode_associated_stages_v4(
+        proof_binding,
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )?;
+    let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
+        association.verus_execution_evidence(),
+    )
+    .map_err(CompilerProofInputValidationErrorV4::VerusEvidence)?;
+    if verus_execution
+        .claims()
+        .pliron_evidence_identity()
+        .as_bytes()
+        != decoded.middle_end.identity().sha256()
+    {
+        return Err(CompilerProofInputValidationErrorV4::VerusMiddleEndMismatch);
+    }
+    Ok(ValidatedCompilerProofInputsV4 {
+        association,
+        receipt_identity: proof_binding.identity(),
+        semantic_mir: decoded.semantic_mir,
+        middle_end: decoded.middle_end,
+        kernel_ir: decoded.kernel_ir,
+        correspondence: decoded.correspondence,
+        formal_memory: decoded.formal_memory,
+        verus_execution,
+        induction_anchors: decoded.induction_anchors,
+    })
+}
+
+fn decode_associated_stages_v4(
+    proof_binding: &InertProofBindingReceiptV3,
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<
+    (InertProofBindingAssociationV4, DecodedCompilerProofStagesV4),
+    CompilerProofInputValidationErrorV4,
+> {
     let association = InertProofBindingAssociationV4::decode(proof_binding.canonical_preimage())
         .map_err(CompilerProofInputValidationErrorV4::ProofBindingDecode)?;
     let inputs = association.inputs();
@@ -446,29 +491,175 @@ pub fn validate_compiler_proof_inputs_v4(
         formal_memory,
     )
     .map_err(CompilerProofInputValidationErrorV4::Stage)?;
-    let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
-        association.verus_execution_evidence(),
-    )
-    .map_err(CompilerProofInputValidationErrorV4::VerusEvidence)?;
-    if verus_execution
-        .claims()
-        .pliron_evidence_identity()
-        .as_bytes()
-        != decoded.middle_end.identity().sha256()
-    {
-        return Err(CompilerProofInputValidationErrorV4::VerusMiddleEndMismatch);
-    }
+    Ok((association, decoded))
+}
 
-    Ok(ValidatedCompilerProofInputsV4 {
+/// Exact singleton compiler inputs retaining a pending guarded-output condition.
+/// This is not an unconditional V4 owner, protected-origin proof or launch token.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::ValidatedConditionalCompilerProofInputsV1;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ValidatedConditionalCompilerProofInputsV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{ValidatedConditionalCompilerProofInputsV1, ValidatedCompilerProofInputsV4};
+/// fn cannot_promote(value: ValidatedConditionalCompilerProofInputsV1)
+///     -> ValidatedCompilerProofInputsV4 { value }
+/// ```
+#[derive(Debug)]
+#[must_use = "retain the condition until exact packed-argument and launch admission"]
+pub struct ValidatedConditionalCompilerProofInputsV1 {
+    association: InertProofBindingAssociationV4,
+    receipt_identity: InertProofBindingReceiptIdentityV3,
+    stages: DecodedCompilerProofStagesV4,
+    verus_execution: CanonicalConditionalOutputEvidenceV1,
+}
+
+impl ValidatedConditionalCompilerProofInputsV1 {
+    pub const fn association(&self) -> &InertProofBindingAssociationV4 {
+        &self.association
+    }
+    pub const fn receipt_identity(&self) -> InertProofBindingReceiptIdentityV3 {
+        self.receipt_identity
+    }
+    pub const fn semantic_mir(&self) -> &AdmittedInertSemanticMirV1 {
+        &self.stages.semantic_mir
+    }
+    pub const fn middle_end(&self) -> &InertProductionMiddleEndEvidenceV5 {
+        &self.stages.middle_end
+    }
+    pub const fn kernel_ir(&self) -> &ValidatedCompilerKernelIrV1 {
+        &self.stages.kernel_ir
+    }
+    pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
+        &self.stages.correspondence
+    }
+    pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryAdmissionEvidenceV4 {
+        &self.stages.formal_memory
+    }
+    pub const fn verus_execution(&self) -> &CanonicalConditionalOutputEvidenceV1 {
+        &self.verus_execution
+    }
+    pub fn semantic_u32_induction_kir_anchors(&self) -> &[VerifiedSemanticU32InductionKirAnchorV1] {
+        &self.stages.induction_anchors
+    }
+    pub const fn has_lossless_mir_to_kir_correspondence(&self) -> bool {
+        true
+    }
+    pub const fn requires_packed_extent_and_launch_discharge(&self) -> bool {
+        true
+    }
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+    pub const fn establishes_llvm_or_machine_refinement(&self) -> bool {
+        false
+    }
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+pub enum ConditionalCompilerProofInputValidationErrorV1 {
+    Stage(CompilerProofInputValidationErrorV4),
+    Evidence(ConditionalOutputEvidenceErrorV1),
+    IdentityMismatch(&'static str),
+    UnsupportedProfile,
+}
+
+impl fmt::Display for ConditionalCompilerProofInputValidationErrorV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stage(error) => error.fmt(f),
+            Self::Evidence(error) => error.fmt(f),
+            Self::IdentityMismatch(field) => {
+                write!(f, "conditional compiler evidence has a different {field}")
+            }
+            Self::UnsupportedProfile => f.write_str(
+                "conditional compiler evidence requires a singleton guarded-output profile",
+            ),
+        }
+    }
+}
+impl Error for ConditionalCompilerProofInputValidationErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Stage(error) => Some(error),
+            Self::Evidence(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Imports conditional evidence without accepting it as an unconditional aggregate.
+/// Every stage uses the same exact V8/V9 and lossless correspondence checks as V4.
+pub fn validate_conditional_compiler_proof_inputs_v1(
+    proof_binding: &InertProofBindingReceiptV3,
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<ValidatedConditionalCompilerProofInputsV1, ConditionalCompilerProofInputValidationErrorV1>
+{
+    use ConditionalCompilerProofInputValidationErrorV1 as E;
+    let (association, stages) = decode_associated_stages_v4(
+        proof_binding,
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )
+    .map_err(E::Stage)?;
+    let verus_execution =
+        CanonicalConditionalOutputEvidenceV1::decode(association.verus_execution_evidence())
+            .map_err(E::Evidence)?;
+    let claims = verus_execution.obligation();
+    for (matches, field) in [
+        (
+            claims.middle_end_identity().as_bytes() == stages.middle_end.identity().sha256(),
+            "middle-end identity",
+        ),
+        (
+            claims.source_semantic_identity().as_bytes()
+                == stages.semantic_mir.semantic_sha256().as_bytes(),
+            "source semantic identity",
+        ),
+        (
+            claims.ranked_kernel_identity().as_bytes()
+                == stages.middle_end.ranked_kernel_identity(),
+            "ranked kernel identity",
+        ),
+    ] {
+        if !matches {
+            return Err(E::IdentityMismatch(field));
+        }
+    }
+    let coverage = stages.middle_end.coverage_summary();
+    let semantics = stages.middle_end.semantic_summary();
+    if stages.semantic_mir.roots().len() != 1
+        || coverage.total_view_declared() != 0
+        || coverage.total_view_proved() != 0
+        || coverage.collective_contributions_declared() != 0
+        || coverage.collective_contributions_proved() != 0
+        || semantics.reference_obligations_declared() != 0
+        || semantics.reference_obligations_policy_checked() != 0
+        || semantics.effect_contracts_declared() != 1
+        || semantics.effect_contracts_proved() != 1
+        || semantics.collective_contracts_declared() != 0
+        || semantics.collective_contracts_policy_checked() != 0
+    {
+        return Err(E::UnsupportedProfile);
+    }
+    Ok(ValidatedConditionalCompilerProofInputsV1 {
         association,
         receipt_identity: proof_binding.identity(),
-        semantic_mir: decoded.semantic_mir,
-        middle_end: decoded.middle_end,
-        kernel_ir: decoded.kernel_ir,
-        correspondence: decoded.correspondence,
-        formal_memory: decoded.formal_memory,
+        stages,
         verus_execution,
-        induction_anchors: decoded.induction_anchors,
     })
 }
 
@@ -551,6 +742,7 @@ fn decode_and_cross_check_stages_v3(
     })
 }
 
+#[derive(Debug)]
 struct DecodedCompilerProofStagesV4 {
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,

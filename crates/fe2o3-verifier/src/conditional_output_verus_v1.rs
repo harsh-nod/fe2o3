@@ -29,7 +29,7 @@ use crate::{
     FunctionalRefinementVerusRuntimeLeaseV1,
 };
 
-const OBLIGATION_DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-GUARDED-OUTPUT-VERUS/V1\0";
+pub(crate) const OBLIGATION_DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-GUARDED-OUTPUT-VERUS/V1\0";
 
 /// Move-only conditional proof. Neither its receipt nor its pending condition
 /// is accepted as an unconditional aggregate, packed-ABI proof or launch token.

@@ -23,6 +23,7 @@ mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
 mod compiler_target_lineage_v1;
+mod conditional_output_evidence_v1;
 mod conditional_output_verus_v1;
 mod control_flow_binding;
 mod executor;
@@ -71,9 +72,10 @@ pub use compiler_multi_root_target_lineage_v1::{
 };
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
-    ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
+    ConditionalCompilerProofInputValidationErrorV1, ValidatedCompilerProofInputsV3,
+    ValidatedCompilerProofInputsV4, ValidatedConditionalCompilerProofInputsV1,
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
-    validate_compiler_proof_inputs_v4,
+    validate_compiler_proof_inputs_v4, validate_conditional_compiler_proof_inputs_v1,
 };
 pub use gfx942_local_checked_u32_add_v1::*;
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
@@ -96,7 +98,11 @@ pub use authenticated_proof_binding::{
 };
 pub use compiler_target_lineage_v1::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
-    validate_compiler_target_lineage_v1,
+    validate_compiler_target_lineage_v1, validate_conditional_compiler_target_lineage_v1,
+};
+pub use conditional_output_evidence_v1::{
+    CanonicalConditionalOutputEvidenceV1, ConditionalOutputEvidenceErrorV1,
+    ConditionalOutputLocationV1, InertConditionalOutputObligationV1,
 };
 pub use conditional_output_verus_v1::{
     ProductionConditionalOutputVerusErrorV1, ProductionConditionalOutputVerusExecutionV1,

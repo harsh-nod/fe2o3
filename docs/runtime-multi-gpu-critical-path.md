@@ -82,14 +82,25 @@ and folding. Exact acceptance preserves original rows, typed outputs and the
 immediately preceding literal identity. Terminal source AST validation and ABI
 discovery remain open.
 
-The remaining semantic path includes ABI discovery, terminal source validation and
-semantic-to-machine entry/continuation/memory/completion evidence, protected invocation custody and
+The checked-u32 helper lane still needs ABI discovery and terminal source
+validation. Complete application admission needs semantic-to-machine entry,
+continuation, memory and completion evidence, protected invocation custody and
 the concrete deployment-approved Worker V3 verifier/refinement providers. Do not
 replace these with qualification metadata, caller digests or an always-allow
 backend. Affirmative Worker provider implementations remain test-only. Bound the
-first complete profile to a single-workitem u32 transform storing its value and
-overflow; it still needs physical entry, output-store, termination and exact
-LLVM/HSACO correspondence before an application launch can be admitted.
+first complete profile to the actual `fill_write_only` kernel described below,
+not a separate checked-add prefix. Its conditional compiler proof now survives
+the singleton handoff and import, but actual packed launch discharge, physical
+entry, output stores, termination and exact source-to-machine correspondence
+still precede application admission.
+
+The [conditional transport checkpoint](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
+retains the signed coverage condition through genuine Rust extraction, V9
+handoff, conditional import and target replay. The old unconditional importer
+and protected Worker constructor remain unchanged. Next bind actual packed
+length and output backing to the selected descriptor and AQL grid, then complete
+machine refinement and the protected provider. Only then qualify admitted fill,
+tracked upload, native XGMI and readback on two GPUs in both directions.
 
 ## Required Multi-Device Bridge
 
@@ -191,12 +202,16 @@ machine-value relation or execution authority.
    handoff. Compose the existing canonical descriptor with physical inspection
    and generated packing for the exact selected artifact.
 2. Check the complete real `fill_write_only` source/KIR chain: Index1d -> get ->
-   u32 truncation -> guarded write through the original output binding. Existing
-   write-only ranked projection records `Access`, not `ValueAccess`; the generic
-   validator explicitly excludes complete indexed-address/operational equivalence.
+   u32 truncation -> guarded write through the original output binding. The
+   retained ranked projection now records `ValueAccess`, and exact global-X KIR
+   value normalization preserves the u64-to-u32 cast. The generic validator still
+   excludes complete indexed-address/operational equivalence.
    Bind actual call spans, predicate `index < len`, output address and stored value,
-   and reject all unsupported reachable effects. Reuse TotalView coverage with
-   actual launch/output extents; a bounded formal-memory witness alone does not
+   and reject all unsupported reachable effects. Use the distinct conditional
+   coverage boundary and discharge `N <= G` from actual packed output length and
+   AQL geometry; do not promote it into unconditional TotalView coverage. Bind
+   the source-output ordinal through descriptor `SliceLengthU64`, never through
+   the ranked extent ordinal. A bounded formal-memory witness alone does not
    establish full result initialization. Do not prioritize isolated helper proofs.
 3. Prove the captured entry-to-exit machine relation. Inputs are kernarg `s[0:1]`,
    workgroup X `s2`, workitem X `v0`; the new layout query derives, not assumes,
@@ -206,6 +221,10 @@ machine-value relation or execution authority.
    is overwritten, OR equals addition only for local X below 64, and Y/Z geometry
    must not duplicate writes. Pointer validity, checked extent/address arithmetic,
    active lanes and memory visibility/completion remain separate obligations.
+   The existing shared per-wave execution proof still accepts projected lane IDs
+   and EXEC. Derive them from the inspected descriptor and validated dispatch;
+   prove dispatch-wide unique coverage parametrically, without a grid-sized
+   simulation or caller-supplied activity mask.
 4. Qualify altered parameters/components, offsets/address spaces, owner/artifact
    substitution, changed result/literal, wrong store address/value, missing
    termination and extra effects. Only a complete proved profile and authenticated

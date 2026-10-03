@@ -47,12 +47,18 @@ Healthy selected-pair copies and three-GPU pending-frame forwarding already have
 native correctness evidence. The critical functional gap is ordinary
 application-kernel admission, not another expansion of copy fixture counts.
 The [checked-u32 entry-prefix relation](runtime-checked-u32-prefix-v1.md) adds a
-same-owner source/KIR value checker with a proved shared fold, but does not yet
-prove its normalization adapters or authorize application kernels.
+same-owner source/KIR value checker with a proved shared fold. Subsequent
+[source assembly](evidence/dev-source-assembly-2026-10-03/README.md) and
+[KIR assembly](evidence/dev-kir-assembly-2026-10-03/README.md) checkpoints qualify
+their bounded actual normalization/assembly bodies, not whole kernels.
 
-Prioritize real rustc extraction into that retained owner, semantic/machine entry
-and continuation/memory composition, and protected invocation-bound admission.
-Then qualify one ordinary multi-GPU compute -> peer -> compute/readback workflow.
+The immediate target is real `fill_write_only`, whose
+[conditional compiler transport](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
+now passes genuine extraction, handoff, import and target replay without launch
+authority. Prioritize actual packed-length/AQL coverage discharge, dispatch-wide
+source/machine and memory/completion composition, then the protected application
+provider. Qualify admitted fill -> tracked upload -> native XGMI -> readback on
+two selected GPUs, lengths 64, 65 and 4097, in both directions.
 Broader fault recovery, all-device matrices and matched HIP/HSA performance are
 separate follow-on gates; existing copy-only paths need not wait for them.
 

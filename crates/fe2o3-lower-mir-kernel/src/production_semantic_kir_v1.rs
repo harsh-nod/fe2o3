@@ -4028,6 +4028,14 @@ fn normalize_kir_expression_inner_v1(
         )
     };
     Some(match &operation.kind {
+        // The source ThreadIndex1d coordinate occupies ranked symbol zero.
+        // Other index kinds/axes and merely width-compatible types are distinct.
+        OperationKind::Intrinsic(intrinsic)
+            if intrinsic == &IntrinsicOperation::global_id_1d()
+                && exact_operation_result_v1(operation, &Type::INDEX) == Some(value) =>
+        {
+            NormalizedScalarExpressionV1::Symbol { symbol: 0, scalar }
+        }
         OperationKind::Constant(constant) => {
             let (constant_scalar, bits) = normalize_kir_constant_v1(constant)?;
             if constant_scalar != scalar {
@@ -30249,6 +30257,119 @@ mod resource_tests {
         );
 
         assert_eq!(kir_written_value_v1(&guarded_store), Some(value));
+    }
+
+    fn normalize_test_coordinate(
+        intrinsic: IntrinsicOperation,
+        result: Type,
+        extra_result: bool,
+    ) -> Option<NormalizedScalarExpressionV1> {
+        let mut block = BasicBlock::new(BlockId(0));
+        let mut results = vec![ValueDef::new(ValueId(0), result)];
+        if extra_result {
+            results.push(ValueDef::new(ValueId(2), Type::INDEX));
+        }
+        block.operations = vec![
+            Operation::new(results, OperationKind::Intrinsic(intrinsic)),
+            Operation::effect_free(
+                ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
+                OperationKind::Cast {
+                    kind: CastKind::Truncate,
+                    value: ValueId(0),
+                    to: Type::Scalar(ScalarType::U32),
+                },
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            "coordinate_value",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 128 };
+        let kir =
+            build_kir_correlation_index(function.body.as_ref().unwrap(), 2, &mut budget).unwrap();
+        normalize_kir_expression_v1(
+            &function,
+            &kir,
+            &BTreeMap::new(),
+            ValueId(1),
+            0,
+            &mut BTreeSet::new(),
+            &mut budget,
+        )
+    }
+
+    #[test]
+    fn mir_pliron_translation_normalizes_exact_global_x_with_its_u32_cast() {
+        let unsigned = |bits| ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits,
+        };
+        assert_eq!(
+            normalize_test_coordinate(IntrinsicOperation::global_id_1d(), Type::INDEX, false),
+            Some(NormalizedScalarExpressionV1::Cast {
+                kind: ProductionSemanticCastV2::Integer,
+                source: unsigned(64),
+                target: unsigned(32),
+                operand: Box::new(NormalizedScalarExpressionV1::Symbol {
+                    symbol: 0,
+                    scalar: unsigned(64)
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn mir_pliron_translation_rejects_coordinate_kind_axis_type_and_result_drift() {
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            assert_eq!(
+                normalize_test_coordinate(
+                    IntrinsicOperation::new(IntrinsicKind::LaunchExtent { axis }, Type::INDEX),
+                    Type::INDEX,
+                    false,
+                ),
+                None,
+            );
+        }
+        for kind in [
+            IndexKind::Global,
+            IndexKind::Local,
+            IndexKind::Workgroup,
+            IndexKind::WorkgroupSize,
+            IndexKind::WorkgroupCount,
+        ] {
+            for axis in [Axis::X, Axis::Y, Axis::Z] {
+                if kind == IndexKind::Global && axis == Axis::X {
+                    continue;
+                }
+                let intrinsic = IntrinsicOperation::new(
+                    IntrinsicKind::InvocationIndex { kind, axis },
+                    Type::INDEX,
+                );
+                assert_eq!(
+                    normalize_test_coordinate(intrinsic, Type::INDEX, false),
+                    None
+                );
+            }
+        }
+        for ty in [Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U32)] {
+            let mut intrinsic = IntrinsicOperation::global_id_1d();
+            intrinsic.result_type = ty.clone();
+            assert_eq!(
+                normalize_test_coordinate(intrinsic, Type::INDEX, false),
+                None
+            );
+            assert_eq!(
+                normalize_test_coordinate(IntrinsicOperation::global_id_1d(), ty, false),
+                None
+            );
+        }
+        assert_eq!(
+            normalize_test_coordinate(IntrinsicOperation::global_id_1d(), Type::INDEX, true),
+            None
+        );
     }
 
     #[test]

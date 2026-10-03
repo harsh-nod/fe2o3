@@ -6,18 +6,20 @@ use fe2o3_amd_target::{
     PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
 };
 use fe2o3_compiler_lineage::{
-    DataLayoutTranscriptV3, InertProductionSemanticCapsuleV3, ProductionTargetLineageErrorV3,
-    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
-    derive_semantic_target_layout_identity_v1,
+    DataLayoutTranscriptV3, InertProductionSemanticCapsuleV3, InertProofBindingReceiptIdentityV3,
+    ProductionTargetLineageErrorV3, SemanticToLlvmAssociationTranscriptV3,
+    TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_kernel_ir::{
     ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugReceiptExtensionV1,
 };
+use fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1;
 use fe2o3_rustc_invocation::{ValidationError, encode_descriptor_v3};
 
 use crate::{
     CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
-    ValidatedCompilerProofInputsV4, validate_compiler_kir_to_llvm_replay_v1,
+    ValidatedCompilerProofInputsV4, ValidatedConditionalCompilerProofInputsV1,
+    validate_compiler_kir_to_llvm_replay_v1,
 };
 
 /// Move-only ownership of independently decoded target lineage and exact KIR-to-LLVM replay.
@@ -136,11 +138,38 @@ pub fn validate_compiler_target_lineage_v1(
     capsule: &InertProductionSemanticCapsuleV3,
     proof_inputs: &ValidatedCompilerProofInputsV4,
 ) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
+    validate_target_lineage(
+        capsule,
+        proof_inputs.receipt_identity(),
+        proof_inputs.semantic_mir(),
+        proof_inputs.kernel_ir().canonical_bytes(),
+    )
+}
+
+/// Replays target lineage while retaining the separate pending conditional owner.
+/// This result grants neither unconditional coverage nor launch authority.
+pub fn validate_conditional_compiler_target_lineage_v1(
+    capsule: &InertProductionSemanticCapsuleV3,
+    proof_inputs: &ValidatedConditionalCompilerProofInputsV1,
+) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
+    validate_target_lineage(
+        capsule,
+        proof_inputs.receipt_identity(),
+        proof_inputs.semantic_mir(),
+        proof_inputs.kernel_ir().canonical_bytes(),
+    )
+}
+
+fn validate_target_lineage(
+    capsule: &InertProductionSemanticCapsuleV3,
+    proof_receipt: InertProofBindingReceiptIdentityV3,
+    semantic_owner: &AdmittedInertSemanticMirV1,
+    kernel_bytes: &[u8],
+) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
     let receipts = capsule.receipts();
-    if proof_inputs.receipt_identity() != receipts.proof_binding().identity()
-        || proof_inputs.semantic_mir().canonical_encoding()
-            != receipts.semantic_mir().canonical_preimage()
-        || proof_inputs.kernel_ir().canonical_bytes() != receipts.kernel_ir().canonical_preimage()
+    if proof_receipt != receipts.proof_binding().identity()
+        || semantic_owner.canonical_encoding() != receipts.semantic_mir().canonical_preimage()
+        || kernel_bytes != receipts.kernel_ir().canonical_preimage()
     {
         return Err(CompilerTargetLineageValidationErrorV1::ProofInputMismatch);
     }
@@ -277,11 +306,7 @@ pub fn validate_compiler_target_lineage_v1(
             "final LLVM Worker data layout",
         ),
         (
-            proof_inputs
-                .semantic_mir()
-                .target_layout_identity()
-                .as_bytes()
-                == &semantic_layout.sha256(),
+            semantic_owner.target_layout_identity().as_bytes() == &semantic_layout.sha256(),
             "semantic-MIR target layout",
         ),
     ] {

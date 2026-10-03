@@ -262,18 +262,83 @@ fn prepare_lineage_evidence_v1(
             ));
         }
 
-        let verus = verification.aggregate_verus_execution().ok_or(
-            ProductionSemanticLineageErrorV3::AxisMismatch(
-                "every production root requires authenticated MIR-to-PLIRON Verus execution",
-            ),
-        )?;
-        let verus = CanonicalProductionMirPlironVerusExecutionEvidenceV1::from_execution(verus)?;
-        if verus.claims().pliron_evidence_identity().as_bytes()
-            != verification.middle_end_evidence().identity().sha256()
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "per-root Verus execution names a different middle-end record",
-            ));
+        let verus_bytes = if let Some(conditional) = verification.conditional_verus_execution() {
+            if ranked.root_count() != 1 {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "conditional output evidence requires a singleton lineage",
+                ));
+            }
+            let verus = fe2o3_verifier::CanonicalConditionalOutputEvidenceV1::from_execution(
+                conditional,
+            )
+            .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+            let claims = verus.obligation();
+            if claims.middle_end_identity().as_bytes()
+                != verification.middle_end_evidence().identity().sha256()
+                || claims.source_semantic_identity().as_bytes()
+                    != semantic.semantic_sha256().as_bytes()
+                || claims.ranked_kernel_identity().as_bytes()
+                    != verification
+                        .middle_end_evidence()
+                        .as_inert()
+                        .ranked_kernel_identity()
+            {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "conditional Verus execution names a different compiler root",
+                ));
+            }
+            verus.canonical_bytes().to_vec().into_boxed_slice()
+        } else {
+            let verus = verification.aggregate_verus_execution().ok_or(
+                ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "every production root requires authenticated MIR-to-PLIRON Verus execution",
+                ),
+            )?;
+            let verus =
+                CanonicalProductionMirPlironVerusExecutionEvidenceV1::from_execution(verus)?;
+            if verus.claims().pliron_evidence_identity().as_bytes()
+                != verification.middle_end_evidence().identity().sha256()
+            {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "per-root Verus execution names a different middle-end record",
+                ));
+            }
+            verus.canonical_bytes().to_vec().into_boxed_slice()
+        };
+        // Singleton V5/V4 evidence has its own exact codecs. Do not first encode
+        // a discarded legacy multi-root payload, which has a different schema.
+        if ranked.root_count() == 1 {
+            let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(
+                admitted.semantic_kir(),
+                verification.semantic_u32_induction(),
+            )?;
+            let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
+            if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir
+                || formal.canonical_kernel_ir_identity() != neutral_kir
+            {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "singleton lineage names a different neutral KIR",
+                ));
+            }
+            return Ok(PreparedLineageEvidenceV1 {
+                middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(
+                    verification.middle_end_evidence().canonical_bytes(),
+                )?,
+                mir_to_kir_correspondence:
+                    InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+                        correspondence.canonical_bytes(),
+                    )?,
+                formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(
+                    formal.canonical_bytes(),
+                )?,
+                proof_verus_evidence: verus_bytes,
+                roster_custody: PreparedLineageRosterCustodyV1::Singleton,
+                workgroups: vec![(
+                    kernel.id.as_str().to_owned(),
+                    [workgroup.x, workgroup.y, workgroup.z],
+                )]
+                .into_boxed_slice(),
+            });
         }
         let induction =
             fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
@@ -303,7 +368,7 @@ fn prepare_lineage_evidence_v1(
                 .into_boxed_slice(),
             correspondence: correspondence.into_boxed_slice(),
             formal_memory: formal_receipt.canonical_bytes().to_vec().into_boxed_slice(),
-            verus_execution: verus.canonical_bytes().to_vec().into_boxed_slice(),
+            verus_execution: verus_bytes,
         });
     }
 
@@ -312,42 +377,6 @@ fn prepare_lineage_evidence_v1(
         .map(|root| (root.kernel_id.clone(), root.workgroup))
         .collect::<Vec<_>>()
         .into_boxed_slice();
-    if let [root] = roots.as_slice() {
-        let verification = ranked
-            .roots()
-            .iter()
-            .find(|ranked_root| ranked_root.semantic_root().index() == root.semantic_root)
-            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "singleton lineage has no matching ranked root",
-            ))?
-            .verification();
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(
-            admitted.semantic_kir(),
-            verification.semantic_u32_induction(),
-        )?;
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
-        if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir
-            || formal.canonical_kernel_ir_identity() != neutral_kir
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "singleton lineage names a different neutral KIR",
-            ));
-        }
-        return Ok(PreparedLineageEvidenceV1 {
-            middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(root.middle_end.to_vec())?,
-            mir_to_kir_correspondence:
-                InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
-                    correspondence.canonical_bytes(),
-                )?,
-            formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(
-                formal.canonical_bytes(),
-            )?,
-            proof_verus_evidence: root.verus_execution.clone(),
-            roster_custody: PreparedLineageRosterCustodyV1::Singleton,
-            workgroups,
-        });
-    }
-
     let middle_end = build_lineage_roster_v2(
         semantic.semantic_sha256().as_bytes(),
         neutral_kir.into(),
@@ -1071,17 +1100,25 @@ impl PreparedProductionSemanticLineageV3 {
         validate_final_llvm_layout(final_llvm)?;
         match &self.roster_custody {
             PreparedLineageRosterCustodyV1::Singleton => {
+                let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                    self.semantic_mir.canonical_preimage(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+                ).map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
                 let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
                     self.mir_to_kir_correspondence.canonical_preimage(),
                 )?;
                 let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
                     self.formal_memory.canonical_preimage(),
                 )?;
-                if correspondence
-                    .nested_v4()
-                    .semantic_u32_induction()
-                    .semantic_mir_sha256()
-                    != self.semantic_mir.identity().sha256()
+                // The semantic digest and the outer receipt-content digest are
+                // different domains; correspondence commits to the former.
+                if correspondence.nested_v4().semantic_sha256()
+                    != semantic.semantic_sha256().as_bytes()
+                    || correspondence
+                        .nested_v4()
+                        .semantic_u32_induction()
+                        .semantic_mir_sha256()
+                        != semantic.semantic_sha256().as_bytes()
                     || correspondence.nested_v4().canonical_kernel_ir_identity()
                         != self.neutral_kir_custody
                     || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody

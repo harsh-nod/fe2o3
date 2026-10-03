@@ -964,7 +964,12 @@ impl AuthenticatedRankedVerificationRootV1 {
     }
 }
 
-struct AuthenticatedFunctionalVerificationV1 {
+enum AuthenticatedFunctionalVerificationV1 {
+    Total(Box<AuthenticatedTotalFunctionalVerificationV1>),
+    Conditional(Box<crate::production_mir_pliron_verus_join_v1::AuthenticatedConditionalOutputVerificationV1>),
+}
+
+struct AuthenticatedTotalFunctionalVerificationV1 {
     semantics: fe2o3_pliron::ProductionReconciledMirPlironSemanticContractV1,
     parallel_contract: fe2o3_functional_proof::ParallelReferenceContractV1,
     parallel_report: fe2o3_pliron::ProductionParallelReferenceContractReportV1,
@@ -982,14 +987,31 @@ impl AuthenticatedRankedVerificationV5 {
     }
 
     pub(crate) fn retained_functional_verification_is_coherent(&self) -> bool {
-        self.functional.as_ref().is_none_or(|functional| {
-            functional.aggregate.report().contract_identity()
-                == functional.semantics.contract().canonical_sha256()
-                && functional.parallel_report.contract_identity()
-                    == functional.parallel_contract.canonical_sha256()
-                && functional.parallel_contract.semantic_contract_identity()
-                    == functional.semantics.contract().canonical_sha256()
-        })
+        self.functional
+            .as_ref()
+            .is_none_or(|functional| match functional {
+                AuthenticatedFunctionalVerificationV1::Conditional(conditional) => {
+                    let execution = conditional.execution();
+                    execution.retains_strictly_imported_signed_receipt()
+                        && execution.staging().evidence_identity()
+                            == self.middle_end_evidence.identity().sha256()
+                        && execution.source_semantic_identity()
+                            == self
+                                .middle_end_evidence
+                                .as_inert()
+                                .source_semantic_identity()
+                        && execution.ranked_kernel_identity()
+                            == self.middle_end_evidence.as_inert().ranked_kernel_identity()
+                }
+                AuthenticatedFunctionalVerificationV1::Total(functional) => {
+                    functional.aggregate.report().contract_identity()
+                        == functional.semantics.contract().canonical_sha256()
+                        && functional.parallel_report.contract_identity()
+                            == functional.parallel_contract.canonical_sha256()
+                        && functional.parallel_contract.semantic_contract_identity()
+                            == functional.semantics.contract().canonical_sha256()
+                }
+            })
     }
 
     pub(crate) fn aggregate_verus_execution(
@@ -997,7 +1019,25 @@ impl AuthenticatedRankedVerificationV5 {
     ) -> Option<&fe2o3_verifier::ProductionMirPlironPerCompilationVerusExecutionV1> {
         self.functional
             .as_ref()
-            .map(|functional| functional.aggregate.execution())
+            .and_then(|functional| match functional {
+                AuthenticatedFunctionalVerificationV1::Total(functional) => {
+                    Some(functional.aggregate.execution())
+                }
+                AuthenticatedFunctionalVerificationV1::Conditional(_) => None,
+            })
+    }
+
+    pub(crate) fn conditional_verus_execution(
+        &self,
+    ) -> Option<&fe2o3_verifier::ProductionConditionalOutputVerusExecutionV1> {
+        self.functional
+            .as_ref()
+            .and_then(|functional| match functional {
+                AuthenticatedFunctionalVerificationV1::Conditional(functional) => {
+                    Some(functional.execution())
+                }
+                AuthenticatedFunctionalVerificationV1::Total(_) => None,
+            })
     }
 
     pub(crate) const fn semantic_u32_induction(
@@ -1019,7 +1059,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
-    ConditionalLaunchAdmissionRequired(Box<crate::production_mir_pliron_verus_join_v1::AuthenticatedConditionalOutputVerificationV1>),
+    ConditionalStaging(fe2o3_pliron::ProductionConditionalOutputStagingErrorV1),
 }
 
 impl fmt::Display for ProductionRankedVerificationErrorV1 {
@@ -1058,15 +1098,7 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::AggregateVerus(error) => {
                 write!(formatter, "functional aggregate proof failed: {error}")
             }
-            Self::ConditionalLaunchAdmissionRequired(verified) => write!(
-                formatter,
-                "conditional output {} has an authenticated conditional aggregate (boundary {:?}, signature verified: {}); conditional evidence transport and packed launch discharge are required before compiler or artifact admission",
-                verified.execution().staging().reference_output_argument(),
-                verified.execution().boundary(),
-                verified
-                    .execution()
-                    .retains_strictly_imported_signed_receipt(),
-            ),
+            Self::ConditionalStaging(error) => error.fmt(formatter),
         }
     }
 }
@@ -1074,9 +1106,8 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
 impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::RosterMetadata(_)
-            | Self::RosterIdentity
-            | Self::ConditionalLaunchAdmissionRequired(_) => None,
+            Self::RosterMetadata(_) | Self::RosterIdentity => None,
+            Self::ConditionalStaging(error) => Some(error),
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
@@ -1301,28 +1332,24 @@ fn authenticate_ranked_root_v5(
             let verified = crate::production_mir_pliron_verus_join_v1::authenticate_conditional_output_per_compilation_v1(
                 lowering, &middle_end_evidence,
             ).map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
-            // Never export conditional coverage as the existing unconditional
-            // SafeReferenceMirToLivePliron aggregate or V1 signed payload.
-            return Err(
-                ProductionRankedVerificationErrorV1::ConditionalLaunchAdmissionRequired(Box::new(
-                    verified,
-                )),
-            );
-        }
-        let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
-            lowering,
-            &middle_end_evidence,
-        )
-        .map_err(ProductionRankedVerificationErrorV1::SemanticContract)?;
-        let (parallel_contract, parallel_report) =
-            fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
+            Some(AuthenticatedFunctionalVerificationV1::Conditional(
+                Box::new(verified),
+            ))
+        } else {
+            let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
                 lowering,
                 &middle_end_evidence,
-                semantics.semantic_contract_report(),
-                semantics.contract(),
             )
-            .map_err(ProductionRankedVerificationErrorV1::ParallelContract)?;
-        let aggregate =
+            .map_err(ProductionRankedVerificationErrorV1::SemanticContract)?;
+            let (parallel_contract, parallel_report) =
+                fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
+                    lowering,
+                    &middle_end_evidence,
+                    semantics.semantic_contract_report(),
+                    semantics.contract(),
+                )
+                .map_err(ProductionRankedVerificationErrorV1::ParallelContract)?;
+            let aggregate =
             crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v1(
                 lowering,
                 &middle_end_evidence,
@@ -1332,12 +1359,15 @@ fn authenticate_ranked_root_v5(
                 parallel_report,
             )
             .map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
-        Some(AuthenticatedFunctionalVerificationV1 {
-            semantics,
-            parallel_contract,
-            parallel_report,
-            aggregate,
-        })
+            Some(AuthenticatedFunctionalVerificationV1::Total(Box::new(
+                AuthenticatedTotalFunctionalVerificationV1 {
+                    semantics,
+                    parallel_contract,
+                    parallel_report,
+                    aggregate,
+                },
+            )))
+        }
     } else {
         None
     };
@@ -1466,6 +1496,18 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 ));
             }
             validate_ranked_root_induction_custody_v1(semantic_owner, root)?;
+            if let Some(execution) = root.verification.conditional_verus_execution() {
+                let staging = fe2o3_pliron::require_conditional_output_staging_v1(
+                    &root.lowering,
+                    &revalidated,
+                )
+                .map_err(ProductionRankedVerificationErrorV1::ConditionalStaging)?;
+                if execution.staging() != &staging {
+                    return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
+                        "changed per-root conditional staging custody",
+                    ));
+                }
+            }
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
         require_exact_ranked_kernel_roster_identity_v1(
