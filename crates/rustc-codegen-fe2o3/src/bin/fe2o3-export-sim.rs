@@ -397,6 +397,10 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     let loader_path = env::join_paths([wrapper_dir, rustc_lib.as_path()])
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let selected_target = options
+        .selected_target
+        .map(|selected| selected.with_primary_package(&cargo, &options.cargo_args))
+        .transpose()?;
     let output_env = options.format.output_env();
     let mut command = Command::new(cargo);
     command
@@ -434,7 +438,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env_remove(DIAGNOSTIC_KIR_ENV_V17)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
-    if let Some(selected) = &options.selected_target {
+    if let Some(selected) = &selected_target {
         command
             .args(["--bin", selected.name()])
             .env(cargo_target_selection_v1::ENV, selected.encode()?);

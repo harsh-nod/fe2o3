@@ -8,12 +8,16 @@ use serde::{Deserialize, Serialize};
 pub(super) const ENV: &str = "FE2O3_EXTRACT_CARGO_TARGET_V1";
 const MAX_REQUEST_BYTES: usize = 8192;
 
+include!("cargo_target_primary_v1.rs");
+
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Selection {
     kind: Kind,
     name: String,
     source: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    primary: Option<PrimaryPackage>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -29,6 +33,7 @@ impl Selection {
             name,
             source: std::fs::canonicalize(&source)
                 .map_err(|error| format!("canonicalize selected bin source: {error}"))?,
+            primary: None,
         };
         selection.validate(crate_name)?;
         Ok(selection)
@@ -61,7 +66,7 @@ impl Selection {
         {
             return Err("selected source must be an exact canonical regular file".into());
         }
-        Ok(())
+        self.validate_primary()
     }
 
     pub(super) fn decode(value: &OsStr, crate_name: &str) -> Result<Self, String> {
@@ -94,45 +99,7 @@ impl Selection {
         if compile.crate_name() != self.name.replace('-', "_") {
             return Ok(false);
         }
-        // Reuse the classifier's frozen option/value grammar. Never interpret
-        // an option value or a source token as a crate-type option.
-        let argv = compile.argv();
-        let mut index = 1;
-        let mut crate_type = None;
-        let mut test = false;
-        while index < argv.len() {
-            if index == compile.source_argument_index() {
-                index += 1;
-                continue;
-            }
-            let argument = &argv[index];
-            if argument == "--" {
-                break;
-            }
-            let separate = argument
-                .to_str()
-                .is_some_and(|value| RUSTC_SEPARATE_VALUE_OPTIONS_V2.contains(&value));
-            let value = if argument == "--crate-type" {
-                Some(
-                    argv.get(index + 1)
-                        .ok_or("missing selected rustc crate type")?
-                        .to_str()
-                        .ok_or("selected rustc crate type must be UTF-8")?,
-                )
-            } else {
-                argument
-                    .to_str()
-                    .and_then(|value| value.strip_prefix("--crate-type="))
-            };
-            if let Some(value) = value {
-                if value.is_empty() || crate_type.replace(value).is_some() {
-                    return Err("selected rustc crate type is empty or repeated".into());
-                }
-            }
-            test |= argument == "--test";
-            index += if separate { 2 } else { 1 };
-        }
-        if crate_type != Some("bin") || test {
+        if compile_crate_type(compile)? != Some("bin") {
             return Ok(false);
         }
         let source = std::fs::canonicalize(compile.source_path())
@@ -141,10 +108,56 @@ impl Selection {
     }
 }
 
+fn compile_crate_type<'a>(
+    compile: RustcCompileInvocationV2<'a>,
+) -> Result<Option<&'a str>, String> {
+    // Reuse the classifier's frozen option/value grammar. Never interpret
+    // an option value or a source token as a crate-type option.
+    let argv = compile.argv();
+    let mut index = 1;
+    let mut crate_type = None;
+    let mut test = false;
+    while index < argv.len() {
+        if index == compile.source_argument_index() {
+            index += 1;
+            continue;
+        }
+        let argument = &argv[index];
+        if argument == "--" {
+            break;
+        }
+        let separate = argument
+            .to_str()
+            .is_some_and(|value| RUSTC_SEPARATE_VALUE_OPTIONS_V2.contains(&value));
+        let value = if argument == "--crate-type" {
+            Some(
+                argv.get(index + 1)
+                    .ok_or("missing selected rustc crate type")?
+                    .to_str()
+                    .ok_or("selected rustc crate type must be UTF-8")?,
+            )
+        } else {
+            argument
+                .to_str()
+                .and_then(|value| value.strip_prefix("--crate-type="))
+        };
+        if let Some(value) = value {
+            if value.is_empty() || crate_type.replace(value).is_some() {
+                return Err("selected rustc crate type is empty or repeated".into());
+            }
+        }
+        test |= argument == "--test";
+        index += if separate { 2 } else { 1 };
+    }
+    Ok(if test { None } else { crate_type })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_rustc_invocation::{RustcInvocationV2, classify_rustc_invocation_v2};
+
+    include!("cargo_target_primary_v1_tests.rs");
 
     struct Files(PathBuf);
     impl Files {

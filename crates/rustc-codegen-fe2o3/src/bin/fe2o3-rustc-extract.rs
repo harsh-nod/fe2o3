@@ -28,6 +28,7 @@ include!("fe2o3-rustc-extract/bf16_tile_source_v1.rs");
 include!("fe2o3-rustc-extract/bf16_generated_source_v1.rs");
 include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
 include!("fe2o3-rustc-extract/normal_composition_v1.rs");
+include!("fe2o3-rustc-extract/binding_only_v1.rs");
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_ENGINEERING_CAPTURE_ENV_V1: &str = "FE2O3_EXTRACT_ENGINEERING_CAPTURE_V1";
@@ -229,6 +230,11 @@ enum PreparedExtractionV1 {
     Passthrough {
         executable: OsString,
         forwarded_args: Vec<OsString>,
+    },
+    BindingOnly {
+        executable: OsString,
+        forwarded_args: Vec<OsString>,
+        crate_binding: CrateBindingIdV1,
     },
     Selected(SelectedExtractionV1),
 }
@@ -747,12 +753,14 @@ fn prepare_for_target(
     let RustcInvocationV2::Compile(compile) = invocation else {
         return Ok(prepare_passthrough(invocation));
     };
-    if compile.crate_name() != selected_crate {
-        return Ok(prepare_passthrough(invocation));
-    }
-    if let Some(selected) = &selected_target
-        && !selected.matches(compile)?
-    {
+    if let Some(selected) = &selected_target {
+        if !selected.matches(compile)? {
+            if let Some(identity) = selected.binding_only_identity(compile)? {
+                return prepare_binding_only_compile(compile, &identity);
+            }
+            return Ok(prepare_passthrough(invocation));
+        }
+    } else if compile.crate_name() != selected_crate {
         return Ok(prepare_passthrough(invocation));
     }
 
@@ -976,6 +984,11 @@ fn execute(prepared: PreparedExtractionV1) -> Result<i32, String> {
             executable,
             forwarded_args,
         } => execute_passthrough(executable, forwarded_args),
+        PreparedExtractionV1::BindingOnly {
+            executable,
+            forwarded_args,
+            crate_binding,
+        } => execute_binding_only(executable, forwarded_args, crate_binding),
         PreparedExtractionV1::Selected(selected) => execute_selected(selected),
     }
 }
@@ -1267,6 +1280,7 @@ mod tests {
     include!("fe2o3-rustc-extract/composition_promotion_v1_tests.rs");
     include!("fe2o3-rustc-extract/normal_composition_v1_tests.rs");
     include!("fe2o3-rustc-extract/bin_target_v1_tests.rs");
+    include!("fe2o3-rustc-extract/binding_only_v1_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {
