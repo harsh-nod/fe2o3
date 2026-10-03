@@ -1307,6 +1307,12 @@ run_rocm_compile() {
         --test production_extraction_driver_v1 \
         production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics -- \
         --ignored --exact
+  run_step rocm-production-extraction-checked-u32-prefix \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_extraction_driver_v1 \
+        checked_u32_prefix_extraction_v1::genuine_checked_u32_prefix_extraction_uses_actual_sources_and_rejects_unsupported_profiles \
+        -- --ignored --exact
   run_step rocm-production-general-matrix \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

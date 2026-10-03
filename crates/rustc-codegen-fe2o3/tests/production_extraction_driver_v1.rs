@@ -14,6 +14,9 @@ use fe2o3_verifier::{
 #[path = "support/inert_invocation_v3.rs"]
 mod inert_invocation_v3;
 
+#[path = "support/checked_u32_prefix_extraction_v1.rs"]
+mod checked_u32_prefix_extraction_v1;
+
 struct ScratchTarget {
     path: PathBuf,
 }

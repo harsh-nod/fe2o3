@@ -11,6 +11,7 @@ use fe2o3_device::memory;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(not(any(
+    feature = "checked-u32-prefix",
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
@@ -50,6 +51,62 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 17;
+    }
+}
+
+#[cfg(all(
+    feature = "checked-u32-prefix",
+    not(any(
+        feature = "checked-u32-prefix-second",
+        feature = "checked-u32-prefix-none",
+        feature = "checked-u32-prefix-unsupported"
+    ))
+))]
+#[inline(never)]
+fn checked_prefix(mut value: u32, replacement: u32) -> u32 {
+    let saved = value;
+    value = replacement;
+    let checked = saved + 17_u32;
+    checked ^ value
+}
+
+#[cfg(feature = "checked-u32-prefix-second")]
+#[inline(never)]
+fn checked_prefix(value: u32, replacement: u32) -> u32 {
+    let saved = replacement;
+    let checked = saved + 17_u32;
+    checked ^ value
+}
+
+#[cfg(feature = "checked-u32-prefix-none")]
+#[inline(never)]
+fn checked_prefix(value: u32, replacement: u32) -> u32 {
+    value ^ replacement
+}
+
+#[cfg(feature = "checked-u32-prefix-unsupported")]
+#[inline(never)]
+fn checked_prefix(value: u32, replacement: u32) -> u32 {
+    let combined = value ^ replacement;
+    combined + 17_u32
+}
+
+#[cfg(feature = "checked-u32-prefix-ambiguous")]
+#[inline(never)]
+fn second_checked_prefix(value: u32, replacement: u32) -> u32 {
+    let checked = value + 23_u32;
+    checked ^ replacement
+}
+
+#[cfg(feature = "checked-u32-prefix")]
+#[kernel(typed)]
+pub fn checked_prefix_output(value: u32, replacement: u32, mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        let value = checked_prefix(value, replacement);
+        #[cfg(feature = "checked-u32-prefix-ambiguous")]
+        let value = value ^ second_checked_prefix(value, replacement);
+        *element = value;
     }
 }
 

@@ -81,11 +81,14 @@ must not become a prerequisite for running their already-admitted smoke tests.
 3. Next functional priority: enable the first ordinary application kernel
    through actual source/KIR/machine refinement and protected invocation custody.
    [Actual-emission capture](evidence/dev-checked-u32-emission-capture-2026-10-03/README.md)
-   is now CPU-qualified; it is not a value-equality theorem or authorization to
-   launch a kernel. The next bounded proof packet is straight-line checked-u32
-   source/KIR prefix value simulation. Machine/ABI/memory/continuation refinement
-   and a deployment-approved production verifier still follow; no fixture
-   authority can substitute for them.
+   is now CPU-qualified. The [entry-prefix shared-fold proof](runtime-checked-u32-prefix-v1.md)
+   and [genuine Rust-source extraction](evidence/dev-rustc-checked-u32-prefix-2026-10-03/README.md)
+   now pass their bounded qualification: actual nonempty copy/reassignment and
+   direct-argument profiles, plus specific fail-closed compiler cases. These are
+   not launch authority. The next proof packet is actual normalization-adapter
+   refinement, beginning with argument-basis initialization. Machine/ABI/memory/
+   continuation refinement and a deployment-approved production verifier still
+   follow; no fixture authority can substitute for them.
 4. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute
    execution. Indeterminate native effects remain fail-stop until recovery has

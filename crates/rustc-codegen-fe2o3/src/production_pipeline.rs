@@ -21,6 +21,8 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+mod checked_u32_prefix;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
     HostOnly,
@@ -45,6 +47,8 @@ pub(crate) enum ProductionPipelineError {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    CheckedU32PrefixSelection(checked_u32_prefix::SelectionError),
+    CheckedU32PrefixCapture(fe2o3_lower_mir_kernel::ProductionCheckedU32AddCaptureErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -112,6 +116,12 @@ impl fmt::Display for ProductionPipelineError {
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
+            }
+            Self::CheckedU32PrefixSelection(error) => {
+                write!(formatter, "checked-u32 prefix extraction selection failed: {error:?}")
+            }
+            Self::CheckedU32PrefixCapture(error) => {
+                write!(formatter, "checked-u32 prefix extraction capture failed: {error}")
             }
             Self::MissingMirPlironTranslationValidation => formatter.write_str(
                 "production compilation reached target-neutral custody without independent MIR-to-PLIRON translation validation",
@@ -263,6 +273,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
+            Self::CheckedU32PrefixCapture(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
@@ -294,6 +305,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CompilerExecutionSubject(error) => Some(error),
             Self::CompilerExecutionReceiptTransport(error) => Some(error),
             Self::CustomLlvmConfiguration
+            | Self::CheckedU32PrefixSelection(_)
             | Self::EmptyCollectedDeviceClosure
             | Self::MissingMirPlironTranslationValidation
             | Self::RustcLineageMismatch

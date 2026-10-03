@@ -8,6 +8,11 @@ rust-version.workspace = true
 publish = false
 
 [features]
+checked-u32-prefix = []
+checked-u32-prefix-second = ["checked-u32-prefix"]
+checked-u32-prefix-none = ["checked-u32-prefix"]
+checked-u32-prefix-ambiguous = ["checked-u32-prefix"]
+checked-u32-prefix-unsupported = ["checked-u32-prefix"]
 atomic-rmw = []
 multi-root-ownership = []
 multi-root-target-lineage = []

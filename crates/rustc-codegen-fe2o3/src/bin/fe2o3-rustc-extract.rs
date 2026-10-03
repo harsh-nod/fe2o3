@@ -21,6 +21,7 @@ use reserved_fe2o3_symbols::{
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
+const EXTRACT_CHECKED_U32_PREFIX_ENV_V1: &str = "FE2O3_EXTRACT_CHECKED_U32_PREFIX_V1";
 const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1";
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
 const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
@@ -65,7 +66,10 @@ fn main() {
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
     )
-    .map(|prepared| select_simulation_mode(prepared, version));
+    .map(|prepared| select_simulation_mode(prepared, version))
+    .and_then(|prepared| {
+        select_checked_u32_prefix_mode(prepared, env::var_os(EXTRACT_CHECKED_U32_PREFIX_ENV_V1))
+    });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -110,6 +114,7 @@ fn require_exact_primary_package_marker_v1(marker: Option<&std::ffi::OsStr>) -> 
 #[derive(Debug)]
 enum ExtractionModeV1 {
     KernelIr,
+    CheckedU32Prefix,
     RankedMemory,
     AmdgpuLlvm(OsString),
     Gfx942Llvm(OsString),
@@ -185,6 +190,29 @@ fn select_simulation_mode(
         };
     }
     prepared
+}
+
+fn select_checked_u32_prefix_mode(
+    prepared: PreparedExtractionV1,
+    requested: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    let PreparedExtractionV1::Selected(mut selected) = prepared else {
+        return Ok(prepared);
+    };
+    if let Some(value) = requested {
+        if value != "1" {
+            return Err(format!(
+                "{EXTRACT_CHECKED_U32_PREFIX_ENV_V1} must be exactly `1` when present"
+            ));
+        }
+        if !matches!(selected.mode, ExtractionModeV1::KernelIr) {
+            return Err(format!(
+                "{EXTRACT_CHECKED_U32_PREFIX_ENV_V1} is mutually exclusive with other extraction modes"
+            ));
+        }
+        selected.mode = ExtractionModeV1::CheckedU32Prefix;
+    }
+    Ok(PreparedExtractionV1::Selected(selected))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -478,6 +506,11 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
         ExtractionModeV1::KernelIr => {
             rustc_codegen_fe2o3::run_production_extraction_driver_v1(&selected.args)?;
         }
+        ExtractionModeV1::CheckedU32Prefix => {
+            rustc_codegen_fe2o3::run_production_checked_u32_prefix_extraction_driver_v1(
+                &selected.args,
+            )?;
+        }
         ExtractionModeV1::RankedMemory => {
             rustc_codegen_fe2o3::run_production_ranked_extraction_driver_v1(&selected.args)?;
         }
@@ -703,6 +736,137 @@ mod tests {
 
     fn selected_binding(crate_name: &str, metadata: &[&str]) -> CrateBindingIdV1 {
         selected_compile(crate_name, metadata).crate_binding
+    }
+
+    #[test]
+    fn checked_u32_prefix_mode_preserves_selected_compile_identity_and_policy() {
+        for requested in [None, Some(OsString::from("1"))] {
+            let mut selected = selected_compile("unit", &["original-metadata"]);
+            selected.crate_binding_output = Some(PathBuf::from("binding.json"));
+            let args = selected.args.clone();
+            let binding = selected.crate_binding;
+            let observation = selected.metadata_observation;
+            let enabled = requested.is_some();
+            let PreparedExtractionV1::Selected(actual) =
+                select_checked_u32_prefix_mode(PreparedExtractionV1::Selected(selected), requested)
+                    .unwrap()
+            else {
+                panic!("selected compile")
+            };
+            assert_eq!(actual.args, args);
+            assert_eq!(actual.crate_binding, binding);
+            assert_eq!(actual.metadata_observation, observation);
+            assert_eq!(
+                actual.crate_binding_output,
+                Some(PathBuf::from("binding.json"))
+            );
+            assert_eq!(
+                matches!(actual.mode, ExtractionModeV1::CheckedU32Prefix),
+                enabled
+            );
+            assert_eq!(
+                actual
+                    .args
+                    .iter()
+                    .filter(|arg| arg.as_str() == "-Coverflow-checks=on")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn checked_u32_prefix_mode_rejects_invalid_flags_and_all_mode_conflicts() {
+        let mut invalid = ["", "0", "2", "true", " 1"].map(OsString::from).to_vec();
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            invalid.push(OsString::from_vec(vec![0xff]));
+        }
+        for value in invalid {
+            assert!(
+                select_checked_u32_prefix_mode(
+                    PreparedExtractionV1::Selected(selected_compile("unit", &["metadata"])),
+                    Some(value)
+                )
+                .unwrap_err()
+                .contains("exactly `1`")
+            );
+        }
+        for mode in [
+            ExtractionModeV1::RankedMemory,
+            ExtractionModeV1::CheckedU32Prefix,
+            ExtractionModeV1::AmdgpuLlvm("out".into()),
+            ExtractionModeV1::Gfx942Llvm("out".into()),
+            ExtractionModeV1::Gfx942CompilerHandoff("out".into()),
+            ExtractionModeV1::SimulationBundle("out".into()),
+            ExtractionModeV1::SimulationBundleV2("out".into()),
+            ExtractionModeV1::SimulationBundleV3("out".into()),
+            ExtractionModeV1::SimulationBundleV4("out".into()),
+            ExtractionModeV1::SimulationBundleV5("out".into()),
+            ExtractionModeV1::SimulationBundleV6("out".into()),
+        ] {
+            let mut selected = selected_compile("unit", &["metadata"]);
+            selected.mode = mode;
+            assert!(
+                select_checked_u32_prefix_mode(
+                    PreparedExtractionV1::Selected(selected),
+                    Some("1".into())
+                )
+                .unwrap_err()
+                .contains("mutually exclusive")
+            );
+        }
+    }
+
+    #[test]
+    fn checked_u32_prefix_flag_does_not_select_passthrough_invocations() {
+        for argv in [
+            compile_argv("other", &["metadata"]),
+            vec![
+                "wrapper".into(),
+                "rustc".into(),
+                "-".into(),
+                "--crate-name".into(),
+                "___".into(),
+                "--print=file-names".into(),
+            ],
+        ] {
+            let PreparedExtractionV1::Passthrough {
+                executable,
+                forwarded_args,
+            } = prepare(
+                argv,
+                Some("unit".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+            else {
+                panic!("passthrough")
+            };
+            let PreparedExtractionV1::Passthrough {
+                executable: actual,
+                forwarded_args: args,
+            } = select_checked_u32_prefix_mode(
+                PreparedExtractionV1::Passthrough {
+                    executable: executable.clone(),
+                    forwarded_args: forwarded_args.clone(),
+                },
+                Some("invalid".into()),
+            )
+            .unwrap()
+            else {
+                panic!("must not select")
+            };
+            assert_eq!(actual, executable);
+            assert_eq!(args, forwarded_args);
+        }
     }
 
     fn session_metadata(selected: &SelectedExtractionV1) -> Vec<String> {

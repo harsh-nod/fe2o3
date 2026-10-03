@@ -12,11 +12,14 @@ use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 
+mod checked_u32_prefix;
+
 const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
     "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX";
 
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
+    checked_u32_prefix: bool,
     ranked_memory: bool,
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
@@ -29,7 +32,9 @@ struct ProductionExtractionCallbacksV1 {
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
-            if let Some(output) = self.simulation_bundle_output.as_deref() {
+            if self.checked_u32_prefix {
+                checked_u32_prefix::extract(tcx)
+            } else if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
                     6 => extract_simulation_bundle_in_active_session_v6(tcx, output),
                     5 => extract_simulation_bundle_in_active_session_v5(tcx, output),
@@ -645,6 +650,7 @@ pub fn run_production_extraction_driver_v1(args: &[String]) -> Result<(), String
 /// construction and verification, without granting artifact authority.
 pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: true,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -667,6 +673,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
@@ -688,6 +695,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
@@ -711,6 +719,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -734,6 +743,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -756,6 +766,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -778,6 +789,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -800,6 +812,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -822,6 +835,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -844,6 +858,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        checked_u32_prefix: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -856,6 +871,19 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         args,
         callbacks,
         "production simulation-bundle V6 extraction callback did not reach rustc analysis",
+    )
+}
+
+/// Checks one actual helper entry prefix in the live rustc transaction.
+/// The diagnostic grants no compiler, proof, artifact, load or launch authority.
+pub fn run_production_checked_u32_prefix_extraction_driver_v1(args: &[String]) -> Result<(), String> {
+    run_production_driver_v1(
+        args,
+        ProductionExtractionCallbacksV1 {
+            checked_u32_prefix: true,
+            ..ProductionExtractionCallbacksV1::default()
+        },
+        "production checked-u32 prefix callback did not reach rustc analysis",
     )
 }
 

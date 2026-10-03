@@ -1230,6 +1230,7 @@ assert_equals \
 for production_step in \
   rocm-production-extraction-safe-kernel \
   rocm-production-extraction-unsafe-rejection \
+  rocm-production-extraction-checked-u32-prefix \
   rocm-production-general-matrix \
   rocm-production-general-attention \
   rocm-production-transaction \
@@ -1249,6 +1250,10 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_extraction_driver_v1 checked_u32_prefix_extraction_v1::genuine_checked_u32_prefix_extraction_uses_actual_sources_and_rejects_unsupported_profiles -- --ignored --exact' \
+  "$(step_command rocm-production-extraction-checked-u32-prefix)" \
+  'ROCm checked-u32 extraction must select the exact ignored module test'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"
