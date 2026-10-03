@@ -10,6 +10,7 @@ mod directed;
 mod directed_consumer;
 mod late_directed;
 mod lifecycle;
+mod no_effect;
 mod packetized;
 #[path = "../peer_readback/tests.rs"]
 mod peer_readback;

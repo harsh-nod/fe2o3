@@ -165,6 +165,7 @@ pub use queue::{
     Gfx942ComputeDependencySourceBatchV1, Gfx942ComputeDependencySubmissionFailureV1,
     Gfx942ComputeEventBindingStateV1, Gfx942ComputeEventOccurrenceV1,
     Gfx942ComputeEventReleaseObservationV1, Gfx942ComputeXgmiProgressV1,
+    Gfx942ComputeXgmiQueueCreationDispositionV1, Gfx942ComputeXgmiQueueCreationOutcomeV1,
     Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1, Gfx942DetachedFixedDispatchV1,
     Gfx942DeviceContentDescriptorErrorV1, Gfx942DeviceContentDescriptorV1,
     Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,

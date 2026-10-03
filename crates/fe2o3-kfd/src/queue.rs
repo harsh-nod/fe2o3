@@ -33,7 +33,9 @@ pub use live::cpu_fixture::{
 };
 pub(crate) use live::sdma_synchronous::SdmaSynchronousCustodyV1;
 pub use live::{
-    Gfx942ComputeXgmiProgressV1, Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1,
+    Gfx942ComputeXgmiProgressV1, Gfx942ComputeXgmiQueueCreationDispositionV1,
+    Gfx942ComputeXgmiQueueCreationOutcomeV1, Gfx942ComputeXgmiQueueCreationRootV1,
+    Gfx942ComputeXgmiQueueV1,
 };
 pub use live::{
     Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, Gfx942SdmaHostReadIntoErrorV1,

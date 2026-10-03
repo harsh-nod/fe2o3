@@ -87,8 +87,19 @@ retained for the whole list. Completing a packet or descriptor does not return
 owners to the caller. Observation does not publish later work; explicit native
 progress publishes at most one next packet. Only final successful currentness,
 queue retirement and owner restoration settle the logical result and event.
-Publication makes cancellation irreversible. A failure can leave an applied
-prefix and retains terminal custody, never partial successful output.
+Publication makes cancellation irreversible. An uncertain or post-arm failure
+can leave an applied prefix and retains terminal custody, never partial
+successful output.
+
+The [creation-recovery checkpoint](evidence/dev-xgmi-creation-recovery-2026-10-03/README.md)
+adds one narrow exception: actual host preparation rejection before native arm,
+with both model retakes and exact live-pair/vacancy checks completed, restores
+the validated original owner pair without new allocation. It settles Failed
+and permits independent work to continue; it does not count as a completed copy.
+Preserved native bytes do not restore Context journal lineage. Unknown
+destinations still reject queued reads and retry; journal callers must dispose
+them and initialize fresh destinations. Synchronous byte inspection does not
+change that rule. All other failure/custody boundaries remain unchanged.
 
 The Context journal and owned async engine keep their whole-list result and
 reservation rules. Pending list outputs are not scalar producer coverage: gaps

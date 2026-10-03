@@ -17,9 +17,45 @@ and settled-list regressions. The
 adds standalone settled-source list frame consumers without retaining a source
 producer result or supplying its event. Fourteen two-GPU cases pass, including
 4/65/4096-descriptor compute pipelines, late compute admission, direct full-frame
-D2H and existing-profile regressions. Pending destination-writer chaining,
-broader kernel authority, native fault campaigns and performance remain open.
+D2H and existing-profile regressions. The
+[creation-recovery checkpoint](evidence/dev-xgmi-creation-recovery-2026-10-03/README.md)
+adds eight four-GPU pre-arm host rejection/retry cases and two existing
+packet-spanning controls. Exact original owners are restored only for certified
+host preparation rejection; an independent retained pair continues normally.
+Pending destination-list chaining, broader kernel authority, post-arm native
+fault campaigns and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
+
+## Pre-Arm Recovery
+
+The production native-peer constructor now supports narrowly classified host
+preparation failure before native queue creation is armed. Both model retakes
+and exact session-pair, route, vacant-root and attachment checks must succeed.
+The runtime validates both original owner slots before restoring either, settles
+Failed, refunds retains and clears only that pair's endpoint reservations.
+Uncertain or post-arm failures retain terminal custody.
+
+The feature-only `gfx942-runtime-xgmi-recovery-smoke` uses four distinct devices
+and production authorities that deny all kernels. Pair B is published and
+retained before pair A's deterministic host capacity rejection. B must remain
+Pending and usable, then complete; A retries on a fresh stream with changed
+source bytes. Both scalar and ordered segmented cases pass in both directions,
+with and without the journal. Full original destination bytes remain unchanged.
+Synchronous inspection is not stable-read authority: journal-mode queued D2H
+and same-destination retry reject, requiring disposal and fresh initialization.
+
+```sh
+cargo run --locked -p fe2o3-runtime --no-default-features \
+  --features hardware-qualification --example gfx942-runtime-xgmi-recovery-smoke \
+  -- --journal segments "$A_SOURCE_UID" "$A_DESTINATION_UID" \
+  "$B_SOURCE_UID" "$B_DESTINATION_UID"
+```
+
+Admission/cleanup checks cover GPUs 1/2/6/7 on MI300X, with no device resets or
+foreign process termination. The denial executes an actual fallible host
+reservation with capacity overflow; it is not OOM, GPU or driver fault injection.
+No general application authority, physical-overlap measurement or formal
+refinement of this recovery adapter follows from these tests.
 
 ## Scope
 

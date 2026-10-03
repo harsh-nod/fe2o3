@@ -24,14 +24,16 @@ progress after seeding. Ordered segment lists now also bridge an exact pending
 compute producer to prequeued or late full-frame compute/D2H consumers on two
 GPUs, including overlapping lists of up to 4096 descriptors. Standalone
 settled-source lists now also feed those consumers with no retained source
-producer result or source event. Earlier matched
+producer result or source event. Narrow pre-arm host preparation recovery now
+also passes four-GPU qualification with an independent retained pair and retry,
+without relaxing journal Unknown handling. Earlier matched
 wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
 has recovered. The latest campaign reached MI300X on 2026-10-03 UTC;
 earlier DNS failures were worker-namespace observations, not evidence of a host
-outage. Its process roster shows GPU 0 occupied and admits GPUs 6/7. Every
+outage. Its process roster shows GPU 0 occupied and admits GPUs 1/2/6/7. Every
 native run still requires a new occupancy check; no exclusive reservation or
 performance qualification follows from that observation.
 These are exit-criteria statuses, not API implementation counts.
@@ -42,10 +44,10 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers qualified on two GPUs; ordinary generated argument API CPU-qualified; incomplete | Ordered segment-list destination chains, native generated-argument qualification, application kernel authority, eight-GPU coverage and native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Ordered segment-list destination chains, native generated-argument qualification, application kernel authority, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
-| A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
+| A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
 | A7: performance and release | Not qualified | Matched performance thresholds, scaling, device timelines, resource/tail metrics and production closure audits |
 
 Broader accepted lane checkpoints remain Native R125, Admission R118B
@@ -325,22 +327,33 @@ controls. The independent auditors accept all 133 native command receipts and
 owned cleanup. The lower KFD crate and 76 proof files are unchanged; neither its
 suite nor a solver was rerun. This is not A3 closure or performance acceptance.
 
+The [creation-recovery checkpoint](evidence/dev-xgmi-creation-recovery-2026-10-03/README.md)
+qualifies eight scalar/segmented, journal/no-journal recovery cases on four GPUs
+and two packet-spanning success controls. A real fallible host preparation call
+rejects before native arm; exact live-pair checks and both successful model
+retakes are required before original owners may be restored. A previously
+published independent pair remains usable, then the failed pair retries with
+changed data. Every original destination byte is unchanged, but synchronous
+inspection does not promote Unknown journal lineage: queued reads and same-owner
+retry still reject in journal mode, which must dispose and replace that owner.
+All 2276 runtime tests pass (32 unchanged hardware ignores), together with 30
+example tests, 114 doctests, strict Clippy and 32 source controls. All 1950 KFD
+tests pass in five exact-roster shards; the final witness-only correction reuses
+that execution after an exact source/ELF bridge and fresh build/list. The native
+receipt replay covers 101 commands and explicit owned cleanup. This is a host
+capacity rejection campaign, not GPU/driver fault injection, whole-adapter
+refinement, physical overlap or performance qualification.
+
 The expedited practical multi-GPU priority order is:
 
-1. Land and qualify narrowly certified no-effect queue-creation recovery.
-   Only validated host preparation failure before native arming, followed by
-   both successful model retakes, may restore the original owners and settle
-   Failed without poisoning independent work. Preserve all post-arm and
-   uncertain failure boundaries. Context still marks failed destinations
-   Unknown; backend metadata preservation must not restore journal lineage.
-2. Add ordered list writes behind an exact pending destination-list writer.
+1. Add ordered list writes behind an exact pending destination-list writer.
    Start with two settled sources writing one initialized destination on three
    GPUs, then a full-frame consumer. Preserve immutable predecessor identity,
    initialized complements and source/whole-destination reservations; do not
    relabel an envelope as scalar coverage. Qualify overlaps, holes, released
    events, source disposal after predecessor settlement and tail-stream-only
    progress without adding concurrent-slice authority.
-3. Integrate one evidence-backed application kernel. Existing production peer
+2. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
@@ -352,11 +365,12 @@ The expedited practical multi-GPU priority order is:
    manual scalar/slice ABI packing, not storage or authority boundaries. Its
    native encoding qualification can use an exact existing admitted kernel;
    that does not substitute for this production evidence provider.
-4. Qualify native partial failures and isolation before broadening execution
-   claims. CPU scripted failures are not a native fault campaign. Native
+3. Qualify post-arm native partial failures and isolation before broadening
+   execution claims. CPU scripted failures and certified pre-arm host capacity
+   rejection are not a GPU/driver fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's
    metadata does not authorize continued execution in that Context.
-5. Defer same-process reopen, eight-GPU coverage and matched performance until
+4. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2

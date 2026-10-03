@@ -130,7 +130,7 @@ trait Context {
     fn prepare(
         &mut self,
         route: Gfx942XgmiRouteV1,
-    ) -> Result<(KfdGfx942SdmaXgmiEngineId, Self::Host), Gfx942SdmaErrorV1>;
+    ) -> Result<(KfdGfx942SdmaXgmiEngineId, Self::Host), Gfx942NativeXgmiSdmaQueueCreationFailureV1>;
     fn arm(&mut self) -> Result<Self::Arm, Gfx942SdmaErrorV1>;
     fn validate(&mut self, route: Gfx942XgmiRouteV1) -> Result<(), Gfx942SdmaErrorV1>;
     fn key(&mut self) -> Result<QueueKeyV1, Gfx942SdmaErrorV1>;
@@ -160,9 +160,7 @@ fn create_with(
             root,
         ));
     }
-    let (engine, host) = context
-        .prepare(route)
-        .map_err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable)?;
+    let (engine, host) = context.prepare(route)?;
     let mut arm = Some(
         context
             .arm()
@@ -225,6 +223,32 @@ fn create_with(
 struct Sessions<'a> {
     source: &'a mut SharedGttMemorySessionV1,
     destination: &'a mut SharedGttMemorySessionV1,
+    preparation: Option<Gfx942XgmiHostPreparationV1>,
+}
+
+fn prepare_host_resources(
+    preparation: Gfx942XgmiHostPreparationV1,
+) -> Result<PreparedGfx942SdmaQueueHostResourcesV1, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
+    match preparation {
+        Gfx942XgmiHostPreparationV1::Normal => {}
+        #[cfg(any(test, feature = "hardware-qualification"))]
+        Gfx942XgmiHostPreparationV1::CapacityDenial => {
+            // Deterministic capacity overflow, not memory pressure or a GPU
+            // fault. It is consumed only by this explicit preparation call.
+            let mut denied = Vec::<u8>::new();
+            denied.try_reserve_exact(usize::MAX).map_err(|_| {
+                Gfx942NativeXgmiSdmaQueueCreationFailureV1::host_preparation(
+                    Gfx942SdmaErrorV1::Contract("qualified XGMI host preparation capacity denial"),
+                )
+            })?;
+            unreachable!("an allocation larger than isize::MAX must be rejected");
+        }
+    }
+    prepare_sdma_queue_host_resources().map_err(|failure| {
+        Gfx942NativeXgmiSdmaQueueCreationFailureV1::host_preparation(
+            recover_sdma_owner_preflight_error(failure),
+        )
+    })
 }
 
 impl Context for Sessions<'_> {
@@ -234,22 +258,28 @@ impl Context for Sessions<'_> {
     fn prepare(
         &mut self,
         route: Gfx942XgmiRouteV1,
-    ) -> Result<(KfdGfx942SdmaXgmiEngineId, Self::Host), Gfx942SdmaErrorV1> {
+    ) -> Result<(KfdGfx942SdmaXgmiEngineId, Self::Host), Gfx942NativeXgmiSdmaQueueCreationFailureV1>
+    {
+        let reject = Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable;
         if self.source.gpu_id() != route.source_gpu_id() {
-            return Err(Gfx942SdmaErrorV1::Contract(
+            return Err(reject(Gfx942SdmaErrorV1::Contract(
                 "XGMI queue executing GPU does not match directional route",
-            ));
+            )));
         }
         let engine =
             admit_kfd_gfx942_sdma_xgmi_engine_mask(route.link().recommended_sdma_engine_id_mask())
-                .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI SDMA route engine mask"))?;
+                .map_err(|_| reject(Gfx942SdmaErrorV1::Contract("XGMI SDMA route engine mask")))?;
         if engine.value() != route.recommended_engine_id() {
-            return Err(Gfx942SdmaErrorV1::Contract(
+            return Err(reject(Gfx942SdmaErrorV1::Contract(
                 "XGMI SDMA route engine identity",
-            ));
+            )));
         }
-        let host =
-            prepare_sdma_queue_host_resources().map_err(recover_sdma_owner_preflight_error)?;
+        let preparation = self.preparation.take().ok_or_else(|| {
+            reject(Gfx942SdmaErrorV1::Contract(
+                "XGMI host preparation already consumed",
+            ))
+        })?;
+        let host = prepare_host_resources(preparation)?;
         Ok((engine, host))
     }
 
@@ -311,10 +341,27 @@ pub(super) fn create(
     route: Gfx942XgmiRouteV1,
     root: &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
 ) -> Result<Gfx942NativeXgmiSdmaQueueV1, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
+    create_with_preparation(
+        source,
+        destination,
+        route,
+        root,
+        Gfx942XgmiHostPreparationV1::Normal,
+    )
+}
+
+pub(super) fn create_with_preparation(
+    source: &mut SharedGttMemorySessionV1,
+    destination: &mut SharedGttMemorySessionV1,
+    route: Gfx942XgmiRouteV1,
+    root: &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
+    preparation: Gfx942XgmiHostPreparationV1,
+) -> Result<Gfx942NativeXgmiSdmaQueueV1, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
     create_with(
         &mut Sessions {
             source,
             destination,
+            preparation: Some(preparation),
         },
         route,
         root,

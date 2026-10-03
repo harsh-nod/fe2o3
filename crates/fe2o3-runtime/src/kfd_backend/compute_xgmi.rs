@@ -76,6 +76,16 @@ enum Progress {
     Pending,
     Changed,
     Complete,
+    NoEffect,
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QualificationHostPreparationV1 {
+    Unrequested,
+    Armed,
+    Attempted,
+    Certified,
 }
 
 pub(super) struct Root {
@@ -86,6 +96,9 @@ pub(super) struct Root {
     phase: Phase,
     creation: Gfx942ComputeXgmiQueueCreationRootV1,
     queue: Option<Gfx942ComputeXgmiQueueV1>,
+    no_effect_error: Option<fe2o3_kfd::ComputeAqlQueueSessionErrorV1>,
+    #[cfg(feature = "hardware-qualification")]
+    qualification_host_preparation: QualificationHostPreparationV1,
     owners: [Option<Gfx942DirectionalQueuePersistentAllocationV1>; 2],
     shells: [Option<Box<MaybeUninit<DirectionalSdmaDeviceOwnerV1>>>; 2],
     #[cfg(test)]
@@ -104,6 +117,8 @@ pub(super) struct Root {
     segment_index: usize,
     #[cfg(test)]
     between_segments: bool,
+    #[cfg(test)]
+    reject_host_preparation: bool,
 }
 
 impl fmt::Debug for Root {
@@ -124,6 +139,7 @@ impl fmt::Debug for Root {
             .field("phase", &self.phase)
             .field("creation_vacant", &self.creation.is_vacant())
             .field("queue", &self.queue.is_some())
+            .field("no_effect_error", &self.no_effect_error)
             .field("owners", &self.owners.each_ref().map(Option::is_some))
             .finish()
     }
@@ -256,6 +272,9 @@ impl Root {
                 phase: Phase::Prepared,
                 creation: Gfx942ComputeXgmiQueueCreationRootV1::new(),
                 queue: None,
+                no_effect_error: None,
+                #[cfg(feature = "hardware-qualification")]
+                qualification_host_preparation: QualificationHostPreparationV1::Unrequested,
                 owners: [None, None],
                 shells,
                 #[cfg(test)]
@@ -279,6 +298,8 @@ impl Root {
                 segment_index: 0,
                 #[cfg(test)]
                 between_segments: false,
+                #[cfg(test)]
+                reject_host_preparation: false,
             },
         ))
     }
@@ -433,6 +454,16 @@ impl Root {
                 return match self.phase {
                     Phase::Prepared => {
                         self.script_step(Stage::Create)?;
+                        if core::mem::take(&mut self.reject_host_preparation) {
+                            // CPU-only simulation of the certified lower
+                            // outcome, not a native fault or certificate.
+                            self.no_effect_error =
+                                Some(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
+                                    "scripted host preparation rejection",
+                                ));
+                            self.phase = Phase::Retired;
+                            return Ok(Progress::NoEffect);
+                        }
                         self.script_step(Stage::Copy)?;
                         self.phase = Phase::Published;
                         Ok(Progress::Changed)
@@ -508,17 +539,50 @@ impl Root {
         };
         match self.phase {
             Phase::Prepared => {
-                self.queue = Some(
-                    source
-                        .create_native_xgmi_queue_with_peer_v1(
-                            destination,
-                            route,
-                            &mut self.creation,
-                        )
-                        .map_err(|error| {
-                            terminal(format!("compute-XGMI queue creation: {error}"))
-                        })?,
+                #[cfg(feature = "hardware-qualification")]
+                let denied =
+                    self.qualification_host_preparation == QualificationHostPreparationV1::Armed;
+                #[cfg(feature = "hardware-qualification")]
+                let outcome = if denied {
+                    self.qualification_host_preparation = QualificationHostPreparationV1::Attempted;
+                    source.create_native_xgmi_queue_with_peer_host_preparation_denial_v1(
+                        destination,
+                        route,
+                        &mut self.creation,
+                    )
+                } else {
+                    source.create_native_xgmi_queue_with_peer_outcome_v1(
+                        destination,
+                        route,
+                        &mut self.creation,
+                    )
+                };
+                #[cfg(not(feature = "hardware-qualification"))]
+                let outcome = source.create_native_xgmi_queue_with_peer_outcome_v1(
+                    destination,
+                    route,
+                    &mut self.creation,
                 );
+                let (result, disposition) =
+                    outcome.into_classified_parts_v1(source, destination, route, &self.creation);
+                match result {
+                    Ok(queue) => self.queue = Some(queue),
+                    Err(error) => {
+                        if disposition
+                            == fe2o3_kfd::Gfx942ComputeXgmiQueueCreationDispositionV1::HostPreparationRejected
+                        {
+                            #[cfg(feature = "hardware-qualification")]
+                            if denied {
+                                self.qualification_host_preparation =
+                                    QualificationHostPreparationV1::Certified;
+                            }
+                            self.no_effect_error = Some(error);
+                            self.phase = Phase::Retired;
+                            return Ok(Progress::NoEffect);
+                        }
+                        return Err(terminal(format!("compute-XGMI queue creation: {error}")));
+                    }
+                }
                 let [source_owner, destination_owner] = &mut self.owners;
                 let queue = self.queue.as_mut().unwrap_or_else(|| std::process::abort());
                 let begin = if let Some(plan) = &self.segments {
@@ -619,6 +683,147 @@ pub(super) fn checked_envelope(record: &AllocationRecordV1, region: BackendMemor
 }
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    #[cfg(all(test, feature = "hardware-qualification"))]
+    pub(crate) fn qualification_xgmi_test_backend_v1() -> Self {
+        let source = KfdRuntimeBackendV1::mock();
+        let mut destination = KfdRuntimeBackendV1::mock();
+        destination.description.backend_device = source.description.backend_device + 1;
+        Self::from_backends(vec![source, destination]).unwrap()
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    fn qualification_xgmi_slots_intact_v1(
+        &self,
+        copy: &CooperativeCopySubmissionV1,
+        restored: bool,
+    ) -> bool {
+        let Some(root) = copy.compute_xgmi.as_ref() else {
+            return false;
+        };
+        if copy.source.child == copy.destination.child
+            || self.allocations.get(&copy.source_region.allocation) != Some(&copy.source)
+            || self.allocations.get(&copy.destination_region.allocation) != Some(&copy.destination)
+        {
+            return false;
+        }
+        // This qualification-only validation never normalizes or extracts an owner.
+        for endpoint in [copy.source, copy.destination] {
+            let Some(child) = self.children.get(endpoint.child) else {
+                return false;
+            };
+            let Some(record) = child.allocations.get(&endpoint.local) else {
+                return false;
+            };
+            if child.terminal
+                || !child.peer_visible_device_allocations
+                || self.compute_xgmi_children.get(endpoint.child) != Some(&None)
+                || !record.sdma_initialized
+                || record.persistent_storage_restore.is_some()
+            {
+                return false;
+            }
+            let native_slot = match &record.sdma_storage {
+                KfdRuntimeSdmaStorageV1::Device(owner) => {
+                    matches!(&**owner, DirectionalSdmaDeviceOwnerV1::Native(_))
+                }
+                KfdRuntimeSdmaStorageV1::H2dReady(ready) if !restored => {
+                    matches!(&ready.owner, PersistentComputeReadyOwnerV1::Native(_))
+                }
+                KfdRuntimeSdmaStorageV1::InitializedStorage(owner) if !restored => {
+                    matches!(&**owner, InitializedStorageOwnerV1::Native(_))
+                }
+                KfdRuntimeSdmaStorageV1::PersistentReplay(_) if !restored => true,
+                _ => false,
+            };
+            if !native_slot {
+                return false;
+            }
+        }
+        let records = [
+            &self.children[copy.source.child].allocations[&copy.source.local],
+            &self.children[copy.destination.child].allocations[&copy.destination.local],
+        ];
+        root.accepts_region(records[0], copy.source_region)
+            && root.accepts_region(records[1], copy.destination_region)
+            && root.matches_regions(
+                records[0],
+                copy.source_region,
+                records[1],
+                copy.destination_region,
+            )
+    }
+
+    /// Arms only this accepted, unstarted native operation. No progress occurs here.
+    #[cfg(feature = "hardware-qualification")]
+    pub(crate) fn reject_native_xgmi_host_preparation_once_for_qualification_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<(), Failure> {
+        self.require_live()?;
+        let Some(record) = self.submissions.get(&submission) else {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown qualification submission",
+            ));
+        };
+        let accepted = matches!(record, RoutedSubmissionV1::CooperativeCopy(copy)
+            if copy.directed.is_none()
+                && copy.status() == BackendPollV1::Pending
+                && copy.compute_xgmi.as_ref().is_some_and(|root| {
+                    matches!(root.route, Route::Native(_))
+                        && root.phase == Phase::Prepared
+                        && root.qualification_host_preparation == QualificationHostPreparationV1::Unrequested
+                        && root.is_quiescent()
+                        && root.shells.iter().all(Option::is_some)
+                        && root.no_effect_error.is_none()
+                })
+                && self.streams.get(&copy.stream).is_some_and(|stream| stream.child == copy.destination.child)
+                && self.qualification_xgmi_slots_intact_v1(copy, false));
+        if !accepted {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "qualification denial requires an unarmed prepared native peer with original owners",
+            ));
+        }
+        let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get_mut(&submission)
+        else {
+            unreachable!("validated qualification submission remains indexed")
+        };
+        copy.compute_xgmi
+            .as_mut()
+            .unwrap()
+            .qualification_host_preparation = QualificationHostPreparationV1::Armed;
+        Ok(())
+    }
+
+    /// Historical outcome for this retained result, not permission to reuse memory.
+    #[cfg(feature = "hardware-qualification")]
+    pub(crate) fn native_xgmi_host_preparation_rejected_for_qualification_v1(
+        &self,
+        submission: u64,
+    ) -> Result<bool, Failure> {
+        self.require_live()?;
+        let Some(record) = self.submissions.get(&submission) else {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown qualification submission",
+            ));
+        };
+        Ok(matches!(record, RoutedSubmissionV1::CooperativeCopy(copy)
+            if copy.directed.is_none()
+                && copy.phase == CooperativeCopyPhaseV1::Failed
+                && copy.is_quiescent()
+                && copy.compute_xgmi.as_ref().is_some_and(|root| {
+                    matches!(root.route, Route::Native(_))
+                        && root.qualification_host_preparation == QualificationHostPreparationV1::Certified
+                        && root.phase == Phase::Retired
+                        && root.no_effect_error.is_some()
+                        && root.is_quiescent()
+                        && root.shells.iter().all(Option::is_none)
+                })
+                && self.qualification_xgmi_slots_intact_v1(copy, true)))
+    }
+
     pub(super) fn prepare_compute_xgmi_plan_v1(
         &self,
         source: RoutedHandleV1,
@@ -979,14 +1184,15 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Err(terminal("compute-XGMI retained allocation slot changed"));
             }
         }
-        match root.progress(source_child, destination_child)? {
+        let succeeded = match root.progress(source_child, destination_child)? {
             Progress::Pending => return Ok(BackendPollV1::Pending),
             Progress::Changed => {
                 self.note_cooperative_progress();
                 return Ok(BackendPollV1::Pending);
             }
-            Progress::Complete => {}
-        }
+            Progress::Complete => true,
+            Progress::NoEffect => false,
+        };
         for (index, child, endpoint) in [
             (0, &*source_child, source),
             (1, &*destination_child, destination),
@@ -1010,15 +1216,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .get_mut(&destination.local)
             .unwrap();
         record.sdma_storage = KfdRuntimeSdmaStorageV1::Device(root.take_output(1));
-        record.sdma_initialized = true;
-        record.sdma_shadow_dirty = true;
-        record.content_sha256 = None;
-        record.last_full_host_write = None;
+        if succeeded {
+            record.sdma_initialized = true;
+            record.sdma_shadow_dirty = true;
+            record.content_sha256 = None;
+            record.last_full_host_write = None;
+        }
         let native = matches!(root.route, Route::Native(_));
         self.compute_xgmi_children[source.child] = None;
         self.compute_xgmi_children[destination.child] = None;
-        let status = self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Succeeded);
-        if native {
+        let status = self.finish_cooperative_copy(
+            submission,
+            if succeeded {
+                CooperativeCopyPhaseV1::Succeeded
+            } else {
+                CooperativeCopyPhaseV1::Failed
+            },
+        );
+        if native && succeeded {
             self.completed_compute_xgmi_copies =
                 self.completed_compute_xgmi_copies.saturating_add(1);
         }

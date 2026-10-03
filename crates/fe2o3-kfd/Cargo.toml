@@ -15,6 +15,9 @@ name = "fe2o3_kfd"
 default = []
 # Opt-in native observations only; no additional execution authority.
 hardware-diagnostic = []
+# Explicit per-attempt native host-preparation denial for repository qualification.
+# No general launch authority; excluded from default/community builds.
+hardware-qualification = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
 # Development-only accounted epoch capacity; not native qualification or authority.

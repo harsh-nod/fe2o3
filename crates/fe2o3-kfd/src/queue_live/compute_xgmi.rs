@@ -2,7 +2,10 @@
 
 use super::model_pair_loan::{self, Failure};
 use super::*;
-use crate::sdma::{Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1};
+use crate::sdma::{
+    Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1,
+    Gfx942XgmiHostPreparationV1,
+};
 use crate::topology::Gfx942XgmiRouteV1;
 
 include!("compute_xgmi_cold_body.rs");
@@ -78,6 +81,101 @@ impl Drop for Gfx942ComputeXgmiQueueCreationRootV1 {
         if !self.is_vacant() {
             std::process::abort();
         }
+    }
+}
+
+// Private evidence about the enclosing outcome's own failed creation attempt.
+#[derive(Debug)]
+struct CreationNoEffect {
+    source: QueueKeyV1,
+    destination: QueueKeyV1,
+    route: Gfx942XgmiRouteV1,
+}
+
+impl CreationNoEffect {
+    fn matches_v1(
+        &self,
+        source: &ComputeAqlQueueSessionV1,
+        destination: &ComputeAqlQueueSessionV1,
+        route: Gfx942XgmiRouteV1,
+        root: &Gfx942ComputeXgmiQueueCreationRootV1,
+    ) -> bool {
+        self.source == source.compute_lane_session
+            && self.destination == destination.compute_lane_session
+            && self.route == route
+            && root.is_vacant()
+            && source.xgmi_attachment.is_none()
+            && destination.xgmi_attachment.is_none()
+            && preflight(source, destination, route).is_ok()
+    }
+}
+
+/// Historical classification of the result returned by a consumed creation
+/// outcome. This is not authority for any other error, root, or later attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942ComputeXgmiQueueCreationDispositionV1 {
+    /// No no-effect claim is made, including for a successful creation.
+    Unclassified,
+    /// This outcome's failed creation was certified before native creation arm;
+    /// both models were retaken and the supplied live pair/vacancy rechecked.
+    HostPreparationRejected,
+}
+
+/// Creation result with narrowly certified host-preparation rejection.
+///
+/// Its private evidence cannot be extracted or applied to another result.
+/// An unclassified error never implies no effects, even if the error is not a
+/// terminal-creation error or the creation root appears vacant.
+#[must_use = "inspect the result and retain any terminal creation custody"]
+pub struct Gfx942ComputeXgmiQueueCreationOutcomeV1 {
+    result: Result<Gfx942ComputeXgmiQueueV1, ComputeAqlQueueSessionErrorV1>,
+    no_effect: Option<CreationNoEffect>,
+}
+
+impl Gfx942ComputeXgmiQueueCreationOutcomeV1 {
+    /// Consumes this outcome and classifies only its enclosed creation result.
+    /// The pair and vacant-root checks are current observations, not permission
+    /// to restore other owners or dispose any earlier or later creation root.
+    pub fn into_classified_parts_v1(
+        self,
+        source: &ComputeAqlQueueSessionV1,
+        destination: &ComputeAqlQueueSessionV1,
+        route: Gfx942XgmiRouteV1,
+        root: &Gfx942ComputeXgmiQueueCreationRootV1,
+    ) -> (
+        Result<Gfx942ComputeXgmiQueueV1, ComputeAqlQueueSessionErrorV1>,
+        Gfx942ComputeXgmiQueueCreationDispositionV1,
+    ) {
+        let disposition = if self.result.is_err()
+            && self
+                .no_effect
+                .as_ref()
+                .is_some_and(|evidence| evidence.matches_v1(source, destination, route, root))
+        {
+            Gfx942ComputeXgmiQueueCreationDispositionV1::HostPreparationRejected
+        } else {
+            Gfx942ComputeXgmiQueueCreationDispositionV1::Unclassified
+        };
+        (self.result, disposition)
+    }
+}
+
+fn settle_creation_failure_v1(
+    root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
+    failure: &Failure<ComputeAqlQueueSessionErrorV1>,
+    host_preparation_rejected: bool,
+    validate: impl FnOnce(&Gfx942ComputeXgmiQueueCreationRootV1) -> Option<CreationNoEffect>,
+) -> Option<CreationNoEffect> {
+    if failure.terminal {
+        return None;
+    }
+    // The paired envelope has retaken BOTH models before returning a
+    // nonterminal error. Vacancy alone does not certify it.
+    root.armed = false;
+    if host_preparation_rejected && root.is_vacant() {
+        validate(root)
+    } else {
+        None
     }
 }
 
@@ -349,6 +447,76 @@ impl ComputeAqlQueueSessionV1 {
         route: Gfx942XgmiRouteV1,
         root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
     ) -> Result<Gfx942ComputeXgmiQueueV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_native_xgmi_queue_with_peer_outcome_v1(peer, route, root)
+            .result
+    }
+
+    /// Creates the same queue as `create_native_xgmi_queue_with_peer_v1`, with
+    /// optional no-effect evidence for an actual pre-arm host preparation error.
+    /// Route, endpoint, arm, retake and post-arm failures never receive evidence.
+    pub fn create_native_xgmi_queue_with_peer_outcome_v1(
+        &mut self,
+        peer: &mut Self,
+        route: Gfx942XgmiRouteV1,
+        root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
+    ) -> Gfx942ComputeXgmiQueueCreationOutcomeV1 {
+        self.create_native_xgmi_queue_with_peer_preparation_v1(
+            peer,
+            route,
+            root,
+            Gfx942XgmiHostPreparationV1::Normal,
+        )
+    }
+
+    /// Qualification-only capacity denial of this exact creation attempt's
+    /// host preparation. Absent from builds without `hardware-qualification`.
+    ///
+    /// After ordinary endpoint/route checks, preparation executes an impossible
+    /// fallible host allocation before native arm. This is not an OOM, GPU, or
+    /// driver failure. Currentness, both model retakes and no-effect outcome
+    /// classification still run normally; earlier rejection need not reach the
+    /// injected allocation. No later attempt or other session pair is armed.
+    #[cfg(feature = "hardware-qualification")]
+    pub fn create_native_xgmi_queue_with_peer_host_preparation_denial_v1(
+        &mut self,
+        peer: &mut Self,
+        route: Gfx942XgmiRouteV1,
+        root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
+    ) -> Gfx942ComputeXgmiQueueCreationOutcomeV1 {
+        self.create_native_xgmi_queue_with_peer_preparation_v1(
+            peer,
+            route,
+            root,
+            Gfx942XgmiHostPreparationV1::CapacityDenial,
+        )
+    }
+
+    fn create_native_xgmi_queue_with_peer_preparation_v1(
+        &mut self,
+        peer: &mut Self,
+        route: Gfx942XgmiRouteV1,
+        root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
+        preparation: Gfx942XgmiHostPreparationV1,
+    ) -> Gfx942ComputeXgmiQueueCreationOutcomeV1 {
+        let mut no_effect = None;
+        let result = self.create_native_xgmi_queue_with_peer_inner_v1(
+            peer,
+            route,
+            root,
+            &mut no_effect,
+            preparation,
+        );
+        Gfx942ComputeXgmiQueueCreationOutcomeV1 { result, no_effect }
+    }
+
+    fn create_native_xgmi_queue_with_peer_inner_v1(
+        &mut self,
+        peer: &mut Self,
+        route: Gfx942XgmiRouteV1,
+        root: &mut Gfx942ComputeXgmiQueueCreationRootV1,
+        no_effect: &mut Option<CreationNoEffect>,
+        preparation: Gfx942XgmiHostPreparationV1,
+    ) -> Result<Gfx942ComputeXgmiQueueV1, ComputeAqlQueueSessionErrorV1> {
         if !root.is_vacant() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "compute-XGMI creation root is occupied",
@@ -358,6 +526,7 @@ impl ComputeAqlQueueSessionV1 {
         peer.require_no_xgmi_attachment_v1()?;
         preflight(self, peer, route)?;
         root.armed = true;
+        let mut host_preparation_rejected = false;
         let result = model_pair_loan::execute(
             &mut Sessions {
                 source: &mut *self,
@@ -365,15 +534,27 @@ impl ComputeAqlQueueSessionV1 {
             },
             |sessions| {
                 let (source, destination) = sessions.memories();
-                match Gfx942NativeXgmiSdmaQueueV1::create(
+                match Gfx942NativeXgmiSdmaQueueV1::create_with_preparation_v1(
                     source,
                     destination,
                     route,
                     &mut root.native,
+                    preparation,
                 ) {
                     Ok(queue) => root.returned = Some(queue),
                     Err(failure) => {
                         let terminal = failure.is_terminal();
+                        if failure.is_host_preparation_rejection() {
+                            // A stale/failed pair must not be recovered merely
+                            // because host allocation happened to fail first.
+                            source
+                                .validate_gfx942_xgmi_route_with_peer(destination, route)
+                                .map_err(|error| Failure {
+                                    error: error.into(),
+                                    terminal: true,
+                                })?;
+                            host_preparation_rejected = true;
+                        }
                         return Err(Failure {
                             error: failure.into_error().into(),
                             terminal,
@@ -429,9 +610,17 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             Err(failure) => {
-                if !failure.terminal {
-                    root.armed = false;
-                }
+                *no_effect =
+                    settle_creation_failure_v1(root, &failure, host_preparation_rejected, |root| {
+                        let certificate = CreationNoEffect {
+                            source: self.compute_lane_session,
+                            destination: peer.compute_lane_session,
+                            route,
+                        };
+                        certificate
+                            .matches_v1(self, peer, route, root)
+                            .then_some(certificate)
+                    });
                 Err(session_error(failure))
             }
         }
@@ -480,6 +669,10 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "compute_xgmi/no_effect_tests.rs"]
+mod no_effect_tests;
 
 #[cfg(test)]
 mod tests {

@@ -4068,9 +4068,22 @@ pub struct Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
     error: Gfx942SdmaErrorV1,
     disposition: Gfx942SdmaQueueSetCreationDispositionV1,
     stage: Option<&'static str>,
+    host_preparation: bool,
+}
+
+// Passed by value into exactly one preparation attempt. Normal callers cannot
+// request the qualification-only denial, and no ambient switch is consulted.
+pub(crate) enum Gfx942XgmiHostPreparationV1 {
+    Normal,
+    #[cfg(any(test, feature = "hardware-qualification"))]
+    CapacityDenial,
 }
 
 impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
+    pub(crate) const fn is_host_preparation_rejection(&self) -> bool {
+        self.host_preparation && !self.is_terminal()
+    }
+
     pub(crate) fn into_error(self) -> Gfx942SdmaErrorV1 {
         self.error
     }
@@ -4115,6 +4128,14 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
             error,
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Retryable,
             stage: None,
+            host_preparation: false,
+        }
+    }
+
+    fn host_preparation(error: Gfx942SdmaErrorV1) -> Self {
+        Self {
+            host_preparation: true,
+            ..Self::retryable(error)
         }
     }
 
@@ -4123,6 +4144,7 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
             error,
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
             stage: root.terminal_stage(),
+            host_preparation: false,
         }
     }
 }
@@ -4441,6 +4463,16 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         root: &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
     ) -> Result<Self, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
         xgmi_creation::create(source, destination, route, root)
+    }
+
+    pub(crate) fn create_with_preparation_v1(
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        root: &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
+        preparation: Gfx942XgmiHostPreparationV1,
+    ) -> Result<Self, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
+        xgmi_creation::create_with_preparation(source, destination, route, root, preparation)
     }
 
     pub const fn route(&self) -> crate::topology::Gfx942XgmiRouteV1 {
@@ -7560,6 +7592,7 @@ mod tests {
             error: Gfx942SdmaErrorV1::Contract("injected pure preflight"),
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Retryable,
             stage: None,
+            host_preparation: false,
         };
         assert!(!retryable.is_terminal());
 
@@ -7567,6 +7600,7 @@ mod tests {
             error: Gfx942SdmaErrorV1::Contract("injected post-route failure"),
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
             stage: Some("memory-terminal-no-queue-custody"),
+            host_preparation: false,
         };
         assert!(terminal_without_queue.is_terminal());
         assert_eq!(

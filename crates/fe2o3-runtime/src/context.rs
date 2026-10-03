@@ -47,6 +47,8 @@ pub use producer_launch::{
 };
 use producer_launch::{PreparedSubmissionCustodyV1, ProducerLaunchRootV1};
 mod peer_segments;
+#[cfg(feature = "hardware-qualification")]
+mod qualification_xgmi;
 use peer_segments::SegmentedPeerCopyRootV1;
 pub use peer_segments::*;
 mod unpublished;

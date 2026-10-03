@@ -271,7 +271,9 @@ mod compute_xgmi;
 #[path = "queue_live/model_pair_loan.rs"]
 mod model_pair_loan;
 pub use compute_xgmi::{
-    Gfx942ComputeXgmiProgressV1, Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1,
+    Gfx942ComputeXgmiProgressV1, Gfx942ComputeXgmiQueueCreationDispositionV1,
+    Gfx942ComputeXgmiQueueCreationOutcomeV1, Gfx942ComputeXgmiQueueCreationRootV1,
+    Gfx942ComputeXgmiQueueV1,
 };
 #[path = "queue_live/sdma_creation.rs"]
 mod sdma_creation;

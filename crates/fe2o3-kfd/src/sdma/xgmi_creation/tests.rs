@@ -55,6 +55,7 @@ struct Script {
     memory: PreparationMemoryFixtureV1,
     hostile: [bool; 3],
     drops: Arc<AtomicUsize>,
+    preparation: Option<Gfx942XgmiHostPreparationV1>,
 }
 
 impl Script {
@@ -70,6 +71,7 @@ impl Script {
             memory: PreparationMemoryFixtureV1::new(true),
             hostile: [false; 3],
             drops: Arc::new(AtomicUsize::new(0)),
+            preparation: None,
         }
     }
 
@@ -134,9 +136,13 @@ impl Context for Script {
     fn prepare(
         &mut self,
         route: Gfx942XgmiRouteV1,
-    ) -> Result<(KfdGfx942SdmaXgmiEngineId, ()), Gfx942SdmaErrorV1> {
+    ) -> Result<(KfdGfx942SdmaXgmiEngineId, ()), Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
         assert_eq!(route, self.route);
-        self.step("host")?;
+        self.step("host")
+            .map_err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::host_preparation)?;
+        if let Some(preparation) = self.preparation.take() {
+            prepare_host_resources(preparation)?;
+        }
         Ok((
             admit_kfd_gfx942_sdma_xgmi_engine_mask(route.link().recommended_sdma_engine_id_mask())
                 .unwrap(),
@@ -362,7 +368,9 @@ fn preflight_errors_and_panics_leave_vacant_reusable_roots() {
                 if panic {
                     assert_eq!(result.err().unwrap().downcast_ref::<&str>(), Some(&stage));
                 } else {
-                    assert!(!result.unwrap().err().unwrap().is_terminal());
+                    let failure = result.unwrap().err().unwrap();
+                    assert!(!failure.is_terminal());
+                    assert_eq!(failure.is_host_preparation_rejection(), stage == "host");
                 }
                 assert!(root.is_vacant());
                 assert_eq!(
@@ -404,6 +412,53 @@ fn preflight_errors_and_panics_leave_vacant_reusable_roots() {
                 drop(ManuallyDrop::into_inner(root));
             }
         }
+    }
+}
+
+#[test]
+fn actual_fallible_host_preparation_is_one_shot_and_not_an_arm_failure() {
+    let failure = prepare_host_resources(Gfx942XgmiHostPreparationV1::CapacityDenial)
+        .err()
+        .expect("host allocation denial");
+    assert!(failure.is_host_preparation_rejection());
+    assert!(!failure.is_terminal());
+    assert!(matches!(
+        failure.error(),
+        Gfx942SdmaErrorV1::Contract("qualified XGMI host preparation capacity denial")
+    ));
+    assert!(prepare_host_resources(Gfx942XgmiHostPreparationV1::Normal).is_ok());
+    let unrelated = Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable(
+        Gfx942SdmaErrorV1::Contract("qualified XGMI host preparation capacity denial"),
+    );
+    assert!(!unrelated.is_host_preparation_rejection());
+}
+
+#[test]
+fn explicit_capacity_denial_never_arms_and_does_not_change_the_next_attempt() {
+    for route in crate::topology::tests::admitted_xgmi_routes() {
+        let mut script = Script::new(route);
+        script.preparation = Some(Gfx942XgmiHostPreparationV1::CapacityDenial);
+        let mut root = Gfx942NativeXgmiSdmaQueueCreationRootV1::new();
+        let failure = create_with(&mut script, route, &mut root).err().unwrap();
+        assert!(failure.is_host_preparation_rejection());
+        assert!(!failure.is_terminal());
+        assert!(root.is_vacant());
+        assert_eq!(*script.trace.borrow(), ["host"]);
+        assert!(script.preparation.is_none());
+        assert!(script.expected.is_none());
+        assert_eq!(script.actual_address, 0);
+
+        // Reaching arm proves that denial affected only the first attempt.
+        // This CPU fixture deliberately stops before any native creation.
+        script.fault = Some(("arm", false));
+        script.trace.borrow_mut().clear();
+        let failure = create_with(&mut script, route, &mut root).err().unwrap();
+        assert!(!failure.is_host_preparation_rejection());
+        assert!(!failure.is_terminal());
+        assert!(root.is_vacant());
+        assert_eq!(*script.trace.borrow(), ["host", "arm"]);
+        assert!(script.expected.is_none());
+        assert_eq!(script.actual_address, 0);
     }
 }
 
