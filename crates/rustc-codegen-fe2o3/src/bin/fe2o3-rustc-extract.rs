@@ -1266,7 +1266,7 @@ mod tests {
     include!("fe2o3-rustc-extract/bf16_generated_source_v1_tests.rs");
     include!("fe2o3-rustc-extract/composition_promotion_v1_tests.rs");
     include!("fe2o3-rustc-extract/normal_composition_v1_tests.rs");
-    include!("fe2o3-rustc-extract/bin_target_tests_v1.rs");
+    include!("fe2o3-rustc-extract/bin_target_v1_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

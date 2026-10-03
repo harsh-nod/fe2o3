@@ -563,7 +563,7 @@ const fn usage() -> &'static str {
 mod tests {
     use super::*;
     include!("fe2o3-export-sim/ordered_program_v17_tests.rs");
-    include!("fe2o3-export-sim/bin_target_tests_v1.rs");
+    include!("fe2o3-export-sim/bin_target_v1_tests.rs");
 
     fn diagnostic_args() -> Vec<OsString> {
         [
