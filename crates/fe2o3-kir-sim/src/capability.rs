@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_061_127;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_096_673;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -122,10 +122,11 @@ pub enum SimulationKirWireVersionV1 {
     V20,
     V21,
     V22,
+    V18,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::V7,
         Self::V9,
         Self::V10,
@@ -137,6 +138,7 @@ impl SimulationKirWireVersionV1 {
         Self::V20,
         Self::V21,
         Self::V22,
+        Self::V18,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -483,6 +485,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                         | SimulationKirWireVersionV1::V12
                         | SimulationKirWireVersionV1::V16
                         | SimulationKirWireVersionV1::V17
+                        | SimulationKirWireVersionV1::V18
                         | SimulationKirWireVersionV1::V19
                         | SimulationKirWireVersionV1::V20
                 ) {
