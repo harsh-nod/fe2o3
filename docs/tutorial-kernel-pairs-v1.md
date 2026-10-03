@@ -134,7 +134,7 @@ For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
 The current projection records 61 known kernel identities and 123 variant
 obligations: 22 variants have exact source associations, 101 remain pending,
-and no pair is source-bound. Seven displayed declarations lack exact
+and no pair is source-bound. Five displayed declarations lack exact
 source/display bindings; every existing positive selection has a display binding.
 Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
@@ -147,6 +147,13 @@ source-model identity and immutable link, rather than as a second active
 instructional implementation. All 61 kernel identities and 123 mode
 obligations are retained; this display migration qualifies no execution.
 
+The LDS/barriers and MoE-routing lessons likewise present their exact current
+source as the primary Kernel tab, without a duplicate current-source tab.
+Their superseded historical sources and claims retain their original immutable
+identities outside the active instructional tabs. The six removed display
+declarations were two unbound historical entries and four ordinary helpers;
+no kernel record, source binding, variant obligation or negative case is removed.
+
 The first-fill kernel display now binds the 680-byte library file at
 `f84c2a59ba34c3e4c12e316cc9b30f14342e36cf`, including its independent CPU
 point reference and exact whole-file digest. Recorded no-GPU execution of the
@@ -157,7 +164,7 @@ execution or tile-pair qualification.
 The MoE routing lesson's current-source tab binds the existing top-2 fixture
 through its full physical module closure, including ordinary enum/struct
 declarations with checked builtin derives. This source selection is not a rustc,
-simulation or GPU result, and it does not bind the older displayed revision.
+simulation or GPU result, and it does not bind the archived older revision.
 
 The CPU simulation lesson's whole-file tab 6 binds
 `row_affine_sum_u32_v1` from

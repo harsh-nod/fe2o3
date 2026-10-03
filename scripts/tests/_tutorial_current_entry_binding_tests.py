@@ -20,8 +20,9 @@ class CurrentEntryBindingTests(FixtureBindingTests):
         kernel_id = f"fixture:{fixture_id}:{symbol}"
         lesson = copy.deepcopy(next(row for row in self.original["curriculum"]["lessons"]
                                     if row["lessonId"] == lesson_id))
-        self.assertEqual(len(lesson["codeTabs"]), 6)
-        tab = lesson["codeTabs"][5]
+        ordinal = 0 if lesson_id == "lds-barriers-atomics" else 5
+        self.assertEqual(len(lesson["codeTabs"]), 5 if ordinal == 0 else 6)
+        tab = lesson["codeTabs"][ordinal]
         tab["ordinal"] = 0
         lesson["codeTabs"] = [tab]
         fixture = copy.deepcopy(next(row for row in self.original["compilerFixtures"]
@@ -29,7 +30,7 @@ class CurrentEntryBindingTests(FixtureBindingTests):
         kernel = copy.deepcopy(next(row for row in self.original["kernelInventory"]["kernels"]
                                     if row["kernelId"] == kernel_id))
         display = copy.deepcopy(next(row for row in self.original["kernelInventory"]["displayItems"]
-                                     if row["lessonId"] == lesson_id and row["tabOrdinal"] == 5))
+                                     if row["lessonId"] == lesson_id and row["tabOrdinal"] == ordinal))
         display["tabOrdinal"] = 0
         document = {
             **self.original,
@@ -136,21 +137,32 @@ class CurrentEntryBindingTests(FixtureBindingTests):
                     SystemExit, "feature-selected fixture kernel roster differs|selected source"):
                 self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
 
-    def test_historical_tabs_and_unresolved_displays_are_not_reclassified(self):
+    def test_historical_vecadd_and_workgroup_archive_metadata_stay_separate(self):
         def digest(value):
             return hashlib.sha256(json.dumps(value, sort_keys=True,
                                              separators=(",", ":")).encode()).hexdigest()
 
-        expected = {
-            "typed-vecadd": "8684d655640e34b39b11d3f5a945882839079fbf2ba782580bcfa14af5e7458a",
-            "lds-barriers-atomics": "2d34ab37302894a63f59355ec11aba0c343a74d15d97742baf226a149e0cdcef",
-        }
-        for lesson in self.original["curriculum"]["lessons"]:
-            if lesson["lessonId"] in expected:
-                self.assertEqual(len(lesson["codeTabs"]), 6)
-                self.assertEqual(digest(lesson["codeTabs"][:5]), expected[lesson["lessonId"]])
+        typed = next(row for row in self.original["curriculum"]["lessons"]
+                     if row["lessonId"] == "typed-vecadd")
+        self.assertEqual(len(typed["codeTabs"]), 6)
+        self.assertEqual(digest(typed["codeTabs"][:5]),
+                         "8684d655640e34b39b11d3f5a945882839079fbf2ba782580bcfa14af5e7458a")
         rows = [row for row in self.original["kernelInventory"]["displayItems"]
-                if row["lessonId"] in expected and row["tabOrdinal"] < 5]
-        self.assertEqual(len(rows), 3)
-        self.assertEqual(digest(rows), "51e90bb2b482e813eef2f36e2ae37e54bc4be0963fc266d2dde105b63aa04c94")
+                if row["lessonId"] == "typed-vecadd" and row["tabOrdinal"] < 5]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(digest(rows), "3f804ff440f95096651083bd005309245e4e57c4f662cbcee2039bf291ed388d")
         self.assertTrue(all(row["bindingStatus"] == "pending" and row["kernelIds"] == [] for row in rows))
+        lds = next(row for row in self.original["curriculum"]["lessons"]
+                   if row["lessonId"] == "lds-barriers-atomics")
+        self.assertEqual(len(lds["codeTabs"]), 5)
+        self.assertEqual(digest(lds["codeTabs"][1:4]), "80b14f1bdeb34eb73f805558e0b904b739eff39658bbbd24fe9b934e026f76e4")
+        self.assertEqual(lds["codeTabs"][0]["evidenceId"], "workgroup-sync-current-source-v1")
+        self.assertEqual(lds["codeTabs"][0]["sourceSha256"],
+                         "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515")
+        self.assertEqual(lds["codeTabs"][0]["sourceItemStatus"], "pending")
+        rows = [row for row in self.original["kernelInventory"]["displayItems"]
+                if row["lessonId"] == "lds-barriers-atomics"]
+        self.assertEqual([(row["tabOrdinal"], row["functionUtf8Offset"], row["bindingStatus"])
+                          for row in rows], [(0, 1194, "fixture-source-contract")])
+        self.assertEqual(rows[0]["kernelIds"],
+                         ["fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1"])

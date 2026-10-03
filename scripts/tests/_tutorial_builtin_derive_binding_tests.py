@@ -112,11 +112,13 @@ class MoeCurrentBindingTests(FixtureBindingTests):
         kernel_id = "fixture:gfx942-moe-top2:" + self.symbol
         kernel = next(row for row in original["kernelInventory"]["kernels"] if row["kernelId"] == kernel_id)
         lesson = next(row for row in original["curriculum"]["lessons"] if row["lessonId"] == "moe-routing")
-        tab = lesson["codeTabs"][5]
+        self.assertEqual(len(lesson["codeTabs"]), 5)
+        tab = lesson["codeTabs"][0]
+        self.assertEqual(tab["evidenceId"], "moe-top2-current-source-v1")
         tab["ordinal"] = 0
         lesson["codeTabs"] = [tab]
         displays = [row for row in original["kernelInventory"]["displayItems"]
-                    if row["lessonId"] == "moe-routing" and row["tabOrdinal"] == 5]
+                    if row["lessonId"] == "moe-routing" and row["tabOrdinal"] == 0]
         self.assertEqual([(row["kernelSymbol"], row["functionUtf8Offset"]) for row in displays], [
             ("candidate_precedes_v1", 1217), ("select_top2_v1", 1493),
             ("logits_are_finite_v1", 2262), ("write_value_v1", 2491), (self.symbol, 3605),
