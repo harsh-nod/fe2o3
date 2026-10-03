@@ -18,6 +18,9 @@ mod inert_invocation_v3;
 #[path = "support/checked_u32_prefix_extraction_v1.rs"]
 mod checked_u32_prefix_extraction_v1;
 
+#[path = "support/conditional_output_packing_v1.rs"]
+mod conditional_output_packing_v1;
+
 struct ScratchTarget {
     path: PathBuf,
 }
@@ -632,6 +635,7 @@ fn write_only_output_genuine_conditional_v9_handoff_is_imported_without_launch_a
     assert!(!lineage.establishes_llvm_to_machine_refinement());
     assert!(!lineage.authenticates_producer());
     assert!(!lineage.grants_runtime_authority());
+    conditional_output_packing_v1::check_actual_fill_packing(&proof, &handoff);
     let module = fe2o3_kernel_ir::decode_module_v9(proof.kernel_ir().canonical_bytes()).unwrap();
     assert_eq!(module.kernels.len(), 1);
     assert_eq!(module.kernels[0].entry.as_str(), "fill_write_only");

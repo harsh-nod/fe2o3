@@ -90,17 +90,29 @@ replace these with qualification metadata, caller digests or an always-allow
 backend. Affirmative Worker provider implementations remain test-only. Bound the
 first complete profile to the actual `fill_write_only` kernel described below,
 not a separate checked-add prefix. Its conditional compiler proof now survives
-the singleton handoff and import, but actual packed launch discharge, physical
-entry, output stores, termination and exact source-to-machine correspondence
-still precede application admission.
+the singleton handoff and import. Actual packed launch coverage is now checked
+against the retained compiler ABI; physical entry, output stores, termination
+and exact source-to-machine correspondence still precede application admission.
 
 The [conditional transport checkpoint](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
 retains the signed coverage condition through genuine Rust extraction, V9
 handoff, conditional import and target replay. The old unconditional importer
-and protected Worker constructor remain unchanged. Next bind actual packed
-length and output backing to the selected descriptor and AQL grid, then complete
-machine refinement and the protected provider. Only then qualify admitted fill,
-tracked upload, native XGMI and readback on two GPUs in both directions.
+and protected Worker constructor remain unchanged. The
+[packed coverage checkpoint](evidence/dev-packed-conditional-coverage-2026-10-03/README.md)
+now joins the exact semantic output, KIR parameter, canonical descriptor, typed
+packing plan, actual length/backing/fixup and AQL grid. It retains immutable
+borrows of the proof and packed owner; it creates no prepared dispatch or device
+authority. Next complete machine refinement and the protected conditional
+provider. Only then qualify admitted fill, tracked upload, native XGMI and
+readback on two GPUs in both directions.
+
+The current Worker artifact verifier accepts only unconditional compiler proof
+inputs and runs before invocation arguments exist. Do not retag the conditional
+owner as unconditional. A conditional artifact profile must retain the universal
+machine contract; a later invocation transition must consume coverage tied to
+the exact prepared dispatch, selected device and patched memory. Reuse the
+existing complete per-wave model and prove its dispatch-wide input/memory join,
+rather than adding more isolated opcode proofs.
 
 ## Required Multi-Device Bridge
 

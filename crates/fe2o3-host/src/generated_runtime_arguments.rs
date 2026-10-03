@@ -825,6 +825,12 @@ pub struct GeneratedRuntimeChargedArgumentsV1 {
 }
 
 impl GeneratedRuntimeChargedArgumentsV1 {
+    pub(crate) fn packed_view_v1(
+        &self,
+    ) -> crate::generated_kfd_arguments::GeneratedPackedArgumentsViewV1<'_> {
+        self.packed.packed.packed_view_v1()
+    }
+
     pub fn kernel_id(&self) -> KernelId {
         self.packed.kernel_id()
     }
@@ -941,6 +947,12 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
 }
 
 impl GeneratedRuntimePackedArgumentsV1 {
+    pub(crate) fn packed_view_v1(
+        &self,
+    ) -> crate::generated_kfd_arguments::GeneratedPackedArgumentsViewV1<'_> {
+        self.packed.packed_view_v1()
+    }
+
     pub const fn kernel_id(&self) -> KernelId {
         self.packed.kernel_id
     }

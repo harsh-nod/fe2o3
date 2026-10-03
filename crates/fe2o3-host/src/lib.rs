@@ -11,6 +11,7 @@ mod compiler_execution_current_record_audit;
 mod compiler_generated_contract;
 mod generated_argument_borrow;
 mod generated_argument_plan;
+mod generated_conditional_coverage;
 mod generated_context_arguments;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
@@ -183,6 +184,10 @@ pub use generated_argument_plan::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
+};
+pub use generated_conditional_coverage::{
+    CheckedConditionalPackedCoverageV1, ConditionalOutputArgumentBindingV1,
+    ConditionalPackedCoverageErrorV1,
 };
 pub use generated_context_arguments::{
     GeneratedContextReadSlice, GeneratedContextReadWriteSlice, GeneratedContextWriteSlice,

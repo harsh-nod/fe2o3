@@ -787,3 +787,53 @@ fn charged_write_only_mapped_output_uses_the_existing_binding_rules() {
     drop(result);
     assert_empty(&budget);
 }
+
+#[test]
+fn conditional_coverage_borrows_charged_storage_without_publishing_or_refunding() {
+    let fixture = crate::generated_conditional_coverage::tests::PackingFixture::new();
+    for n in [0_usize, 65] {
+        let independent = crate::generated_conditional_coverage::tests::PackingFixture::new();
+        let plan = independent.plan();
+        let (output, mut observer) =
+            GeneratedRuntimeWriteSlice::new_charged(vec![19u32; n].into_boxed_slice());
+        let budget = GeneratedRuntimeResultBudgetV1::new(520, 1).unwrap();
+        let prepared = prepare_charged_with_plan(
+            output,
+            plan,
+            limits(),
+            &budget,
+            |output, account| output.account_storage(account),
+            |output, account| {
+                Ok(
+                    GeneratedRuntimeArgumentBindingV1::from_compiler_generated_parts(
+                        vec![],
+                        vec![output.bind_argument(plan, 0, account)?],
+                    ),
+                )
+            },
+        )
+        .unwrap();
+        drop(independent);
+        let before = budget.usage();
+        assert_eq!(before.reserved_peak_bytes, n as u64 * 8);
+        assert_eq!(before.retained_members, 1);
+        assert_eq!(
+            fixture.check(prepared.packed_view_v1(), 128).unwrap(),
+            n as u64
+        );
+        if n != 0 {
+            assert!(matches!(
+                fixture.check(prepared.packed_view_v1(), 64),
+                Err(crate::ConditionalPackedCoverageErrorV1::Underlaunch {
+                    elements: 65,
+                    grid_x: 64
+                })
+            ));
+        }
+        assert_eq!(budget.usage(), before);
+        assert!(observer.try_take().unwrap().is_none());
+        drop(prepared);
+        assert!(matches!(observer.try_take(), Err(Error::OutputUnavailable)));
+        assert_empty(&budget);
+    }
+}

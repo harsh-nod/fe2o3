@@ -529,7 +529,7 @@ pub struct GeneratedArgumentPackingPlanV1 {
     kernarg_size: u64,
     kernarg_alignment: u32,
     pointer_width: PointerWidth,
-    fields: Box<[AbiField]>,
+    fields: Arc<[AbiField]>,
     components: Box<[GeneratedPackingComponentV1]>,
 }
 
@@ -556,6 +556,10 @@ impl GeneratedArgumentPackingPlanV1 {
 
     pub fn argument(&self, index: usize) -> Option<&AbiField> {
         self.fields.get(index)
+    }
+
+    pub(crate) fn retain_argument_fields_v1(&self) -> Arc<[AbiField]> {
+        Arc::clone(&self.fields)
     }
 
     pub fn component_count(&self) -> usize {
@@ -2227,7 +2231,7 @@ fn packing_plan_from_layout(
         kernarg_size: layout.size(),
         kernarg_alignment: layout.alignment(),
         pointer_width: layout.pointer_width(),
-        fields: layout.fields().to_vec().into_boxed_slice(),
+        fields: Arc::from(layout.fields()),
         components: packing_components(layout).into_boxed_slice(),
     }
 }
@@ -4035,7 +4039,7 @@ mod tests {
             kernarg_size: fe2o3_artifacts::MAX_ABI_BYTES + 1,
             kernarg_alignment: 1,
             pointer_width: PointerWidth::Bits64,
-            fields: Box::new([]),
+            fields: std::sync::Arc::from([]),
             components: Box::new([]),
         };
         assert_eq!(

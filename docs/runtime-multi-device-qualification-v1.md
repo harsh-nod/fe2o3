@@ -55,9 +55,12 @@ their bounded actual normalization/assembly bodies, not whole kernels.
 The immediate target is real `fill_write_only`, whose
 [conditional compiler transport](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
 now passes genuine extraction, handoff, import and target replay without launch
-authority. Prioritize actual packed-length/AQL coverage discharge, dispatch-wide
-source/machine and memory/completion composition, then the protected application
-provider. Qualify admitted fill -> tracked upload -> native XGMI -> readback on
+authority. The [packed coverage checkpoint](evidence/dev-packed-conditional-coverage-2026-10-03/README.md)
+adds actual typed packing, output backing and AQL extent checks with retained
+immutable owners. It is not device preparation or application admission.
+Prioritize dispatch-wide source/machine and memory/completion composition, then
+the protected conditional application provider and exact invocation binding.
+Qualify admitted fill -> tracked upload -> native XGMI -> readback on
 two selected GPUs, lengths 64, 65 and 4097, in both directions.
 Broader fault recovery, all-device matrices and matched HIP/HSA performance are
 separate follow-on gates; existing copy-only paths need not wait for them.

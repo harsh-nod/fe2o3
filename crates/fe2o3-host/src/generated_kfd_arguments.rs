@@ -1,6 +1,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
@@ -22,7 +23,7 @@ use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
     RecoveredWorkerV3AdmissionErrorV1,
 };
-use fe2o3_artifacts::RustDisjointIndexSpaceV1;
+use fe2o3_artifacts::{AbiField, PointerWidth, RustDisjointIndexSpaceV1};
 
 const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
@@ -484,6 +485,8 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
         Ok(GeneratedKfdPackedArguments {
             kernel_id: packed.kernel_id(),
             alignment: packed.alignment(),
+            pointer_width: plan.pointer_width(),
+            argument_fields: plan.retain_argument_fields_v1(),
             explicit_kernarg: packed.bytes().to_vec(),
             buffers,
             pointer_fixups,
@@ -500,6 +503,8 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
 pub struct GeneratedKfdPackedArguments<'allocation> {
     kernel_id: KernelId,
     alignment: u32,
+    pointer_width: PointerWidth,
+    argument_fields: Arc<[AbiField]>,
     explicit_kernarg: Vec<u8>,
     buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
     pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
@@ -508,6 +513,19 @@ pub struct GeneratedKfdPackedArguments<'allocation> {
 }
 
 impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
+    pub(crate) fn packed_view_v1(&self) -> GeneratedPackedArgumentsViewV1<'_> {
+        GeneratedPackedArgumentsViewV1 {
+            kernel_id: self.kernel_id,
+            alignment: self.alignment,
+            pointer_width: self.pointer_width,
+            argument_fields: &self.argument_fields,
+            explicit_kernarg: &self.explicit_kernarg,
+            buffers: &self.buffers,
+            pointer_fixups: &self.pointer_fixups,
+            observation: &self.packing_observation,
+        }
+    }
+
     pub const fn kernel_id(&self) -> KernelId {
         self.kernel_id
     }
@@ -546,6 +564,8 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
         Ok(GeneratedKfdOwnedPackedParts {
             kernel_id: self.kernel_id,
             alignment: self.alignment,
+            pointer_width: self.pointer_width,
+            argument_fields: self.argument_fields,
             explicit_kernarg: self.explicit_kernarg,
             buffers: self.buffers,
             pointer_fixups: self.pointer_fixups,
@@ -579,10 +599,38 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
 pub(crate) struct GeneratedKfdOwnedPackedParts {
     pub(crate) kernel_id: KernelId,
     pub(crate) alignment: u32,
+    pointer_width: PointerWidth,
+    argument_fields: Arc<[AbiField]>,
     pub(crate) explicit_kernarg: Vec<u8>,
     pub(crate) buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
     pub(crate) pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
     pub(crate) packing_observation: GeneratedKfdPackingObservationV1,
+}
+
+impl GeneratedKfdOwnedPackedParts {
+    pub(crate) fn packed_view_v1(&self) -> GeneratedPackedArgumentsViewV1<'_> {
+        GeneratedPackedArgumentsViewV1 {
+            kernel_id: self.kernel_id,
+            alignment: self.alignment,
+            pointer_width: self.pointer_width,
+            argument_fields: &self.argument_fields,
+            explicit_kernarg: &self.explicit_kernarg,
+            buffers: &self.buffers,
+            pointer_fixups: &self.pointer_fixups,
+            observation: &self.packing_observation,
+        }
+    }
+}
+
+pub(crate) struct GeneratedPackedArgumentsViewV1<'a> {
+    pub(crate) kernel_id: KernelId,
+    pub(crate) alignment: u32,
+    pub(crate) pointer_width: PointerWidth,
+    pub(crate) argument_fields: &'a [AbiField],
+    pub(crate) explicit_kernarg: &'a [u8],
+    pub(crate) buffers: &'a [Gfx942RuntimeDispatchBufferV1],
+    pub(crate) pointer_fixups: &'a [Gfx942KfdDispatchPointerFixupV1],
+    pub(crate) observation: &'a GeneratedKfdPackingObservationV1,
 }
 
 /// Address-free input identity retained from the compiler-generated packing plan.
@@ -599,6 +647,15 @@ pub struct GeneratedKfdPackingObservationV1 {
 }
 
 impl GeneratedKfdPackingObservationV1 {
+    #[cfg(test)]
+    pub(crate) fn with_explicit_kernarg_for_test(&self, bytes: &[u8]) -> Self {
+        let mut observation = self.clone();
+        observation.explicit_kernarg_bytes = bytes.len();
+        observation.explicit_kernarg_sha256 = Sha256::digest(bytes).into();
+        observation.identity = packing_observation_identity(&observation).unwrap();
+        observation
+    }
+
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
         let mut observation = Self {
@@ -1019,6 +1076,33 @@ mod tests {
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
         Mutability, Name, PointerWidth,
     };
+
+    #[test]
+    fn conditional_coverage_rejects_ambiguous_buffer_observations() {
+        use crate::generated_conditional_coverage::tests::PackingFixture;
+        let fixture = PackingFixture::new();
+        let mut values = [0_u32];
+        let output = GeneratedKfdWriteSlice::new(&mut values)
+            .bind_argument(fixture.plan(), 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(vec![], vec![output])
+                .pack(fixture.plan())
+                .unwrap();
+        for argument_index in [0, 1] {
+            let mut observation = packed.packing_observation().clone();
+            let mut duplicate = observation.buffers[0].clone();
+            duplicate.argument_index = argument_index;
+            observation.buffers.push(duplicate);
+            observation.identity = packing_observation_identity(&observation).unwrap();
+            let mut view = packed.packed_view_v1();
+            view.observation = &observation;
+            assert!(matches!(
+                fixture.check(view, 64),
+                Err(crate::ConditionalPackedCoverageErrorV1::OutputBinding)
+            ));
+        }
+    }
 
     fn slice_field<T: GeneratedDeviceScalarV1>(
         name: &str,

@@ -35,6 +35,7 @@ fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-kfd.workspace = true
+fe2o3-mir-model.workspace = true
 fe2o3-resource-accounting.workspace = true
 fe2o3-runtime.workspace = true
 fe2o3-runtime-model.workspace = true
@@ -55,6 +56,8 @@ fe2o3-service-host.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-functional-proof = { workspace = true, features = ["internal-proof-staging"] }
+fe2o3-proof-contracts.workspace = true
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-rustc-invocation.workspace = true

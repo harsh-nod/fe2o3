@@ -128,9 +128,11 @@ must not become a prerequisite for running their already-admitted smoke tests.
    application target is now the genuine `fill_write_only` kernel, not a separate
    checked-add prefix. Its
    [conditional compiler transport](evidence/dev-conditional-fill-transport-2026-10-03/README.md)
-   passes genuine handoff/import/replay without launch authority. Actual packed
-   coverage discharge, dispatch-wide source/machine refinement and the protected
-   provider precede the complete admitted two-GPU pipeline. Follow the
+   passes genuine handoff/import/replay without launch authority. The
+   [packed coverage checkpoint](evidence/dev-packed-conditional-coverage-2026-10-03/README.md)
+   now checks the exact typed owner, output backing and AQL extent. Device-bound
+   invocation custody, dispatch-wide source/machine refinement and the protected
+   conditional provider still precede the complete admitted two-GPU pipeline. Follow the
    [remaining multi-device work](runtime-multi-gpu-critical-path.md#required-multi-device-bridge).
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute
