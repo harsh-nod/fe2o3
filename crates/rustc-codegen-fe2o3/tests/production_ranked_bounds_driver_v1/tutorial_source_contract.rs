@@ -3,7 +3,6 @@ struct TutorialSourceInputV1<'a> {
     lesson_id: &'a str,
     tab_ordinal: usize,
     source_path: &'a str,
-    lib_source_path: &'a str,
     export: SimulationExportPackageV1<'a>,
 }
 
@@ -11,7 +10,6 @@ const CPU_TUTORIAL_SOURCE_INPUT_V1: TutorialSourceInputV1<'static> = TutorialSou
     lesson_id: "cpu-semantic-simulation",
     tab_ordinal: 0,
     source_path: "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs",
-    lib_source_path: "src/lib.rs",
     export: RANKED_BOUNDS_EXPORT_PACKAGE_V1,
 };
 
@@ -94,8 +92,8 @@ impl TutorialSourceCaseV1<'_> {
             || input["sourcePaths"] != json!([source.source_path])
             || input["cargoTarget"]
                 != json!({
-                    "kind": "lib", "name": source.export.rustc_crate,
-                    "sourcePath": source.lib_source_path,
+                    "kind": source.export.target.kind(), "name": source.export.target.name(source.export.rustc_crate),
+                    "sourcePath": source.export.target.source_path(),
                 })
         {
             return Err("source driver compiler input differs");
@@ -131,7 +129,7 @@ impl TutorialSourceCaseV1<'_> {
         .expect("decode compiler-owned tutorial source contract");
         self.check_contract_for_input(&manifest, source)
             .expect("bind actual source test to tutorial contract");
-        bind_tutorial_source_package(source)
+        bind_tutorial_source_package(source, self.feature)
             .expect("bind tutorial Cargo package to its manifest and library source");
         simulation_export_command_for_package_with_exporter(
             Path::new(env!("CARGO_BIN_EXE_fe2o3-export-sim")),
@@ -185,7 +183,7 @@ fn tutorial_source_metadata_command(manifest: &Path) -> Command {
     command
 }
 
-fn bind_tutorial_source_package(source: TutorialSourceInputV1<'_>) -> Result<(), String> {
+fn bind_tutorial_source_package(source: TutorialSourceInputV1<'_>, feature: &str) -> Result<(), String> {
     let canonicalize = |path: &Path| {
         std::fs::canonicalize(path).map_err(|error| {
             format!(
@@ -199,10 +197,15 @@ fn bind_tutorial_source_package(source: TutorialSourceInputV1<'_>) -> Result<(),
         &manifest
             .parent()
             .ok_or("source manifest has no parent")?
-            .join(source.lib_source_path),
+            .join(source.export.target.source_path()),
     )?;
+    let required = check_explicit_bin_declaration(source.export, &manifest, &library, feature)?;
     let metadata = tutorial_source_metadata_output(tutorial_source_metadata_command(&manifest))?;
-    check_tutorial_source_package_metadata(&metadata, source, &manifest, &library, canonicalize)
+    check_tutorial_source_package_metadata(&metadata, source, &manifest, &library, canonicalize)?;
+    if let Some(required) = required {
+        check_explicit_bin_metadata_features(&metadata, source.export, &required)?;
+    }
+    Ok(())
 }
 
 fn check_tutorial_source_package_metadata(
@@ -245,6 +248,9 @@ fn check_tutorial_source_package_metadata(
     let targets = selected["targets"]
         .as_array()
         .ok_or("missing Cargo package targets")?;
+    if let SimulationExportTargetV1::ExplicitBin { name, .. } = source.export.target {
+        return check_explicit_bin_metadata_target(targets, name, library, canonicalize);
+    }
     let mut library_count = 0;
     for target in targets {
         let kind = target["kind"]
@@ -621,8 +627,8 @@ fn tutorial_source_identity_test_document(case: &TutorialSourceCaseV1<'_>) -> Va
                         "defaultFeatures": source.export.default_features,
                         "sourcePaths": [source.source_path],
                         "cargoTarget": {
-                            "kind": "lib", "name": source.export.rustc_crate,
-                            "sourcePath": source.lib_source_path,
+                            "kind": source.export.target.kind(), "name": source.export.target.name(source.export.rustc_crate),
+                            "sourcePath": source.export.target.source_path(),
                         },
                     },
                     "cases": [case.expected_row()],
@@ -647,6 +653,7 @@ fn tutorial_source_case_scopes_shared_symbols_to_exact_lesson_and_tab() {
             package: "other-package",
             rustc_crate: "other_lib",
             default_features: false,
+            target: SimulationExportTargetV1::Library { source_path: "src/lib.rs" },
         },
         ..CPU_TUTORIAL_SOURCE_INPUT_V1
     };
@@ -795,6 +802,7 @@ fn tutorial_source_exporter_uses_independent_package_selection() {
             package: "other-package",
             rustc_crate: "other_lib",
             default_features: false,
+            target: SimulationExportTargetV1::Library { source_path: "src/lib.rs" },
         },
     ] {
         let command = build(source);

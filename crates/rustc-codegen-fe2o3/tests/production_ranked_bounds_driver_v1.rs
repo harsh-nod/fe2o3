@@ -10,6 +10,7 @@ include!("production_ranked_bounds_driver_v1/generative_provider_tests.rs");
 include!("production_ranked_bounds_driver_v1/context_entry_tests.rs");
 include!("production_ranked_bounds_driver_v1/context_vecadd_tests.rs");
 include!("production_ranked_bounds_driver_v1/tutorial_source_contract.rs");
+include!("production_ranked_bounds_driver_v1/explicit_bin_source_v1.rs");
 include!("production_ranked_bounds_driver_v1/slice_metadata_argument_tests.rs");
 
 fn run_typed_layout_runtime_fixture(
@@ -4393,11 +4394,37 @@ fn simulation_export_command_for_feature(
 }
 
 #[derive(Clone, Copy)]
+enum SimulationExportTargetV1<'a> {
+    Library { source_path: &'a str },
+    ExplicitBin { name: &'a str, source_path: &'a str },
+}
+impl<'a> SimulationExportTargetV1<'a> {
+    fn source_path(self) -> &'a str {
+        match self {
+            Self::Library { source_path } | Self::ExplicitBin { source_path, .. } => source_path,
+        }
+    }
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Library { .. } => "lib",
+            Self::ExplicitBin { .. } => "bin",
+        }
+    }
+    fn name(self, rustc_crate: &'a str) -> &'a str {
+        match self {
+            Self::Library { .. } => rustc_crate,
+            Self::ExplicitBin { name, .. } => name,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SimulationExportPackageV1<'a> {
     manifest_path: &'a str,
     package: &'a str,
     rustc_crate: &'a str,
     default_features: bool,
+    target: SimulationExportTargetV1<'a>,
 }
 
 const RANKED_BOUNDS_EXPORT_PACKAGE_V1: SimulationExportPackageV1<'static> =
@@ -4406,6 +4433,9 @@ const RANKED_BOUNDS_EXPORT_PACKAGE_V1: SimulationExportPackageV1<'static> =
         package: "fe2o3-production-ranked-bounds-fixture",
         rustc_crate: "fe2o3_production_ranked_bounds_fixture",
         default_features: true,
+        target: SimulationExportTargetV1::Library {
+            source_path: "src/lib.rs",
+        },
     };
 
 fn simulation_export_command_for_feature_with_exporter(
@@ -4451,6 +4481,7 @@ fn simulation_export_command_for_package_with_exporter(
         .env("RUSTC_WORKSPACE_WRAPPER", POISONED_WRAPPER)
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", POISONED_WRAPPER)
         .env_remove("FE2O3_EXTRACT_CRATE_V1")
+        .env_remove("FE2O3_EXTRACT_CARGO_TARGET_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3")
@@ -4470,6 +4501,17 @@ fn simulation_export_command_for_package_with_exporter(
     if let Some(version) = bundle_version {
         command.arg("--bundle-version").arg(version.to_string());
     }
+    if let SimulationExportTargetV1::ExplicitBin { name, source_path } = source.target {
+        let root = workspace().join(source.manifest_path);
+        let root = root
+            .parent()
+            .expect("source manifest parent")
+            .join(source_path);
+        command
+            .args(["--bin-name", name])
+            .arg("--bin-source")
+            .arg(root);
+    }
     command.arg("--target-dir").arg(target_dir).args([
         "--",
         "--manifest-path",
@@ -4478,8 +4520,10 @@ fn simulation_export_command_for_package_with_exporter(
         source.package,
         "--features",
         feature,
-        "--lib",
     ]);
+    if matches!(source.target, SimulationExportTargetV1::Library { .. }) {
+        command.arg("--lib");
+    }
     if !source.default_features {
         command.arg("--no-default-features");
     }

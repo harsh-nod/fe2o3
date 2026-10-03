@@ -1551,6 +1551,16 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle -- \
         --ignored --exact
+  run_step rocm-production-explicit-bin-source-dependencies \
+    env "${loader_environment_removals[@]}" \
+      cargo fetch --locked --manifest-path \
+        crates/rustc-codegen-fe2o3/tests/fixtures/production-explicit-bin-device/Cargo.toml
+  run_step rocm-production-explicit-bin-source-sim \
+    env "${loader_environment_removals[@]}" CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_library -- \
+        --ignored --exact
   run_step rocm-production-simulation-bundle-gfx950 \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

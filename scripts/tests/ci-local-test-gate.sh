@@ -1348,6 +1348,8 @@ for production_step in \
   rocm-production-write-only-witness-mappings \
   rocm-production-barrier-cfg \
   rocm-production-simulation-bundle-gfx942 \
+  rocm-production-explicit-bin-source-dependencies \
+  rocm-production-explicit-bin-source-sim \
   rocm-production-simulation-bundle-gfx950 \
   rocm-production-simulation-float-casts \
   rocm-production-simulation-wrapping-integers \
@@ -1373,6 +1375,14 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo fetch --locked --manifest-path crates/rustc-codegen-fe2o3/tests/fixtures/production-explicit-bin-device/Cargo.toml' \
+  "$(step_command rocm-production-explicit-bin-source-dependencies)" \
+  'ROCm compile omitted exact standalone bin dependency preparation'
+assert_equals \
+  'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_library -- --ignored --exact' \
+  "$(step_command rocm-production-explicit-bin-source-sim)" \
+  'ROCm compile omitted exact explicit-bin source/SIM regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_neutral_workgroup_reduce_driver_v1 ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact' \
   "$(step_command rocm-production-row-affine-source-sim)" \
