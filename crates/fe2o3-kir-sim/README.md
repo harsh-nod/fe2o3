@@ -33,8 +33,11 @@ resetting cumulative work, peak storage or first-denial history.
 Ordinary supported scalar instructions can execute with inert layout metadata;
 storage operations and storage-object types still produce explicit
 `InertStorage` preflight refusals. Existing simulation limits remain unchanged.
-This library route adds no V18 CLI, bundle import, persisted-schedule format,
-capability-matrix version, source authority or GPU execution authority.
+The capability matrix reports V18 with the existing supported scalar and
+non-Generic memory operations; executable storage and Generic pointer/slice
+casts remain unsupported. Raw V18 diagnostic CLI imports are separate from
+original-source custody. Neither route grants source or GPU execution authority
+or adds a bundle or persisted-schedule format.
 
 `admit_v20` borrows exact verified V20 custody for the separate
 `gfx942:xnack-` / Wave64 / `physical_entry_u32_out_v1` profile.

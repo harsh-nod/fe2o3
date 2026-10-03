@@ -380,6 +380,8 @@ uses the existing generic CPU engine after exact, budgeted canonical V18
 admission. The original layout table, function roles, version, digest and byte
 length are preserved. Inert layout metadata is accepted; executable storage
 operations and storage-object types still produce explicit preflight refusals.
+Generic-address-space pointer/slice casts also remain unsupported; preserving
+their inert layout records does not make those operations executable.
 
 This opt-in diagnostic path grants no source, compiler, proof, launch or hardware
 authority. It does not predict GPU performance. Persisted schedule recording,

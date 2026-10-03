@@ -750,8 +750,9 @@ actual-source CLI qualification is [recorded separately](../../../docs/physical-
 ## Diagnostic V18 CPU Debugging
 
 `fe2o3-debug sim --diagnostic-kir-v18 kernel-v18.kir --request request.json --protocol jsonl --wave-width 64`
-uses the ordinary simulator capture and JSONL debugger backend. Generic scalar
-and memory kernels support logical stepping, dispatch/workgroup/wave/lane
+uses the ordinary simulator capture and JSONL debugger backend. Existing
+supported scalar and non-Generic memory operations support logical stepping,
+dispatch/workgroup/wave/lane
 inspection and checkpoint memory inspection while retaining exact V18 identity
 and inert layout metadata. Configuration identity binds the typed request,
 target and capture limits, not merely input file names.
@@ -765,3 +766,5 @@ Wave32 are rejected before input IO; diagnosis V2 reports unavailable rather
 than presenting V18 as a legacy source-bound graph. Executable storage operations
 remain explicit preflight refusals. This adds V18 diagnostic admission error
 codes but does not change debugger protocol or KIR formats.
+Generic pointer/slice casts remain unsupported. Raw canonical bytes do not
+authenticate an original Rust source owner or a compiler continuation.

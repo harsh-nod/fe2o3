@@ -73,7 +73,7 @@ fn integer_assembly_is_scalar_bits_owned_with_explicit_remaining_rejection() {
                 && row.operation == SimulationOperationSurfaceV1::InlineAssembly
         })
         .collect();
-    assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
+    assert_eq!(rows.len(), 4 * 10); // Four target profiles, ten wire versions.
     for row in rows {
         assert_eq!(
             row.capability,
@@ -109,7 +109,7 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
                     && row.operation == surface
             })
             .collect();
-        assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
+        assert_eq!(rows.len(), 4 * 10); // Four target profiles, ten wire versions.
         for row in rows {
             assert!(matches!(&row.capability,
                 SimulationCapabilityDispositionV1::Unsupported { reason }
@@ -150,6 +150,7 @@ fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
             SimulationKirWireVersionV1::V12,
             SimulationKirWireVersionV1::V16,
             SimulationKirWireVersionV1::V17,
+            SimulationKirWireVersionV1::V18,
             SimulationKirWireVersionV1::V19,
             SimulationKirWireVersionV1::V20,
         ] {
@@ -179,7 +180,7 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
                 && row.operation == SimulationOperationSurfaceV1::Execution
         })
         .collect();
-    assert_eq!(rows.len(), 4 * 9); // Four target profiles, nine wire versions.
+    assert_eq!(rows.len(), 4 * 10); // Four target profiles, ten wire versions.
     assert!(rows.iter().all(|row| matches!(
         &row.capability,
         SimulationCapabilityDispositionV1::Unsupported {
@@ -481,6 +482,13 @@ fn json_command_emits_the_same_stable_matrix() {
 #[test]
 fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
     let mut matrix = semantic_capability_matrix_v1();
+    // Preserve the historical pre-V18 projection independently of new rows.
+    matrix
+        .top_level_rows
+        .retain(|row| row.kir_wire_version != SimulationKirWireVersionV1::V18);
+    matrix
+        .pointer_rows
+        .retain(|row| row.kir_wire_version != SimulationKirWireVersionV1::V18);
     let rows: Vec<_> = matrix
         .top_level_rows
         .iter()
@@ -498,12 +506,98 @@ fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
             reason: SimulationUnsupportedReasonCodeV1::InertStorage
         }
     )));
-    assert_eq!(
-        serde_json::to_vec(&matrix).unwrap().len() + 1,
-        SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1
-    );
+    assert_eq!(serde_json::to_vec(&matrix).unwrap().len() + 1, 5_061_127);
     matrix
         .top_level_rows
         .retain(|row| row.operation != SimulationOperationSurfaceV1::Storage);
     assert_eq!(serde_json::to_vec(&matrix).unwrap().len() + 1, 5_055_195);
+}
+
+#[test]
+fn v18_rows_preserve_existing_semantics_and_explicit_storage_refusals() {
+    let matrix = semantic_capability_matrix_v1();
+    assert_eq!(matrix.top_level_rows.len(), 2_352);
+    assert_eq!(matrix.pointer_rows.len(), 48);
+    let mut rows = 0;
+    let mut storage = 0;
+    let mut added_bytes = 0;
+    for row in matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V18)
+    {
+        let previous = matrix
+            .top_level_rows
+            .iter()
+            .find(|previous| {
+                previous.kir_wire_version == SimulationKirWireVersionV1::V12
+                    && previous.profile == row.profile
+                    && previous.operation == row.operation
+            })
+            .unwrap();
+        let mut projected = row.clone();
+        projected.kir_wire_version = SimulationKirWireVersionV1::V12;
+        assert_eq!(
+            serde_json::to_vec(&projected).unwrap(),
+            serde_json::to_vec(previous).unwrap()
+        );
+        if row.operation == SimulationOperationSurfaceV1::Storage {
+            assert!(matches!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Unsupported {
+                    reason: SimulationUnsupportedReasonCodeV1::InertStorage
+                }
+            ));
+            storage += 1;
+        }
+        added_bytes += serde_json::to_vec(row).unwrap().len() + 1;
+        rows += 1;
+    }
+    assert_eq!((rows, storage), (196, 4));
+    let mut pointers = 0;
+    for row in matrix
+        .pointer_rows
+        .iter()
+        .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V18)
+    {
+        assert_eq!(row.operation, "restrict_pointer_access");
+        let previous = matrix
+            .pointer_rows
+            .iter()
+            .find(|previous| {
+                previous.kir_wire_version == SimulationKirWireVersionV1::V12
+                    && previous.profile == row.profile
+            })
+            .unwrap();
+        let mut projected = row.clone();
+        projected.kir_wire_version = SimulationKirWireVersionV1::V12;
+        assert_eq!(
+            serde_json::to_vec(&projected).unwrap(),
+            serde_json::to_vec(previous).unwrap()
+        );
+        added_bytes += serde_json::to_vec(row).unwrap().len() + 1;
+        pointers += 1;
+    }
+    assert_eq!(pointers, 4);
+    assert_eq!(added_bytes, 35_546);
+    assert_eq!(
+        SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
+        5_061_127 + added_bytes
+    );
+    for (version, spelling) in [
+        (SimulationKirWireVersionV1::V7, "v7"),
+        (SimulationKirWireVersionV1::V9, "v9"),
+        (SimulationKirWireVersionV1::V10, "v10"),
+        (SimulationKirWireVersionV1::V11, "v11"),
+        (SimulationKirWireVersionV1::V12, "v12"),
+        (SimulationKirWireVersionV1::V16, "v16"),
+        (SimulationKirWireVersionV1::V17, "v17"),
+        (SimulationKirWireVersionV1::V19, "v19"),
+        (SimulationKirWireVersionV1::V20, "v20"),
+        (SimulationKirWireVersionV1::V21, "v21"),
+        (SimulationKirWireVersionV1::V22, "v22"),
+        (SimulationKirWireVersionV1::V18, "v18"),
+    ] {
+        assert_eq!(serde_json::to_value(version).unwrap(), spelling);
+    }
 }
