@@ -140,6 +140,67 @@ fn mir_to_live_pliron_receipt_has_a_distinct_import_boundary() {
 }
 
 #[test]
+fn conditional_coverage_receipts_cannot_be_imported_as_unconditional() {
+    let signing = signer(88);
+    let conditional =
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePlironConditionalCoverage;
+    let total = FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron;
+    for boundary in [conditional, total] {
+        let policy = FunctionalRefinementImportPolicyV2::new(
+            signing.verifying_key().to_bytes(),
+            toolchain(10),
+            boundary,
+        )
+        .unwrap();
+        let wire = signed(
+            &signing,
+            policy.signer_identity(),
+            binding(),
+            policy.toolchain(),
+            FunctionalRefinementResultV2::Proved,
+            boundary,
+        );
+        let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+        let proof = importer
+            .import(
+                FunctionalRefinementImportExpectationV2::new(binding()),
+                &wire,
+            )
+            .unwrap();
+        assert_eq!(proof.boundary(), boundary);
+        let other = if boundary == conditional {
+            total
+        } else {
+            conditional
+        };
+        let policy = FunctionalRefinementImportPolicyV2::new(
+            signing.verifying_key().to_bytes(),
+            toolchain(10),
+            other,
+        )
+        .unwrap();
+        let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+        assert_eq!(
+            importer.import(
+                FunctionalRefinementImportExpectationV2::new(binding()),
+                &wire
+            ),
+            Err(FunctionalRefinementImportErrorV2::WrongBoundary)
+        );
+        let mut retagged = wire;
+        retagged[11] = other as u8;
+        assert_eq!(
+            importer.import(
+                FunctionalRefinementImportExpectationV2::new(binding()),
+                &retagged
+            ),
+            Err(FunctionalRefinementImportErrorV2::SignatureRejected)
+        );
+        assert_eq!(importer.imported_count(), 0);
+    }
+}
+
+#[test]
 fn caller_forged_proved_and_wrong_signer_are_rejected() {
     let signing = signer(91);
     let pinned = policy(&signing);

@@ -19,6 +19,46 @@ const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
     "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 const PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1: u32 = 120;
 
+#[derive(Debug)]
+pub(crate) struct AuthenticatedConditionalOutputVerificationV1 {
+    execution: fe2o3_verifier::ProductionConditionalOutputVerusExecutionV1,
+    _staging_policy: ProductionRefinementStagingPolicyV2,
+}
+
+impl AuthenticatedConditionalOutputVerificationV1 {
+    pub(crate) const fn execution(
+        &self,
+    ) -> &fe2o3_verifier::ProductionConditionalOutputVerusExecutionV1 {
+        &self.execution
+    }
+}
+
+pub(crate) fn authenticate_conditional_output_per_compilation_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+) -> Result<AuthenticatedConditionalOutputVerificationV1, ProductionMirPlironVerusJoinErrorV1> {
+    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
+        RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+    )
+    .map_err(
+        |error| ProductionMirPlironVerusJoinErrorV1::RuntimeUnavailable {
+            root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+            detail: error.to_string(),
+        },
+    )?;
+    let (execution, policy) = fe2o3_verifier::execute_conditional_output_per_compilation_v1(
+        &runtime,
+        ranked,
+        evidence,
+        PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1,
+    )
+    .map_err(ProductionMirPlironVerusJoinErrorV1::ConditionalVerification)?;
+    Ok(AuthenticatedConditionalOutputVerificationV1 {
+        execution,
+        _staging_policy: policy,
+    })
+}
+
 /// Compiler-owned aggregate proof and its ephemeral import policy.
 #[must_use = "dropping this value abandons authenticated conditional-composition evidence"]
 pub(crate) struct AuthenticatedMirPlironPerCompilationVerificationV1 {
@@ -77,6 +117,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
 pub(crate) enum ProductionMirPlironVerusJoinErrorV1 {
     RuntimeUnavailable { root: &'static str, detail: String },
     Verification(ProductionMirPlironPerCompilationVerusErrorV1),
+    ConditionalVerification(fe2o3_verifier::ProductionConditionalOutputVerusErrorV1),
 }
 
 impl fmt::Display for ProductionMirPlironVerusJoinErrorV1 {
@@ -87,6 +128,7 @@ impl fmt::Display for ProductionMirPlironVerusJoinErrorV1 {
                 "per-compilation MIR/PLIRON proof runtime is unavailable at {root}: {detail}",
             ),
             Self::Verification(error) => error.fmt(formatter),
+            Self::ConditionalVerification(error) => error.fmt(formatter),
         }
     }
 }
@@ -96,6 +138,7 @@ impl Error for ProductionMirPlironVerusJoinErrorV1 {
         match self {
             Self::RuntimeUnavailable { .. } => None,
             Self::Verification(error) => Some(error),
+            Self::ConditionalVerification(error) => Some(error),
         }
     }
 }

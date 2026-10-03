@@ -1019,8 +1019,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
-    ConditionalStaging(fe2o3_pliron::ProductionConditionalOutputStagingErrorV1),
-    ConditionalAggregateRequired(Box<fe2o3_pliron::ProductionConditionalOutputStagingV1>),
+    ConditionalLaunchAdmissionRequired(Box<crate::production_mir_pliron_verus_join_v1::AuthenticatedConditionalOutputVerificationV1>),
 }
 
 impl fmt::Display for ProductionRankedVerificationErrorV1 {
@@ -1059,11 +1058,14 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::AggregateVerus(error) => {
                 write!(formatter, "functional aggregate proof failed: {error}")
             }
-            Self::ConditionalStaging(error) => error.fmt(formatter),
-            Self::ConditionalAggregateRequired(staging) => write!(
+            Self::ConditionalLaunchAdmissionRequired(verified) => write!(
                 formatter,
-                "conditional output {} has live guarded coverage and policy-checked value staging; signed conditional aggregate and packed launch discharge are required before compiler or artifact admission",
-                staging.reference_output_argument()
+                "conditional output {} has an authenticated conditional aggregate (boundary {:?}, signature verified: {}); conditional evidence transport and packed launch discharge are required before compiler or artifact admission",
+                verified.execution().staging().reference_output_argument(),
+                verified.execution().boundary(),
+                verified
+                    .execution()
+                    .retains_strictly_imported_signed_receipt(),
             ),
         }
     }
@@ -1074,7 +1076,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
         match self {
             Self::RosterMetadata(_)
             | Self::RosterIdentity
-            | Self::ConditionalAggregateRequired(_) => None,
+            | Self::ConditionalLaunchAdmissionRequired(_) => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
@@ -1083,7 +1085,6 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
             Self::AggregateVerus(error) => Some(error),
-            Self::ConditionalStaging(error) => Some(error),
         }
     }
 }
@@ -1297,14 +1298,14 @@ fn authenticate_ranked_root_v5(
             .conditional_coverage()
             .is_empty()
         {
-            let staging =
-                fe2o3_pliron::require_conditional_output_staging_v1(lowering, &middle_end_evidence)
-                    .map_err(ProductionRankedVerificationErrorV1::ConditionalStaging)?;
+            let verified = crate::production_mir_pliron_verus_join_v1::authenticate_conditional_output_per_compilation_v1(
+                lowering, &middle_end_evidence,
+            ).map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
             // Never export conditional coverage as the existing unconditional
             // SafeReferenceMirToLivePliron aggregate or V1 signed payload.
             return Err(
-                ProductionRankedVerificationErrorV1::ConditionalAggregateRequired(Box::new(
-                    staging,
+                ProductionRankedVerificationErrorV1::ConditionalLaunchAdmissionRequired(Box::new(
+                    verified,
                 )),
             );
         }

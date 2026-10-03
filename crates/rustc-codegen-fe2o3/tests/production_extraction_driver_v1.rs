@@ -544,7 +544,7 @@ fn run_write_only_proof_extraction(
 }
 
 #[test]
-#[ignore = "acceptance target: conditional output still needs signed aggregate and source-to-machine admission; requires pinned Verus and AMD target"]
+#[ignore = "acceptance target: conditional output still needs evidence transport, packed launch discharge and source-to-machine admission; requires pinned Verus and AMD target"]
 fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
     let target = ScratchTarget::new();
     let handoff_output = target.path().join("write-only-semantic.handoff");
@@ -608,7 +608,7 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
 
 #[test]
 #[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
-fn write_only_output_genuine_value_proof_reaches_the_conditional_aggregate_gate() {
+fn write_only_output_genuine_conditional_proof_reaches_the_launch_admission_gate() {
     let target = ScratchTarget::new();
     let handoff_output = target.path().join("unproved-coverage.handoff");
     let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
@@ -619,10 +619,10 @@ fn write_only_output_genuine_value_proof_reaches_the_conditional_aggregate_gate(
     );
     assert!(
         stderr.contains(
-            "conditional output 0 has live guarded coverage and policy-checked value staging"
+            "conditional output 0 has an authenticated conditional aggregate (boundary SafeReferenceMirToLivePlironConditionalCoverage, signature verified: true)"
         ) && stderr
-            .contains("signed conditional aggregate and packed launch discharge are required"),
-        "positive value proof did not reach the separate conditional aggregate gate:\n{stderr}"
+            .contains("conditional evidence transport and packed launch discharge are required"),
+        "positive conditional proof did not reach the separate launch-admission gate:\n{stderr}"
     );
     assert!(!stderr.contains("functional-refinement Verus execution failed"));
     assert!(

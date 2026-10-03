@@ -66,6 +66,7 @@ impl GuardedIdentityCoverageV1 {
     pub const fn noalias_class(&self) -> u64 {
         self.noalias_class
     }
+    /// Ranked element width in bits, not the host buffer byte stride.
     pub const fn element_width(&self) -> u32 {
         self.element_width
     }
@@ -82,6 +83,9 @@ impl GuardedIdentityCoverageV1 {
     }
     pub const fn workgroup_extents(&self) -> [u64; 3] {
         self.layout.workgroup_extents
+    }
+    pub const fn subgroup_size(&self) -> u64 {
+        self.layout.subgroup_size
     }
     pub const fn requires_full_physical_workgroups(&self) -> bool {
         matches!(

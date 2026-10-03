@@ -88,6 +88,8 @@ pub enum FunctionalRefinementBoundaryV2 {
     SafeReferenceMirToKernelMir = 1,
     SafeReferenceSourceToKernelMir = 2,
     SafeReferenceMirToLivePliron = 3,
+    /// Guarded coverage remains conditional on the actual launch extent.
+    SafeReferenceMirToLivePlironConditionalCoverage = 4,
 }
 
 impl FunctionalRefinementBoundaryV2 {
@@ -97,6 +99,7 @@ impl FunctionalRefinementBoundaryV2 {
             1 => Ok(Self::SafeReferenceMirToKernelMir),
             2 => Ok(Self::SafeReferenceSourceToKernelMir),
             3 => Ok(Self::SafeReferenceMirToLivePliron),
+            4 => Ok(Self::SafeReferenceMirToLivePlironConditionalCoverage),
             value => Err(FunctionalRefinementImportErrorV2::UnknownBoundary(value)),
         }
     }

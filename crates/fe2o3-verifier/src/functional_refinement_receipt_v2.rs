@@ -276,15 +276,54 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
+    execute_and_import_generated_composition_locally_v1(
+        runtime,
+        source,
+        binding,
+        timeout_seconds,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+    )
+}
+
+pub(crate) fn execute_and_import_generated_conditional_composition_locally_v1(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    source: CanonicalGeneratedVerusProofInputV3,
+    binding: FunctionalRefinementBindingV2,
+    timeout_seconds: u32,
+) -> Result<
+    (
+        RetainedImportedFunctionalRefinementReceiptV2,
+        ProductionRefinementStagingPolicyV2,
+    ),
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
+    execute_and_import_generated_composition_locally_v1(
+        runtime,
+        source,
+        binding,
+        timeout_seconds,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePlironConditionalCoverage,
+    )
+}
+
+fn execute_and_import_generated_composition_locally_v1(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    source: CanonicalGeneratedVerusProofInputV3,
+    binding: FunctionalRefinementBindingV2,
+    timeout_seconds: u32,
+    boundary: FunctionalRefinementBoundaryV2,
+) -> Result<
+    (
+        RetainedImportedFunctionalRefinementReceiptV2,
+        ProductionRefinementStagingPolicyV2,
+    ),
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
     let signing = SigningKey::generate(&mut OsRng);
     let verifying_key = signing.verifying_key().to_bytes();
     let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
-    let policy = FunctionalRefinementImportPolicyV2::new(
-        verifying_key,
-        toolchain,
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
-    )
-    .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
+    let policy = FunctionalRefinementImportPolicyV2::new(verifying_key, toolchain, boundary)
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
         ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
@@ -294,7 +333,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
         binding,
         policy.signer_identity(),
         timeout_seconds,
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+        boundary,
     )?;
     let signature = signing.sign(unsigned.signing_bytes()).to_bytes();
     let wire = unsigned.attach_signature(signature);
@@ -424,6 +463,31 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     operation_index: usize,
     lemma_name: &str,
 ) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    generate_ranked_effect_formula_replay(kernel, block_index, operation_index, lemma_name, false)
+}
+
+pub(crate) fn generate_ranked_conditional_effect_formula_v1(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+    Ok(generate_ranked_effect_formula_replay(
+        kernel,
+        block_index,
+        operation_index,
+        "fe2o3_conditional_output_v1",
+        true,
+    )?
+    .lemma)
+}
+
+fn generate_ranked_effect_formula_replay(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    lemma_name: &str,
+    conditional: bool,
+) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
     let operation = kernel
         .blocks()
         .get(block_index)
@@ -458,8 +522,16 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
         (contract.gpu_value(), contract.reference_value()),
     ]);
     let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    let lemma = if conditional {
+        if contract.gpu_coordinates().len() != 1 || contract.reference_coordinates().len() != 1 {
+            return Err(invalid_ranked_recipe());
+        }
+        program.render_conditional_lemma(&pairs, lemma_name)?
+    } else {
+        program.render_lemma(&pairs, lemma_name)?
+    };
     Ok(RankedEffectFormulaReplayV2 {
-        lemma: program.render_lemma(&pairs, lemma_name)?,
+        lemma,
         symbols: program.symbols.iter().copied().collect(),
         needs_ieee_congruence: program.needs_ieee_congruence(),
     })
@@ -701,6 +773,69 @@ impl SemanticFormulaProgramV2 {
         Ok(source.into_string())
     }
 
+    fn render_conditional_lemma(
+        &self,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+        lemma_name: &str,
+    ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+        use fe2o3_pliron::{ProductionNumericalContractV2, ProductionSemanticScalarTypeV2};
+        if pairs.len() != 4 || self.needs_ieee_congruence() {
+            return Err(invalid_ranked_recipe());
+        }
+        for value in [pairs[3].0, pairs[3].1] {
+            let ProductionRankedValueV1::Local(id) = value else {
+                return Err(invalid_ranked_recipe());
+            };
+            if !matches!(self.definitions.get(&id), Some(SemanticDefinitionV2::TypedExpression(expression,
+                ProductionNumericalContractV2::ExactBitVectorOperatorCongruence))
+                if expression.scalar() == (ProductionSemanticScalarTypeV2::Integer { signed: false, bits: 32 }))
+            {
+                return Err(invalid_ranked_recipe());
+            }
+        }
+        let mut source = BoundedVerusSourceV2::default();
+        write!(source, "    proof fn {lemma_name}(n: u64, g: u64, s0: int")
+            .map_err(|_| generated_source_limit())?;
+        for symbol in self.symbols.iter().filter(|symbol| **symbol != 0) {
+            write!(source, ", s{symbol}: int").map_err(|_| generated_source_limit())?;
+        }
+        source.write_str(
+            ")\n        requires n <= g,\n        ensures\n            (0 <= s0 && s0 < g as int && s0 < n as int) <==> (0 <= s0 && s0 < n as int),\n            (0 <= s0 && s0 < n as int) ==> {\n",
+        ).map_err(|_| generated_source_limit())?;
+        // Reuse the exact DAG in the postcondition. A receipt identity or a
+        // no-postcondition lemma call cannot supply these semantic facts.
+        self.write_definitions(&mut source)?;
+        for (index, (actual, expected)) in pairs.iter().enumerate() {
+            let (ProductionRankedValueV1::Local(actual), ProductionRankedValueV1::Local(expected)) =
+                (*actual, *expected)
+            else {
+                return Err(invalid_ranked_recipe());
+            };
+            writeln!(
+                source,
+                "                &&& v{} == v{}",
+                actual.get(),
+                expected.get()
+            )
+            .map_err(|_| generated_source_limit())?;
+            match index {
+                0 => writeln!(source, "                &&& v{} == s0", actual.get()),
+                1 | 2 => writeln!(source, "                &&& v{} == 1", actual.get()),
+                _ => Ok(()),
+            }
+            .map_err(|_| generated_source_limit())?;
+        }
+        source
+            .write_str("            },\n    {\n        if 0 <= s0 && s0 < n as int {\n")
+            .map_err(|_| generated_source_limit())?;
+        self.write_definitions(&mut source)?;
+        self.write_pair_assertions(&mut source, pairs)?;
+        source
+            .write_str("        }\n    }\n\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(source.into_string())
+    }
+
     fn needs_ieee_congruence(&self) -> bool {
         self.order.iter().any(|identity| {
             matches!(
@@ -743,6 +878,18 @@ impl SemanticFormulaProgramV2 {
         source
             .write_str(") {\n")
             .map_err(|_| generated_source_limit())?;
+        self.write_definitions(source)?;
+        self.write_pair_assertions(source, pairs)?;
+        source
+            .write_str("    }\n\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(())
+    }
+
+    fn write_definitions(
+        &self,
+        source: &mut BoundedVerusSourceV2,
+    ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
         for identity in &self.order {
             let definition = self
                 .definitions
@@ -796,6 +943,14 @@ impl SemanticFormulaProgramV2 {
             }
             .map_err(|_| generated_source_limit())?;
         }
+        Ok(())
+    }
+
+    fn write_pair_assertions(
+        &self,
+        source: &mut BoundedVerusSourceV2,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+    ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
         for (actual, expected) in pairs {
             let (ProductionRankedValueV1::Local(actual), ProductionRankedValueV1::Local(expected)) =
                 (*actual, *expected)
@@ -810,9 +965,6 @@ impl SemanticFormulaProgramV2 {
             )
             .map_err(|_| generated_source_limit())?;
         }
-        source
-            .write_str("    }\n\n")
-            .map_err(|_| generated_source_limit())?;
         Ok(())
     }
 }
@@ -1644,6 +1796,181 @@ mod tests {
             assert_eq!(
                 validate_proved_output(&hostile).unwrap_err().kind(),
                 FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
+            );
+        }
+    }
+
+    fn conditional_formula_source(
+        coordinate_symbol: u32,
+        predicate: u64,
+        changed_value: bool,
+    ) -> String {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let value = ProductionSemanticExpressionV2::Symbol { scalar, symbol: 2 };
+        let operations = vec![
+            ProductionRankedOperationV1::SemanticSymbol {
+                result: ProductionRankedValueIdV1::new(0),
+                symbol: coordinate_symbol,
+            },
+            ProductionRankedOperationV1::SemanticExpression {
+                result: ProductionRankedValueIdV1::new(1),
+                expression: ProductionSemanticExpressionV2::Constant {
+                    scalar: ProductionSemanticScalarTypeV2::Bool,
+                    bits: predicate,
+                },
+                numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            },
+            ProductionRankedOperationV1::SemanticExpression {
+                result: ProductionRankedValueIdV1::new(2),
+                expression: value.clone(),
+                numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            },
+            ProductionRankedOperationV1::SemanticExpression {
+                result: ProductionRankedValueIdV1::new(3),
+                expression: if changed_value {
+                    ProductionSemanticExpressionV2::Constant { scalar, bits: 7 }
+                } else {
+                    value
+                },
+                numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            },
+        ];
+        let kernel = ProductionRankedKernelV1::new(
+            "conditional_formula",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let local = |id| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id));
+        let pairs = [
+            (local(0), local(0)),
+            (local(1), local(1)),
+            (local(1), local(1)),
+            (local(2), local(3)),
+        ];
+        let program = SemanticFormulaProgramV2::build(&kernel, &pairs).unwrap();
+        let lemma = program
+            .render_conditional_lemma(&pairs, "conditional_fixture")
+            .unwrap();
+        format!("use vstd::prelude::*;\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{lemma}\n}}\n")
+    }
+
+    #[test]
+    fn conditional_formula_exposes_actual_semantics_in_its_postcondition() {
+        let source = conditional_formula_source(0, 1, false);
+        let ensures = source
+            .split("        ensures\n")
+            .nth(1)
+            .unwrap()
+            .split("\n    {\n")
+            .next()
+            .unwrap();
+        assert!(ensures.contains("v0 == s0"));
+        assert!(ensures.contains("v1 == 1"));
+        assert!(ensures.contains("v2 == v3"));
+        assert!(ensures.contains("let v2: int = fe2o3_bv_norm_v2(s2, 32);"));
+        assert!(source.contains("requires n <= g,"));
+        for forbidden in ["assume(", "external_body", "uninterp", "fn main"] {
+            assert!(!source.contains(forbidden));
+        }
+        // Equal but wrong coordinates/predicates survive generation and must be
+        // rejected by the theorem, not accepted through equality alone.
+        assert!(conditional_formula_source(1, 0, false).contains("let v0: int = s1;"));
+    }
+
+    #[test]
+    fn conditional_formula_rejects_unsupported_value_types_and_pair_rosters() {
+        let local = |id| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id));
+        let pairs = [(local(0), local(1)); 4];
+        for kernel in [
+            wrapping_bitvector_kernel(0),
+            ieee_congruence_kernel(None, false),
+        ] {
+            let program = SemanticFormulaProgramV2::build(&kernel, &pairs).unwrap();
+            assert!(
+                program
+                    .render_conditional_lemma(&pairs, "unsupported")
+                    .is_err()
+            );
+            assert!(
+                program
+                    .render_conditional_lemma(&pairs[..3], "missing_coordinate")
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the root-owned pinned production functional-refinement runtime"]
+    fn protected_runtime_conditional_coverage_proves_and_rejects_semantic_mutants() {
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
+            std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
+                .expect("set the protected runtime root"),
+        )
+        .unwrap();
+        let positive = conditional_formula_source(0, 1, false);
+        let binding = FunctionalRefinementBindingV2::from_subjects(subjects(), digest(57)).unwrap();
+        let (receipt, _) = execute_and_import_generated_conditional_composition_locally_v1(
+            &runtime,
+            CanonicalGeneratedVerusProofInputV3::new(positive.clone().into_bytes()).unwrap(),
+            binding,
+            60,
+        )
+        .unwrap();
+        assert!(receipt.proof().signature_and_policy_verified());
+        assert_eq!(
+            receipt.proof().boundary(),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePlironConditionalCoverage
+        );
+        for (name, source) in [
+            (
+                "underlaunch",
+                positive.replace("requires n <= g,", "requires true,"),
+            ),
+            (
+                "reversed launch condition",
+                positive.replace("requires n <= g,", "requires g <= n,"),
+            ),
+            (
+                "off-by-one guard",
+                positive.replacen(
+                    "s0 < g as int && s0 < n as int",
+                    "s0 < g as int && s0 <= n as int",
+                    1,
+                ),
+            ),
+            (
+                "equal wrong coordinates",
+                conditional_formula_source(1, 1, false),
+            ),
+            (
+                "equal false predicates",
+                conditional_formula_source(0, 0, false),
+            ),
+            ("changed value", conditional_formula_source(0, 1, true)),
+        ] {
+            let error = execute_and_import_generated_conditional_composition_locally_v1(
+                &runtime,
+                CanonicalGeneratedVerusProofInputV3::new(source.into_bytes()).unwrap(),
+                binding,
+                60,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+                "{name}: {error}"
+            );
+            assert!(
+                error.to_string().contains("postcondition not satisfied")
+                    || error.to_string().contains("assertion failed"),
+                "{name}: {error}"
             );
         }
     }

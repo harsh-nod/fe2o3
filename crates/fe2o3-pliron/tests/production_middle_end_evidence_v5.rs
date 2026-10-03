@@ -1648,6 +1648,8 @@ fn conditional_output_staging_survives_real_materialization_without_total_view_a
     let staged = fe2o3_pliron::require_conditional_output_staging_v1(&input, &evidence).unwrap();
     assert_eq!(staged.coverage().ranked_extent_argument(), 1);
     assert_eq!(staged.coverage().static_global_x_extent(), None);
+    assert_eq!(staged.coverage().subgroup_size(), 64);
+    assert_eq!(staged.coverage().element_width(), 32);
     assert_eq!(staged.reference_output_argument(), 7);
     assert_eq!(staged.evidence_identity(), evidence.identity().sha256());
     assert!(!staged.grants_artifact_or_launch_authority());
