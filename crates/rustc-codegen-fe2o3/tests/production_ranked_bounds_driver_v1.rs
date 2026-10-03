@@ -404,6 +404,11 @@ fn write_only_witness_mappings_retain_exact_ranked_predicates() {
             "{feature} did not retain its exact write-only mapping and predicate:\n{}",
             output.stderr,
         );
+        assert!(
+            !output.stderr.contains("kernel.trap"),
+            "{feature} projected a skipped write as a trapping invocation:\n{}",
+            output.stderr,
+        );
     }
 
     let wrong_geometry = run_feature_extraction(&target, "write_only_blocked_dynamic_grid");

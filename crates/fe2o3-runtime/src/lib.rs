@@ -375,14 +375,13 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         .map_err(|_| Gfx942RuntimePreparationErrorV1::KernargLayout)?;
     let implicit_size = usize::try_from(kernel.implicit_argument_size())
         .map_err(|_| Gfx942RuntimePreparationErrorV1::KernargLayout)?;
-    if implicit_offset != Some(explicit_kernarg)
-        || implicit_size != COV6_IMPLICIT_KERNARG_BYTES_V1
-        || explicit_kernarg
-            .checked_add(implicit_size)
-            .is_none_or(|bytes| bytes != total_kernarg)
-    {
-        return Err(Gfx942RuntimePreparationErrorV1::KernargLayout);
-    }
+    validate_kernarg_layout_v1(
+        explicit_kernarg,
+        total_kernarg,
+        implicit_offset,
+        implicit_size,
+        !kernel.hidden_arguments().is_empty(),
+    )?;
     let mut kernarg = vec![0_u8; total_kernarg];
     kernarg[..explicit_kernarg].copy_from_slice(&inputs.explicit_kernarg);
     initialize_hidden_arguments(
@@ -486,6 +485,29 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
             geometry: inputs.geometry,
         },
     })
+}
+
+fn validate_kernarg_layout_v1(
+    explicit: usize,
+    total: usize,
+    implicit_offset: Option<usize>,
+    implicit_size: usize,
+    has_hidden_arguments: bool,
+) -> Result<(), Gfx942RuntimePreparationErrorV1> {
+    // LLVM may omit the entire hidden block when the kernel does not use it.
+    // Match the physical layout already admitted by the finalizer and KFD binder.
+    let valid = match (has_hidden_arguments, implicit_offset, implicit_size) {
+        (false, None, 0) => total == explicit,
+        (true, Some(offset), COV6_IMPLICIT_KERNARG_BYTES_V1) => {
+            offset == explicit && explicit.checked_add(implicit_size) == Some(total)
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Gfx942RuntimePreparationErrorV1::KernargLayout)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -842,6 +864,60 @@ mod tests {
         assert_eq!(ceil_div_u32(64, 64), 1);
         assert_eq!(ceil_div_u32(65, 64), 2);
         assert_eq!(ceil_div_u32(u32::MAX, u16::MAX.into()), 65_537);
+    }
+
+    #[test]
+    fn kernarg_layout_accepts_only_exact_physical_profiles() {
+        assert!(validate_kernarg_layout_v1(16, 16, None, 0, false).is_ok());
+        assert!(validate_kernarg_layout_v1(16, 272, Some(16), 256, true).is_ok());
+        for (explicit, total, offset, size, hidden) in [
+            (15, 16, None, 0, false),
+            (17, 16, None, 0, false),
+            (272, 16, None, 0, false),
+            (16, 272, None, 0, false),
+            (16, 16, Some(16), 0, false),
+            (16, 272, Some(16), 256, false),
+            (16, 16, None, 0, true),
+            (16, 272, None, 256, true),
+            (16, 272, Some(8), 256, true),
+            (16, 271, Some(16), 255, true),
+            (16, 273, Some(16), 257, true),
+            (16, 16, Some(16), 256, true),
+            (usize::MAX, 255, Some(usize::MAX), 256, true),
+        ] {
+            assert!(
+                matches!(
+                    validate_kernarg_layout_v1(explicit, total, offset, size, hidden),
+                    Err(Gfx942RuntimePreparationErrorV1::KernargLayout)
+                ),
+                "accepted {explicit}/{total}/{offset:?}/{size}/{hidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn kernarg_hidden_suffix_still_initializes_geometry_and_reserved_bytes() {
+        let prepared = prepare_gfx942_runtime_dispatch_v1(
+            &crate::synthetic_cov6::preparation_module(),
+            "vecadd",
+            Gfx942RuntimeDispatchInputsV1::new(
+                vec![0x5a; 16],
+                vec![],
+                vec![],
+                geometry(),
+                0,
+                5_000,
+            ),
+        )
+        .unwrap();
+        let request = prepared.into_unchecked_kfd_request().into_parts_v1();
+        assert_eq!(request.kernarg_template.len(), 272);
+        assert_eq!(&request.kernarg_template[..16], &[0x5a; 16]);
+        assert_eq!(&request.kernarg_template[16..20], &2_u32.to_le_bytes());
+        assert_eq!(&request.kernarg_template[28..30], &64_u16.to_le_bytes());
+        assert_eq!(&request.kernarg_template[34..36], &2_u16.to_le_bytes());
+        assert_eq!(&request.kernarg_template[80..82], &2_u16.to_le_bytes());
+        assert!(request.kernarg_template[82..].iter().all(|byte| *byte == 0));
     }
 
     #[test]

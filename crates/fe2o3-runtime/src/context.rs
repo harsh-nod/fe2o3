@@ -1660,7 +1660,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self.backend
     }
 
-    #[cfg(all(test, feature = "hardware-qualification"))]
+    #[cfg(test)]
     pub(crate) fn backend_submission_for_test_v1<A>(
         &self,
         submission: &RuntimeSubmissionV1<A>,

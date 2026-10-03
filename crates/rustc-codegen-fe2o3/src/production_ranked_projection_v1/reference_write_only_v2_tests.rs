@@ -399,3 +399,242 @@ fn reference_write_only_constant_rhs_still_requires_current_index_and_receiver()
         );
     }
 }
+
+#[test]
+fn write_only_guard_failure_reaches_the_following_effect_without_writing() {
+    let (function, callables, _, _) = reference_write_fixture_v2(ReferenceWriteMutationV2::None);
+    let mut projected = (0..function.blocks().len())
+        .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+        .collect::<Vec<_>>();
+    projected[5].items = vec![
+        ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+            view: ProductionRankedValueIdV1::new(1),
+            indices: vec![ProductionRankedValueV1::Local(
+                ProductionRankedValueIdV1::new(0),
+            )],
+            checked_success: None,
+            failure: GuardedAccessFailureV1::Continue,
+            comparisons: vec![(
+                ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+                ProductionRankedValueV1::Argument(0),
+            )],
+            access: AccessKindAttr::Write,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                block: 5,
+                statement: None,
+            }),
+        }),
+        ProjectedBlockItemV1::Effect {
+            operation: ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 2,
+                noalias_class: 3,
+            },
+            source: None,
+        },
+    ];
+    let (blocks, sources, _) = build_ranked_cfg(
+        &assertion_proof_types(),
+        &function,
+        &callables,
+        &vec![None; function.locals().len()],
+        &vec![None; function.blocks().len()],
+        &[],
+        vec![],
+        projected,
+    )
+    .unwrap();
+    let ProductionRankedTerminatorV1::IndexLessThan {
+        true_block,
+        false_block,
+        ..
+    } = blocks
+        .iter()
+        .find(|block| {
+            matches!(
+                block.terminator(),
+                ProductionRankedTerminatorV1::IndexLessThan { .. }
+            )
+        })
+        .unwrap()
+        .terminator()
+    else {
+        panic!("missing write guard")
+    };
+    let success = &blocks[*true_block as usize];
+    let failure = &blocks[*false_block as usize];
+    assert!(matches!(
+        success.operations(),
+        [ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Write,
+            ..
+        }]
+    ));
+    assert!(failure.operations().is_empty());
+    assert_eq!(success.terminator(), failure.terminator());
+    let ProductionRankedTerminatorV1::Branch { target } = failure.terminator() else {
+        panic!("failed write must continue")
+    };
+    assert!(matches!(
+        blocks[*target as usize].operations(),
+        [ProductionRankedOperationV1::AllocationEffect { .. }]
+    ));
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].block, *true_block as usize);
+    assert_eq!(
+        sources[0].semantic_site,
+        Some(ProjectedSemanticAccessSiteV1 {
+            block: 5,
+            statement: None
+        })
+    );
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
+    );
+}
+
+#[test]
+fn write_only_padded_static_launch_proves_total_view_but_underlaunch_does_not() {
+    // These exact finite graphs exercise the real nine-pass pipeline. They do
+    // not replace the production kernel's runtime extent with a guessed size.
+    for length in [64_u64, 65, 4097] {
+        for underlaunch in [false, true] {
+            let global = if underlaunch {
+                64
+            } else {
+                length.div_ceil(64) * 64
+            };
+            if underlaunch && length == 64 {
+                continue;
+            }
+            let invocation = ProductionRankedValueIdV1::new(0);
+            let view = ProductionRankedValueIdV1::new(2);
+            let extent = ProductionRankedValueIdV1::new(1);
+            let entry = vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [global, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::InvocationIndex {
+                    result: invocation,
+                    dimension: 0,
+                    launch_extent: global,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: extent,
+                    value: length,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: view,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![length],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: 1,
+                    noalias_class: 1,
+                },
+                ProductionRankedOperationV1::OwnershipContract {
+                    view: ProductionRankedValueV1::Local(view),
+                    coverage: dialect_kernel::OwnershipCoverageAttr::TotalView,
+                    partition: dialect_kernel::OwnershipPartitionAttr::ExactSets,
+                },
+            ];
+            let (blocks, _, _) = single_guarded_cfg(
+                entry,
+                GuardedRankedAccessV1 {
+                    view,
+                    indices: vec![ProductionRankedValueV1::Local(invocation)],
+                    checked_success: None,
+                    failure: GuardedAccessFailureV1::Continue,
+                    comparisons: vec![(
+                        ProductionRankedValueV1::Local(invocation),
+                        ProductionRankedValueV1::Local(extent),
+                    )],
+                    access: AccessKindAttr::Write,
+                    memory_space: MemorySpaceAttr::Global,
+                    source: SemanticSourceProvenanceV1::unavailable(),
+                    semantic_site: None,
+                },
+            );
+            let kernel = ProductionRankedKernelV1::new("padded_write_only", 0, blocks).unwrap();
+            let construction =
+                ProductionConstructionV1::ranked_kernel("padded_module", kernel).unwrap();
+            let result = compile_ranked_kernel_for_lowering_v1(
+                construction,
+                ProductionSessionLimitsV1::default(),
+            );
+            if underlaunch {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("FE2O3-OWN"), "unexpected failure: {error}");
+            } else {
+                let lowering = result.unwrap();
+                assert!(lowering.all_mandatory_reports_are_clean());
+                assert_eq!(
+                    lowering
+                        .ownership_report()
+                        .coverage_summary()
+                        .total_view_proved(),
+                    1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn write_only_boolean_result_does_not_mint_exact_control() {
+    let (function, callables, _, _) = reference_write_fixture_v2(ReferenceWriteMutationV2::None);
+    let mut blocks = function.blocks().to_vec();
+    blocks[6] = block(
+        176,
+        vec![],
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant: SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(6), vec![], BOOL_TYPE).unwrap(),
+            ),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![SemanticSwitchTargetV1::new(
+                    1,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 7),
+                )],
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 8),
+            )
+            .unwrap(),
+        },
+    );
+    blocks.push(block(177, vec![], SemanticTerminatorKindV1::Return));
+    blocks.push(block(178, vec![], SemanticTerminatorKindV1::Return));
+    let function = projection_function_with_locals(blocks, function.locals().to_vec());
+    let predicates = switch_predicates(
+        &function,
+        &vec![None; function.locals().len()],
+        &vec![None; function.locals().len()],
+    )
+    .unwrap();
+    assert!(predicates.iter().all(Option::is_none));
+    assert!(matches!(
+        projected_cfg_terminator(
+            &function,
+            6,
+            &callables,
+            false,
+            &constant_locals(&function).unwrap(),
+            &predicates,
+            &vec![None; function.blocks().len()],
+        )
+        .unwrap(),
+        ProjectedCfgTerminatorV1::AnalysisSplit {
+            first_block: 7,
+            second_block: 8
+        }
+    ));
+}

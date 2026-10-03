@@ -126,11 +126,18 @@ struct GuardedRankedAccessV1 {
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
+    failure: GuardedAccessFailureV1,
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardedAccessFailureV1 {
+    Trap,
+    Continue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5422,6 +5429,7 @@ fn project_strided_read_effects_v1(
             view,
             indices: vec![row, column],
             checked_success: None,
+            failure: GuardedAccessFailureV1::Trap,
             comparisons: vec![(row, rows), (column, columns)],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
@@ -8174,6 +8182,7 @@ fn project_intrinsic_contracts(
                 view,
                 indices: vec![index],
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons: vec![(index, extent)],
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
@@ -8869,6 +8878,11 @@ fn project_intrinsic_contracts(
             view,
             indices: vec![index],
             checked_success,
+            failure: if direct_write {
+                GuardedAccessFailureV1::Continue
+            } else {
+                GuardedAccessFailureV1::Trap
+            },
             comparisons,
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
@@ -19631,7 +19645,7 @@ fn build_ranked_cfg(
                             operations,
                             &predicate,
                             access_block,
-                            failure_block,
+                            (failure_block, access.failure),
                             live.len(),
                         )?;
                     } else {
@@ -19702,12 +19716,41 @@ fn build_ranked_cfg(
                         source: access.source,
                         semantic_site: access.semantic_site,
                     });
-                    push_block_at(
-                        &mut blocks,
-                        failure_block,
-                        Vec::new(),
-                        ProductionRankedTerminatorV1::Trap,
-                    )?;
+                    // A write-only call returns false without writing on failure;
+                    // unlike a dereference, it does not trap or end the invocation.
+                    if access.failure == GuardedAccessFailureV1::Continue && !live.is_empty() {
+                        push_block_at_with_index_arguments(
+                            &mut blocks,
+                            failure_block,
+                            u32::try_from(live.len()).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "live induction argument count does not fit u32",
+                                )
+                            })?,
+                            Vec::new(),
+                            ProductionRankedTerminatorV1::BranchArgs {
+                                arguments: live_induction_block_arguments(
+                                    ranked_block_id(failure_block)?,
+                                    live,
+                                )?,
+                                target: ranked_block_id(continuation)?,
+                            },
+                        )?;
+                    } else {
+                        push_block_at(
+                            &mut blocks,
+                            failure_block,
+                            Vec::new(),
+                            match access.failure {
+                                GuardedAccessFailureV1::Trap => ProductionRankedTerminatorV1::Trap,
+                                GuardedAccessFailureV1::Continue => {
+                                    ProductionRankedTerminatorV1::Branch {
+                                        target: ranked_block_id(continuation)?,
+                                    }
+                                }
+                            },
+                        )?;
+                    }
                     current = continuation;
                     operations = Vec::new();
                 }
@@ -20514,7 +20557,7 @@ fn append_predicate_blocks_with_index_arguments(
     first_operations: Vec<ProductionRankedOperationV1>,
     predicate: &GuardPredicateV1,
     true_block: usize,
-    false_block: usize,
+    failure: (usize, GuardedAccessFailureV1),
     argument_count: usize,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
@@ -20550,9 +20593,13 @@ fn append_predicate_blocks_with_index_arguments(
                 lhs,
                 rhs,
                 true_arguments: arguments.clone(),
-                false_arguments: Vec::new(),
+                false_arguments: if failure.1 == GuardedAccessFailureV1::Continue {
+                    arguments
+                } else {
+                    Vec::new()
+                },
                 true_block: ranked_block_id(next)?,
-                false_block: ranked_block_id(false_block)?,
+                false_block: ranked_block_id(failure.0)?,
             },
         )?;
     }
@@ -23444,6 +23491,7 @@ fn project_place_access_with_atomic(
                 view: view_id,
                 indices: ranked_indices,
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons,
                 access,
                 memory_space,
@@ -37780,6 +37828,7 @@ mod tests {
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
@@ -37810,6 +37859,99 @@ mod tests {
         )));
         assert!(
             blocks
+                .iter()
+                .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
+        );
+    }
+
+    #[test]
+    fn write_only_guard_failure_forwards_every_live_induction_argument() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            1,
+        );
+        let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
+        let mut projected = (0..function.blocks().len())
+            .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+            .collect::<Vec<_>>();
+        projected[2]
+            .items
+            .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+                view: ProductionRankedValueIdV1::new(0),
+                indices: vec![ProductionRankedValueV1::Argument(0)],
+                checked_success: None,
+                failure: GuardedAccessFailureV1::Continue,
+                comparisons: vec![
+                    (
+                        ProductionRankedValueV1::Argument(0),
+                        ProductionRankedValueV1::Argument(1),
+                    ),
+                    (
+                        ProductionRankedValueV1::Argument(0),
+                        ProductionRankedValueV1::Argument(2),
+                    ),
+                ],
+                access: AccessKindAttr::Write,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: None,
+            }));
+        let (blocks, _, _) = build_ranked_cfg(
+            &projection_types(),
+            &function,
+            &[],
+            &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
+            &inductions,
+            entry_operations,
+            projected,
+        )
+        .unwrap();
+        let mut guards = 0;
+        for (block_index, block) in blocks.iter().enumerate() {
+            let ProductionRankedTerminatorV1::IndexLessThanArgs {
+                true_arguments,
+                false_arguments,
+                false_block,
+                ..
+            } = block.terminator()
+            else {
+                continue;
+            };
+            // The loop header has its own predicate; select the expanded access guard.
+            if false_arguments.is_empty() {
+                continue;
+            }
+            guards += 1;
+            assert_eq!(true_arguments, false_arguments);
+            assert_eq!(
+                false_arguments,
+                &[ProductionRankedValueV1::BlockArgument {
+                    block: block_index as u32,
+                    argument: 0
+                }]
+            );
+            let failure = &blocks[*false_block as usize];
+            assert_eq!(failure.index_argument_count(), 1);
+            assert!(failure.operations().is_empty());
+            let ProductionRankedTerminatorV1::BranchArgs { arguments, target } =
+                failure.terminator()
+            else {
+                panic!("failed write lost live arguments")
+            };
+            assert_eq!(
+                arguments,
+                &[ProductionRankedValueV1::BlockArgument {
+                    block: *false_block,
+                    argument: 0
+                }]
+            );
+            assert_eq!(blocks[*target as usize].index_argument_count(), 1);
+        }
+        assert_eq!(guards, 2);
+        assert!(
+            !blocks
                 .iter()
                 .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
         );
