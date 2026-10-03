@@ -62,6 +62,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 || self.allocations.contains_key(&self.next_handle)
                 || self.generated_allocations.contains_key(&self.next_handle)
                 || self.generated_shells.contains_key(&self.next_handle)
+                || self.generated_submissions.contains_key(&self.next_handle)
             {
                 self.terminal = true;
                 return Err(RuntimeBackendFailureV1::Terminal(

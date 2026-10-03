@@ -3,17 +3,17 @@ use crate::authorized_execution::tests::{
     TestAuthorityV1, source_authority_for_device, source_projection,
 };
 
-struct Fixture {
+pub(super) struct Fixture {
     binding: GeneratedShellBindingV1,
     logical: Vec<crate::RuntimeAllocationIdV1>,
     hsaco: Vec<u8>,
     authority: TestAuthorityV1,
     storage: crate::GeneratedGfx942PersistentStorageV1,
-    roster: GeneratedHostRosterV1,
+    pub(super) roster: GeneratedHostRosterV1,
 }
 
 impl Fixture {
-    fn new(backend: &mut KfdMultiDeviceRuntimeBackendV1, device: u64) -> Self {
+    pub(super) fn new(backend: &mut KfdMultiDeviceRuntimeBackendV1, device: u64) -> Self {
         let stream = backend.create_stream_v1(device).unwrap();
         let (hsaco, projection) = source_projection();
         let authority = source_authority_for_device(&projection, device);
@@ -36,7 +36,10 @@ impl Fixture {
             .unwrap()
     }
 
-    fn install(&mut self, backend: &mut KfdMultiDeviceRuntimeBackendV1) -> GeneratedShellPlanV1 {
+    pub(super) fn install(
+        &mut self,
+        backend: &mut KfdMultiDeviceRuntimeBackendV1,
+    ) -> GeneratedShellPlanV1 {
         let pending = self.prepare(backend);
         let global = *pending.plan();
         let bound = backend

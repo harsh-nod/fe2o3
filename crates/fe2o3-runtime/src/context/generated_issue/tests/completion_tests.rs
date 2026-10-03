@@ -6,10 +6,10 @@ use crate::{
 };
 use std::{cell::Cell, rc::Rc};
 
-struct OmittingCarrier {
+pub(super) struct OmittingCarrier {
     calls: Rc<Cell<usize>>,
     drops: Rc<Cell<usize>>,
-    destinations: Vec<Vec<u8>>,
+    pub(super) destinations: Vec<Vec<u8>>,
 }
 
 impl Drop for OmittingCarrier {
@@ -57,7 +57,7 @@ unsafe impl RuntimeGfx942GeneratedCompletionCarrierV1 for OmittingCarrier {
     }
 }
 
-fn carrier(calls: &Rc<Cell<usize>>, drops: &Rc<Cell<usize>>) -> OmittingCarrier {
+pub(super) fn carrier(calls: &Rc<Cell<usize>>, drops: &Rc<Cell<usize>>) -> OmittingCarrier {
     OmittingCarrier {
         calls: calls.clone(),
         drops: drops.clone(),
@@ -242,8 +242,8 @@ fn generated_graph_shared_drain_snapshot_excludes_only_registry_owned_submission
     core::mem::forget(context);
 }
 
-pub(super) fn assert_submission_retained(
-    context: &RuntimeContextV1<KfdRuntimeBackendV1>,
+pub(super) fn assert_submission_retained<B: RuntimeBackendV1>(
+    context: &RuntimeContextV1<B>,
     id: RuntimeSubmissionIdV1,
     before: SubmissionRecordV1,
 ) {

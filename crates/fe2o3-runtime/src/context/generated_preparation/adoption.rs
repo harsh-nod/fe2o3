@@ -7,7 +7,7 @@ use crate::generated_source::GeneratedHostRosterV1;
 macro_rules! impl_generated_adoption_context {
     ($backend:ty) => {
         impl RuntimeContextV1<$backend> {
-            fn generated_adoption_scope_for_hold_v1(
+            pub(in crate::context) fn generated_adoption_scope_for_hold_v1(
                 &self,
                 hold: &ContextUnpublishedHoldV1,
             ) -> Result<
@@ -151,7 +151,7 @@ macro_rules! impl_generated_adoption_context {
                 self.finish_gfx942_adoption_scoped_v1(scope, result)
             }
 
-            fn finish_gfx942_adoption_scoped_v1<T>(
+            pub(in crate::context) fn finish_gfx942_adoption_scoped_v1<T>(
                 &mut self,
                 scope: crate::kfd_backend::GeneratedAdoptionScopeV1,
                 result: std::thread::Result<Result<T, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
@@ -176,6 +176,7 @@ macro_rules! impl_generated_adoption_context {
 impl_generated_adoption_context!(KfdRuntimeBackendV1);
 impl_generated_adoption_context!(KfdMultiDeviceRuntimeBackendV1);
 
+#[cfg(test)]
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
     pub(in crate::context) fn finish_gfx942_adoption_v1<T>(
         &mut self,

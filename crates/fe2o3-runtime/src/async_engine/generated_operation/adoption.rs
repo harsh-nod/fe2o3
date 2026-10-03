@@ -439,22 +439,28 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     }
 }
 
-impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
-    /// Activates the exact reserved generated invocation and returns its original
-    /// completion observer after owner custody is rooted. Immediate admission and
-    /// ordinary live preflight rejection preserve the supplied ticket, as does
-    /// discarding a queued activation before execution. Terminal execution and
-    /// panic may instead retain it for owner shutdown and
-    /// resolve the outer future with an engine error. Observer loss never cancels
-    /// native work; the preparation control does not cancel activated execution.
-    pub fn try_activate_generated_v1(
-        &self,
-        ticket: RuntimeAsyncReservedTicketV1,
-        stream: RuntimeStreamIdV1,
-    ) -> Result<
-        ActivationFutureV1<crate::KfdRuntimeBackendErrorV1>,
-        ActivationFailureV1<crate::KfdRuntimeBackendErrorV1>,
-    > {
-        self.enqueue_reserved_activation_v1(ticket, stream, true)
-    }
+macro_rules! impl_generated_activation {
+    ($backend:ty) => {
+        impl RuntimeAsyncProgressHandleV1<$backend> {
+            /// Activates the exact reserved generated invocation and returns its original
+            /// completion observer after owner custody is rooted. Immediate admission and
+            /// ordinary live preflight rejection preserve the supplied ticket, as does
+            /// discarding a queued activation before execution. Terminal execution and
+            /// panic may instead retain it for owner shutdown and
+            /// resolve the outer future with an engine error. Observer loss never cancels
+            /// native work; the preparation control does not cancel activated execution.
+            pub fn try_activate_generated_v1(
+                &self,
+                ticket: RuntimeAsyncReservedTicketV1,
+                stream: RuntimeStreamIdV1,
+            ) -> Result<
+                ActivationFutureV1<crate::KfdRuntimeBackendErrorV1>,
+                ActivationFailureV1<crate::KfdRuntimeBackendErrorV1>,
+            > {
+                self.enqueue_reserved_activation_v1(ticket, stream, true)
+            }
+        }
+    };
 }
+impl_generated_activation!(KfdRuntimeBackendV1);
+impl_generated_activation!(crate::KfdMultiDeviceRuntimeBackendV1);

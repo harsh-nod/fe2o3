@@ -7102,6 +7102,7 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     allocations: HashMap<u64, RoutedHandleV1>,
     generated_allocations: HashMap<u64, RoutedHandleV1>,
     generated_shells: HashMap<u64, multi_generated::MultiGeneratedShellPlanV1>,
+    generated_submissions: HashMap<u64, multi_generated::MultiGeneratedSubmissionV1>,
     modules: HashMap<u64, RoutedHandleV1>,
     kernels: HashMap<u64, RoutedHandleV1>,
     kernel_modules: HashMap<u64, u64>,
@@ -7872,6 +7873,7 @@ impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
             .field("allocations", &self.allocations.len())
             .field("generated_allocations", &self.generated_allocations.len())
             .field("generated_shells", &self.generated_shells.len())
+            .field("generated_submissions", &self.generated_submissions.len())
             .field("modules", &self.modules.len())
             .field("kernels", &self.kernels.len())
             .field("submissions", &self.submissions.len())
@@ -7975,6 +7977,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             allocations: HashMap::new(),
             generated_allocations: HashMap::new(),
             generated_shells: HashMap::new(),
+            generated_submissions: HashMap::new(),
             modules: HashMap::new(),
             kernels: HashMap::new(),
             kernel_modules: HashMap::new(),
@@ -8005,6 +8008,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.allocations.is_empty()
             || !self.generated_allocations.is_empty()
             || !self.generated_shells.is_empty()
+            || !self.generated_submissions.is_empty()
             || !self.modules.is_empty()
             || !self.kernels.is_empty()
             || !self.kernel_modules.is_empty()
@@ -8062,7 +8066,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     fn next_id(&mut self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let id = self.next_handle;
-        if self.generated_allocations.contains_key(&id) || self.generated_shells.contains_key(&id) {
+        if self.generated_allocations.contains_key(&id)
+            || self.generated_shells.contains_key(&id)
+            || self.generated_submissions.contains_key(&id)
+        {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                 "multi-device handle collides with generated custody",
@@ -8077,7 +8084,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     fn require_submission_capacity_v1(
         &self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
+        if self
+            .submissions
+            .len()
+            .checked_add(self.generated_submissions.len())
+            .is_none_or(|count| count >= MAX_RUNTIME_SUBMISSIONS_V1)
+        {
             Err(KfdRuntimeBackendV1::capacity(
                 "multi-device submission capacity exceeded",
             ))
@@ -12403,6 +12415,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return self.poll_generated_submission_v1(submission);
+        }
         let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -12445,6 +12460,11 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         deadline: Instant,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return wait_with_deadline_v1(deadline, || {
+                self.poll_generated_submission_v1(submission)
+            });
+        }
         let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -12493,6 +12513,9 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return self.release_generated_submission_v1(submission);
+        }
         self.check_directed_if_present_v1(submission)?;
         if self.deferred_compute_v1(submission).is_some() {
             return self.release_deferred_compute_v1(submission);
@@ -13837,6 +13860,9 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         deadline: Instant,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return self.wait_v1(submission, deadline);
+        }
         let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,

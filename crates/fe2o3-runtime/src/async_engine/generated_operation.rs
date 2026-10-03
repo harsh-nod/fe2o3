@@ -6,9 +6,8 @@ use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationEr
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
 impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
-    /// Retains generated reservation and nonpublishing DATA adoption on one exact
-    /// child. Stop/drain retires the original storage; issue and completion hooks
-    /// remain unavailable on the multi-device bridge.
+    /// Retains generated reservation, DATA adoption and authority-bracketed issue
+    /// on one exact child. Completion requires the original completion carrier.
     ///
     /// ```no_run
     /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
@@ -31,6 +30,46 @@ impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
         RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
         RuntimeAsyncEngineCallErrorV1,
     > {
+        self.try_prepare_generated_with_completion_v1(device, prepare, None)
+    }
+
+    /// Retains the original generated decoder and exact child through completion.
+    #[doc(hidden)]
+    pub fn try_prepare_generated_gfx942_completion_v1<
+        P: crate::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        self.try_prepare_generated_with_completion_v1(device, prepare, Some(adoption::CompletionHooksV1 {
+            settle: RuntimeContextV1::<crate::KfdMultiDeviceRuntimeBackendV1>::complete_gfx942_issue_v1::<P>,
+            decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
+            domain: |prepared| prepared.value().completion_domain_v1(),
+        }))
+    }
+
+    fn try_prepare_generated_with_completion_v1<
+        P: RuntimeGfx942GeneratedCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+        completion: Option<
+            adoption::CompletionHooksV1<
+                crate::KfdMultiDeviceRuntimeBackendV1,
+                crate::RuntimeGfx942PreparedV1<P>,
+            >,
+        >,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
         type Context = RuntimeContextV1<crate::KfdMultiDeviceRuntimeBackendV1>;
         self.enqueue_preparation_with_adoption_v1(
             Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
@@ -40,7 +79,11 @@ impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
                 ready: Context::gfx942_adoption_ready_v1,
                 adopt: Context::adopt_gfx942_prepared_v1::<P>,
                 retire: Context::retire_gfx942_adoption_v1,
-                issue: None,
+                issue: Some(adoption::IssueHooksV1 {
+                    progress: Context::progress_gfx942_issue_v1::<P>,
+                    retire_stopped: Context::retire_gfx942_issued_v1,
+                    completion,
+                }),
             }),
         )
     }
@@ -62,9 +105,9 @@ impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
     ///     let _ = handle.try_prepare_gfx942_v1(device, |owner| Ok::<_, ()>(owner));
     /// }
     /// ```
-    /// ```compile_fail,E0599
+    /// ```no_run
     /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
-    /// fn no_completion<P: fe2o3_runtime::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static>(
+    /// fn completion<P: fe2o3_runtime::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static>(
     ///     handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
     ///     prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, ()> + Send + 'static,
     /// ) {
@@ -517,7 +560,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
             device,
             prepare,
             Some(adoption::CompletionHooksV1 {
-                settle: RuntimeContextV1::complete_gfx942_issue_v1::<P>,
+                settle: RuntimeContextV1::<KfdRuntimeBackendV1>::complete_gfx942_issue_v1::<P>,
                 decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
                 domain: |prepared| prepared.value().completion_domain_v1(),
             }),
@@ -547,8 +590,8 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
                 adopt: RuntimeContextV1::<KfdRuntimeBackendV1>::adopt_gfx942_prepared_v1::<P>,
                 retire: RuntimeContextV1::<KfdRuntimeBackendV1>::retire_gfx942_adoption_v1,
                 issue: Some(adoption::IssueHooksV1 {
-                    progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
-                    retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,
+                    progress: RuntimeContextV1::<KfdRuntimeBackendV1>::progress_gfx942_issue_v1::<P>,
+                    retire_stopped: RuntimeContextV1::<KfdRuntimeBackendV1>::retire_gfx942_issued_v1,
                     completion,
                 }),
             }),

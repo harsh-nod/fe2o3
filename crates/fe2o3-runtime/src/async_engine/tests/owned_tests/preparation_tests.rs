@@ -759,6 +759,89 @@ fn preparation_public_multi_gfx942_bridge_rejects_each_synthetic_owner_without_c
     );
 }
 
+enum NoGeneratedCarrier {}
+
+impl crate::RuntimeGfx942GeneratedCarrierV1 for NoGeneratedCarrier {
+    type CurrentnessError = ();
+    type Readback = ();
+    fn source(&self) -> crate::RuntimeGfx942GeneratedSourceV1<'_, ()> {
+        match *self {}
+    }
+    fn prepare_readback(&self) -> Result<(), crate::RuntimeGfx942ReadbackErrorV1> {
+        match *self {}
+    }
+    fn install_readback(&mut self, _: ()) {
+        match *self {}
+    }
+}
+
+// SAFETY: uninhabited fixture; no carrier, completion view or authority can exist.
+#[allow(unsafe_code)]
+unsafe impl crate::RuntimeGfx942GeneratedCompletionCarrierV1 for NoGeneratedCarrier {
+    fn completion_domain_v1(
+        &self,
+    ) -> Result<crate::RuntimeGeneratedResultDomainV1, crate::RuntimeGfx942ReadbackErrorV1> {
+        match *self {}
+    }
+    fn with_completion_view_v1(
+        &mut self,
+        _: impl for<'a> FnOnce(
+            crate::RuntimeGfx942GeneratedCompletionViewV1<'a, ()>,
+        ) -> Result<(), RuntimeErrorV1<crate::KfdRuntimeBackendErrorV1>>,
+    ) -> Result<(), RuntimeErrorV1<crate::KfdRuntimeBackendErrorV1>> {
+        match *self {}
+    }
+    fn complete_readback_v1(self) -> Result<(), crate::RuntimeGfx942ReadbackErrorV1> {
+        match self {}
+    }
+}
+
+#[test]
+fn preparation_public_multi_generated_bridges_reject_before_source_or_completion() {
+    let (engine, handle) = RuntimeAsyncOwnedEngineV1::spawn_with_progress(
+        || RuntimeContextV1::open(crate::KfdMultiDeviceRuntimeBackendV1::mock_preparation_v1()),
+        RuntimeAsyncEngineConfigV1::default(),
+        RuntimeAsyncProgressConfigV1::default(),
+    )
+    .unwrap();
+    let devices = handle
+        .observer()
+        .try_with_context(|context| {
+            context
+                .devices()
+                .iter()
+                .map(|device| device.id())
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    for device in devices {
+        for complete in [false, true] {
+            let observed = calls.clone();
+            let callback = move |_: &fe2o3_kfd::CheckedGfx942XnackMinusDevice| -> Result<NoGeneratedCarrier, ()> {
+                observed.fetch_add(1, Ordering::SeqCst);
+                panic!("synthetic device must reject before invoking source");
+            };
+            let future = if complete {
+                handle.try_prepare_generated_gfx942_completion_v1(device, callback)
+            } else {
+                handle.try_prepare_generated_gfx942_v1(device, callback)
+            }
+            .unwrap();
+            assert!(matches!(
+                join(future),
+                Ok(Err(crate::RuntimeGfx942PreparationErrorV1::Context(_)))
+            ));
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        engine.shutdown().unwrap().disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    assert_eq!(handle.observer.reply_cells_in_use(), 0);
+}
+
 #[test]
 fn preparation_public_gfx942_bridge_rejects_synthetic_owner_without_callback() {
     use crate::KfdRuntimeBackendV1;

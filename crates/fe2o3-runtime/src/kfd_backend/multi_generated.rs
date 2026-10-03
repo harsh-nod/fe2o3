@@ -4,6 +4,9 @@ use super::*;
 use crate::generated_source::{GeneratedHostRosterV1, RuntimeGfx942GeneratedSourceMutV1};
 use generated_shells::{GeneratedShellCommitPlanV1, GeneratedShellPlanV1};
 
+mod issue;
+pub(super) use issue::MultiGeneratedSubmissionV1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedAdoptionScopeV1 {
     child: Option<usize>,
@@ -180,6 +183,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             && !self.events.contains_key(&id)
             && !self.generated_allocations.contains_key(&id)
             && !self.generated_shells.contains_key(&id)
+            && !self.generated_submissions.contains_key(&id)
     }
 
     pub(crate) fn prepare_generated_shells_v1(
@@ -393,6 +397,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     pub(crate) fn validate_generated_shell_disposal_v1(&self, plan: &GeneratedShellPlanV1) -> bool {
         self.validate_generated_shell_records_v1(plan)
+            && !self
+                .generated_submissions
+                .values()
+                .any(|submission| submission.shell_key() == plan.key)
             && self.generated_shells.get(&plan.key).is_some_and(|route| {
                 self.children[route.scope.child.expect("validated child")]
                     .validate_generated_shell_disposal_v1(&route.local)

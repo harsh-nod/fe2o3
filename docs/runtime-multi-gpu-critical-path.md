@@ -93,10 +93,10 @@ LLVM/HSACO correspondence before an application launch can be admitted.
 
 ## Required Multi-Device Bridge
 
-Generated issue/completion currently specializes
-`RuntimeContextV1<KfdRuntimeBackendV1>`. Preparation and nonpublishing DATA
-adoption now also route through the multi-device backend. A production Worker
-provider alone will not finish a single-Context multi-device application pipeline.
+Preparation, DATA adoption, generated issue and completion now share their
+Context bodies across single-device and multi-device backends. Production
+application admission and an authenticated output-to-peer composition still
+need end-to-end qualification.
 
 1. Completed: route nonexecuting preparation through the exact retained
    multi-backend child, preserving Context generation, logical device, backend
@@ -116,34 +116,48 @@ provider alone will not finish a single-Context multi-device application pipelin
    [two-GPU DATA checkpoint](evidence/dev-multi-adoption-2026-10-03/README.md)
    passes native adoption, independent retirement and primary-lane rebound in
    both device orders. This is finite native mechanics, not protected Worker
-   application admission. Generated issue/completion remains the next step.
-3. Add an authenticated generated-storage peer handoff. Generated allocation
-   slots are deliberately distinct from PUBLIC allocations; enabling multi-device
-   generated dispatch must not relabel them or bypass ordinary peer-copy guards.
-4. Qualify the complete admitted compute -> native peer -> compute/readback path
+   application admission.
+3. Generated issue/completion routing and owner-thread activation are implemented.
+   A private global submission map retains the original child, shell and local
+   receipt, including malformed returned identities and unwind. Generic
+   poll/wait/drain cannot publish Ready work or report physical completion as
+   delivered output. Retired DATA can release its exact receipt before shell
+   disposal. The [two-GPU issue checkpoint](evidence/dev-multi-issue-2026-10-03/README.md)
+   passes three native dispatches, full four-buffer readback, independent
+   retirement and primary-lane rebound per device order on MI300X GPUs 6/7.
+   Context/async qualification remains CPU bookkeeping and rejection evidence,
+   not a protected Worker positive-path launch or a new adapter proof.
+4. Compose an authenticated completed host result with ordinary staged upload
+   and PUBLIC peer operations. Generated allocation slots remain distinct from
+   PUBLIC allocations; do not relabel them or bypass ordinary peer-copy guards.
+5. Qualify the complete admitted compute -> native peer -> compute/readback path
    on freshly observed free devices. Existing finite native witnesses do not
    substitute for this application-admission gate.
 
 ### Next Integration Packet
 
-Keep generated submission routes separate from ordinary `RoutedSubmissionV1`
-and peer producer indexes. Bind each route to its captured child, global shell
-key and exact local submission. Reserve capacity before child publication and
-root returned custody before handling protocol errors. Generalize the existing
-Context issue/completion bodies and owner-thread hooks without changing their
-readback, decoder or closing-authority gates. Physical recycled completion is
-not logical output success. Release validation must accept retired DATA without
-requiring the child issue helper's earlier Adopted phase. Stop/drain must never
-publish a Ready receipt.
+Reuse `GeneratedRuntimeChargedResultV1::take_completed_v1` with the original
+completion receipt, then encode its borrowed charged typed result with the
+existing scalar little-endian encoder. Receipt matching and the original decoder
+gate already authenticate the completed value after generated DATA settlement.
+There is no need to expose private readback storage before retirement.
 
-For the first generated-result peer handoff, prefer an explicitly authenticated
-host-staged export into a fresh ordinary DeviceLocal allocation, then reuse
-existing PUBLIC peer paths. Generated DATA is coherent HostVisible storage and
-has no SDMA-promotion bridge; do not relabel it as DeviceLocal or as a PUBLIC
-frame. Bind the original full-roster readback and selected output before the
-completion path destroys DATA. A native ownership transfer needs its own lower
-typed transition and accounting/failure evidence. Neither export route is
-implemented or qualified by the nonpublishing DATA checkpoint.
+The smallest synchronous composition writes the complete encoded image to a
+fresh ordinary DeviceLocal allocation using `Context::write_allocation`, then
+reuses PUBLIC peers. For owner-driven progress, fill ordinary HostVisible staging
+and use the existing tracked async copy to DeviceLocal; do not hide a blocking
+DeviceLocal upload inside a nonblocking owner command. Retain the charged result
+until staging succeeds, and retain staging until physical quiescence. Preserve
+the ordinary writer journal's NoEffect/Unknown/success handling and recoverable
+destination handles on failure.
+
+This is a new ordinary host-write version, not the original generated allocation
+or a pending generated producer event. Add focused receipt/encoding/upload/peer
+composition tests before claiming the complete pipeline. Generated DATA is
+coherent HostVisible storage, with no native SDMA-promotion bridge. Zero-copy
+ownership transfer needs a separate lower typed transition and accounting/failure
+evidence. Neither composed export nor production Worker admission is qualified
+by the two-GPU issue checkpoint.
 
 ## Deferred Work
 

@@ -1,16 +1,27 @@
-//! Finite native DATA routing witness, with no generated dispatch publication.
+//! Finite native routing witnesses, not protected Worker or typed reply authority.
 
 use super::*;
+
+mod issue;
 
 fn install_multi(
     backend: &mut KfdMultiDeviceRuntimeBackendV1,
     uid: u64,
     stream: u64,
 ) -> GeneratedShellPlanV1 {
+    install_multi_with_roster(backend, uid, stream, false).0
+}
+
+fn install_multi_with_roster(
+    backend: &mut KfdMultiDeviceRuntimeBackendV1,
+    uid: u64,
+    stream: u64,
+    full_roster: bool,
+) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
     let model = backend
         .with_retained_preparation_device_v1(uid, |device| device.model_admission())
         .unwrap();
-    let (roster, program, buffers, packet) = native_fixture(false);
+    let (roster, program, buffers, packet) = native_fixture(full_roster);
     let (binding, logical) =
         RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model, buffers.len());
     let pending = backend
@@ -43,7 +54,7 @@ fn install_multi(
     assert_eq!(record.native.as_ref().unwrap().phase, PhaseV1::Adopted);
     assert!(record.control.is_none());
     assert!(record.native.as_ref().unwrap().submission.is_none());
-    global
+    (global, roster)
 }
 
 fn assert_unpublished(backend: &KfdMultiDeviceRuntimeBackendV1) {
@@ -61,6 +72,13 @@ fn assert_unpublished(backend: &KfdMultiDeviceRuntimeBackendV1) {
 
 fn retire_multi(backend: &mut KfdMultiDeviceRuntimeBackendV1, plan: &GeneratedShellPlanV1) {
     backend.retire_generated_data_v1(plan).unwrap();
+    dispose_retired_multi(backend, plan);
+}
+
+fn dispose_retired_multi(
+    backend: &mut KfdMultiDeviceRuntimeBackendV1,
+    plan: &GeneratedShellPlanV1,
+) {
     let child = backend
         .child_for_device(plan.binding.backend_device)
         .unwrap();

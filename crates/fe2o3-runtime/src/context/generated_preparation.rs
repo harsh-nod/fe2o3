@@ -107,7 +107,7 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
     }
 }
 
-impl RuntimeContextV1<KfdRuntimeBackendV1> {
+impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     pub(in crate::context) fn gfx942_prepared_matches_plan_v1<T>(
         &self,
         prepared: &RuntimeGfx942PreparedV1<T>,

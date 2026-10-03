@@ -38,6 +38,51 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
 }
 
 impl KfdRuntimeBackendV1 {
+    pub(crate) fn install_generated_receipt_metadata_for_test_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        roster: &GeneratedHostRosterV1,
+    ) -> u64 {
+        let id = self.next_handle;
+        self.next_handle += 1;
+        let mut native = native_state(PhaseV1::Adopted, 0);
+        native.submission = Some(issue::GeneratedSubmissionV1 {
+            id,
+            roster: roster.clone(),
+            receipt: ReceiptV1::Ready,
+        });
+        self.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+        assert!(self.generated_submissions.insert(id, plan.key).is_none());
+        id
+    }
+
+    pub(crate) fn retire_generated_receipt_metadata_for_test_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+    ) {
+        // No DATA, queue, completion token or actual retirement is fabricated.
+        let native = self
+            .generated_shells
+            .get_mut(&plan.key)
+            .unwrap()
+            .native
+            .as_mut()
+            .unwrap();
+        assert!(native.data.is_empty() && native.native_lane.is_none());
+        assert_eq!(native.returned.completed, 0);
+        assert!(native.returned.handed_to_lower.is_none());
+        native.returned.install(Vec::new());
+        native.phase = PhaseV1::Retired;
+    }
+
+    pub(crate) fn clear_generated_receipt_metadata_for_test_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+    ) {
+        assert!(self.generated_submissions.is_empty());
+        self.generated_shells.get_mut(&plan.key).unwrap().native = None;
+    }
+
     pub(crate) fn park_generated_adopted_metadata_for_test_v1(&mut self) -> GeneratedShellPlanV1 {
         let uid = self.description.backend_device;
         let stream = self.create_stream_v1(uid).unwrap();

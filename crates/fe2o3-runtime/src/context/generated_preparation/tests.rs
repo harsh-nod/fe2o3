@@ -74,6 +74,32 @@ fn preparation_multi_context_binding_rejects_cross_context_device_and_backend() 
     assert_eq!(Rc::strong_count(prepared.value()), 1);
 }
 
+impl RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1> {
+    pub(in crate::context) fn bound_multi_preparation_for_test_v1<T>(
+        &self,
+        device: RuntimeDeviceIdV1,
+        value: T,
+    ) -> RuntimeGfx942PreparedV1<T> {
+        let uid = self
+            .devices()
+            .iter()
+            .find(|item| item.id() == device)
+            .unwrap()
+            .backend_device;
+        // Descriptive binding only: this fixture owns no checked native device.
+        RuntimeGfx942PreparedV1 {
+            value,
+            binding: PreparationBindingV1 {
+                context_generation: self.context_generation,
+                device,
+                backend_device: uid,
+                native_device: admission_for_device(1, 1, uid).1,
+            },
+            owner_local: PhantomData,
+        }
+    }
+}
+
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
     pub(crate) fn generated_route_ids_for_test_v1(
         device: u64,

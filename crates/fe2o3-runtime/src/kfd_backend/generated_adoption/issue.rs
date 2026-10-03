@@ -10,6 +10,44 @@ pub(super) struct GeneratedSubmissionV1 {
 }
 
 impl KfdRuntimeBackendV1 {
+    pub(in crate::kfd_backend) fn generated_shell_has_no_submission_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+    ) -> bool {
+        self.validate_generated_shell_records_v1(plan)
+            && !self
+                .generated_submissions
+                .values()
+                .any(|key| *key == plan.key)
+            && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                record
+                    .native
+                    .as_ref()
+                    .is_none_or(|native| native.submission.is_none())
+            })
+    }
+
+    pub(in crate::kfd_backend) fn generated_submission_owner_matches_v1(
+        &self,
+        submission: u64,
+        plan: &GeneratedShellPlanV1,
+    ) -> bool {
+        submission != 0
+            && self.generated_submissions.get(&submission) == Some(&plan.key)
+            && self.validate_generated_shell_records_v1(plan)
+            && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                record
+                    .native
+                    .as_ref()
+                    .and_then(|native| native.submission.as_ref())
+                    .is_some_and(|owner| {
+                        owner.id == submission
+                            && Arc::ptr_eq(&record.source_identity, &owner.roster.source_identity)
+                            && readback::roster_matches_plan_v1(plan, &owner.roster)
+                    })
+            })
+    }
+
     pub(crate) fn prepare_generated_issue_v1(
         &mut self,
         plan: &GeneratedShellPlanV1,
