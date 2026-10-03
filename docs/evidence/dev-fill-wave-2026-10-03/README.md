@@ -91,11 +91,13 @@ debug assertions and overflow checks enabled, and serial Rust tests.
   also checked 28 executable identities and confirmed the Clippy failure sites
   are unchanged from the parent.
 
-[Qualification archive](qualification.tar.xz): 193 manifest entries, 1,043,636 bytes,
-SHA256 `4c9a504fb5949dd62b59c58440c3b020699143a583716ba0d595c4e359fce833`.
+[Qualification archive](qualification.tar.xz): 193 manifest entries, 1,043,712 bytes,
+SHA256 `cc822fd4922b1021342242f2c882ce9468d9db98a5f6155b340d737f5ddbe11d`.
 It includes source snapshots, commands, stdout/stderr, owned-process receipts,
 staged proof inputs, candidate patch, review notes, audit and sealing scripts.
 Raw evidence remains at `/home/harsh/.codex-tmp/fe2o3-fill-wave-20261003`.
+The audit also passed after publication; its candidate diff uses the fixed parent
+commit instead of depending on a still-staged Git index.
 
 ## Multi-GPU Critical Path
 
