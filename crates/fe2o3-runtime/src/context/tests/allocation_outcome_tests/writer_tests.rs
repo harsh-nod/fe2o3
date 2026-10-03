@@ -85,6 +85,84 @@ fn make_unknown(context: &mut Context, allocation: RuntimeAllocationIdV1) {
 }
 
 #[test]
+fn full_host_visible_write_rejects_wrong_placement_size_and_identity_before_effects() {
+    let (mut context, device_local, host) = fixture(true, 1);
+    let (mut foreign, _, foreign_host) = fixture(false, 1);
+    let next = context.next_identity;
+    let memory = context.backend.inner.memory.clone();
+    for (allocation, bytes, expected) in [
+        (
+            device_local,
+            &[1u8; 8][..],
+            RuntimeValidationErrorV1::Unsupported,
+        ),
+        (host, &[][..], RuntimeValidationErrorV1::InvalidRange),
+        (host, &[1u8; 7][..], RuntimeValidationErrorV1::InvalidRange),
+        (host, &[1u8; 9][..], RuntimeValidationErrorV1::InvalidRange),
+        (
+            foreign_host,
+            &[1u8; 8][..],
+            RuntimeValidationErrorV1::UnknownAllocation,
+        ),
+    ] {
+        assert!(
+            matches!(context.write_host_visible_allocation_v1(allocation, bytes),
+            Err(RuntimeErrorV1::Validation(error)) if error == expected)
+        );
+        assert_eq!(context.next_identity, next);
+        assert_eq!(context.backend.write_calls, 0);
+        assert_eq!(context.backend.inner.memory, memory);
+    }
+    context
+        .write_host_visible_allocation_v1(host, &[0x5a; 8])
+        .unwrap();
+    assert_eq!(context.backend.write_calls, 1);
+    assert_eq!(state(&context, host).content_lineage, 1);
+    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
+    context.release_allocation(host).unwrap();
+    assert!(matches!(
+        context.write_host_visible_allocation_v1(host, &[0x5a; 8]),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::UnknownAllocation
+        ))
+    ));
+    assert!(context.cleanup().is_complete());
+    assert!(foreign.cleanup().is_complete());
+}
+
+#[test]
+fn full_host_visible_write_preserves_native_failure_and_unknown_writer_custody() {
+    for failure in [
+        Failure::Rejected,
+        Failure::Quiescent,
+        Failure::Terminal,
+        Failure::Panic,
+    ] {
+        let (mut context, neighbor, host) = fixture(true, 1);
+        let before = state(&context, neighbor);
+        let (pointer, drops) = diagnostic(&mut context, failure, false);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            context.write_host_visible_allocation_v1(host, &[0x5a; 8])
+        }));
+        assert_diagnostic(result, failure, pointer, &drops);
+        assert_eq!(context.backend.write_calls, 1);
+        assert_eq!(state(&context, neighbor), before);
+        let observed = state(&context, host);
+        assert_eq!(observed.content_lineage, 0);
+        assert_eq!(
+            observed.pending_writer.is_some(),
+            failure != Failure::Rejected
+        );
+        if matches!(failure, Failure::Terminal | Failure::Panic) {
+            assert!(context.is_terminal());
+            core::mem::forget(context);
+        } else {
+            assert!(context.cleanup().is_complete());
+        }
+    }
+}
+
+#[test]
 fn synchronous_writes_burn_genuine_ids_and_epochs_but_rejections_preserve_lineage() {
     let (mut context, a, _) = fixture(true, 1);
     for (epoch, failure, lineage) in [

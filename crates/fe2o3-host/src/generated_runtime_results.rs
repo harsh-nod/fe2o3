@@ -18,8 +18,10 @@ use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error
 mod bundle_completion;
 #[cfg(test)]
 mod completion_tests;
+mod staging;
 mod typed_completion;
 pub use bundle_completion::*;
+pub use staging::*;
 pub use typed_completion::*;
 
 /// Shared result-peak admission. Clones share the same account, not fresh limits.

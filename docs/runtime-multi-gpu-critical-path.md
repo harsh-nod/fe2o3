@@ -127,37 +127,46 @@ need end-to-end qualification.
    retirement and primary-lane rebound per device order on MI300X GPUs 6/7.
    Context/async qualification remains CPU bookkeeping and rejection evidence,
    not a protected Worker positive-path launch or a new adapter proof.
-4. Compose an authenticated completed host result with ordinary staged upload
-   and PUBLIC peer operations. Generated allocation slots remain distinct from
-   PUBLIC allocations; do not relabel them or bypass ordinary peer-copy guards.
+4. Completed-value staging now preserves the original charged result and uses a
+   complete ordinary HostVisible write, settled upload and PUBLIC peer. The
+   [staging checkpoint](evidence/dev-result-staging-2026-10-03/README.md) passes
+   synthetic charged host data through real uploads and native XGMI in both
+   directions on GPUs 6/7. CPU tests cover the shared receipt-matching body,
+   encoding and failure custody; this is not a protected Worker positive launch
+   or authenticated native completion-to-peer witness. Generated allocation slots
+   remain distinct from PUBLIC allocations.
 5. Qualify the complete admitted compute -> native peer -> compute/readback path
    on freshly observed free devices. Existing finite native witnesses do not
    substitute for this application-admission gate.
 
-### Next Integration Packet
+### Next Integration Packet: Host Front Door
 
-Reuse `GeneratedRuntimeChargedResultV1::take_completed_v1` with the original
-completion receipt, then encode its borrowed charged typed result with the
-existing scalar little-endian encoder. Receipt matching and the original decoder
-gate already authenticate the completed value after generated DATA settlement.
-There is no need to expose private readback storage before retirement.
+The normal authenticated helpers in `fe2o3-host/generated_runtime_invocation.rs`
+still accept only the single-device backend. Add multi-context counterparts for
+`prepare_generated_context_invocation`, its async variant, and the returned
+invocation's `validate_context`. Preserve existing signatures and reuse the same
+`require_runtime_evidence`, `prepare_context_payload` and `project_persistent`
+bodies. The retained invocation and preparation future are already backend-neutral.
+No public backend trait or private-storage extraction is needed.
 
-The smallest synchronous composition writes the complete encoded image to a
-fresh ordinary DeviceLocal allocation using `Context::write_allocation`, then
-reuses PUBLIC peers. For owner-driven progress, fill ordinary HostVisible staging
-and use the existing tracked async copy to DeviceLocal; do not hide a blocking
-DeviceLocal upload inside a nonblocking owner command. Retain the charged result
-until staging succeeds, and retain staging until physical quiescence. Preserve
-the ordinary writer journal's NoEffect/Unknown/success handling and recoverable
-destination handles on failure.
+Missing protected evidence must still reject before Context access, argument
+callbacks, result-budget work or queue admission. Keep sync preparation inert;
+the multi async path can reuse the existing reservation/adoption/issue/completion
+hooks and original decoder. Compile both public entry paths and retain rejection,
+ownership/privacy, exact-device and currentness tests. This removes an API
+restriction for genuine protected authority; it does not supply the still-missing
+production positive verifier/refinement providers.
 
-This is a new ordinary host-write version, not the original generated allocation
-or a pending generated producer event. Add focused receipt/encoding/upload/peer
-composition tests before claiming the complete pipeline. Generated DATA is
-coherent HostVisible storage, with no native SDMA-promotion bridge. Zero-copy
-ownership transfer needs a separate lower typed transition and accounting/failure
-evidence. Neither composed export nor production Worker admission is qualified
-by the two-GPU issue checkpoint.
+For owner-driven staging, authenticate/encode on the caller and enqueue only
+scratch plus ordinary staging handles, retaining the original output if enqueue
+rejects. Require successful H2D completion before ordinary peer admission; pending
+H2D writers are not peer producers. A dropped observer or timeout is not physical
+quiescence. Scratch is caller-owned outside the result-credit budget.
+
+Staging creates a new ordinary host-write version, not the original generated
+allocation or pending generated producer event. Generated DATA is coherent
+HostVisible storage with no native SDMA-promotion bridge. Zero-copy ownership
+transfer needs separate typed transition, accounting and failure evidence.
 
 ## Deferred Work
 

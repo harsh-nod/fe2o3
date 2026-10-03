@@ -2516,6 +2516,30 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         Ok(())
     }
 
+    /// Replaces one complete HostVisible allocation using ordinary host-write
+    /// journal and backend settlement. Rejects DeviceLocal placement and partial
+    /// images before backend effects; this never performs a DeviceLocal upload.
+    /// A backend failure retains the same NoEffect/Unknown distinction as
+    /// `write_allocation`. The caller retains the allocation handle on every path.
+    pub fn write_host_visible_allocation_v1(
+        &mut self,
+        allocation: RuntimeAllocationIdV1,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let record = self
+            .allocations
+            .get(&allocation)
+            .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+        if record.kind != RuntimeMemoryKindV1::HostVisible {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
+        if u64::try_from(bytes.len()).ok() != Some(record.byte_len) {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
+        self.write_allocation(allocation, 0, bytes)
+    }
+
     pub fn write_allocation(
         &mut self,
         allocation: RuntimeAllocationIdV1,
