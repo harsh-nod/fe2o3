@@ -20,7 +20,7 @@ fn settled(direct: bool, readback: bool, readback_will_run: bool) -> PendingList
     p
 }
 
-fn return_and_readback(p: &mut PendingList, consumer: u64) -> (u64, u64) {
+pub(super) fn return_and_readback(p: &mut PendingList, consumer: u64) -> (u64, u64) {
     let event = p.f.event(1, consumer);
     p.f.backend.compute_xgmi_routes.insert(
         (1, 0),

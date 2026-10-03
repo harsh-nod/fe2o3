@@ -915,6 +915,8 @@ fn main() -> Result<(), String> {
                 | "--gather-compute-overlap"
                 | "--late-gather-compute"
                 | "--late-gather-compute-overlap"
+                | "--destination-segments-compute"
+                | "--late-destination-segments-compute"
         )
     }) {
         return gather_compute::main(&arguments);

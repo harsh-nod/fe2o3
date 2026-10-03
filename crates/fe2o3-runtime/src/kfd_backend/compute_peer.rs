@@ -240,6 +240,34 @@ pub(super) struct SegmentDestinationFrame {
     source: (u64, RoutedHandleV1, AllocationIdentity),
     plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
     origin: SegmentFrameOrigin,
+    predecessor: Option<SegmentDestinationPredecessor>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SegmentDestinationPredecessor {
+    id: u64,
+    frame: Arc<SegmentDestinationFrame>,
+}
+
+impl SegmentDestinationPredecessor {
+    pub(super) fn orders_owner(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        route: RoutedHandleV1,
+        owner: u64,
+    ) -> bool {
+        self.frame.orders_owner(backend, self.id, route, owner)
+    }
+
+    pub(super) fn owns_occupied_child(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        child: usize,
+        owner: u64,
+    ) -> bool {
+        self.frame
+            .owns_occupied_child(backend, self.id, child, owner)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -278,6 +306,93 @@ impl SegmentDestinationFrame {
     }
 
     pub(super) fn is_intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1, id: u64) -> bool {
+        let mut frame = self;
+        let mut current = id;
+        for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            if !frame.node_is_intact(backend, current) {
+                return false;
+            }
+            let RoutedSubmissionV1::CooperativeCopy(copy) = &backend.submissions[&current] else {
+                return false;
+            };
+            // A settled receipt no longer retains operational ancestor sources.
+            if copy.is_quiescent() {
+                return true;
+            }
+            let Some(prior) = &frame.predecessor else {
+                return true;
+            };
+            if !matches!(frame.origin, SegmentFrameOrigin::Settled)
+                || !matches!(prior.frame.origin, SegmentFrameOrigin::Settled)
+                || prior.id >= current
+                || prior.frame.depth == 0
+                || prior.frame.depth >= frame.depth
+                || prior.frame.stream != frame.stream
+                || prior.frame.endpoint != frame.endpoint
+                || !copy.dependencies.contains(&prior.id)
+                || !backend.submission_retained_as_dependency(prior.id)
+            {
+                return false;
+            }
+            current = prior.id;
+            frame = &prior.frame;
+        }
+        false
+    }
+
+    pub(super) fn orders_owner(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        route: RoutedHandleV1,
+        owner: u64,
+    ) -> bool {
+        if route != self.endpoint.1 || !self.is_intact(backend, id) {
+            return false;
+        }
+        let mut current = id;
+        let mut frame = self;
+        for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            if current == owner {
+                return true;
+            }
+            let Some(prior) = &frame.predecessor else {
+                return false;
+            };
+            if prior.id >= current || prior.frame.depth >= frame.depth {
+                return false;
+            }
+            current = prior.id;
+            frame = &prior.frame;
+        }
+        false
+    }
+
+    pub(super) fn owns_occupied_child(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        child: usize,
+        owner: u64,
+    ) -> bool {
+        child == self.endpoint.1.child
+            && self.orders_owner(backend, id, self.endpoint.1, owner)
+            && matches!(backend.submissions.get(&owner),
+            Some(RoutedSubmissionV1::CooperativeCopy(copy))
+                if copy.status() == BackendPollV1::Pending
+                    && copy.destination == self.endpoint.1
+                    && copy.compute_xgmi.as_ref().is_some_and(|root| !root.is_quiescent())
+                    && [copy.source, copy.destination].iter().all(|endpoint| {
+                        backend.compute_xgmi_children.get(endpoint.child) == Some(&Some(owner))
+                            && backend.children.get(endpoint.child)
+                                .and_then(|child| child.allocations.get(&endpoint.local))
+                                .is_some_and(|record| matches!(record.sdma_storage,
+                                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(id))
+                                        if id == owner))
+                    }))
+    }
+
+    fn node_is_intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1, id: u64) -> bool {
         let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = backend.submissions.get(&id) else {
             return false;
         };
@@ -1075,11 +1190,36 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || self
                 .cooperative_allocation_owners
                 .get(&destination)
-                .is_none_or(|owners| owners.len() != 1 || owners[0] != id)
+                .is_none_or(|owners| {
+                    owners.iter().max().copied() != Some(id)
+                        || owners
+                            .iter()
+                            .any(|owner| !frame.orders_owner(self, id, destination, *owner))
+                })
         {
             return None;
         }
         frame.is_intact(self, id).then(|| Arc::clone(frame))
+    }
+
+    pub(super) fn prepare_segment_destination_predecessor_v1(
+        &self,
+        stream: u64,
+        destination: RoutedHandleV1,
+        events: &[u64],
+    ) -> Option<SegmentDestinationPredecessor> {
+        let owners = self.cooperative_allocation_owners.get(&destination)?;
+        let id = owners.iter().max().copied()?;
+        if !events.iter().any(|event| {
+            matches!(self.events.get(event),
+                Some(RoutedEventV1::CooperativeCopy { submission, child })
+                    if *submission == id && *child == destination.child)
+        }) {
+            return None;
+        }
+        let frame = self.compute_peer_segment_frame_v1(id, destination)?;
+        (frame.stream == stream && matches!(frame.origin, SegmentFrameOrigin::Settled))
+            .then_some(SegmentDestinationPredecessor { id, frame })
     }
 
     pub(super) fn prepare_segment_destination_frame_v1(
@@ -1088,6 +1228,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         submission: (u64, usize, usize),
         endpoints: [(RoutedHandleV1, BackendMemoryRegionV1); 2],
         producer: Option<&Producer>,
+        predecessor: Option<SegmentDestinationPredecessor>,
     ) -> Option<Arc<SegmentDestinationFrame>> {
         let plan = root.segment_plan_v1()?;
         if endpoints[0].1.access != RuntimeAccessV1::Read
@@ -1106,7 +1247,14 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 // stable-source frame and retain only legacy transfer behavior.
                 if self
                     .cooperative_allocation_owners
-                    .contains_key(&endpoints[1].0)
+                    .get(&endpoints[1].0)
+                    .is_some_and(|owners| {
+                        owners.iter().any(|owner| {
+                            !predecessor.as_ref().is_some_and(|prior| {
+                                prior.orders_owner(self, endpoints[1].0, *owner)
+                            })
+                        })
+                    })
                     || self
                         .cooperative_allocation_owners
                         .get(&endpoints[0].0)
@@ -1140,6 +1288,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             endpoint,
             plan: Arc::clone(plan),
             origin,
+            predecessor,
         }))
     }
 

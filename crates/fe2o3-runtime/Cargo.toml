@@ -55,6 +55,10 @@ required-features = ["hardware-qualification"]
 name = "gfx942-runtime-xgmi-recovery-smoke"
 required-features = ["hardware-qualification"]
 
+[[example]]
+name = "gfx942-runtime-destination-segments-smoke"
+required-features = ["hardware-qualification"]
+
 [[bin]]
 name = "fe2o3-runtime-kfd-worker-v5-qualification"
 path = "src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs"

@@ -749,6 +749,25 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to success-ordered lists sharing one initialized destination frame.
+    ///
+    /// Requires `supports_peer_copy_segments_frame_v1` and Context's version
+    /// journal. Each source is settled and retains its ordinary read lease. A
+    /// pending destination must name its exact latest segmented writer with an
+    /// explicit event on the same stream and original allocation. Retain the
+    /// immutable list/frame and predecessor identities independently of public
+    /// event release, with bounded strictly older dependency ranks.
+    ///
+    /// Acquire the destination owner and publish a successor only after actual
+    /// predecessor success and restoration. Ordered windows, including overlaps,
+    /// preserve initialized bytes outside those windows. Read-only compute and
+    /// readback consumers of the latest whole frame obey the same success chain;
+    /// failure, cancellation, and Unknown never promote it. This does not grant
+    /// scalar coverage or admit pending compute sources into ordered list chains.
+    fn supports_ordered_peer_copy_segments_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered partial peer writes into one initialized allocation.
     ///
     /// This additionally requires `supports_pending_compute_peer_copy_v1`. Each
@@ -4228,6 +4247,7 @@ mod tests {
         cleanup_log: Vec<(MockCleanupKind, u64)>,
         device_name_len: usize,
         device_target_len: usize,
+        third_device: bool,
         handle_override: Option<(MockHandleKind, u64)>,
         cancel_before_publication: bool,
         deferred_copies: bool,
@@ -4236,6 +4256,7 @@ mod tests {
         pending_compute_peer: bool,
         pending_compute_segments: bool,
         peer_segments_frame: bool,
+        ordered_peer_segments: bool,
         ordered_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
@@ -4575,7 +4596,7 @@ mod tests {
             } else {
                 "t".repeat(self.device_target_len)
             };
-            Ok(vec![
+            let mut devices = vec![
                 BackendDeviceDescriptionV1 {
                     backend_device: 10,
                     name: device_name,
@@ -4590,7 +4611,17 @@ mod tests {
                     global_memory_bytes: 1 << 30,
                     capabilities,
                 },
-            ])
+            ];
+            if self.third_device {
+                devices.push(BackendDeviceDescriptionV1 {
+                    backend_device: 30,
+                    name: "device-2".into(),
+                    target: "gfx942".into(),
+                    global_memory_bytes: 1 << 30,
+                    capabilities,
+                });
+            }
+            Ok(devices)
         }
 
         fn create_stream_v1(
@@ -4875,6 +4906,10 @@ mod tests {
 
         fn supports_peer_copy_segments_frame_v1(&self) -> bool {
             self.peer_segments_frame
+        }
+
+        fn supports_ordered_peer_copy_segments_v1(&self) -> bool {
+            self.ordered_peer_segments
         }
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {

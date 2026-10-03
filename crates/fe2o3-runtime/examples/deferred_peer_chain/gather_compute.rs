@@ -1,17 +1,40 @@
 //! Ordered gather into the original R57 C input, followed by its unchanged second gate.
 
 use super::*;
+use fe2o3_runtime::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsV1};
 
 const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--gather-compute|--gather-compute-overlap|--late-gather-compute|--late-gather-compute-overlap> <0xsource-id> <0xsource-id> [more source IDs] <0xsink-id>";
+const SEGMENT_USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--destination-segments-compute|--late-destination-segments-compute> <4|65|4096> <0xsource-id> <0xsource-id> <0xsink-id>";
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
     ids: Vec<u64>,
     overlap: bool,
     late: bool,
+    segments: Option<usize>,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
+    if matches!(
+        arguments.first().map(String::as_str),
+        Some("--destination-segments-compute" | "--late-destination-segments-compute")
+    ) {
+        if arguments.len() != 5 {
+            return Err(SEGMENT_USAGE.into());
+        }
+        let count = match arguments[1].as_str() {
+            "4" => 4,
+            "65" => 65,
+            "4096" => 4096,
+            _ => return Err(SEGMENT_USAGE.into()),
+        };
+        let mut legacy = vec!["--gather-compute".to_owned()];
+        legacy.extend_from_slice(&arguments[2..]);
+        let mut parsed = options(&legacy)?;
+        parsed.late = arguments[0] == "--late-destination-segments-compute";
+        parsed.segments = Some(count);
+        return Ok(parsed);
+    }
     let (overlap, late) = match arguments.first().map(String::as_str) {
         Some("--gather-compute") => (false, false),
         Some("--gather-compute-overlap") => (true, false),
@@ -34,7 +57,12 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         }
         ids.push(id);
     }
-    Ok(Options { ids, overlap, late })
+    Ok(Options {
+        ids,
+        overlap,
+        late,
+        segments: None,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +104,10 @@ fn expected(checked: &[Window]) -> Vec<Vec<u8>> {
         gathered[window.destination..window.destination + window.bytes]
             .copy_from_slice(&source[window.source..window.source + window.bytes]);
     }
+    finish_expected(vec![source; checked.len()], gathered)
+}
+
+fn finish_expected(mut sources: Vec<Vec<u8>>, gathered: Vec<u8>) -> Vec<Vec<u8>> {
     let computed: Vec<u8> = gathered
         .chunks_exact(4)
         .enumerate()
@@ -90,9 +122,60 @@ fn expected(checked: &[Window]) -> Vec<Vec<u8>> {
         .copy_from_slice(&computed[layout.source_offset..layout.source_offset + layout.copy_bytes]);
     let mut host = vec![0x5a; layout.host_bytes];
     host[layout.host_offset..layout.host_offset + returned.len()].copy_from_slice(&returned);
-    let mut all = vec![source; checked.len()];
-    all.extend([gathered, computed, returned, host]);
-    all
+    sources.extend([gathered, computed, returned, host]);
+    sources
+}
+
+fn descriptors(source: usize, count: usize) -> Vec<RuntimePeerCopySegmentV1> {
+    assert!(source < 2 && [4, 65, 4096].contains(&count));
+    (0..count)
+        .map(|index| {
+            let (from, to, bytes) = match index {
+                0 | 2 => (4 * (1 + source * 9), 64, 128),
+                1 => (4 * (65 + source * 5), 96, 128),
+                3 => (4 * (257 + source * 7), 192, 68),
+                _ => (
+                    4 * (1 + (index * 13 + source * 29) % 10_000),
+                    4 * (257 + (index * 17 + source * 19) % 40_000),
+                    4 * (1 + index % 17),
+                ),
+            };
+            RuntimePeerCopySegmentV1 {
+                source_offset: from as u64,
+                destination_offset: to as u64,
+                byte_len: bytes as u64,
+            }
+        })
+        .collect()
+}
+
+fn expected_segments(count: usize) -> Vec<Vec<u8>> {
+    let sources = vec![expected_c(), expected_d()];
+    let mut gathered = filled(0.25);
+    for (source, bytes) in sources.iter().enumerate() {
+        for segment in descriptors(source, count) {
+            let from = segment.source_offset as usize;
+            let to = segment.destination_offset as usize;
+            let len = segment.byte_len as usize;
+            gathered[to..to + len].copy_from_slice(&bytes[from..from + len]);
+        }
+    }
+    finish_expected(sources, gathered)
+}
+
+fn verify_segments(count: usize, snapshots: &[Vec<u8>]) -> ResultV1<String> {
+    if snapshots != expected_segments(count) {
+        return Err(failure(
+            "destination-segments-bytes",
+            "full snapshots differ",
+        ));
+    }
+    let mut framed = b"fe2o3.destination-segments-compute.v1\0".to_vec();
+    for bytes in snapshots {
+        framed.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        framed.extend_from_slice(bytes);
+    }
+    Ok(digest(&framed))
 }
 
 fn verify(checked: &[Window], snapshots: &[Vec<u8>]) -> ResultV1<String> {
@@ -113,11 +196,26 @@ fn verify(checked: &[Window], snapshots: &[Vec<u8>]) -> ResultV1<String> {
 struct Resources {
     runs: Vec<DeviceRun>,
     windows: Vec<Window>,
+    segments: Option<usize>,
     peer_stream: RuntimeStreamIdV1,
     return_stream: RuntimeStreamIdV1,
     readback_stream: RuntimeStreamIdV1,
     returned: RuntimeAllocationIdV1,
     host: RuntimeAllocationIdV1,
+}
+
+impl Resources {
+    fn source_count(&self) -> usize {
+        self.runs.len() - 1
+    }
+
+    fn source_allocation(&self, index: usize) -> RuntimeAllocationIdV1 {
+        self.runs[index].allocations[if self.segments.is_some() && index == 0 {
+            2
+        } else {
+            3
+        }]
+    }
 }
 
 fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> {
@@ -184,6 +282,23 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
         // Preserve source C's actual device-produced identity for its second gate.
         runs.push(run);
     }
+    if options.segments.is_some() {
+        // Distinct settled payloads: source 0 keeps C; source 1 finishes D.
+        setup_compute(&mut context, &runs[1], true, deadline)?;
+        for (run, allocation, expected) in [
+            (&runs[0], runs[0].allocations[2], expected_c()),
+            (&runs[1], runs[1].allocations[3], expected_d()),
+        ] {
+            if context
+                .query_stream(run.stream)
+                .map_err(|error| failure("list-source-settled", error))?
+                != RuntimeStreamObservationV1::default()
+            {
+                return Err(failure("list-source-settled", "retained setup result"));
+            }
+            verify_initial(&mut context, allocation, &expected)?;
+        }
+    }
     let sink = runs.last().ok_or("missing sink")?;
     upload(
         &mut context,
@@ -237,7 +352,12 @@ fn setup(options: &Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)>
         context,
         Arc::new(Resources {
             runs,
-            windows: windows(devices.len() - 1, options.overlap),
+            windows: if options.segments.is_none() {
+                windows(devices.len() - 1, options.overlap)
+            } else {
+                Vec::new()
+            },
+            segments: options.segments,
             peer_stream,
             return_stream,
             readback_stream,
@@ -272,11 +392,67 @@ fn callback<A>(
 
 struct Chain {
     sources: Vec<RuntimeSubmissionV1<Arguments>>,
-    peers: Vec<RuntimeSubmissionV1<RuntimePeerCopyV1>>,
+    peers: Vec<Peer>,
     compute: RuntimeSubmissionV1<Arguments>,
     returned: RuntimeSubmissionV1<RuntimePeerCopyV1>,
     readback: RuntimeSubmissionV1<RuntimeCopyV1>,
     ids: Vec<RuntimeSubmissionIdV1>,
+}
+
+enum Peer {
+    Scalar(RuntimeSubmissionV1<RuntimePeerCopyV1>),
+    Segments(RuntimeSubmissionV1<RuntimePeerCopySegmentsV1>),
+}
+
+impl Peer {
+    fn id(&self) -> RuntimeSubmissionIdV1 {
+        match self {
+            Self::Scalar(peer) => peer.id(),
+            Self::Segments(peer) => peer.id(),
+        }
+    }
+
+    fn status(&self, context: &Context) -> ResultV1<RuntimeCompletionStatusV1> {
+        match self {
+            Self::Scalar(peer) => context.query_submission(peer),
+            Self::Segments(peer) => context.query_submission(peer),
+        }
+        .map_err(|error| failure("gather-peer-status", error))
+    }
+
+    fn observe(
+        &self,
+        context: &mut Context,
+        receipts: &Arc<Mutex<Receipts>>,
+    ) -> ResultV1<fe2o3_runtime::RuntimeEventIdV1> {
+        match self {
+            Self::Scalar(peer) => callback(context, peer, receipts)?,
+            Self::Segments(peer) => callback(context, peer, receipts)?,
+        }
+        match self {
+            Self::Scalar(peer) => context.record_event(peer),
+            Self::Segments(peer) => context.record_event(peer),
+        }
+        .map_err(|error| failure("gather-peer-event", error))
+    }
+
+    fn require(&self, context: &Context, status: RuntimeCompletionStatusV1) -> ResultV1<()> {
+        match self {
+            Self::Scalar(peer) => require(context, peer, status),
+            Self::Segments(peer) => require(context, peer, status),
+        }
+    }
+
+    fn release(self, context: &mut Context) -> ResultV1<()> {
+        match self {
+            Self::Scalar(peer) => context
+                .release_submission(peer)
+                .map_err(|error| failure("gather-release-peer", error)),
+            Self::Segments(peer) => context
+                .release_submission(peer)
+                .map_err(|error| failure("gather-release-peer", error)),
+        }
+    }
 }
 
 fn publication_gate(retained: usize, completed: u64, all_pending: bool) -> ResultV1<bool> {
@@ -289,19 +465,13 @@ fn publication_gate(retained: usize, completed: u64, all_pending: bool) -> Resul
     Ok(retained == 1)
 }
 
-fn publication_observation(
-    context: &Context,
-    peers: &[RuntimeSubmissionV1<RuntimePeerCopyV1>],
-) -> ResultV1<bool> {
+fn publication_observation(context: &Context, peers: &[Peer]) -> ResultV1<bool> {
     if peers.len() < 2 {
         return Err(failure("gather-late-roster", "ordered peers required"));
     }
     let mut all_pending = true;
     for peer in peers {
-        all_pending &= context
-            .query_submission(peer)
-            .map_err(|error| failure("gather-late-peer-status", error))?
-            == RuntimeCompletionStatusV1::Pending;
+        all_pending &= peer.status(context)? == RuntimeCompletionStatusV1::Pending;
     }
     publication_gate(
         context.backend().retained_compute_xgmi_copies_v1(),
@@ -312,7 +482,7 @@ fn publication_observation(
 
 fn seed_oldest(
     context: &mut Context,
-    peers: &[RuntimeSubmissionV1<RuntimePeerCopyV1>],
+    peers: &[Peer],
     peer_stream: RuntimeStreamIdV1,
     deadline: Instant,
 ) -> ResultV1<()> {
@@ -351,12 +521,15 @@ fn admit(
     late: bool,
     deadline: Instant,
 ) -> ResultV1<Chain> {
-    let count = resources.windows.len();
+    let count = resources.source_count();
     let sink = &resources.runs[count];
     let mut ids = Vec::new();
     let mut sources = Vec::new();
     let mut events = Vec::new();
-    for run in &resources.runs[..count] {
+    for run in resources.runs[..count]
+        .iter()
+        .filter(|_| resources.segments.is_none())
+    {
         let arguments = Arguments::new(run.allocations[2], run.allocations[1], run.allocations[3])
             .map_err(|error| failure("gather-source-arguments", error))?;
         let submission = context
@@ -379,42 +552,62 @@ fn admit(
     }
     let mut peers = Vec::new();
     let mut predecessor = None;
-    for (index, window) in resources.windows.iter().enumerate() {
-        let mut dependencies = vec![events[index]];
+    for index in 0..count {
+        let mut dependencies = events.get(index).copied().into_iter().collect::<Vec<_>>();
         dependencies.extend(predecessor);
-        let submission = context
-            .peer_copy(
-                resources.peer_stream,
-                range(
-                    resources.runs[index].allocations[3],
-                    RuntimeAccessV1::Read,
-                    window.source,
-                    window.bytes,
-                ),
-                range(
-                    sink.allocations[2],
-                    RuntimeAccessV1::Write,
-                    window.destination,
-                    window.bytes,
-                ),
-                &dependencies,
+        let submission = if let Some(count) = resources.segments {
+            let mut list = descriptors(index, count);
+            let peer = context
+                .peer_copy_segments(
+                    resources.peer_stream,
+                    region(resources.source_allocation(index), RuntimeAccessV1::Read),
+                    region(sink.allocations[2], RuntimeAccessV1::Write),
+                    &list,
+                    &dependencies,
+                )
+                .map_err(|error| failure("destination-segments-peer", error))?;
+            list.fill(RuntimePeerCopySegmentV1 {
+                source_offset: u64::MAX,
+                destination_offset: u64::MAX,
+                byte_len: 0,
+            });
+            Peer::Segments(peer)
+        } else {
+            let window = resources.windows[index];
+            Peer::Scalar(
+                context
+                    .peer_copy(
+                        resources.peer_stream,
+                        range(
+                            resources.source_allocation(index),
+                            RuntimeAccessV1::Read,
+                            window.source,
+                            window.bytes,
+                        ),
+                        range(
+                            sink.allocations[2],
+                            RuntimeAccessV1::Write,
+                            window.destination,
+                            window.bytes,
+                        ),
+                        &dependencies,
+                    )
+                    .map_err(|error| failure("gather-peer", error))?,
             )
-            .map_err(|error| failure("gather-peer", error))?;
-        callback(context, &submission, receipts)?;
+        };
         ids.push(submission.id());
-        context
-            .release_event(events[index])
-            .map_err(|error| failure("gather-source-event-release", error))?;
+        let event = submission.observe(context, receipts)?;
+        if let Some(event) = events.get(index) {
+            context
+                .release_event(*event)
+                .map_err(|error| failure("gather-source-event-release", error))?;
+        }
         if let Some(event) = predecessor {
             context
                 .release_event(event)
                 .map_err(|error| failure("gather-peer-event-release", error))?;
         }
-        predecessor = Some(
-            context
-                .record_event(&submission)
-                .map_err(|error| failure("gather-peer-event", error))?,
-        );
+        predecessor = Some(event);
         peers.push(submission);
     }
     if late {
@@ -512,7 +705,7 @@ fn admit(
         require(context, submission, RuntimeCompletionStatusV1::Pending)?;
     }
     for submission in &peers {
-        require(context, submission, RuntimeCompletionStatusV1::Pending)?;
+        submission.require(context, RuntimeCompletionStatusV1::Pending)?;
     }
     require(context, &compute, RuntimeCompletionStatusV1::Pending)?;
     require(context, &returned, RuntimeCompletionStatusV1::Pending)?;
@@ -536,13 +729,29 @@ fn admit(
     })
 }
 
+fn pipeline_wait(segments: Option<usize>) -> Duration {
+    match segments {
+        // Two serialized maximum-size lists retain the prior allowance per list.
+        Some(4096) => Duration::from_secs(360),
+        Some(_) => Duration::from_secs(180),
+        None => WAIT,
+    }
+}
+
 fn pipeline(
     engine: &mut Engine,
     handle: &Handle,
     resources: Arc<Resources>,
     late: bool,
 ) -> ResultV1<String> {
-    let deadline = Instant::now() + WAIT;
+    let pipeline_wait = pipeline_wait(resources.segments);
+    let pipeline_ticks = if resources.segments.is_some() {
+        60_000
+    } else {
+        TICKS
+    };
+    let started = Instant::now();
+    let deadline = started + pipeline_wait;
     let mut future = Box::pin(
         handle
             .enqueue_stream_registration(resources.readback_stream)
@@ -561,10 +770,13 @@ fn pipeline(
         admit(context, &owned, &observed, late, deadline)
     })?;
     let mut completed = false;
-    for _ in 0..TICKS {
+    let mut completed_polls = 0;
+    let mut last_snapshot = None;
+    for tick in 0..pipeline_ticks {
         if Instant::now() >= deadline {
             break;
         }
+        let sample = resources.segments.is_some() && tick % 256 == 0;
         let result = command(engine, handle, deadline, "gather-poll", move |context| {
             let complete = match context
                 .poll(&mut chain.readback)
@@ -574,9 +786,25 @@ fn pipeline(
                 RuntimePollV1::Pending => false,
                 status => return Err(failure("gather-final-status", status)),
             };
-            Ok((chain, complete))
+            let snapshot = sample.then(|| {
+                format!(
+                    "elapsed={:?} native_completed={} native_retained={} peers={:?} compute={:?} return={:?} readback={:?}",
+                    started.elapsed(),
+                    context.backend().completed_compute_xgmi_copies_v1(),
+                    context.backend().retained_compute_xgmi_copies_v1(),
+                    chain.peers.iter().map(|peer| (peer.id(), peer.status(context))).collect::<Vec<_>>(),
+                    (chain.compute.id(), context.query_submission(&chain.compute)),
+                    (chain.returned.id(), context.query_submission(&chain.returned)),
+                    (chain.readback.id(), context.query_submission(&chain.readback)),
+                )
+            });
+            Ok((chain, complete, snapshot))
         })?;
         chain = result.0;
+        completed_polls += 1;
+        if result.2.is_some() {
+            last_snapshot = result.2;
+        }
         if result.1 {
             completed = true;
             break;
@@ -584,7 +812,15 @@ fn pipeline(
         std::thread::sleep(Duration::from_micros(50));
     }
     if !completed {
-        return Err(failure("gather-deadline", "final-only progress exhausted"));
+        return Err(failure(
+            "gather-deadline",
+            (
+                pipeline_wait,
+                started.elapsed(),
+                completed_polls,
+                last_snapshot,
+            ),
+        ));
     }
     {
         let receipts = receipts.lock().unwrap_or_else(|error| error.into_inner());
@@ -617,7 +853,7 @@ fn pipeline(
                 require(context, submission, RuntimeCompletionStatusV1::Succeeded)?;
             }
             for submission in &chain.peers {
-                require(context, submission, RuntimeCompletionStatusV1::Succeeded)?;
+                submission.require(context, RuntimeCompletionStatusV1::Succeeded)?;
             }
             require(
                 context,
@@ -635,7 +871,7 @@ fn pipeline(
                 RuntimeCompletionStatusV1::Succeeded,
             )?;
             if context.backend().completed_compute_xgmi_copies_v1()
-                != (owned.windows.len() + 1) as u64
+                != (owned.source_count() + 1) as u64
                 || context.backend().retained_compute_xgmi_copies_v1() != 0
             {
                 return Err(failure(
@@ -645,9 +881,8 @@ fn pipeline(
             }
             let sink = owned.runs.last().ok_or("missing sink")?;
             let layout = ReturnLayout::new(true);
-            let mut allocations: Vec<_> = owned.runs[..owned.windows.len()]
-                .iter()
-                .map(|run| (run.allocations[3], BYTES))
+            let mut allocations: Vec<_> = (0..owned.source_count())
+                .map(|index| (owned.source_allocation(index), BYTES))
                 .collect();
             allocations.extend([
                 (sink.allocations[2], BYTES),
@@ -673,9 +908,7 @@ fn pipeline(
                 .release_submission(chain.compute)
                 .map_err(|error| failure("gather-release-consumer", error))?;
             for submission in chain.peers.into_iter().rev() {
-                context
-                    .release_submission(submission)
-                    .map_err(|error| failure("gather-release-peer", error))?;
+                submission.release(context)?;
             }
             for submission in chain.sources {
                 context
@@ -685,7 +918,10 @@ fn pipeline(
             Ok(snapshots)
         },
     )?;
-    let output = verify(&resources.windows, &snapshots)?;
+    let output = match resources.segments {
+        Some(count) => verify_segments(count, &snapshots)?,
+        None => verify(&resources.windows, &snapshots)?,
+    };
     if handle.observer().reply_cells_in_use() != 0 {
         return Err(failure("gather-replies", "retained reply credit"));
     }
@@ -721,6 +957,25 @@ fn report(options: &Options, output: &str) -> String {
         .map(|id| format!("0x{id:016x}"))
         .collect::<Vec<_>>()
         .join(",");
+    if let Some(segments) = options.segments {
+        let (admission, progress, publication) = if options.late {
+            (
+                "lists-preadmitted-consumer-after-oldest-publication",
+                "oldest-list-seed-then-final-readback-stream-only",
+                " publication_observed=true publication_identity=ordered-roster-inference paired_custody=validated-by-consumer-admission retained_native_at_consumer_admission=1 retained_native_counter=0,1,0 publication_capture=single-peer-leaf-quantum oldest_seed=bounded-context-progress",
+            )
+        } else {
+            (
+                "all-before-explicit-progress",
+                "final-readback-stream-only",
+                "",
+            )
+        };
+        return format!(
+            "PASS schema=fe2o3.destination-segments-compute.v1 authority=qualification-r57-n3-v2 devices=3 sources=2 unique_ids={ids} lists=2 segments_per_list={segments} descriptors={} elements={ELEMENTS} bytes={BYTES} setup_launches=4 pipeline_launches=1 peer_copies=3 dependent_readbacks=1 completion_receipts=5 pipeline=settled-list-list-compute-peer-readback source_payloads=C,D source_producers=completed-and-released-before-list-admission admission={admission} progress={progress} public_events=released-after-dependent-admission consumer_dependencies=latest-list-only consumer_bindings=full-frame-read-stable-read-full-write descriptor_snapshot=caller-overwritten-after-admission native_transport=NATIVE-XGMI native_counter=0,3 output=full-byte-pass source_preservation=full-byte-pass gathered_frame=full-byte-pass return_guards=full-byte-pass host_guards=full-byte-pass output_sha256={output} digest=domain-and-u64le-length-prefixed-C-source-D-source-C-D-E-host host_output_installations=0 pipeline_host_joins=0 journal=enabled contexts=1 owners=1 batches=1 results_release=reverse-dependencies final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{publication}",
+            segments * 2,
+        );
+    }
     let windows = windows(count, options.overlap)
         .iter()
         .map(|window| format!("{}:{}:{}", window.source, window.destination, window.bytes))
@@ -786,6 +1041,117 @@ pub(super) fn main(arguments: &[String]) -> ResultV1<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_segment_cli_keeps_two_settled_sources_and_three_devices_explicit() {
+        assert_eq!(pipeline_wait(None), WAIT);
+        for mode in [
+            "--destination-segments-compute",
+            "--late-destination-segments-compute",
+        ] {
+            for count in [4, 65, 4096] {
+                let parsed = options(&[
+                    mode.into(),
+                    count.to_string(),
+                    "0x3".into(),
+                    "0x2".into(),
+                    "0x1".into(),
+                ])
+                .unwrap();
+                assert_eq!(parsed.ids, [3, 2, 1]);
+                assert_eq!(parsed.segments, Some(count));
+                assert_eq!(parsed.late, mode.starts_with("--late-"));
+                assert!(!parsed.overlap);
+                assert_eq!(
+                    pipeline_wait(parsed.segments),
+                    Duration::from_secs(if count == 4096 { 360 } else { 180 }),
+                );
+            }
+            for suffix in [
+                vec!["4", "0x1", "0x2"],
+                vec!["4", "0x1", "0x2", "0x3", "0x4"],
+                vec!["4", "0x1", "0x2", "0x01"],
+                vec!["4", "0x0", "0x2", "0x3"],
+                vec!["3", "0x1", "0x2", "0x3"],
+                vec!["4097", "0x1", "0x2", "0x3"],
+                vec!["04", "0x1", "0x2", "0x3"],
+                vec!["4", "0x1", "0x2", "--gather-compute"],
+            ] {
+                let arguments = std::iter::once(mode)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(options(&arguments).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn destination_segment_oracle_distinguishes_sources_list_order_and_full_guards() {
+        for count in [4, 65, 4096] {
+            let snapshots = expected_segments(count);
+            assert_eq!(snapshots.len(), 6);
+            assert_ne!(snapshots[0], snapshots[1]);
+            assert_eq!(&snapshots[2][..64], &filled(0.25)[..64]);
+            assert_eq!(&snapshots[2][BYTES - 4..], &0.25_f32.to_le_bytes());
+            let mut reversed = filled(0.25);
+            for source in (0..2).rev() {
+                for segment in descriptors(source, count) {
+                    let from = segment.source_offset as usize;
+                    let to = segment.destination_offset as usize;
+                    let len = segment.byte_len as usize;
+                    assert!(from.is_multiple_of(4) && to.is_multiple_of(4));
+                    assert!(len.is_multiple_of(4) && from + len <= BYTES && to + len <= BYTES);
+                    reversed[to..to + len].copy_from_slice(&snapshots[source][from..from + len]);
+                }
+            }
+            assert_ne!(reversed, snapshots[2]);
+            assert_eq!(descriptors(0, count)[0], descriptors(0, count)[2]);
+            assert_eq!(verify_segments(count, &snapshots).unwrap().len(), 64);
+            for index in 0..snapshots.len() {
+                for offset in [0, snapshots[index].len() - 1] {
+                    let mut corrupt = snapshots.clone();
+                    corrupt[index][offset] ^= 1;
+                    assert!(verify_segments(count, &corrupt).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn destination_segment_report_does_not_invent_pending_source_or_kernel_authority() {
+        for late in [false, true] {
+            let options = Options {
+                ids: vec![1, 2, 3],
+                overlap: false,
+                late,
+                segments: Some(65),
+            };
+            let line = report(&options, &"0".repeat(64));
+            let fields: std::collections::BTreeMap<_, _> = line
+                .strip_prefix("PASS ")
+                .unwrap()
+                .split_whitespace()
+                .map(|field| field.split_once('=').unwrap())
+                .collect();
+            assert_eq!(fields.len(), line.split_whitespace().count() - 1);
+            assert_eq!(fields["schema"], "fe2o3.destination-segments-compute.v1");
+            assert_eq!(fields["authority"], "qualification-r57-n3-v2");
+            assert_eq!(fields["source_payloads"], "C,D");
+            assert_eq!(fields["segments_per_list"], "65");
+            assert_eq!(fields["descriptors"], "130");
+            assert_eq!(fields["setup_launches"], "4");
+            assert_eq!(fields["pipeline_launches"], "1");
+            assert_eq!(fields["completion_receipts"], "5");
+            assert_eq!(fields["native_counter"], "0,3");
+            assert_eq!(fields["consumer_dependencies"], "latest-list-only");
+            assert_eq!(fields["pipeline_host_joins"], "0");
+            assert_eq!(fields["performance_acceptance"], "false");
+            assert_eq!(fields["formal_refinement"], "false");
+            assert_eq!(fields.contains_key("publication_observed"), late);
+            assert!(!fields.contains_key("windows"));
+        }
+    }
 
     #[test]
     fn gather_compute_cli_preserves_sources_and_sink_without_new_authority() {
@@ -886,6 +1252,7 @@ mod tests {
                     ids: (1..=devices).collect(),
                     overlap,
                     late: false,
+                    segments: None,
                 };
                 let checked = windows(options.ids.len() - 1, overlap);
                 let oracle = verify(&checked, &expected(&checked)).unwrap();

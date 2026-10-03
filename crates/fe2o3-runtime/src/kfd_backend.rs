@@ -9290,6 +9290,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             destination,
             &dependency_submissions,
         );
+        let segment_predecessor = if segments.is_some() && compute_producer.is_none() {
+            self.prepare_segment_destination_predecessor_v1(stream, destination_route, dependencies)
+        } else {
+            None
+        };
+        let segment_readback_frame =
+            if self.children[destination_route.child].allocations[&destination_route.local].kind
+                == RuntimeMemoryKindV1::HostVisible
+            {
+                dependency_submissions.iter().find_map(|id| {
+                    self.compute_peer_segment_frame_v1(*id, source_route)
+                        .filter(|frame| frame.covers(self, source))
+                        .map(|frame| (*id, frame))
+                })
+            } else {
+                None
+            };
         let source_dependencies_complete = self
             .cooperative_allocation_owners
             .get(&source_route)
@@ -9298,6 +9315,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     dependency_set.contains(owner)
                         || readback_frame.is_some_and(|producer| {
                             producer.orders_destination_owner(self, *owner)
+                        })
+                        || segment_readback_frame.as_ref().is_some_and(|(id, frame)| {
+                            frame.orders_owner(self, *id, source_route, *owner)
                         })
                         || matches!(
                             self.submissions.get(owner),
@@ -9314,6 +9334,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     dependency_set.contains(owner)
                         || compute_producer.as_ref().is_some_and(|producer| {
                             producer.orders_destination_owner(self, *owner)
+                        })
+                        || segment_predecessor.as_ref().is_some_and(|prior| {
+                            prior.orders_owner(self, destination_route, *owner)
                         })
                         || matches!(
                             self.submissions.get(owner),
@@ -9354,7 +9377,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 destination_route,
                 destination,
                 plan,
-                compute_producer.as_ref(),
+                (compute_producer.as_ref(), segment_predecessor.as_ref()),
             )?)
         } else if let Some(producer) = &compute_producer {
             Some(self.prepare_compute_xgmi_plan_v1(
@@ -9382,6 +9405,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     ),
                     [(source_route, source), (destination_route, destination)],
                     compute_producer.as_ref(),
+                    segment_predecessor,
                 )
             } else {
                 None
@@ -12617,6 +12641,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         // Stable-source lists retain their original initialized destination frame
         // independently of compute provenance. Pending endpoint-writer profiles
         // keep legacy transfer behavior without this consumer authorization.
+        true
+    }
+
+    fn supports_ordered_peer_copy_segments_v1(&self) -> bool {
+        // Exact same-stream destination-list predecessors serialize whole owners.
+        // The final frame retains list identity, never scalar envelope coverage.
         true
     }
 

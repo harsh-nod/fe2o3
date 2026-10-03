@@ -485,16 +485,44 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.disposal_started
             || root.disposed_count != 0
             || root.journal_disposed
-            || root.queued.is_some()
             || root.allocations.len() != 1
             || root.members.len() != 1
             || writer.key.context_generation != id.context_generation
             || writer.key.local != id.local
             || writer.key.kind != ContextWriterKindV1::Submission
-            || versions.retained_writer(writer)?
-                != (fe2o3_runtime_model::ContextWriterStateV1::Pending { member_count: 1 })
         {
             return Err(E::InvalidReference);
+        }
+        match &root.queued {
+            Some(requests) => {
+                let predecessor = peer
+                    .destination_predecessor_v1()
+                    .ok_or(E::InvalidReference)?;
+                if requests.len() != 1
+                    || requests[0].destination != root.members[0]
+                    || requests[0].predecessor.is_none_or(|previous| {
+                        previous.key.kind != ContextWriterKindV1::Submission
+                            || previous.key.context_generation
+                                != predecessor.submission.context_generation
+                            || previous.key.local != predecessor.submission.local
+                    })
+                    || versions.journal.lookup_writer(writer)?
+                        != fe2o3_runtime_model::ContextWriterStateV1::Reserved
+                {
+                    return Err(E::InvalidReference);
+                }
+                versions.journal.validate_queued_writer(writer, requests)?;
+                if versions.journal.queued_writer_status(writer)?
+                    == Some(ContextQueuedWriterStatusV1::Unknown)
+                {
+                    return Err(E::InvalidState);
+                }
+            }
+            None if peer.destination_predecessor_v1().is_none()
+                && versions.retained_writer(writer)?
+                    == (fe2o3_runtime_model::ContextWriterStateV1::Pending { member_count: 1 }) => {
+            }
+            None => return Err(E::InvalidState),
         }
         let allocation = &root.allocations[0];
         let member = root.members[0];
@@ -511,11 +539,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 allocation.record.byte_len,
             )
             || versions.whole_allocation(allocation.id, &allocation.record)? != member
-            || versions
-                .journal
-                .lookup_allocation(member.allocation)?
-                .pending_writer
-                != Some(writer)
+            || root.queued.is_none()
+                && versions
+                    .journal
+                    .lookup_allocation(member.allocation)?
+                    .pending_writer
+                    != Some(writer)
         {
             return Err(E::InvalidAllocationReference);
         }
@@ -526,7 +555,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         destinations: &[RuntimeAllocationIdV1],
     ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
-        self.prepare_submission_writer_profile_v1(destinations, None, None)
+        self.prepare_submission_writer_profile_v1(destinations, None, None, None)
     }
 
     fn prepare_submission_writer_profile_v1(
@@ -534,12 +563,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         destinations: &[RuntimeAllocationIdV1],
         launch: Option<&ProducerLaunchRootV1>,
         peer: Option<&ScalarPeerCopyRootV1>,
+        segments: Option<&SegmentedPeerCopyRootV1>,
     ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
         self.guard_journal_unwind_v1(|context| {
             if peer.is_some_and(|peer| {
                 peer.compute.is_none()
                     || destinations != [peer.destination.region.allocation]
                     || launch.is_some()
+                    || segments.is_some()
+            }) {
+                return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+            }
+            if segments.is_some_and(|root| {
+                destinations != [root.destination.region.allocation]
+                    || launch.is_some()
+                    || peer.is_some()
             }) {
                 return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
             }
@@ -571,7 +609,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .try_reserve_exact(canonical.len())
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             let mut requests = Vec::new();
-            if launch.is_some() || peer.is_some() {
+            if launch.is_some() || peer.is_some() || segments.is_some() {
                 requests
                     .try_reserve_exact(canonical.len())
                     .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
@@ -588,7 +626,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .expect("configured journal")
                     .whole_allocation(id, &record);
                 let member = context.journal_result_v1(result)?;
-                if launch.is_none() && peer.is_none() {
+                if launch.is_none() && peer.is_none() && segments.is_none() {
                     context.validate_journal_unqueued_v1(id, &record)?;
                 }
                 let result = context
@@ -619,14 +657,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         context.validate_queued_launch_predecessor_v1(launch, writer)?;
                     } else if let Some(peer) = peer {
                         context.validate_queued_peer_predecessor_v1(peer, writer)?;
+                    } else if let Some(segments) = segments {
+                        context.validate_queued_segmented_predecessor_v1(segments, writer)?;
                     } else {
                         return Err(RuntimeValidationErrorV1::ContextReserved);
                     }
                     queued = true;
-                } else if peer.is_some_and(|peer| peer.compute_predecessor_v1().is_some()) {
+                } else if peer.is_some_and(|peer| peer.compute_predecessor_v1().is_some())
+                    || segments.is_some_and(|root| root.destination_predecessor_v1().is_some())
+                {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
-                if launch.is_some() || peer.is_some() {
+                if launch.is_some() || peer.is_some() || segments.is_some() {
                     requests.push(ContextQueuedWriteV1 {
                         destination: member,
                         predecessor,
@@ -732,6 +774,40 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }
         let result = self.validate_pending_peer_copy_roots_v1(dependency.submission);
+        self.journal_result_v1(result)?;
+        if self.submissions[&dependency.submission].journal_writer != Some(writer) {
+            return self.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidReference));
+        }
+        Ok(())
+    }
+
+    fn validate_queued_segmented_predecessor_v1(
+        &mut self,
+        peer: &SegmentedPeerCopyRootV1,
+        writer: ContextWriterReferenceV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let dependency = peer
+            .destination_predecessor_v1()
+            .filter(|dependency| {
+                writer.key.kind == ContextWriterKindV1::Submission
+                    && writer.key.context_generation == dependency.submission.context_generation
+                    && writer.key.local == dependency.submission.local
+                    && self.segmented_predecessor_matches_v1(
+                        peer.stream,
+                        peer.destination,
+                        *dependency,
+                    )
+            })
+            .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
+        let versions = self.versions.as_ref().expect("configured journal");
+        let result = versions.journal.queued_writer_status(writer);
+        if matches!(
+            self.journal_result_v1(result)?,
+            Some(ContextQueuedWriterStatusV1::Unknown | ContextQueuedWriterStatusV1::Blocked)
+        ) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        let result = self.validate_pending_segmented_peer_roots_v1(dependency.submission);
         self.journal_result_v1(result)?;
         if self.submissions[&dependency.submission].journal_writer != Some(writer) {
             return self.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidReference));
@@ -1002,7 +1078,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             _ => None,
         };
-        let prepared = self.prepare_submission_writer_profile_v1(destinations, launch, peer)?;
+        let segments = match &custody {
+            Some(PreparedSubmissionCustodyV1::Segments { root, .. }) => Some(root),
+            _ => None,
+        };
+        let prepared =
+            self.prepare_submission_writer_profile_v1(destinations, launch, peer, segments)?;
         let (reads, producer) = match &custody {
             Some(PreparedSubmissionCustodyV1::Launch(root)) => {
                 self.prepare_launch_inputs_v1(root, sources)?

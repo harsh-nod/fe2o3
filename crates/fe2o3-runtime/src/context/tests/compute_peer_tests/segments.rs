@@ -5,6 +5,9 @@ use super::*;
 #[path = "segments/settled.rs"]
 mod settled;
 
+#[path = "segments/ordered.rs"]
+mod ordered;
+
 type List = RuntimeSubmissionV1<RuntimePeerCopySegmentsV1>;
 type Calls = Arc<Mutex<Vec<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>>>;
 

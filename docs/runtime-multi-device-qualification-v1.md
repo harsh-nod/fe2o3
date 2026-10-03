@@ -22,9 +22,56 @@ D2H and existing-profile regressions. The
 adds eight four-GPU pre-arm host rejection/retry cases and two existing
 packet-spanning controls. Exact original owners are restored only for certified
 host preparation rejection; an independent retained pair continues normally.
-Pending destination-list chaining, broader kernel authority, post-arm native
-fault campaigns and performance remain open.
+The [destination-list checkpoint](evidence/dev-destination-segments-2026-10-03/README.md)
+adds ordered settled-source lists into one pending destination frame, followed
+by a full-frame D2H or compute consumer. Eighteen three-GPU cases pass, including
+overlaps, source disposal after predecessor settlement and late compute admission.
+Pending-compute-source destination-list chaining, broader kernel authority,
+post-arm native fault campaigns and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
+
+## Ordered Destination Lists
+
+`supports_ordered_peer_copy_segments_v1` is a default-false backend capability.
+The unified KFD backend implements it for version-journal Context submissions:
+settled sources can queue ordered lists into one initialized DeviceLocal
+destination on the same stream. Each successor supplies the exact latest
+destination-list event. Immutable descriptor/frame identities and retained
+predecessor results survive public event release. Ordinary source leases and
+whole-destination queued writers remain distinct.
+
+A full-frame D2H or Read-only compute consumer can depend on only the latest
+list. Initialized holes, overlapping descriptors and last-writer order are
+preserved without granting scalar envelope coverage. A restored completed
+ancestor can outlive disposal of its source. Pending ancestors still require
+their original source, and failed writes do not restore journal lineage.
+
+The copy-only witness uses production authorities that deny every kernel:
+
+```sh
+cargo run --locked -p fe2o3-runtime --no-default-features \
+  --features hardware-qualification \
+  --example gfx942-runtime-destination-segments-smoke \
+  -- "$SOURCE_0_UID" "$SOURCE_1_UID" "$DESTINATION_UID" overlap
+```
+
+`--dispose-source` before the three IDs selects early disposal after the first
+list settles. Cases are `disjoint`, `overlap`, `duplicates` and `packets`.
+The existing `gfx942-runtime-deferred-peer-chain-smoke` adds
+`--destination-segments-compute <4|65|4096> <source0> <source1> <destination>`
+and its `--late-destination-segments-compute` variant under unchanged finite R57
+authority. It does not admit arbitrary application kernels or generated signatures.
+
+The [destination-list packet](evidence/dev-destination-segments-2026-10-03/README.md)
+accepts 18 native cases on GPUs 1/6/7 with independent full-buffer oracles and
+owned cleanup. Fresh CPU checks pass 2294 runtime tests, 40 example tests,
+61 runtime doctests, strict Clippy and all 32 source controls. The 1950-test KFD
+qualification is explicitly reused through unchanged executable/source identity;
+it is not a fresh run. Existing proof bodies are unchanged, with no new solver
+or whole-adapter refinement claim.
+This profile does not compose pending-compute-source lists behind a pending
+destination writer, permit simultaneous writes to destination slices, isolate
+indeterminate native failures, or establish performance parity.
 
 ## Pre-Arm Recovery
 

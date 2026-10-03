@@ -3,6 +3,9 @@
 #[path = "settled_segment_tests.rs"]
 mod settled;
 
+#[path = "ordered_segment_tests.rs"]
+mod ordered;
+
 use super::window::initialize_bytes;
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};

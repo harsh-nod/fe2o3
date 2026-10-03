@@ -13,8 +13,8 @@ impl RuntimePeerCopySegmentsBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     /// including duplicates and overlapping writes. One queue, mapping pair, and
     /// logical result cover the complete list; no intermediate result is exposed.
     /// A pending source requires its exact producer-aware full-allocation Write
-    /// event. The initialized destination must be settled at list admission;
-    /// downstream reads use a distinct preserved-frame contract, not its envelope.
+    /// event. A settled source may follow the exact same-stream destination-list
+    /// event. Downstream reads retain the initialized frame, not its envelope.
     fn peer_copy_segments_v1(
         &mut self,
         stream: u64,
@@ -82,8 +82,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         destination: RoutedHandleV1,
         destination_region: BackendMemoryRegionV1,
         plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
-        producer: Option<&compute_peer::Producer>,
+        custody: (
+            Option<&compute_peer::Producer>,
+            Option<&compute_peer::SegmentDestinationPredecessor>,
+        ),
     ) -> Result<Box<Root>, Failure> {
+        let (producer, predecessor) = custody;
         let unsupported = || {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -110,10 +114,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let record = &child.allocations[&endpoint.local];
             let pending_source = endpoint == source
                 && producer.is_some_and(|producer| producer.owns_source(self, endpoint));
+            let ordered_destination = endpoint == destination
+                && self.compute_xgmi_children[endpoint.child].is_some_and(|owner| {
+                    predecessor
+                        .is_some_and(|prior| prior.owns_occupied_child(self, endpoint.child, owner))
+                });
             if !child.peer_visible_device_allocations
                 || !checked_envelope(record, region)
                 || !record.sdma_initialized
                 || !pending_source
+                    && !ordered_destination
                     && (child.allocation_is_active(endpoint.local)
                         || self.allocation_retained_by_deferred_compute_v1(endpoint)
                         || !matches!(

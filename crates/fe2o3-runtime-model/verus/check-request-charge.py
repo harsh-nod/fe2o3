@@ -30,7 +30,7 @@ SOURCES = frozenset(FILES) | frozenset((
 ))
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "35e227a6ac11da82987a454e7def44afc125bc62b7815e8afa77a36b6a486b80"
+SOURCE_TREE_SHA = "ea42e9fbe051da80cb9c7bae61d37db1a1b0401c6cf5a9857ea217a2b63315d6"
 PROOF_SHA = "762360bdc1d84b360c16546b1669f040316c28fcd98b1f0005fd3d9de1516faf"
 # Full no-cheating discovery measured three obligations on the exact PROOF_SHA.
 EXPECTED_VERIFIED = 3

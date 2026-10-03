@@ -26,14 +26,16 @@ GPUs, including overlapping lists of up to 4096 descriptors. Standalone
 settled-source lists now also feed those consumers with no retained source
 producer result or source event. Narrow pre-arm host preparation recovery now
 also passes four-GPU qualification with an independent retained pair and retry,
-without relaxing journal Unknown handling. Earlier matched
+without relaxing journal Unknown handling. Ordered settled-source lists into
+one destination now pass three-GPU qualification, including overlaps, early
+source disposal, full-frame D2H and prequeued/late compute consumers. Earlier matched
 wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub access
 has recovered. The latest campaign reached MI300X on 2026-10-03 UTC;
 earlier DNS failures were worker-namespace observations, not evidence of a host
-outage. Its process roster shows GPU 0 occupied and admits GPUs 1/2/6/7. Every
+outage. Its process roster shows GPU 0 occupied and admits GPUs 1/6/7. Every
 native run still requires a new occupancy check; no exclusive reservation or
 performance qualification follows from that observation.
 These are exit-criteria statuses, not API implementation counts.
@@ -44,7 +46,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Ordered segment-list destination chains, native generated-argument qualification, application kernel authority, eight-GPU coverage and post-arm/native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered settled-source destination lists and full-frame consumers on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Pending-compute-source destination-list chains, native generated-argument qualification, application kernel authority, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
@@ -344,16 +346,26 @@ receipt replay covers 101 commands and explicit owned cleanup. This is a host
 capacity rejection campaign, not GPU/driver fault injection, whole-adapter
 refinement, physical overlap or performance qualification.
 
+The [destination-list checkpoint](evidence/dev-destination-segments-2026-10-03/README.md)
+qualifies ordered lists from two settled sources into one initialized destination
+on three GPUs. The exact latest predecessor event orders whole-destination
+writers; immutable frame identities preserve holes and overlap order without
+granting scalar envelope coverage. Full-frame D2H and Read-only compute consumers
+can depend on only the latest list. Released public events, disposed completed
+ancestor sources, caller descriptor mutation and late consumer admission are
+covered. All 18 native cases pass, including two lists of 4096 descriptors, with
+165 independently replayed transport receipts and owned cleanup. Fresh checks
+pass 2294 runtime tests (32 unchanged hardware ignores), 40 example tests,
+61 runtime doctests, strict Clippy and all 32 source controls. The prior 1950 KFD
+tests are reused through exact executable and dependency-source identity, not
+rerun. The first maximum-size campaign exceeded its witness deadline and remains
+rejected; the final campaign repeats every case with a larger maximum-size
+allowance. No runtime currentness guard was relaxed. No performance, new solver
+or whole-adapter refinement acceptance follows.
+
 The expedited practical multi-GPU priority order is:
 
-1. Add ordered list writes behind an exact pending destination-list writer.
-   Start with two settled sources writing one initialized destination on three
-   GPUs, then a full-frame consumer. Preserve immutable predecessor identity,
-   initialized complements and source/whole-destination reservations; do not
-   relabel an envelope as scalar coverage. Qualify overlaps, holes, released
-   events, source disposal after predecessor settlement and tail-stream-only
-   progress without adding concurrent-slice authority.
-2. Integrate one evidence-backed application kernel. Existing production peer
+1. Integrate one evidence-backed application kernel. Existing production peer
    constructors already accept caller authorities; finite fixtures do not
    supply compiler/effects evidence. The
    generated binding does not ship a concrete production proof backend or grant
@@ -365,11 +377,23 @@ The expedited practical multi-GPU priority order is:
    manual scalar/slice ABI packing, not storage or authority boundaries. Its
    native encoding qualification can use an exact existing admitted kernel;
    that does not substitute for this production evidence provider.
-3. Qualify post-arm native partial failures and isolation before broadening
+   Prioritize concrete protected compiler/proof and semantic machine-refinement
+   providers with authenticated per-invocation bindings, not another fixture-only
+   ABI demonstration. Pending-compute-source destination-list composition remains
+   a separate extension to the accepted settled-source profile.
+2. Qualify post-arm native partial failures and isolation before broadening
    execution claims. CPU scripted failures and certified pre-arm host capacity
    rejection are not a GPU/driver fault campaign. Native
    ambiguity still fail-stops the whole router; an untouched third child's
    metadata does not authorize continued execution in that Context.
+3. Amortize per-segment native overhead with bounded shared-owner packet windows.
+   Preserve full paired currentness checks around publication and completion,
+   exact slot/generation tickets, contiguous-prefix progress and final-only
+   owner restoration. Existing batching owns a different mapping pair per
+   request; shared-owner windows require new custody/prefix correspondence,
+   not cached authority across scheduler ticks. Repeated deep-chain ancestry
+   validation is a separate measured-optimization target. Neither change may
+   weaken currentness or treat an operational check as a full closing audit.
 4. Defer same-process reopen, eight-GPU coverage and matched performance until
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all

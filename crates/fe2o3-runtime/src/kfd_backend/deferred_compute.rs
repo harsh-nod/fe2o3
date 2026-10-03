@@ -601,6 +601,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                                 && !peers.iter().any(|peer| {
                                     peer.frame.as_ref().is_some_and(|frame| {
                                         frame.orders_owner(self, peer.id, *route, *owner)
+                                    }) || peer.segment_frame.as_ref().is_some_and(|frame| {
+                                        frame.orders_owner(self, peer.id, *route, *owner)
                                     })
                                 })
                         })
@@ -618,6 +620,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             !peers.iter().any(|peer| {
                 peer.id == owner
                     || peer.frame.as_ref().is_some_and(|frame| {
+                        frame.owns_occupied_child(self, peer.id, stream.child, owner)
+                    })
+                    || peer.segment_frame.as_ref().is_some_and(|frame| {
                         frame.owns_occupied_child(self, peer.id, stream.child, owner)
                     })
             })
@@ -967,6 +972,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 BackendPollV1::Pending => {
                     let ancestor = self.compute_xgmi_children[child].filter(|owner| {
                         peer.frame.as_ref().is_some_and(|frame| {
+                            frame.owns_occupied_child(self, peer.id, child, *owner)
+                        }) || peer.segment_frame.as_ref().is_some_and(|frame| {
                             frame.owns_occupied_child(self, peer.id, child, *owner)
                         })
                     });
