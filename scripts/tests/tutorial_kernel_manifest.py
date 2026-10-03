@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "e7618672b6f60d10b83be818cd36c78b656b628aac70fa487dc284f8fb7378a0")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "fabc52a5f2486527fe11d95d7bafadee6ea2a66984a3ad5e93f4e09d71f8a94b")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)

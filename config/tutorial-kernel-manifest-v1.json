@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "41ee837bf683e3442dc5ec9dea581b74a70366ee",
-      "tree": "f73371b79b3e4a1e70a9a26e25009707a8f443a6"
+      "commit": "ed6e1f8dae6090e53690a34a9e89394d6715f689",
+      "tree": "b7488c10a88417a7863aa795af5b959970162f00"
     },
     "status": "pending",
     "lessons": [
