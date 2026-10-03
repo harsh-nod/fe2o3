@@ -1345,6 +1345,93 @@ fn explicitly_binds_metadata_to_descriptor_and_entry_symbols() {
 }
 
 #[test]
+fn genuine_rust_fill_entry_has_descriptor_derived_register_inputs_and_exact_symbol_extent() {
+    let bytes = include_bytes!("fixtures/rust-fill-write-only-gfx942/kernel.hsaco");
+    let bound = inspect_and_bind_kernel_descriptors(bytes).unwrap();
+    assert_eq!(bound.inspection().target().processor(), "gfx942");
+    assert_eq!(bound.bindings().len(), 1);
+    let kernel = &bound.inspection().kernels()[0];
+    assert_eq!(kernel.name(), "fill_write_only");
+    assert_eq!(kernel.required_workgroup_size(), Some([64, 1, 1]));
+    let binding = bound.bindings()[0];
+    let descriptor = binding.descriptor();
+    assert_eq!(descriptor.kernarg_size(), 16);
+    assert_eq!(descriptor.kernel_code_properties(), 8);
+    assert_eq!(descriptor.compute_pgm_rsrc2(), 0x84);
+    let layout = bound.gfx942_initial_register_layout_v1(0).unwrap();
+    assert_eq!(layout.dispatch_pointer_sgprs(), None);
+    assert_eq!(layout.queue_pointer_sgprs(), None);
+    assert_eq!(layout.kernarg_pointer_sgprs(), Some([0, 1]));
+    assert_eq!(layout.dispatch_id_sgprs(), None);
+    assert_eq!(layout.user_sgpr_count(), 2);
+    assert_eq!(layout.workgroup_id_sgprs(), [Some(2), None, None]);
+    assert_eq!(layout.workgroup_info_sgpr(), None);
+    assert_eq!(layout.workitem_id_vgprs(), [Some(0), None, None]);
+    assert_eq!(layout.initialized_sgpr_count(), 3);
+    assert_eq!(layout.initialized_vgpr_count(), 1);
+    assert_ne!(u16::from(layout.user_sgpr_count()), kernel.sgpr_count());
+    assert_eq!(binding.entry_size(), 68);
+    let start = binding.entry_file_offset() as usize;
+    let end = start + binding.entry_size() as usize;
+    assert_eq!(
+        &bytes[start..start + 8],
+        &[0x00, 0x01, 0x0a, 0xc0, 0, 0, 0, 0]
+    );
+    assert_eq!(&bytes[end - 4..end], &0xbf81_0000u32.to_le_bytes());
+    assert_eq!(&bytes[end..end + 4], &0xbf80_0000u32.to_le_bytes());
+    assert_eq!(
+        bound.gfx942_initial_register_layout_v1(1),
+        Err(fe2o3_hsaco::Gfx942InitialRegisterLayoutErrorV1::KernelIndexOutOfBounds)
+    );
+}
+
+#[test]
+fn gfx942_entry_layout_does_not_infer_kernarg_position_from_the_old_machine_code() {
+    let mut bytes = include_bytes!("fixtures/rust-fill-write-only-gfx942/kernel.hsaco").to_vec();
+    let original = inspect_and_bind_kernel_descriptors(&bytes).unwrap();
+    let offset = original.bindings()[0].descriptor_file_offset() as usize;
+    write_u16(&mut bytes, offset + 56, (1 << 1) | (1 << 3));
+    write_u32(&mut bytes, offset + 52, (4 << 1) | (1 << 7));
+    let shifted = inspect_and_bind_kernel_descriptors(&bytes).unwrap();
+    let layout = shifted.gfx942_initial_register_layout_v1(0).unwrap();
+    assert_eq!(layout.dispatch_pointer_sgprs(), Some([0, 1]));
+    assert_eq!(layout.kernarg_pointer_sgprs(), Some([2, 3]));
+    assert_eq!(layout.workgroup_id_sgprs(), [Some(4), None, None]);
+    // This only inspects layout: the unchanged instruction body is NOT certified.
+    assert_ne!(
+        layout,
+        original.gfx942_initial_register_layout_v1(0).unwrap()
+    );
+}
+
+#[test]
+fn gfx942_entry_profile_rejects_surplus_user_slots_without_changing_general_inspection() {
+    use fe2o3_hsaco::Gfx942InitialRegisterLayoutErrorV1 as E;
+    let original = include_bytes!("fixtures/rust-fill-write-only-gfx942/kernel.hsaco");
+    let bound = inspect_and_bind_kernel_descriptors(original).unwrap();
+    let offset = bound.bindings()[0].descriptor_file_offset() as usize;
+    for actual in [0, 1, 3, 4, 16] {
+        let mut bytes = original.to_vec();
+        write_u32(&mut bytes, offset + 52, (u32::from(actual) << 1) | (1 << 7));
+        let inspected = inspect_and_bind_kernel_descriptors(&bytes).unwrap();
+        assert_eq!(
+            inspected.gfx942_initial_register_layout_v1(0),
+            Err(E::UserSgprCount {
+                expected: 2,
+                actual
+            })
+        );
+    }
+    let other = binding_fixture(valid_kernel("vecadd", "vecadd.kd"));
+    let inspected = inspect_and_bind_kernel_descriptors(&other.bytes).unwrap();
+    assert_ne!(inspected.inspection().target().processor(), "gfx942");
+    assert_eq!(
+        inspected.gfx942_initial_register_layout_v1(0),
+        Err(E::UnsupportedProcessor)
+    );
+}
+
+#[test]
 fn metadata_only_inspection_does_not_require_static_symbols() {
     let bytes = valid_hsaco();
     inspect(&bytes).unwrap();

@@ -175,26 +175,37 @@ The next acceptance target is one genuinely extracted, lowered and compiled Rust
 device-entry kernel, then admitted compute -> native peer -> compute/readback.
 Do not add more preparation wrappers or substitute a qualification-only kernel.
 
-1. Join the compiler owner's captured semantic ABI and KIR parameter/component
-   bindings to generated packing and the selected export's inspected physical
-   kernarg layout. Reuse the existing ABI capture, packing validator and published
-   HSACO parser. `compiler_descriptor.rs` already validates the structural
-   root/type/ownership joins; the extraction-only checked-prefix branch currently
-   drops its entry bindings. Retain that same-transaction evidence, starting with
-   the genuine `fill(DisjointSlice<u32>)` fixture, then scalar-plus-output. Do not
-   implement a parallel descriptor checker. The source-prefix ABI currently
-   accepts only direct u32 helper arguments, not an output-slice device entry.
-2. Establish complete source semantics for that selected kernel. Reuse the
-   checked-add prefix/KIR proofs only where the actual kernel needs them. The
-   existing `checked_prefix_output` calls a helper that continues after addition
-   with XOR/return; closing terminal checked-add AST validation alone establishes
-   neither the helper result nor the kernel store. Do not put another isolated
-   helper proof ahead of the entry/output path.
-3. Cover actual emitted entry loads, register/argument correspondence, arithmetic,
-   output-address calculation, bounded stores, memory completion and termination.
-   Choose instructions from the real selected artifact. The current local MOV/ADD
-   relation leaves entry and continuation obligations open; metadata alone cannot
-   establish machine-register equality.
+The [entry-layout checkpoint](evidence/dev-entry-layout-2026-10-03/README.md)
+captures genuine Rust `fill_write_only` through normal KIR V9/LLVM lowering and
+ROCm machine-code emission. Its exact function is 68 bytes and 14 instructions;
+trailing NOPs are outside the function symbol. The new HSACO query derives the
+scratch-free gfx942 input register locations from the selected inspected
+descriptor. This is CPU-qualified descriptive layout, not a formal ABI proof,
+machine-value relation or execution authority.
+
+1. Reuse the existing same-owner ABI/descriptor transition. The normal target
+   stage already retains semantic/KIR/formal ownership and typed roots; inert
+   worker-handoff construction validates the descriptor and embeds it into LLVM.
+   The plain LLVM capture stops before that construction. Do not copy those
+   fields into another owner or treat standalone diagnostic LLVM as a protected
+   handoff. Compose the existing canonical descriptor with physical inspection
+   and generated packing for the exact selected artifact.
+2. Check the complete real `fill_write_only` source/KIR chain: Index1d -> get ->
+   u32 truncation -> guarded write through the original output binding. Existing
+   write-only ranked projection records `Access`, not `ValueAccess`; the generic
+   validator explicitly excludes complete indexed-address/operational equivalence.
+   Bind actual call spans, predicate `index < len`, output address and stored value,
+   and reject all unsupported reachable effects. Reuse TotalView coverage with
+   actual launch/output extents; a bounded formal-memory witness alone does not
+   establish full result initialization. Do not prioritize isolated helper proofs.
+3. Prove the captured entry-to-exit machine relation. Inputs are kernarg `s[0:1]`,
+   workgroup X `s2`, workitem X `v0`; the new layout query derives, not assumes,
+   these locations. Cover the exact kernarg load, shift/OR index construction,
+   wait, unsigned comparison/EXEC mask, scaled address, four-byte store and both
+   paths to `S_ENDPGM`. In particular, the load captures its base before that pair
+   is overwritten, OR equals addition only for local X below 64, and Y/Z geometry
+   must not duplicate writes. Pointer validity, checked extent/address arithmetic,
+   active lanes and memory visibility/completion remain separate obligations.
 4. Qualify altered parameters/components, offsets/address spaces, owner/artifact
    substitution, changed result/literal, wrong store address/value, missing
    termination and extra effects. Only a complete proved profile and authenticated

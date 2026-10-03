@@ -5,6 +5,11 @@ use crate::{
     MAX_ELF_SEGMENTS, MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_MESSAGEPACK_STRING_BYTES,
 };
 
+mod gfx942_initial_registers;
+pub use gfx942_initial_registers::{
+    Gfx942InitialRegisterLayoutErrorV1, Gfx942InitialRegisterLayoutV1,
+};
+
 const ELF64_HEADER_BYTES: usize = 64;
 const ELF64_PROGRAM_HEADER_BYTES: usize = 56;
 const ELF64_SECTION_HEADER_BYTES: usize = 64;
