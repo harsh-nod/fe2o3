@@ -113,7 +113,7 @@ fn roundtrip(source: &Module, declarations_only: bool) {
         .unwrap();
     assert_eq!(budget.storage(), FLOOR);
     assert_eq!(budget.failed_storage(), None);
-    assert_eq!(budget.work_budget_v1().failed_work(), None);
+    assert_eq!(budget.failed_work(), None);
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn storage_v18_cyclic_pointer_table_copy_and_live_roundtrip_use_the_finite_roste
     ));
     assert_eq!(short.work(), 2);
     assert_eq!(short.storage(), FLOOR);
-    assert_eq!(short.work_budget_v1().failed_work(), Some(3));
+    assert_eq!(short.failed_work(), Some(3));
     roundtrip(&source, false);
 }
 
