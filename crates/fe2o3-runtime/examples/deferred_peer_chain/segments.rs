@@ -1,9 +1,9 @@
-//! Five retained roots through the unchanged two-step R57 authority on each device.
+//! Pending or released source compute through unchanged two-step R57 device gates.
 
 use super::*;
 use fe2o3_runtime::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsV1};
 
-const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--segments-compute|--late-segments-compute|--segments-readback> <4|65|4096> <0xsource-id> <0xdestination-id>";
+const USAGE: &str = "usage: gfx942-runtime-deferred-peer-chain-smoke <--segments-compute|--late-segments-compute|--segments-readback|--settled-segments-compute|--late-settled-segments-compute|--settled-segments-readback> <4|65|4096> <0xsource-id> <0xdestination-id>";
 const SOURCE_OFFSET: usize = 8;
 const SOURCE_LEN: usize = BYTES - 40;
 const DESTINATION_OFFSET: usize = 20;
@@ -17,16 +17,20 @@ struct Options {
     count: usize,
     late: bool,
     direct: bool,
+    settled: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
     if arguments.len() != 4 {
         return Err(USAGE.into());
     }
-    let (late, direct) = match arguments[0].as_str() {
-        "--segments-compute" => (false, false),
-        "--late-segments-compute" => (true, false),
-        "--segments-readback" => (false, true),
+    let (late, direct, settled) = match arguments[0].as_str() {
+        "--segments-compute" => (false, false, false),
+        "--late-segments-compute" => (true, false, false),
+        "--segments-readback" => (false, true, false),
+        "--settled-segments-compute" => (false, false, true),
+        "--late-settled-segments-compute" => (true, false, true),
+        "--settled-segments-readback" => (false, true, true),
         _ => return Err(USAGE.into()),
     };
     let count = match arguments[1].as_str() {
@@ -40,6 +44,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         count,
         late,
         direct,
+        settled,
     })
 }
 
@@ -204,7 +209,13 @@ fn setup(options: Options) -> ResultV1<(ManuallyDrop<Context>, Arc<Resources>)> 
         setup_compute(&mut context, &run, false, deadline)?;
         runs.push(run);
     }
-    // Both second gates remain unconsumed. Only C is refreshed; original B/D stay intact.
+    if options.settled {
+        // Normal setup launch is completed and released; no source event is created.
+        setup_compute(&mut context, &runs[0], true, deadline)?;
+        require_settled_source(&context, &runs[0])?;
+        verify_initial(&mut context, runs[0].allocations[3], &expected_d())?;
+    }
+    // Sink's second gate remains unconsumed. Only C is refreshed; B/D stay intact.
     upload(
         &mut context,
         runs[1].stream,
@@ -312,12 +323,22 @@ fn callback<A>(
 }
 
 struct Chain {
-    producer: RuntimeSubmissionV1<Arguments>,
+    producer: Option<RuntimeSubmissionV1<Arguments>>,
     list: RuntimeSubmissionV1<RuntimePeerCopySegmentsV1>,
     consumer: Option<RuntimeSubmissionV1<Arguments>>,
     returned: Option<RuntimeSubmissionV1<RuntimePeerCopyV1>>,
     readback: RuntimeSubmissionV1<RuntimeCopyV1>,
     ids: Vec<RuntimeSubmissionIdV1>,
+}
+
+fn require_settled_source(context: &Context, source: &DeviceRun) -> ResultV1<()> {
+    let observation = context
+        .query_stream(source.stream)
+        .map_err(|error| failure("segments-settled-source-query", error))?;
+    if observation != RuntimeStreamObservationV1::default() {
+        return Err(failure("segments-settled-source-results", observation));
+    }
+    Ok(())
 }
 
 fn publication_gate(retained: usize, completed: u64, pending: bool) -> ResultV1<bool> {
@@ -353,25 +374,37 @@ fn admit(
 ) -> ResultV1<Chain> {
     let source = &resources.runs[0];
     let sink = &resources.runs[1];
-    let arguments = Arguments::new(
-        source.allocations[2],
-        source.allocations[1],
-        source.allocations[3],
-    )
-    .map_err(|error| failure("segments-producer-arguments", error))?;
-    let producer = context
-        .launch_producer_aware_v1(
-            source.stream,
-            &source.kernel,
-            &arguments,
-            GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
-            &[],
+    let producer = if options.settled {
+        require_settled_source(context, source)?;
+        None
+    } else {
+        let arguments = Arguments::new(
+            source.allocations[2],
+            source.allocations[1],
+            source.allocations[3],
         )
-        .map_err(|error| failure("segments-producer", error))?;
-    callback(context, &producer, 0, receipts)?;
-    let event = context
-        .record_event(&producer)
-        .map_err(|error| failure("segments-producer-event", error))?;
+        .map_err(|error| failure("segments-producer-arguments", error))?;
+        let submission = context
+            .launch_producer_aware_v1(
+                source.stream,
+                &source.kernel,
+                &arguments,
+                GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
+                &[],
+            )
+            .map_err(|error| failure("segments-producer", error))?;
+        callback(context, &submission, 0, receipts)?;
+        Some(submission)
+    };
+    let event = producer
+        .as_ref()
+        .map(|submission| {
+            context
+                .record_event(submission)
+                .map_err(|error| failure("segments-producer-event", error))
+        })
+        .transpose()?;
+    let first = usize::from(producer.is_some());
     let mut supplied = descriptors(options.count);
     let list = context
         .peer_copy_segments(
@@ -389,13 +422,17 @@ fn admit(
                 DESTINATION_LEN,
             ),
             &supplied,
-            &[event],
+            event.as_slice(),
         )
         .map_err(|error| failure("segments-list", error))?;
-    callback(context, &list, 1, receipts)?;
-    context
-        .release_event(event)
-        .map_err(|error| failure("segments-producer-event-release", error))?;
+    callback(context, &list, first, receipts)?;
+    if let Some(event) = event {
+        context
+            .release_event(event)
+            .map_err(|error| failure("segments-producer-event-release", error))?;
+    } else {
+        require_settled_source(context, source)?;
+    }
     // Both caller order and descriptor bytes cease being a source of authority.
     supplied.reverse();
     supplied.fill(RuntimePeerCopySegmentV1 {
@@ -441,11 +478,15 @@ fn admit(
                 &[event],
             )
             .map_err(|error| failure("segments-direct-readback", error))?;
-        callback(context, &readback, 2, receipts)?;
+        callback(context, &readback, first + 1, receipts)?;
         context
             .release_event(event)
             .map_err(|error| failure("segments-direct-event-release", error))?;
-        require(context, &producer, RuntimeCompletionStatusV1::Pending)?;
+        if let Some(submission) = &producer {
+            require(context, submission, RuntimeCompletionStatusV1::Pending)?;
+        } else {
+            require_settled_source(context, source)?;
+        }
         require(context, &list, RuntimeCompletionStatusV1::Pending)?;
         require(context, &readback, RuntimeCompletionStatusV1::Pending)?;
         if context.backend().completed_compute_xgmi_copies_v1() != 0
@@ -456,7 +497,12 @@ fn admit(
                 "unexpected native peer progress",
             ));
         }
-        let ids = vec![producer.id(), list.id(), readback.id()];
+        let mut ids: Vec<_> = producer
+            .as_ref()
+            .map(RuntimeSubmissionV1::id)
+            .into_iter()
+            .collect();
+        ids.extend([list.id(), readback.id()]);
         return Ok(Chain {
             producer,
             list,
@@ -484,7 +530,7 @@ fn admit(
     if options.late && !observed(context, &list)? {
         return Err(failure("segments-late-admission", "paired custody changed"));
     }
-    callback(context, &consumer, 2, receipts)?;
+    callback(context, &consumer, first + 1, receipts)?;
     context
         .release_event(event)
         .map_err(|error| failure("segments-list-event-release", error))?;
@@ -510,7 +556,7 @@ fn admit(
             &[event],
         )
         .map_err(|error| failure("segments-return", error))?;
-    callback(context, &returned, 3, receipts)?;
+    callback(context, &returned, first + 2, receipts)?;
     context
         .release_event(event)
         .map_err(|error| failure("segments-consumer-event-release", error))?;
@@ -535,11 +581,15 @@ fn admit(
             &[event],
         )
         .map_err(|error| failure("segments-readback", error))?;
-    callback(context, &readback, 4, receipts)?;
+    callback(context, &readback, first + 3, receipts)?;
     context
         .release_event(event)
         .map_err(|error| failure("segments-return-event-release", error))?;
-    require(context, &producer, RuntimeCompletionStatusV1::Pending)?;
+    if let Some(submission) = &producer {
+        require(context, submission, RuntimeCompletionStatusV1::Pending)?;
+    } else {
+        require_settled_source(context, source)?;
+    }
     require(context, &list, RuntimeCompletionStatusV1::Pending)?;
     require(context, &consumer, RuntimeCompletionStatusV1::Pending)?;
     require(context, &returned, RuntimeCompletionStatusV1::Pending)?;
@@ -553,13 +603,12 @@ fn admit(
             "native counter or custody differs",
         ));
     }
-    let ids = vec![
-        producer.id(),
-        list.id(),
-        consumer.id(),
-        returned.id(),
-        readback.id(),
-    ];
+    let mut ids: Vec<_> = producer
+        .as_ref()
+        .map(RuntimeSubmissionV1::id)
+        .into_iter()
+        .collect();
+    ids.extend([list.id(), consumer.id(), returned.id(), readback.id()]);
     Ok(Chain {
         producer,
         list,
@@ -640,11 +689,11 @@ fn pipeline(
         deadline,
         "segments-snapshot-release",
         move |context| {
-            require(
-                context,
-                &chain.producer,
-                RuntimeCompletionStatusV1::Succeeded,
-            )?;
+            if let Some(submission) = &chain.producer {
+                require(context, submission, RuntimeCompletionStatusV1::Succeeded)?;
+            } else {
+                require_settled_source(context, &owned.runs[0])?;
+            }
             require(context, &chain.list, RuntimeCompletionStatusV1::Succeeded)?;
             if let Some(submission) = &chain.consumer {
                 require(context, submission, RuntimeCompletionStatusV1::Succeeded)?;
@@ -701,9 +750,11 @@ fn pipeline(
             context
                 .release_submission(chain.list)
                 .map_err(|error| failure("segments-release-list", error))?;
-            context
-                .release_submission(chain.producer)
-                .map_err(|error| failure("segments-release-producer", error))?;
+            if let Some(submission) = chain.producer {
+                context
+                    .release_submission(submission)
+                    .map_err(|error| failure("segments-release-producer", error))?;
+            }
             Ok(snapshots)
         },
     )?;
@@ -787,7 +838,11 @@ fn report(options: Options, output: &str) -> String {
         .sum();
     let (admission, progress, retained) = if options.direct {
         (
-            "all-three-before-explicit-progress",
+            if options.settled {
+                "all-two-before-explicit-progress"
+            } else {
+                "all-three-before-explicit-progress"
+            },
             "final-readback-stream-only",
             "0,0",
         )
@@ -799,7 +854,11 @@ fn report(options: Options, output: &str) -> String {
         )
     } else {
         (
-            "all-five-before-explicit-progress",
+            if options.settled {
+                "all-four-before-explicit-progress"
+            } else {
+                "all-five-before-explicit-progress"
+            },
             "final-readback-stream-only",
             "0,0",
         )
@@ -807,33 +866,63 @@ fn report(options: Options, output: &str) -> String {
     let (schema, launches, computes, copies, results, pipeline, counter, guards, digest, release) =
         if options.direct {
             (
-                "fe2o3.pending-segments-readback.v1",
+                if options.settled {
+                    "fe2o3.settled-segments-readback.v1"
+                } else {
+                    "fe2o3.pending-segments-readback.v1"
+                },
                 3,
+                usize::from(!options.settled),
                 1,
-                1,
-                3,
-                "compute-segments-readback",
+                if options.settled { 2 } else { 3 },
+                if options.settled {
+                    "segments-readback"
+                } else {
+                    "compute-segments-readback"
+                },
                 "0,1",
                 "not-applicable",
                 "length-prefixed-source-input-host",
-                "readback-list-producer",
+                if options.settled {
+                    "readback-list"
+                } else {
+                    "readback-list-producer"
+                },
             )
         } else {
             (
-                "fe2o3.pending-segments-compute.v1",
+                if options.settled {
+                    "fe2o3.settled-segments-compute.v1"
+                } else {
+                    "fe2o3.pending-segments-compute.v1"
+                },
                 4,
+                if options.settled { 1 } else { 2 },
                 2,
-                2,
-                5,
-                "compute-segments-deferred-compute-peer-readback",
+                if options.settled { 4 } else { 5 },
+                if options.settled {
+                    "segments-deferred-compute-peer-readback"
+                } else {
+                    "compute-segments-deferred-compute-peer-readback"
+                },
                 "0,2",
                 "full-byte-pass",
                 "length-prefixed-source-input-output-return-host",
-                "readback-peer-consumer-list-producer",
+                if options.settled {
+                    "readback-peer-consumer-list"
+                } else {
+                    "readback-peer-consumer-list-producer"
+                },
             )
         };
+    let setup_launches = 2 + usize::from(options.settled);
+    let provenance = if options.settled {
+        " source_admission=settled-result-released source_results_at_list_admission=0 source_events_supplied=0 source_stream=empty-before-and-after-admission"
+    } else {
+        ""
+    };
     format!(
-        "PASS schema={schema} authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} descriptors={} useful_bytes={useful} source_envelope={SOURCE_OFFSET},{SOURCE_LEN} destination_envelope={DESTINATION_OFFSET},{DESTINATION_LEN} descriptor_order=serial-last-writer-wins duplicates=retained caller_list=mutated-after-admission launches={launches} setup_launches=2 pipeline_launches={computes} peer_copies={copies} segmented_copies=1 dependent_readbacks=1 completion_receipts={results} pipeline={pipeline} admission={admission} progress={progress} late_consumer={} publication_observed={} retained_native_counter={retained} public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter={counter} output=full-byte-pass source_preservation=full-byte-pass destination_frame=initialized-complement-checked return_guards={guards} host_guards=full-byte-pass output_sha256={output} digest={digest} host_output_installations=0 journal=enabled retained_results={results} contexts=1 owners=1 pipeline_host_joins=0 results_release={release} final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+        "PASS schema={schema} authority=qualification-r57-n3-v2 devices=2 unique_ids=0x{:016x},0x{:016x} elements={ELEMENTS} bytes={BYTES} descriptors={} useful_bytes={useful} source_envelope={SOURCE_OFFSET},{SOURCE_LEN} destination_envelope={DESTINATION_OFFSET},{DESTINATION_LEN} descriptor_order=serial-last-writer-wins duplicates=retained caller_list=mutated-after-admission launches={launches} setup_launches={setup_launches} pipeline_launches={computes} peer_copies={copies} segmented_copies=1 dependent_readbacks=1 completion_receipts={results} pipeline={pipeline} admission={admission} progress={progress} late_consumer={} publication_observed={} retained_native_counter={retained} public_events=released-after-dependent-admission native_transport=NATIVE-XGMI native_counter={counter} output=full-byte-pass source_preservation=full-byte-pass destination_frame=initialized-complement-checked return_guards={guards} host_guards=full-byte-pass output_sha256={output} digest={digest} host_output_installations=0 journal=enabled retained_results={results} contexts=1 owners=1 pipeline_host_joins=0 results_release={release} final_drain=completed-only cleanup=owned-shutdown-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{provenance}",
         options.ids[0], options.ids[1], options.count, options.late, options.late
     )
 }
@@ -869,7 +958,8 @@ mod tests {
                         ids: [2, 1],
                         count,
                         late: flag.starts_with("--late"),
-                        direct: flag == "--segments-readback"
+                        direct: flag == "--segments-readback",
+                        settled: false,
                     }
                 );
             }
@@ -971,6 +1061,7 @@ mod tests {
                     count: 4,
                     late,
                     direct: false,
+                    settled: false,
                 },
                 "digest",
             );
@@ -981,6 +1072,7 @@ mod tests {
                 .collect();
             let fields: std::collections::BTreeMap<_, _> = pairs.iter().copied().collect();
             assert_eq!(pairs.len(), fields.len());
+            assert_eq!(pairs.len(), 48);
             assert_eq!(fields["completion_receipts"], "5");
             assert_eq!(fields["native_counter"], "0,2");
             assert_eq!(fields["authority"], "qualification-r57-n3-v2");
@@ -1034,6 +1126,7 @@ mod tests {
                 count: 4,
                 late: false,
                 direct: true,
+                settled: false,
             },
             "digest",
         );
@@ -1045,6 +1138,146 @@ mod tests {
             "return_guards=not-applicable",
         ] {
             assert!(line.split_whitespace().any(|word| word == field));
+        }
+    }
+
+    #[test]
+    fn settled_segment_cli_requires_distinct_explicit_provenance_modes() {
+        for flag in [
+            "--settled-segments-compute",
+            "--late-settled-segments-compute",
+            "--settled-segments-readback",
+        ] {
+            for count in [4, 65, 4096] {
+                let parsed =
+                    options(&[flag.into(), count.to_string(), "0x2".into(), "0x1".into()]).unwrap();
+                assert_eq!(
+                    parsed,
+                    Options {
+                        ids: [2, 1],
+                        count,
+                        late: flag.starts_with("--late"),
+                        direct: flag.ends_with("-readback"),
+                        settled: true,
+                    }
+                );
+            }
+        }
+        for arguments in [
+            vec!["--settled-segments-compute", "0", "0x1", "0x2"],
+            vec!["--settled-segments-compute", "4097", "0x1", "0x2"],
+            vec!["--settled-segments-compute", "4", "0x1", "0x01"],
+            vec!["--settled-segments-compute", "4", "0x0", "0x2"],
+            vec!["--settled-segments-readback", "4", "1", "0x2"],
+            vec!["--late-settled-segments-readback", "4", "0x1", "0x2"],
+            vec![
+                "--settled-segments-compute",
+                "--segments-compute",
+                "4",
+                "0x1",
+                "0x2",
+            ],
+            vec!["--late-settled-segments-compute", "4", "0x1"],
+        ] {
+            assert!(
+                options(&arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn settled_segment_reports_change_provenance_not_the_complete_byte_oracle() {
+        for count in [4, 65, 4096] {
+            for (direct, late) in [(false, false), (false, true), (true, false)] {
+                let output = if direct {
+                    verify_direct(count, &expected_direct(count)).unwrap()
+                } else {
+                    verify(count, &expected(count)).unwrap()
+                };
+                let options = Options {
+                    ids: [2, 1],
+                    count,
+                    late,
+                    direct,
+                    settled: true,
+                };
+                let line = report(options, &output);
+                let pairs: Vec<_> = line
+                    .split_whitespace()
+                    .skip(1)
+                    .map(|word| word.split_once('=').unwrap())
+                    .collect();
+                let fields: std::collections::BTreeMap<_, _> = pairs.iter().copied().collect();
+                assert_eq!(pairs.len(), 52);
+                assert_eq!(fields.len(), pairs.len());
+                assert_eq!(
+                    fields["schema"],
+                    if direct {
+                        "fe2o3.settled-segments-readback.v1"
+                    } else {
+                        "fe2o3.settled-segments-compute.v1"
+                    }
+                );
+                assert_eq!(fields["source_admission"], "settled-result-released");
+                assert_eq!(fields["source_results_at_list_admission"], "0");
+                assert_eq!(fields["source_events_supplied"], "0");
+                assert_eq!(fields["source_stream"], "empty-before-and-after-admission");
+                assert_eq!(fields["setup_launches"], "3");
+                assert_eq!(fields["pipeline_launches"], if direct { "0" } else { "1" });
+                assert_eq!(
+                    fields["completion_receipts"],
+                    if direct { "2" } else { "4" }
+                );
+                assert_eq!(fields["retained_results"], fields["completion_receipts"]);
+                assert_eq!(fields["pipeline_host_joins"], "0");
+                assert_eq!(fields["output_sha256"], output);
+                assert_eq!(fields["native_counter"], if direct { "0,1" } else { "0,2" });
+                assert_eq!(
+                    fields["results_release"],
+                    if direct {
+                        "readback-list"
+                    } else {
+                        "readback-peer-consumer-list"
+                    }
+                );
+                assert_eq!(
+                    fields["retained_native_counter"],
+                    if late { "0,1,0" } else { "0,0" }
+                );
+                assert_eq!(fields["authority"], "qualification-r57-n3-v2");
+                assert_eq!(fields["performance_acceptance"], "false");
+                assert_eq!(fields["formal_refinement"], "false");
+                let previous = report(
+                    Options {
+                        settled: false,
+                        ..options
+                    },
+                    &output,
+                );
+                let previous: std::collections::BTreeMap<_, _> = previous
+                    .split_whitespace()
+                    .skip(1)
+                    .map(|word| word.split_once('=').unwrap())
+                    .collect();
+                assert_eq!(previous.len(), 48);
+                assert!(!previous.contains_key("source_admission"));
+                for key in [
+                    "output_sha256",
+                    "digest",
+                    "source_envelope",
+                    "destination_envelope",
+                    "descriptor_order",
+                    "duplicates",
+                    "caller_list",
+                    "source_preservation",
+                    "destination_frame",
+                    "return_guards",
+                    "host_guards",
+                    "cleanup",
+                ] {
+                    assert_eq!(fields[key], previous[key], "oracle/ownership field {key}");
+                }
+            }
         }
     }
 }

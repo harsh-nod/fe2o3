@@ -10,6 +10,7 @@ struct SegmentedPeerPlanV1 {
     source: ContextReadSourceV1,
     destination: ContextReadSourceV1,
     identity: IdentityDigestV1,
+    origin: SegmentedPeerSourceV1,
     _segments: std::sync::Arc<Vec<RuntimePeerCopySegmentV1>>,
 }
 
@@ -20,7 +21,7 @@ pub(in crate::context) struct SegmentedPeerCopyRootV1 {
     pub(in crate::context) destination: ContextReadSourceV1,
     pub(in crate::context) identity: IdentityDigestV1,
     plan: std::sync::Arc<SegmentedPeerPlanV1>,
-    pub(in crate::context) producer: ScalarPeerDependencyV1,
+    pub(in crate::context) origin: SegmentedPeerSourceV1,
     pub(in crate::context) dependencies: Vec<ScalarPeerDependencyV1>,
     pub(in crate::context) backend_submission: Option<u64>,
     pub(in crate::context) dependencies_held: bool,
@@ -28,6 +29,13 @@ pub(in crate::context) struct SegmentedPeerCopyRootV1 {
 }
 
 impl SegmentedPeerCopyRootV1 {
+    pub(in crate::context) fn compute_producer_v1(&self) -> Option<ScalarPeerDependencyV1> {
+        match self.origin {
+            SegmentedPeerSourceV1::Settled => None,
+            SegmentedPeerSourceV1::Compute(producer) => Some(producer),
+        }
+    }
+
     pub(in crate::context) fn preserves_destination_frame_v1(
         &self,
         source: ContextReadSourceV1,
@@ -39,6 +47,7 @@ impl SegmentedPeerCopyRootV1 {
             && self.stream == self.plan.stream
             && self.backend_stream == self.plan.backend_stream
             && self.identity == self.plan.identity
+            && self.origin == self.plan.origin
             && source.record == self.destination.record
             && source.region.allocation == self.destination.region.allocation
             && source.region.access == RuntimeAccessV1::Read
@@ -77,9 +86,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         dependencies: &[RuntimeEventIdV1],
     ) -> Result<Option<SegmentedPeerCopyRootV1>, RuntimeValidationErrorV1> {
         if self.versions.is_none()
-            || !self
+            || !(self
                 .backend
                 .supports_pending_compute_peer_copy_segments_v1()
+                || self.backend.supports_peer_copy_segments_frame_v1())
             || source.access != RuntimeAccessV1::Read
             || destination.access != RuntimeAccessV1::Write
         {
@@ -99,7 +109,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Ok(None);
         }
         let dependencies = self.prepare_dependency_roster_v1(dependencies)?;
-        let Some(producer) = dependencies
+        let producer = dependencies
             .iter()
             .find(|dependency| {
                 self.submissions[&dependency.submission].status
@@ -109,9 +119,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .get(&dependency.submission)
                         .is_some_and(|launch| exact_source(launch, source))
             })
-            .copied()
-        else {
-            return Ok(None);
+            .copied();
+        let origin = match producer {
+            Some(producer)
+                if self
+                    .backend
+                    .supports_pending_compute_peer_copy_segments_v1() =>
+            {
+                SegmentedPeerSourceV1::Compute(producer)
+            }
+            None if self.backend.supports_peer_copy_segments_frame_v1() => {
+                SegmentedPeerSourceV1::Settled
+            }
+            _ => return Ok(None),
         };
         let mut depth = 1;
         for (index, dependency) in dependencies.iter().enumerate() {
@@ -120,7 +140,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             self.check_operation_custody_v1(dependency.submission)?;
             let record = self.submissions[&dependency.submission];
-            if dependency == &producer {
+            if Some(*dependency) == producer {
                 if dependency.device != source.record.device
                     || record.quiescent
                     || !record.producer_launch
@@ -128,6 +148,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
             } else if record.status != RuntimeCompletionStatusV1::Succeeded || !record.quiescent {
+                if origin == SegmentedPeerSourceV1::Settled {
+                    // The legacy list still retains its controls, but this
+                    // profile makes no pending-control provenance promise.
+                    return Ok(None);
+                }
                 return Err(RuntimeValidationErrorV1::ContextReserved);
             }
             depth = depth.max(
@@ -137,6 +162,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             );
         }
         if depth > MAX_RUNTIME_DEPENDENCIES_V1 {
+            if origin == SegmentedPeerSourceV1::Settled {
+                return Ok(None);
+            }
             return Err(RuntimeValidationErrorV1::TooManyDependencies);
         }
         self.segmented_peer_copies
@@ -150,6 +178,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             source,
             destination,
             identity,
+            origin,
             _segments: segments,
         });
         Ok(Some(SegmentedPeerCopyRootV1 {
@@ -159,7 +188,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             source,
             destination,
             plan,
-            producer,
+            origin,
             dependencies,
             backend_submission: None,
             dependencies_held: true,
@@ -211,9 +240,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             };
         };
         if self.versions.is_none()
-            || !self
-                .backend
-                .supports_pending_compute_peer_copy_segments_v1()
+            || match root.origin {
+                SegmentedPeerSourceV1::Settled => {
+                    !self.backend.supports_peer_copy_segments_frame_v1()
+                }
+                SegmentedPeerSourceV1::Compute(_) => !self
+                    .backend
+                    .supports_pending_compute_peer_copy_segments_v1(),
+            }
             || self.scalar_peer_copies.contains_key(&id)
             || self.same_device_copies.contains_key(&id)
             || self.producer_launches.contains_key(&id)
@@ -224,14 +258,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.source.record.device == root.destination.record.device
             || root.source.region.access != RuntimeAccessV1::Read
             || root.destination.region.access != RuntimeAccessV1::Write
-            || root.state.depth < 2
+            || root.state.depth == 0
+            || root.compute_producer_v1().is_some() && root.state.depth < 2
             || root.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
-            || root.dependencies.is_empty()
             || root.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
             || root.state.cursor > root.dependencies.len()
             || root.state.terminal == Some(BackendPollV1::Pending)
             || root.state.terminal.is_none() && root.state.cursor != 0
-            || !root.dependencies.contains(&root.producer)
+            || root
+                .compute_producer_v1()
+                .is_some_and(|producer| !root.dependencies.contains(&producer))
+            || root.origin != root.plan.origin
             || root.identity != root.plan.identity
             || root.stream != root.plan.stream
             || root.source.region != root.plan.source.region
@@ -325,7 +362,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             previous = Some(dependency.submission);
             ordinals[dependency.ordinal] = true;
-            if dependency == &root.producer {
+            if Some(*dependency) == root.compute_producer_v1() {
                 self.validate_producer_launch_custody_v1(dependency.submission)?;
                 if dependency.device != root.source.record.device
                     || !parent.producer_launch

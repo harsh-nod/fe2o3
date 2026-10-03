@@ -1,5 +1,8 @@
 //! Actual routed compute custody and scripted segment bytes, not computed arithmetic.
 
+#[path = "settled_segment_tests.rs"]
+mod settled;
+
 use super::window::initialize_bytes;
 use super::*;
 use crate::{RuntimePeerCopySegmentV1, RuntimePeerCopySegmentsBackendV1};
@@ -52,8 +55,8 @@ fn owner(f: &Fixture, allocation: u64) -> (u64, &[u8]) {
 
 struct PendingList {
     f: Fixture,
-    producer: u64,
-    producer_event: u64,
+    producer: Option<u64>,
+    producer_event: Option<u64>,
     list: u64,
     event: u64,
     identities: [u64; 4],
@@ -77,6 +80,15 @@ impl PendingList {
         direct: bool,
         readback: bool,
         settled: bool,
+        readback_will_run: bool,
+    ) -> Self {
+        Self::with_source_profile(Some((queued, settled)), direct, readback, readback_will_run)
+    }
+
+    fn with_source_profile(
+        compute: Option<(bool, bool)>,
+        direct: bool,
+        readback: bool,
         readback_will_run: bool,
     ) -> Self {
         let mut f = Fixture::with_layout_driver_prefixes_and_readback_progress(
@@ -107,9 +119,10 @@ impl PendingList {
         let (input_id, input) = initialize_bytes(&mut f, input_allocation, 0xc3);
         let (output_id, output) = initialize_bytes(&mut f, output_allocation, 0x49);
         let (return_id, returned) = initialize_bytes(&mut f, returned_allocation, 0xaf);
-        let producer = f.launch(0, 0, queued, true);
-        let producer_event = f.event(0, producer);
-        if settled {
+        let producer = compute.map(|(queued, _)| f.launch(0, 0, queued, true));
+        let producer_event = producer.map(|id| f.event(0, id));
+        if let Some((_, true)) = compute {
+            let producer = producer.unwrap();
             f.drive(f.compute_streams[0], producer);
             assert_eq!(
                 f.backend.poll_v1(producer).unwrap(),
@@ -126,7 +139,7 @@ impl PendingList {
                 source_region,
                 destination,
                 &list,
-                &[producer_event],
+                producer_event.as_slice(),
             )
             .unwrap();
         let retained = Arc::clone(
@@ -137,7 +150,10 @@ impl PendingList {
                 .segments_for_test_v1()
                 .unwrap(),
         );
-        assert!(f.copy(submission).compute_producer.is_some());
+        assert_eq!(
+            f.copy(submission).compute_producer.is_some(),
+            compute.is_some()
+        );
         assert!(f.copy(submission).staging.is_empty());
         assert_eq!(retained.windows().len(), list.len());
         list.reverse();
@@ -235,10 +251,9 @@ impl PendingList {
 
     fn release_events(&mut self) {
         self.f.backend.release_event_v1(self.event).unwrap();
-        self.f
-            .backend
-            .release_event_v1(self.producer_event)
-            .unwrap();
+        if let Some(event) = self.producer_event {
+            self.f.backend.release_event_v1(event).unwrap();
+        }
     }
 
     fn assert_deferred(&self, consumer: u64) {
@@ -396,7 +411,7 @@ fn pending_segments_compute_full_pipeline_releases_events_and_restores_exact_fra
             }
             assert_eq!(p.f.backend.cooperative_progress_generation, generation);
             p.drive(p.f.readback_stream, readback, Some(consumer));
-            for id in [p.producer, p.list, consumer, returned, readback] {
+            for id in [p.producer.unwrap(), p.list, consumer, returned, readback] {
                 assert_eq!(p.f.backend.poll_v1(id).unwrap(), BackendPollV1::Succeeded);
             }
             assert_eq!(
@@ -577,7 +592,7 @@ fn pending_segments_cancelled_list_does_not_authorize_consumer_or_readback() {
                 .all(Option::is_none)
         );
         assert_eq!(
-            p.f.backend.cancel_v1(p.producer).unwrap(),
+            p.f.backend.cancel_v1(p.producer.unwrap()).unwrap(),
             BackendCancellationV1::Cancelled
         );
         p.f.clean();
@@ -677,7 +692,7 @@ fn pending_segments_postpublication_cancel_and_prefix_failure_preserve_custody()
             assert!(
                 p.f.backend
                     .cooperative_dependency_retain_counts
-                    .contains_key(&p.producer)
+                    .contains_key(&p.producer.unwrap())
             );
             assert_eq!(p.f.backend.completed_compute_xgmi_copies, 0);
             // Fail-stop native roots remain retained; no fake cleanup or byte rollback.
@@ -759,8 +774,8 @@ fn pending_segments_consumer_rejects_wrong_exact_event_writable_alias_and_bounds
             producer_submission: p.list,
         };
         match case {
-            0 => dependency.event = p.producer_event,
-            1 => dependency.producer_submission = p.producer,
+            0 => dependency.event = p.producer_event.unwrap(),
+            1 => dependency.producer_submission = p.producer.unwrap(),
             2 => bindings[0].region.access = RuntimeAccessV1::ReadWrite,
             3 => {
                 bindings[1].region = BackendMemoryRegionV1 {
@@ -809,7 +824,7 @@ fn pending_segments_consumer_rejects_wrong_exact_event_writable_alias_and_bounds
             BackendCancellationV1::Cancelled
         );
         assert_eq!(
-            p.f.backend.cancel_v1(p.producer).unwrap(),
+            p.f.backend.cancel_v1(p.producer.unwrap()).unwrap(),
             BackendCancellationV1::Cancelled
         );
         p.f.clean();
@@ -821,7 +836,7 @@ fn pending_segments_physically_completed_native_source_keeps_exact_frame_provena
     for queued in [false, true] {
         let mut p = PendingList::new_timed(queued, true, true, true);
         assert_eq!(
-            p.f.backend.poll_v1(p.producer).unwrap(),
+            p.f.backend.poll_v1(p.producer.unwrap()).unwrap(),
             BackendPollV1::Succeeded
         );
         let before = (p.f.backend.next_handle, p.f.backend.submissions.len());
@@ -829,7 +844,7 @@ fn pending_segments_physically_completed_native_source_keeps_exact_frame_provena
             p.f.readback_stream,
             region(p.f.allocations[1][3], RuntimeAccessV1::Read),
             region(p.f.host.unwrap(), RuntimeAccessV1::Write),
-            &[p.producer_event],
+            &[p.producer_event.unwrap()],
         );
         assert!(matches!(wrong, Err(RuntimeBackendFailureV1::Rejected(_))));
         assert_eq!(
@@ -846,7 +861,11 @@ fn pending_segments_physically_completed_native_source_keeps_exact_frame_provena
         );
         let readback = p.direct_readback().unwrap();
         p.release_events();
-        assert!(p.f.backend.release_submission_v1(p.producer).is_err());
+        assert!(
+            p.f.backend
+                .release_submission_v1(p.producer.unwrap())
+                .is_err()
+        );
         p.drive(p.f.readback_stream, readback, None);
         assert_eq!(
             p.f.backend.poll_v1(readback).unwrap(),

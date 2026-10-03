@@ -12,10 +12,14 @@ queue and mapping pair remain retained until whole-list completion. The
 adds distinct producer/frame provenance for an exact pending full-write compute
 feeding a list into an initialized settled destination. Fourteen two-GPU cases
 pass, including prequeued and late compute consumers, direct full-frame D2H,
-and settled-list regressions. Standalone settled-source list frame consumers,
-pending destination-writer chaining, broader kernel authority, native fault
-campaigns and performance remain open. Earlier sections below retain their
-original example and checkpoint scopes.
+and settled-list regressions. The
+[settled-frame checkpoint](evidence/dev-settled-peer-frames-2026-10-02/README.md)
+adds standalone settled-source list frame consumers without retaining a source
+producer result or supplying its event. Fourteen two-GPU cases pass, including
+4/65/4096-descriptor compute pipelines, late compute admission, direct full-frame
+D2H and existing-profile regressions. Pending destination-writer chaining,
+broader kernel authority, native fault campaigns and performance remain open.
+Earlier sections below retain their original example and checkpoint scopes.
 
 ## Scope
 

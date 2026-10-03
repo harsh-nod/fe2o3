@@ -44,7 +44,7 @@ struct NativePeerProducerV1 {
     source_region: BackendMemoryRegionV1,
     destination_region: BackendMemoryRegionV1,
     frame: Option<compute_peer::DestinationFrame>,
-    segment_frame: Option<compute_peer::SegmentDestinationFrame>,
+    segment_frame: Option<Arc<compute_peer::SegmentDestinationFrame>>,
 }
 
 #[derive(Debug, Default)]
@@ -477,7 +477,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                                 .ok_or_else(|| {
                                     KfdRuntimeBackendV1::rejected(
                                         KfdRuntimeBackendErrorKindV1::Unsupported,
-                                        "deferred segmented input requires an exact pending compute-backed destination frame",
+                                        "deferred segmented input requires an exact retained destination frame",
                                     )
                                 })?,
                         )
@@ -544,7 +544,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                             "deferred peer destination aliases require covered read ranges",
                         ));
                     }
-                    depth = depth.max(copy.dependency_depth.checked_add(1).ok_or_else(|| {
+                    let producer_depth = segment_frame
+                        .as_ref()
+                        .map_or(copy.dependency_depth, |frame| frame.depth());
+                    depth = depth.max(producer_depth.checked_add(1).ok_or_else(|| {
                         KfdRuntimeBackendV1::capacity("deferred dependency depth overflow")
                     })?);
                     peers.push(NativePeerProducerV1 {

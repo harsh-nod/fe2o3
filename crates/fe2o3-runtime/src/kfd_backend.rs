@@ -9231,6 +9231,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     })?,
                 );
             }
+            // A whole-frame D2H is a provenance consumer, unlike an ordinary
+            // transfer control. Keep its rank separate from legacy copy ordering.
+            if self.children[destination_route.child].allocations[&destination_route.local].kind
+                == RuntimeMemoryKindV1::HostVisible
+                && let Some(frame) = self.compute_peer_segment_frame_v1(*dependency, source_route)
+            {
+                dependency_depth =
+                    dependency_depth.max(frame.depth().checked_add(1).ok_or_else(|| {
+                        KfdRuntimeBackendV1::capacity("segment frame readback depth overflow")
+                    })?);
+            }
         }
         if let Some(producer) = &compute_producer {
             dependency_depth =
@@ -9251,6 +9262,21 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 })?);
             }
         }
+        // A legacy settled list can retain completed controls whose historical
+        // depth was not part of its transfer-only rank. Preserve that acceptance
+        // if the stricter frame-consumer rank cannot be represented.
+        let segment_frame_depth = if segments.is_some() && compute_producer.is_none() {
+            dependency_submissions
+                .iter()
+                .try_fold(dependency_depth, |depth, id| {
+                    let parent = self.segment_frame_dependency_depth_v1(*id)?;
+                    (parent > 0).then_some(())?;
+                    Some(depth.max(parent.checked_add(1)?))
+                })
+                .filter(|depth| *depth <= MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1)
+        } else {
+            None
+        };
         if dependency_depth > MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Capacity,
@@ -9321,7 +9347,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             }
         }
 
-        let compute_xgmi = if let Some(plan) = segments {
+        let mut compute_xgmi = if let Some(plan) = segments {
             Some(self.prepare_compute_xgmi_segments_v1(
                 source_route,
                 source,
@@ -9345,6 +9371,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 directed.is_some(),
             )?
         };
+        if let Some(root) = &mut compute_xgmi {
+            let frame = if compute_producer.is_some() || segment_frame_depth.is_some() {
+                self.prepare_segment_destination_frame_v1(
+                    root,
+                    (
+                        stream,
+                        dependency_depth,
+                        segment_frame_depth.unwrap_or(dependency_depth),
+                    ),
+                    [(source_route, source), (destination_route, destination)],
+                    compute_producer.as_ref(),
+                )
+            } else {
+                None
+            };
+            root.bind_segment_frame_v1(frame);
+        }
         let staging_byte_len = if compute_xgmi.is_some() {
             0
         } else {
@@ -12567,6 +12610,13 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         // One exact full-Write source producer gates the complete immutable list.
         // Native restoration preserves its initially settled destination frame;
         // consumers retain that list identity, never scalar envelope coverage.
+        true
+    }
+
+    fn supports_peer_copy_segments_frame_v1(&self) -> bool {
+        // Stable-source lists retain their original initialized destination frame
+        // independently of compute provenance. Pending endpoint-writer profiles
+        // keep legacy transfer behavior without this consumer authorization.
         true
     }
 

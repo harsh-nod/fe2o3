@@ -898,7 +898,12 @@ fn main() -> Result<(), String> {
     if arguments.first().is_some_and(|argument| {
         matches!(
             argument.as_str(),
-            "--segments-compute" | "--late-segments-compute" | "--segments-readback"
+            "--segments-compute"
+                | "--late-segments-compute"
+                | "--segments-readback"
+                | "--settled-segments-compute"
+                | "--late-settled-segments-compute"
+                | "--settled-segments-readback"
         )
     }) {
         return segments::main(&arguments);

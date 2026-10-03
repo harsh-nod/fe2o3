@@ -81,7 +81,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         .ok_or_else(|| {
                             KfdRuntimeBackendV1::rejected(
                                 KfdRuntimeBackendErrorKindV1::Unsupported,
-                                "pending segmented readback requires an exact compute-backed destination frame",
+                                "pending segmented readback requires an exact retained destination frame",
                             )
                         })?,
                 )

@@ -135,8 +135,36 @@ accounting charge until result release.
 
 The [pending-list qualification](evidence/dev-pending-peer-segments-2026-10-02/README.md)
 records the CPU checks and 14 accepted two-GPU cases. This profile does not authorize
-pending destination-writer chaining, standalone settled-source list frame
-consumers, arbitrary application kernels, or a new formal refinement.
+pending destination-writer chaining, arbitrary application kernels, or a new
+formal refinement. Standalone settled-source frame consumers use the separate
+profile below.
+
+## Settled Source Frame Consumers
+
+The additive `supports_peer_copy_segments_frame_v1` capability enables a list
+whose source is already settled, independently of pending-compute support.
+The source result may be released before admission; no source producer event
+is required. Context retains an ordinary current-version source read lease
+and a whole-destination writer. Pending or Unknown sources cannot become
+settled merely because a compute producer was not found.
+
+The backend retains an immutable frame with the original endpoint identities,
+stream and exact descriptor plan. A Read-only compute or full-frame D2H
+consumer authenticates that retained frame, including initialized destination
+bytes outside the descriptor windows. Whole-list success and original-owner
+restoration still precede consumer handoff. The settled origin does not
+fabricate a compute producer or scalar envelope coverage.
+
+Frame-consumer depth is bounded separately from the legacy transfer scheduling
+rank. Completed controls retain their real rank for frame consumption, without
+retroactively changing accepted transfer-only scheduling. A list outside the
+new frame profile may retain legacy transfer behavior but grants no new Context
+consumer authority. Explicit pending controls and pending destination writers
+remain outside this Context profile.
+
+The [settled-frame evidence record](evidence/dev-settled-peer-frames-2026-10-02/README.md)
+tracks source-bound CPU and native qualification. The new adapter is not a
+whole-runtime formal refinement or an application-kernel authority provider.
 
 ## Copy Only Native Execution
 
@@ -440,9 +468,9 @@ qualification remains separate from this caller-driven Context workload.
   geometries, and attribute the 65-segment cost before larger optimizations. No
   speedup or parity claim follows from the completed comparisons.
 - Graph sequence nodes and explicit negotiated Worker transport support.
-- Broader versioned pending-producer handoff beyond the exact profile above:
-  standalone settled-source list frame consumers and ordered list writes behind
-  another pending destination writer remain unsupported. The completed-event
+- Broader versioned pending-producer handoff beyond the exact profiles above:
+  ordered list writes behind another pending destination writer remain
+  unsupported. The completed-event
   fixture and ready-prefix flush do not supply these missing profiles.
   The [producer-bound reservation model](runtime-producer-read-reservations-v1.md)
   is now a concrete Rust candidate with conditional settlement/custody proofs.

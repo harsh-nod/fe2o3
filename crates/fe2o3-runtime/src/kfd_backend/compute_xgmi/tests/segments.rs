@@ -1016,7 +1016,7 @@ fn unified_segments_pending_compute_writer_is_not_bypassed_by_an_exact_event() {
 }
 
 #[test]
-fn unified_segments_pending_envelope_is_not_scalar_compute_or_readback_coverage() {
+fn unified_segments_missing_frame_cannot_promote_envelope_to_consumer_coverage() {
     for published in [false, true] {
         let mut f = Native::new(&[64, 96], 0);
         let stream = f.layout.global_streams[1];
@@ -1058,6 +1058,19 @@ fn unified_segments_pending_envelope_is_not_scalar_compute_or_readback_coverage(
         };
         let trace = root(&f.context, id).trace.clone();
         let backend = f.context.backend_mut_for_test_v1();
+        // Isolate the legacy transfer-only profile: an envelope is never a
+        // substitute for the newly retained whole-destination frame receipt.
+        let RoutedSubmissionV1::CooperativeCopy(copy) = backend.submissions.get_mut(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        let frame = copy
+            .compute_xgmi
+            .as_mut()
+            .unwrap()
+            .segment_frame
+            .take()
+            .unwrap();
         let event = backend.record_event_v1(stream, id).unwrap();
         let before = backend.next_handle;
         let retained = backend.cooperative_dependency_retain_counts.clone();
@@ -1087,6 +1100,11 @@ fn unified_segments_pending_envelope_is_not_scalar_compute_or_readback_coverage(
                 .all(|child| child.pending_compute.is_empty() && !child.any_compute_active_v1())
         );
         backend.release_event_v1(event).unwrap();
+        let RoutedSubmissionV1::CooperativeCopy(copy) = backend.submissions.get_mut(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        copy.compute_xgmi.as_mut().unwrap().segment_frame = Some(frame);
         assert_eq!(root(&f.context, id).trace, trace);
         if published {
             assert_pair_held(&f, id, 0);

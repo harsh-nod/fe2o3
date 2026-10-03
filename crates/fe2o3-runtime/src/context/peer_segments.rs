@@ -15,6 +15,12 @@ pub use fe2o3_runtime_model::{
 /// Typed completion for the entire ordered segment list, not one native packet.
 pub enum RuntimePeerCopySegmentsV1 {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SegmentedPeerSourceV1 {
+    Settled,
+    Compute(super::peer_custody::ScalarPeerDependencyV1),
+}
+
 /// Optional ordered peer-copy SPI; not encoded by Worker V1-V5.
 ///
 /// Offsets are relative to the bounding regions, which need not have equal

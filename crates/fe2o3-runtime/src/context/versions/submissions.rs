@@ -460,11 +460,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(E::InvalidState);
         }
         let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
-        if self
-            .validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?
-            .is_some()
-            || self.validate_producer_read_v1(id)?.is_none()
-        {
+        let stable = self.validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?;
+        let producer = self.validate_producer_read_v1(id)?;
+        let valid_input = if peer.compute_producer_v1().is_some() {
+            stable.is_none() && producer.is_some()
+        } else {
+            producer.is_none()
+                && stable.is_some_and(|root| {
+                    root.sources.len() == 1
+                        && root.sources[0].region == peer.source.region
+                        && root.sources[0].record == peer.source.record
+                })
+        };
+        if !valid_input {
             return Err(E::InvalidReference);
         }
         let root = versions
@@ -1017,7 +1025,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 {
                     return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
                 }
-                (None, self.prepare_segmented_peer_inputs_v1(root)?)
+                if root.compute_producer_v1().is_some() {
+                    (None, self.prepare_segmented_peer_inputs_v1(root)?)
+                } else {
+                    (self.prepare_submission_readers_v1(sources)?, None)
+                }
             }
             other => {
                 let peer = match other {

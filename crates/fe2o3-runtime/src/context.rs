@@ -727,6 +727,26 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to a retained destination frame for ordered lists with a settled source.
+    ///
+    /// Authenticate initialized original source and destination allocations and
+    /// retain the immutable complete descriptor list and original endpoint identities.
+    /// Every descriptor affects only its checked destination window; gaps retain
+    /// their initialized contents. This is a whole-allocation frame guarantee,
+    /// not a claim that either the list or its bounding envelope writes every byte.
+    /// Context holds an ordinary current-version source read lease and one whole
+    /// destination writer. Explicit control dependencies must already be successful
+    /// and quiescent. This does not admit pending source or destination writers.
+    ///
+    /// Pending Read-only compute and readback consumers must authenticate the exact
+    /// retained list event/frame, independently retain the list after public event
+    /// release, and wait for whole-list success and original-owner restoration.
+    /// Cancellation, failed or unknown completion cannot authorize a consumer.
+    /// This capability is independent of pending-compute-source list support.
+    fn supports_peer_copy_segments_frame_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered partial peer writes into one initialized allocation.
     ///
     /// This additionally requires `supports_pending_compute_peer_copy_v1`. Each
@@ -4213,6 +4233,7 @@ mod tests {
         pending_directed_peer_readback: bool,
         pending_compute_peer: bool,
         pending_compute_segments: bool,
+        peer_segments_frame: bool,
         ordered_compute_peer: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
         pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
@@ -4848,6 +4869,10 @@ mod tests {
 
         fn supports_pending_compute_peer_copy_segments_v1(&self) -> bool {
             self.pending_compute_segments
+        }
+
+        fn supports_peer_copy_segments_frame_v1(&self) -> bool {
+            self.peer_segments_frame
         }
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {

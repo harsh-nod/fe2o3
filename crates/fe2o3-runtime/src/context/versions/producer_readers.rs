@@ -288,7 +288,7 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
                     .ok_or(E::InvalidReference)?;
                 (
                     peer.dependencies_held,
-                    peer.producer,
+                    peer.compute_producer_v1().ok_or(E::InvalidReference)?,
                     peer.dependencies.as_slice(),
                     peer.source,
                 )
@@ -666,7 +666,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .producer_launches
                 .get(&dependency.submission)
                 .ok_or(RuntimeValidationErrorV1::ContextReserved)?;
-            if dependency != peer.producer
+            if Some(dependency) != peer.compute_producer_v1()
                 || source.region != peer.source.region
                 || source.record != peer.source.record
                 || !producer.covers_input_v1(source)
@@ -1214,6 +1214,24 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return self.single_producer_input_root_v1(id).map(Some);
         }
+        if let Some(peer) = self.segmented_peer_copies.get(&id)
+            && peer.compute_producer_v1().is_none()
+        {
+            self.validate_segmented_peer_custody_v1(id)
+                .map_err(|_| ContextVersionJournalErrorV1::InvalidReference)?;
+            if self
+                .versions
+                .as_ref()
+                .is_some_and(|versions| versions.producer_readers.contains_key(&id))
+                || self
+                    .submissions
+                    .get(&id)
+                    .is_some_and(|record| record.journal_producer_read.is_some())
+            {
+                return Err(ContextVersionJournalErrorV1::InvalidReference);
+            }
+            return Ok(None);
+        }
         if self
             .submissions
             .get(&id)
@@ -1255,7 +1273,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if segments {
             self.validate_segmented_peer_custody_v1(id)
                 .map_err(|_| E::InvalidReference)?;
-            if !self.segmented_peer_copies.contains_key(&id) {
+            if self
+                .segmented_peer_copies
+                .get(&id)
+                .is_none_or(|peer| peer.compute_producer_v1().is_none())
+            {
                 return Err(E::InvalidReference);
             }
         } else if compute {

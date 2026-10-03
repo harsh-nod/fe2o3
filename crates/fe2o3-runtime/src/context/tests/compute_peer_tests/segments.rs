@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "segments/settled.rs"]
+mod settled;
+
 type List = RuntimeSubmissionV1<RuntimePeerCopySegmentsV1>;
 type Calls = Arc<Mutex<Vec<(RuntimeSubmissionIdV1, RuntimeCompletionStatusV1)>>>;
 
@@ -635,12 +638,10 @@ fn segments_validate_immutable_identity_rank_and_nested_profile_before_observati
                 f.context.segmented_peer_copies.remove(&peer.id);
             }
             5 => {
-                f.context
-                    .segmented_peer_copies
-                    .get_mut(&peer.id)
-                    .unwrap()
-                    .producer
-                    .backend_submission += 1
+                let root = f.context.segmented_peer_copies.get_mut(&peer.id).unwrap();
+                let mut producer = root.compute_producer_v1().unwrap();
+                producer.backend_submission += 1;
+                root.origin = peer_segments::SegmentedPeerSourceV1::Compute(producer);
             }
             6 => {
                 f.context

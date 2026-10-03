@@ -82,6 +82,7 @@ pub(super) struct Root {
     route: Route,
     window: Gfx942ComputeXgmiCopyWindowV1,
     segments: Option<Arc<Gfx942ComputeXgmiSegmentsPlanV1>>,
+    segment_frame: Option<Arc<compute_peer::SegmentDestinationFrame>>,
     phase: Phase,
     creation: Gfx942ComputeXgmiQueueCreationRootV1,
     queue: Option<Gfx942ComputeXgmiQueueV1>,
@@ -144,6 +145,22 @@ fn terminal(detail: impl Into<String>) -> Failure {
 }
 
 impl Root {
+    pub(super) fn segment_plan_v1(&self) -> Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>> {
+        self.segments.as_ref()
+    }
+
+    pub(super) fn segment_frame_v1(&self) -> Option<&Arc<compute_peer::SegmentDestinationFrame>> {
+        self.segment_frame.as_ref()
+    }
+
+    pub(super) fn bind_segment_frame_v1(
+        &mut self,
+        frame: Option<Arc<compute_peer::SegmentDestinationFrame>>,
+    ) {
+        debug_assert!(self.segment_frame.is_none());
+        self.segment_frame = frame;
+    }
+
     #[cfg(test)]
     pub(super) fn segments_for_test_v1(&self) -> Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>> {
         self.segments.as_ref()
@@ -233,6 +250,7 @@ impl Root {
             root,
             Self {
                 route,
+                segment_frame: None,
                 window,
                 segments,
                 phase: Phase::Prepared,
