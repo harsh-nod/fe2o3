@@ -11,6 +11,7 @@ import sys
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -190,6 +191,21 @@ class CpuGroupTests(unittest.TestCase):
                                              failure="standalone-lockfiles")
                 self.assertEqual(result.returncode, 29, result.stderr.decode())
                 self.assertEqual(failed, baseline[:2])
+
+    def test_integration_and_legacy_cpu_require_standalone_preflight_before_consumers(self):
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            with self.subTest(arguments=arguments):
+                rows = self.successful(*arguments)
+                self.assertEqual(rows[0][0], "cpu-workspace-dependencies")
+                self.assertEqual(rows[1], (
+                    "standalone-lockfiles", "bash", str(ROOT / "scripts/check-standalone-lockfiles.sh"),
+                ))
+                self.assertTrue(rows[2][0].startswith("host-reference-"))
+                self.assertEqual(sum(row[0] == "standalone-lockfiles" for row in rows), 1)
+                result, failed = self.invoke(*arguments, failure="standalone-lockfiles")
+                self.assertEqual(result.returncode, 29, result.stderr.decode())
+                self.assertEqual(failed, rows[:2])
 
     def test_every_lane_stops_at_each_failed_stage_including_prefetch_and_driver(self):
         for group in CPU_GROUPS:
@@ -534,9 +550,14 @@ class ColdTargetBootstrapTests(unittest.TestCase):
             "crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.toml",
             "crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.toml",
             "crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.toml",
+            "examples/tiled_gemm_general_v1/Cargo.toml",
         ]
         for relative in required:
             self.assertIn(ROOT / relative, manifests)
+        tiled = ROOT / "examples/tiled_gemm_general_v1/Cargo.toml"
+        owner = tomllib.loads(tiled.read_text())
+        self.assertIn("device-api", owner["workspace"]["members"])
+        self.assertTrue(tiled.with_name("device-api").joinpath("Cargo.toml").is_file())
         snapshot = {
             path: path.read_bytes()
             for manifest in manifests for path in (manifest, manifest.with_name("Cargo.lock"))

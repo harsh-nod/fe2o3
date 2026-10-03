@@ -820,6 +820,7 @@ run_cpu_tests() {
     *) printf 'unknown CPU test mode: %s\n' "${mode}" >&2; return 2 ;;
   esac
   run_workspace_dependency_bootstrap cpu
+  run_standalone_lockfiles
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
   local -a raw_cpu_examples wrapper_cpu_examples wrapper_managed_packages

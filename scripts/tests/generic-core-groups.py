@@ -261,6 +261,7 @@ run_step() {
   printf 'stage:%s\n' "$name"
   case "$name" in
     cpu-workspace-dependencies | auxiliary-workspace-dependencies) "$@" ;;
+    standalone-lockfiles) return 0 ;;  # The real inventory is covered by generic-cpu-groups.
     *) return 43 ;;
   esac
 }
@@ -307,6 +308,7 @@ class WorkspaceDependencyBootstrapTests(unittest.TestCase):
     def test_isolated_cpu_and_auxiliary_fetch_workspace_before_offline_test_consumers(self) -> None:
         for entry, prefix, after_fetch in [
             ("run_cpu_tests", "cpu", [
+                "stage:standalone-lockfiles",
                 "host-reference-tests", "driver-bootstrap:cpu-tests", "stage:cargo-fe2o3-tests",
             ]),
             ("run_auxiliary_tests", "auxiliary", ["stage:core-doc-tests"]),
