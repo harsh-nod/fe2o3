@@ -271,6 +271,8 @@ fn explicit_bin_metadata_allows_same_name_library_but_refuses_target_substitutio
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_library() {
+    use sha2::Digest as _;
+
     let source = EXPLICIT_BIN_SOURCE_V1;
     bind_tutorial_source_package(source, "explicit_bin_export")
         .expect("bind actual explicit bin manifest, metadata and source root");
@@ -299,9 +301,18 @@ fn explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_l
     assert!(!bundle.grants_load_authority());
     assert!(!bundle.grants_launch_authority());
     let map = fe2o3_kernel_ir::DebugSourceMapDocumentV1::from_json_bytes(bundle.debug_map().unwrap()).unwrap();
-    let file = map.files().iter().find(|file| file.display_path()
-        .ends_with("production-explicit-bin-device/src/explicit_bin_export.rs")).unwrap();
-    assert_eq!(file.byte_len(), std::fs::metadata(workspace().join(source.source_path)).unwrap().len());
+    // Rustc retains Cargo's package-relative input name, not the canonical
+    // source selector. Its stable file identity is not a raw content digest.
+    let display_path = "src/explicit_bin_export.rs";
+    assert_eq!(source.export.target.source_path(), display_path);
+    let mut matching_files = map.files().iter().filter(|file| file.display_path() == display_path);
+    let file = matching_files.next().expect("map retains the exact selected bin display path");
+    assert!(matching_files.next().is_none(), "selected bin display path must be unique");
+    let source_bytes = std::fs::read(workspace().join(source.source_path)).unwrap();
+    let compiled_source = include_bytes!("../fixtures/production-explicit-bin-device/src/explicit_bin_export.rs");
+    assert_eq!(sha2::Sha256::digest(&source_bytes), sha2::Sha256::digest(compiled_source));
+    assert_eq!(source_bytes.len(), compiled_source.len());
+    assert_eq!(file.byte_len(), u64::try_from(source_bytes.len()).unwrap());
     let original = vec![0xa5_u8; 80 * 4];
     for value in [0_u32, 19, u32::MAX] {
         let request = target.path().join(format!("request-{value}.json"));
