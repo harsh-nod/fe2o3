@@ -22,10 +22,10 @@ no block parameters and contain only constants before the captured checked add.
 
 Argument roles, source ABI types, actual KIR parameters and retained lowerer
 bindings establish the input basis. Source assignments and emitted KIR values
-are folded independently. The source fold handles mutable-local redefinition
+are evaluated independently. The source fold handles mutable-local redefinition
 and reads a copied value before writing the destination, including self-copy.
-KIR definitions have distinct dense slots; duplicate IDs and parameter
-collisions reject. Exact statement spans include zero-operation copies/Nops.
+KIR definitions map sparse u32 IDs directly to symbolic origins; duplicate IDs
+and parameter collisions reject. Exact statement spans include zero-operation copies/Nops.
 The terminal value and overflow IDs, operand, literal and types are checked.
 
 Acceptance establishes a conditional, terminal-only relation: equal source/KIR
@@ -49,8 +49,8 @@ clears source scratch, installs paired argument origins and leaves every unmappe
 source local uninitialized. This takes O(locals + arguments) time and constant
 extra space beyond the caller's scratch; duplicate detection uses that scratch.
 
-The basis denotation composes with an uninitialized KIR suffix and the existing
-fold theorem. A successful symbolic fold agrees with an independently defined
+The retained basis/suffix lemma still supports the existing fold theorem; the
+production KIR checker now evaluates its closed grammar directly. A successful symbolic fold agrees with an independently defined
 concrete u32 fold for every valid common input vector. Equal initialized terminal
 origins then imply equal concrete values. The existing shared widened-add body
 proves the modulo-2^32 result and carry. Failed initialization or folding may
@@ -89,8 +89,25 @@ and walking take O(retained spans + prefix length) time and O(prefix length)
 scratch, replacing the former ordinal tree map. Sparse KIR IDs still use a tree
 map; no allocation is sized by the largest raw ID.
 
-The proof does **not** verify ABI discovery, terminal AST validation, KIR
-normalization/assembly, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
+Actual KIR constant and checked-add assembly also shares its executable body
+with Verus. It consumes borrowed `Operation` records and checked argument rows,
+not a caller-normalized operation list. Exact acceptance includes positional
+arguments, fresh definition IDs, typed constant results, exact capture IDs,
+distinct fresh `[U32, Bool]` outputs and RHS identity with the immediately
+preceding literal. Bounds reject fewer than two or more than 257 operations and
+more than 128 arguments before indexing. IDs may include `u32::MAX`.
+
+The direct `BTreeMap<u32, Origin>` removes the old constant-step vector, dense
+constant-state suffix and extra fold. It retains O(n log n) time and O(n) scratch,
+with at most 384 entries. Independent typed KIR evaluation agrees with the
+returned origin and composes with the source fold and mathematical checked-add
+value/overflow. Pinned Verus standard-library BTreeMap specifications remain a
+trust boundary; no project-specific assumption or external-body proof was added.
+KIR variant/field/container and capture-getter correspondence is source-checked
+with explicit rejected-payload erasure, not a Rust parser or compiler theorem.
+
+The proof does **not** verify ABI discovery, terminal AST validation,
+actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
 continuation, memory effects, completion or protected compiler provenance.
 Those obligations cannot be replaced by the source hashes used to bind tests
 and solver runs to reviewed files.
@@ -160,8 +177,12 @@ Reviewed structural guards bind the original container fields and getter chains,
 capture coordinates, typed IDs, wrapper and caller. These source checks are not
 a proof of compiler provenance or Rust name resolution/layout.
 
-Next prove actual KIR constant/checked-add assembly and terminal AST validation,
-and finish ABI discovery. Then compose physical
+The [KIR assembly qualification](evidence/dev-kir-assembly-2026-10-03/README.md)
+adds exact borrowed-operation assembly, independent KIR evaluation and its
+source-fold composition. Terminal source AST validation and ABI discovery remain
+the next semantic obligations. Then compose physical
 entry, continuation and memory obligations into protected per-invocation admission.
-Only that admission can authorize a general application-kernel multi-GPU witness.
+The generated invocation path also needs explicit multi-device routing and an
+authenticated peer handoff for its distinct generated storage; neither follows
+automatically from the single-device admission proof.
 The A3 milestone, issue #182 and broad HIP/HSA parity remain incomplete.

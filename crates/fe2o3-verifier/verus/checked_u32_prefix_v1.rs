@@ -1,6 +1,9 @@
 //! Shared argument-basis, typed source-statement normalization and fold denotation.
-//! Includes actual source-span assembly; terminal AST, KIR, ABI and authority remain separate.
+//! Includes actual source-span and KIR assembly; terminal source AST, ABI and authority remain separate.
 use vstd::prelude::*;
+
+#[path = "checked_u32_kernel_v1.rs"]
+mod kernel_assembly;
 
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/fold_body.rs");
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/basis_body.rs");

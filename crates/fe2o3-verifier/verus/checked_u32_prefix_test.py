@@ -17,7 +17,7 @@ class Controls(unittest.TestCase):
         self.proof = check.ROOT / check.PROOF
         self.data = {"verus": copy.deepcopy(check.base.VERIFIER), "verification-results": {
             "encountered-error": False, "encountered-vir-error": False, "success": True,
-            "errors": 0, "verified": 71, "is-verifying-entire-crate": True}}
+            "errors": 0, "verified": check.VERIFIED_COUNT, "is-verifying-entire-crate": True}}
 
     def accepted(self, status=0, rows=(), target="fold", failure=None):
         return check.classify(status, json.dumps(self.data), "\n".join(map(json.dumps, rows)), self.proof, target, failure)
@@ -28,11 +28,12 @@ class Controls(unittest.TestCase):
         self.data["verification-results"] = {"encountered-error": True, "encountered-vir-error": False,
             "errors": 1, "verified": selected["verified"], "is-verifying-entire-crate": False}
         call, contract, loop, body, definition = check.locations(self.proof, target, failure)
+        proof = check.target_proof(self.proof, target)
         expanded = {"file_name": str(body), "expansion": {"macro_decl_name": selected["macro"] + "!",
-            "span": {"file_name": str(self.proof), "line_start": call},
+            "span": {"file_name": str(proof), "line_start": call},
             "def_site_span": {"file_name": str(body), "line_start": definition}}}
         rows = [{"level": "error", "message": "invariant not satisfied at end of loop body" if invariant else "postcondition not satisfied",
-            "spans": [{"is_primary": True, "file_name": str(self.proof), "line_start": loop if invariant else contract}]},
+            "spans": [{"is_primary": True, "file_name": str(proof), "line_start": loop if invariant else contract}]},
             {"level": "error", "message": "aborting due to 1 previous error", "spans": []}]
         if invariant:
             rows.append({"level": "note", "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function", "spans": [expanded]})
@@ -108,7 +109,7 @@ class Controls(unittest.TestCase):
             (check.PROOF, b"semantic_local: u32,", b"semantic_local: u64,"),
             (check.KIR_SCHEMA, b"pub struct ValueId(pub u32);", b"pub struct ValueId(pub u64);"),
             (check.ADAPTER, b"basis::initialize_argument_basis(&arguments, &mut source_state, &mut kernel_state)", b"true"),
-            (check.ADAPTER, b".insert(binding.kernel_ir_value, slot)", b".insert(binding.kernel_ir_value, 0)"),
+            (check.ADAPTER, b"kernel::kernel_prefix(&arguments, operations, capture)", b"kernel::kernel_prefix(&[], operations, capture)"),
             (check.BASIS, b"ordinary_exec,\n        arguments,\n        source,\n        kernel,",
              b"ordinary_exec,\n        arguments,\n        kernel,\n        source,"),
         ):
@@ -141,6 +142,38 @@ class Controls(unittest.TestCase):
             changed[str(check.NORMALIZE_BODY)] = escape + sources[str(check.NORMALIZE_BODY)]
             with self.assertRaises(ValueError):
                 check.validate(changed)
+
+    def test_kernel_schema_forwarding_and_closed_body(self):
+        sources = check.snapshot()
+        self.assertEqual(len(check.kernel_mutants(sources[str(check.KERNEL_BODY)].decode("ascii"))), 20)
+        for path, before, after in (
+            (check.KIR_SCHEMA, b"pub enum OperationKind {", b"pub enum OperationKind { Extra,"),
+            (check.KIR_SCHEMA, b"pub results: Vec<ValueDef>", b"pub results: Proxy<ValueDef>"),
+            (check.KIR_SCHEMA, b"U32(u32)", b"U32(u64)"),
+            (check.KIR_SCHEMA, b"pub struct Operation {", b"#[cfg(any())] pub struct Operation {"),
+            (check.kernel_schema.TYPES, b"pub enum ScalarType {", b"pub enum ScalarType { Extra,"),
+            (check.kernel_schema.TYPES, b"Scalar(ScalarType)", b"Scalar(Proxy)"),
+            (check.schema.CAPTURE, b"self.capture.operand", b"self.capture.value"),
+            (check.KERNEL, b"let operand = capture.operand().0;", b"let operand = capture.value().0;"),
+        ):
+            self.assertEqual(sources[str(path)].count(before), 1, str(path))
+            changed = dict(sources)
+            changed[str(path)] = changed[str(path)].replace(before, after)
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+        for escape in (b'include!("other.rs");\n', b'#[cfg(any())]\n', b'#[verifier::external_body]\n'):
+            changed = dict(sources)
+            changed[str(check.KERNEL_BODY)] = escape + changed[str(check.KERNEL_BODY)]
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+
+    def test_kernel_diagnostics(self):
+        for target, failure in (("constant_binding", "post"), ("terminal_origin", "post"),
+                                ("assemble_kernel", "post"), ("assemble_kernel", "argument"), ("assemble_kernel", "loop")):
+            rows = self.negative(target, failure)
+            self.assertTrue(self.accepted(1, rows, target, failure))
+            rows[0]["spans"][0]["file_name"] = str(self.proof)
+            self.assertFalse(self.accepted(1, rows, target, failure))
 
     def test_normalization_ast_schema_getters_and_forwarding(self):
         sources = check.snapshot()

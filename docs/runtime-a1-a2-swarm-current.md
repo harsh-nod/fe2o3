@@ -104,11 +104,17 @@ must not become a prerequisite for running their already-admitted smoke tests.
    keep ABI discovery and KIR normalization open. The
    [source-span assembly checkpoint](evidence/dev-source-assembly-2026-10-03/README.md)
    now proves exact original-row selection and pre-add AST/fold composition
-   through the actual linear scan/walk. Terminal AST validation and KIR assembly
-   are the next semantic work, not completed application admission.
+   through the actual linear scan/walk. The
+   [KIR assembly checkpoint](evidence/dev-kir-assembly-2026-10-03/README.md)
+   adds exact actual-operation acceptance and direct KIR/source-fold denotation,
+   replacing redundant dense constant scratch with a sparse origin map.
+   Terminal source AST validation and ABI discovery remain open.
    Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
-   follow; no fixture authority can substitute for them.
+   follow; no fixture authority can substitute for them. The generated invocation
+   path is currently single-device: exact-child preparation, generated issue
+   routing and authenticated generated-storage peer handoff are explicit
+   [remaining multi-device work](runtime-multi-gpu-critical-path.md#required-multi-device-bridge).
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute
    execution. Indeterminate native effects remain fail-stop until recovery has

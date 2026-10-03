@@ -75,11 +75,14 @@ now composes the actual retained span scan/walk with source normalization and
 pre-add AST/fold denotation. Its bounded private ordinal vector replaces the
 source tree map, making the scan/walk linear. Terminal AST evaluation is separate.
 
-Next prove KIR Constant/CheckedAdd slot assembly and terminal AST validation.
-Preserve exact owner identity, sparse V8 IDs, contiguous spans and value/overflow
-ordering. Do not substitute a caller-built operation sequence for those loops.
+The [KIR assembly checkpoint](evidence/dev-kir-assembly-2026-10-03/README.md)
+now proves actual borrowed Constant/CheckedAdd assembly and direct evaluation.
+Sparse V8 IDs map directly to origins, removing redundant dense constant scratch
+and folding. Exact acceptance preserves original rows, typed outputs and the
+immediately preceding literal identity. Terminal source AST validation and ABI
+discovery remain open.
 
-The remaining path includes ABI discovery, terminal source/KIR assembly and
+The remaining semantic path includes ABI discovery, terminal source validation and
 semantic-to-machine entry/continuation/memory/completion evidence, protected invocation custody and
 the concrete deployment-approved Worker V3 verifier/refinement providers. Do not
 replace these with qualification metadata, caller digests or an always-allow
@@ -87,6 +90,27 @@ backend. Affirmative Worker provider implementations remain test-only. Bound the
 first complete profile to a single-workitem u32 transform storing its value and
 overflow; it still needs physical entry, output-store, termination and exact
 LLVM/HSACO correspondence before an application launch can be admitted.
+
+## Required Multi-Device Bridge
+
+The authenticated generated-invocation path currently specializes
+`RuntimeContextV1<KfdRuntimeBackendV1>`. A production Worker provider alone will
+not turn it into a single-Context multi-device application pipeline.
+
+1. Route nonexecuting preparation through the exact retained multi-backend child.
+   Preserve Context generation, logical device, backend UID, native admission,
+   selected-child exclusion and pre/post callback currentness. Reuse generic
+   async preparation tickets and cleanup. This can proceed independently of the
+   remaining kernel proof and grants no launch authority.
+2. Route generated reservation, shell adoption, issue and completion with exact
+   global/local handle correspondence and original carrier ownership. Cleanup
+   must return to the same child; ambiguous rollback remains quarantined.
+3. Add an authenticated generated-storage peer handoff. Generated allocation
+   slots are deliberately distinct from PUBLIC allocations; enabling multi-device
+   generated dispatch must not relabel them or bypass ordinary peer-copy guards.
+4. Qualify the complete admitted compute -> native peer -> compute/readback path
+   on freshly observed free devices. Existing finite native witnesses do not
+   substitute for this application-admission gate.
 
 ## Deferred Work
 

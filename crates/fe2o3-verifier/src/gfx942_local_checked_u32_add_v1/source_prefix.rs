@@ -11,11 +11,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticFunctionDeclV1, SemanticLocalRoleV1, SemanticPlaceV1,
     SemanticStatementV1,
 };
-use std::collections::BTreeMap;
 
 mod assemble;
 mod basis;
 mod fold;
+mod kernel;
 mod normalize;
 use fold::{Origin, PrefixInput, PrefixStep};
 
@@ -58,8 +58,8 @@ impl CheckedU32PrefixArgumentV1 {
 /// checked-add value/overflow results on the first traversal from function
 /// entry. Later backedges and repeated block visits are not covered. This is
 /// not a claim about machine entry, continuation, compiler origin or authority.
-/// ABI discovery and complete KIR assembly remain separate from the shared
-/// source-normalization, argument-basis and fold theorems.
+/// ABI discovery and terminal source validation remain separate from the shared
+/// source-normalization, KIR assembly, argument-basis and fold theorems.
 #[derive(Debug)]
 pub struct CapturedCheckedU32PrefixV1<'a> {
     capture: ProductionCheckedU32AddCaptureV1<'a>,
@@ -379,71 +379,9 @@ fn check_parts(
         .operations
         .get(..next_operation as usize)
         .ok_or(E::Kernel)?;
-    let mut slots = BTreeMap::new();
-    kernel_state.reserve(operations.len() + 1);
-    for (slot, binding) in arguments.iter().enumerate() {
-        if slots.insert(binding.kernel_ir_value, slot).is_some() {
-            return Err(E::Kernel);
-        }
-    }
-    let mut kernel_steps = Vec::with_capacity(operations.len());
-    for operation in &operations[..operations.len().checked_sub(1).ok_or(E::Kernel)?] {
-        let OperationKind::Constant(Constant::U32(value)) = operation.kind else {
-            return Err(E::Kernel);
-        };
-        let [result] = operation.results.as_slice() else {
-            return Err(E::Kernel);
-        };
-        let destination = kernel_state.len();
-        if result.ty != Type::Scalar(ScalarType::U32)
-            || slots.insert(result.id, destination).is_some()
-        {
-            return Err(E::Kernel);
-        }
-        kernel_state.push(Origin::Uninitialized);
-        kernel_steps.push(PrefixStep {
-            destination,
-            input: PrefixInput::Constant(value),
-        });
-    }
-    if !fold::fold(&mut kernel_state, &kernel_steps) {
-        return Err(E::Kernel);
-    }
-    let terminal = operations.last().ok_or(E::Kernel)?;
-    let OperationKind::Binary {
-        op: BinaryOp::Checked(CheckedBinaryOperator::Add),
-        lhs,
-        rhs,
-    } = terminal.kind
-    else {
-        return Err(E::Kernel);
-    };
-    let [value, overflow] = terminal.results.as_slice() else {
-        return Err(E::Kernel);
-    };
-    if lhs != capture.operand()
-        || value.id != capture.value()
-        || overflow.id != capture.overflow()
-        || value.id == overflow.id
-        || slots.contains_key(&value.id)
-        || slots.contains_key(&overflow.id)
-        || value.ty != Type::Scalar(ScalarType::U32)
-        || overflow.ty != Type::Scalar(ScalarType::Bool)
-        || slots
-            .get(&rhs)
-            .is_none_or(|slot| kernel_state[*slot] != Origin::Constant(capture.literal()))
-        || operations[operations.len() - 2]
-            .results
-            .first()
-            .is_none_or(|result| result.id != rhs)
-    {
-        return Err(E::Kernel);
-    }
+    let kernel_origin = kernel::kernel_prefix(&arguments, operations, capture)?;
     let origin = source_state[source_local];
-    if slots
-        .get(&lhs)
-        .is_none_or(|slot| kernel_state[*slot] != origin)
-    {
+    if kernel_origin != origin {
         return Err(E::ValueMismatch);
     }
     let origin = match origin {
