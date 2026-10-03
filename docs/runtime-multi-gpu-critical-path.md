@@ -139,23 +139,24 @@ need end-to-end qualification.
    on freshly observed free devices. Existing finite native witnesses do not
    substitute for this application-admission gate.
 
-### Next Integration Packet: Host Front Door
+### Completed: Host Preparation Entry Points
 
 The normal authenticated helpers in `fe2o3-host/generated_runtime_invocation.rs`
-still accept only the single-device backend. Add multi-context counterparts for
-`prepare_generated_context_invocation`, its async variant, and the returned
-invocation's `validate_context`. Preserve existing signatures and reuse the same
+now include `prepare_generated_multi_context_invocation`, its async counterpart,
+and `GeneratedWorkerV3ContextInvocationV1::validate_multi_context`. Existing
+single-device signatures remain unchanged. Both variants reuse the original
 `require_runtime_evidence`, `prepare_context_payload` and `project_persistent`
-bodies. The retained invocation and preparation future are already backend-neutral.
-No public backend trait or private-storage extraction is needed.
+bodies, result account and decoder. No new backend abstraction or authority is
+introduced. The [host checkpoint](evidence/dev-host-multi-2026-10-03/README.md)
+qualifies the public APIs with genuine generated argument types and ownership,
+wrong-kernel and privacy compile controls.
 
-Missing protected evidence must still reject before Context access, argument
-callbacks, result-budget work or queue admission. Keep sync preparation inert;
-the multi async path can reuse the existing reservation/adoption/issue/completion
-hooks and original decoder. Compile both public entry paths and retain rejection,
-ownership/privacy, exact-device and currentness tests. This removes an API
-restriction for genuine protected authority; it does not supply the still-missing
-production positive verifier/refinement providers.
+Missing protected evidence still rejects before Context access, argument
+callbacks, budget cloning or queue admission. The source-wiring checks isolate
+each wrapper independently; they are not concrete-KFD execution or a new adapter
+proof. Sync preparation remains inert. The async example compiles the existing
+reservation/adoption/issue/completion lifecycle while retaining failure tickets.
+No new native run or production positive verifier/refinement provider is claimed.
 
 For owner-driven staging, authenticate/encode on the caller and enqueue only
 scratch plus ordinary staging handles, retaining the original output if enqueue
@@ -167,6 +168,43 @@ Staging creates a new ordinary host-write version, not the original generated
 allocation or pending generated producer event. Generated DATA is coherent
 HostVisible storage with no native SDMA-promotion bridge. Zero-copy ownership
 transfer needs separate typed transition, accounting and failure evidence.
+
+### Next: One Real Output Kernel
+
+The next acceptance target is one genuinely extracted, lowered and compiled Rust
+device-entry kernel, then admitted compute -> native peer -> compute/readback.
+Do not add more preparation wrappers or substitute a qualification-only kernel.
+
+1. Join the compiler owner's captured semantic ABI and KIR parameter/component
+   bindings to generated packing and the selected export's inspected physical
+   kernarg layout. Reuse the existing ABI capture, packing validator and published
+   HSACO parser. `compiler_descriptor.rs` already validates the structural
+   root/type/ownership joins; the extraction-only checked-prefix branch currently
+   drops its entry bindings. Retain that same-transaction evidence, starting with
+   the genuine `fill(DisjointSlice<u32>)` fixture, then scalar-plus-output. Do not
+   implement a parallel descriptor checker. The source-prefix ABI currently
+   accepts only direct u32 helper arguments, not an output-slice device entry.
+2. Establish complete source semantics for that selected kernel. Reuse the
+   checked-add prefix/KIR proofs only where the actual kernel needs them. The
+   existing `checked_prefix_output` calls a helper that continues after addition
+   with XOR/return; closing terminal checked-add AST validation alone establishes
+   neither the helper result nor the kernel store. Do not put another isolated
+   helper proof ahead of the entry/output path.
+3. Cover actual emitted entry loads, register/argument correspondence, arithmetic,
+   output-address calculation, bounded stores, memory completion and termination.
+   Choose instructions from the real selected artifact. The current local MOV/ADD
+   relation leaves entry and continuation obligations open; metadata alone cannot
+   establish machine-register equality.
+4. Qualify altered parameters/components, offsets/address spaces, owner/artifact
+   substitution, changed result/literal, wrong store address/value, missing
+   termination and extra effects. Only a complete proved profile and authenticated
+   producer can satisfy the existing semantic-machine provider contract. Keep
+   partial relations non-authoritative and the production admission gate closed.
+
+Deployment-approved measurements, protected ledger access and rollback policy
+remain separate deployment inputs. A complete semantic-machine verifier is
+missing implementation, not a configuration toggle. Existing native peer,
+adoption and issue witnesses do not substitute for it.
 
 ## Deferred Work
 

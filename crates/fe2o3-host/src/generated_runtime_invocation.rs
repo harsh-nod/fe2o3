@@ -5,10 +5,11 @@ use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime::{
-    GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1,
-    KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1,
-    RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1,
-    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCompletionCarrierV1,
+    GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1,
+    KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
+    PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1, RuntimeAsyncPreparationV1,
+    RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1,
+    RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCompletionCarrierV1,
     RuntimeGfx942GeneratedCompletionViewV1, RuntimeGfx942GeneratedSourceMutV1,
     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
     RuntimeGfx942ReadbackErrorV1,
@@ -240,6 +241,15 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3ContextInvocation
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         context.validate_gfx942_prepared_v1(&self.prepared)
     }
+
+    /// Nonexecuting revalidation against the original multi-device Context and
+    /// exact retained child generation. This grants no admission or replay permission.
+    pub fn validate_multi_context(
+        &self,
+        context: &mut RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        context.validate_gfx942_prepared_v1(&self.prepared)
+    }
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3RuntimeInvocationV1<K> {
@@ -368,6 +378,61 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })
     }
 
+    /// Prepares against one selected child of an existing multi-device Context.
+    /// Uses the same protected-evidence gate, argument preparation and private
+    /// carrier as `prepare_generated_context_invocation`; no device is reopened.
+    /// The returned invocation is inert, not a launch or a GPU completion.
+    ///
+    /// ```no_run
+    /// use fe2o3_host::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
+    ///     CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentLimitsV1,
+    ///     GeneratedRuntimeResultBudgetV1, GeneratedWorkerV3ContextInvocationV1,
+    ///     AqlDispatchGeometryV1};
+    /// use fe2o3_runtime::{RuntimeContextV1, KfdMultiDeviceRuntimeBackendV1, RuntimeDeviceIdV1};
+    /// fn prepare<K: CompilerGeneratedKernelExpectationV1, A: CompilerGeneratedRuntimeArguments<K>>(
+    ///     executable: AuthenticatedWorkerV3ExecutableV1<K>, args: A,
+    ///     context: &mut RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     geometry: AqlDispatchGeometryV1, budget: &GeneratedRuntimeResultBudgetV1,
+    /// ) -> Result<GeneratedWorkerV3ContextInvocationV1<K>, Box<dyn std::error::Error>> {
+    ///     let invocation = executable.prepare_generated_multi_context_invocation(args, context,
+    ///         device, geometry, 0, 1000, GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 16), budget)?;
+    ///     let _devices = context.devices(); // No Context borrow remains in the invocation.
+    ///     invocation.validate_multi_context(context)?;
+    ///     Ok(invocation)
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_generated_multi_context_invocation<Arguments>(
+        self,
+        arguments: Arguments,
+        context: &mut RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>,
+        device: RuntimeDeviceIdV1,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<GeneratedWorkerV3ContextInvocationV1<K>, GeneratedWorkerV3ContextInvocationErrorV1>
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+    {
+        self.require_runtime_evidence()
+            .map_err(RuntimeGfx942PreparationErrorV1::Preparation)?;
+        let prepared = context.with_gfx942_preparation_device_v1(device, |device| {
+            self.prepare_context_payload(
+                arguments,
+                device,
+                geometry,
+                dynamic_group_segment_bytes,
+                timeout_milliseconds,
+                limits,
+                result_budget,
+            )?
+            .project_persistent()
+        })?;
+        Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })
+    }
+
     pub(crate) fn require_runtime_evidence(
         &self,
     ) -> Result<(), GeneratedWorkerV3RuntimeInvocationErrorV1> {
@@ -412,6 +477,91 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self,
         arguments: Arguments,
         owner: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>,
+        device: RuntimeDeviceIdV1,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<GeneratedWorkerV3ContextInvocationErrorV1>,
+        GeneratedWorkerV3RuntimeInvocationErrorV1,
+    >
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+        K: 'static,
+    {
+        self.require_runtime_evidence()?;
+        let result_budget = result_budget.clone();
+        owner
+            .try_prepare_generated_gfx942_completion_v1(device, move |device| {
+                self.prepare_context_payload(
+                    arguments,
+                    device,
+                    geometry,
+                    dynamic_group_segment_bytes,
+                    timeout_milliseconds,
+                    limits,
+                    &result_budget,
+                )?
+                .project_persistent()
+            })
+            .map_err(GeneratedWorkerV3RuntimeInvocationErrorV1::Engine)
+    }
+
+    /// Prepares on the multi-device owner thread against exactly the selected child.
+    /// Missing protected evidence rejects before budget cloning, enqueue or argument
+    /// callbacks. Existing completion hooks retain the original result domain and
+    /// decoder through reservation, activation, issue, readback and retirement.
+    /// Success here is only an inert preparation ticket; the owner must be driven
+    /// separately. Dropped futures and timeouts do not establish physical quiescence.
+    ///
+    /// The example retains complete reservation/activation failures, including
+    /// their tickets, instead of discarding recovery custody by extracting `.error`.
+    /// Terminal engine errors do not promise a retryable ticket.
+    ///
+    /// ```no_run
+    /// use fe2o3_host as host;
+    /// use fe2o3_runtime as rt;
+    /// enum RunFailure {
+    ///     Admission(host::GeneratedWorkerV3RuntimeInvocationErrorV1),
+    ///     Preparation(host::GeneratedWorkerV3ContextInvocationErrorV1),
+    ///     Engine(rt::RuntimeAsyncEngineCallErrorV1),
+    ///     Reservation(rt::RuntimeAsyncPreparedReservationFailureV1),
+    ///     Activation(rt::RuntimeAsyncGeneratedActivationFailureV1<rt::KfdRuntimeBackendErrorV1>),
+    ///     Readback(rt::RuntimeGfx942ReadbackErrorV1),
+    /// }
+    /// async fn run<K, A>(
+    ///     executable: host::AuthenticatedWorkerV3ExecutableV1<K>, arguments: A,
+    ///     owner: &rt::RuntimeAsyncProgressHandleV1<rt::KfdMultiDeviceRuntimeBackendV1>,
+    ///     device: rt::RuntimeDeviceIdV1, stream: rt::RuntimeStreamIdV1,
+    ///     geometry: host::AqlDispatchGeometryV1, budget: &host::GeneratedRuntimeResultBudgetV1,
+    /// ) -> Result<rt::RuntimeGeneratedCompletionReceiptV1, RunFailure>
+    /// where K: host::CompilerGeneratedKernelExpectationV1 + 'static,
+    ///       A: host::CompilerGeneratedRuntimeArguments<K>,
+    /// {
+    ///     let preparation = executable.prepare_generated_multi_context_invocation_async(
+    ///         arguments, owner, device, geometry, 0, 1000,
+    ///         host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 16), budget,
+    ///     ).map_err(RunFailure::Admission)?;
+    ///     let prepared = preparation.await.map_err(RunFailure::Engine)?
+    ///         .map_err(RunFailure::Preparation)?;
+    ///     let reservation = owner.try_reserve_prepared_v1(prepared)
+    ///         .map_err(RunFailure::Reservation)?;
+    ///     let reserved = reservation.await.map_err(RunFailure::Engine)?
+    ///         .map_err(RunFailure::Reservation)?;
+    ///     let activation = owner.try_activate_generated_v1(reserved, stream)
+    ///         .map_err(RunFailure::Activation)?;
+    ///     let completion = activation.await.map_err(RunFailure::Engine)?
+    ///         .map_err(RunFailure::Activation)?;
+    ///     completion.await.map_err(RunFailure::Engine)?.map_err(RunFailure::Readback)
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_generated_multi_context_invocation_async<Arguments>(
+        self,
+        arguments: Arguments,
+        owner: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>,
         device: RuntimeDeviceIdV1,
         geometry: AqlDispatchGeometryV1,
         dynamic_group_segment_bytes: u32,
@@ -545,40 +695,73 @@ impl Error for GeneratedWorkerV3RuntimeInvocationErrorV1 {
 }
 
 #[cfg(test)]
-mod async_preparation_tests {
-    #[test]
-    fn async_preparation_reuses_protected_constructor_and_original_account() {
-        // Source wiring supplements runtime engine tests; it is not successful
-        // compiler-backed construction or native qualification.
-        let source = include_str!("generated_runtime_invocation.rs");
-        let body = source
-            .split_once("pub fn prepare_generated_context_invocation_async<Arguments>(")
+mod preparation_tests {
+    const SOURCE: &str = include_str!("generated_runtime_invocation.rs");
+
+    fn method(name: &str) -> &'static str {
+        SOURCE
+            .split_once(&format!("pub fn {name}"))
             .unwrap()
             .1
-            .split_once("fn prepare_context_payload<Arguments>(")
+            .split_once("\n    }\n")
             .unwrap()
-            .0;
-        let protected = body.find("self.require_runtime_evidence()?").unwrap();
-        let budget = body
-            .find("let result_budget = result_budget.clone()")
-            .unwrap();
-        let enqueue = body
-            .find(".try_prepare_generated_gfx942_completion_v1(")
-            .unwrap();
-        let payload = body.find("self.prepare_context_payload(").unwrap();
-        let projection = body.find(".project_persistent()").unwrap();
-        assert!(
-            protected < budget && budget < enqueue && enqueue < payload && payload < projection
-        );
+            .0
+    }
+
+    fn preparation_body(name: &str) -> &'static str {
+        method(name).split_once("\n    {\n").unwrap().1
+    }
+
+    fn no_new_authority(body: &str) {
         for forbidden in [
             "ResultBudgetV1::new",
             "execute_",
             ".launch(",
             "into_runtime_inputs(",
+            "open_default",
+            "open_worker_v3",
+            "Qualification",
+            "synthetic",
+            "unsafe",
         ] {
             assert!(!body.contains(forbidden));
         }
-        let projection = source
+        assert_eq!(body.matches("self.require_runtime_evidence()").count(), 1);
+        assert_eq!(body.matches("self.prepare_context_payload(").count(), 1);
+        assert_eq!(body.matches(".project_persistent()").count(), 1);
+    }
+
+    #[test]
+    fn async_preparation_reuses_protected_constructor_and_original_account() {
+        // Source wiring supplements runtime engine tests; it is not successful
+        // compiler-backed construction or native qualification.
+        let names = [
+            "prepare_generated_context_invocation_async<Arguments>(",
+            "prepare_generated_multi_context_invocation_async<Arguments>(",
+        ];
+        assert_eq!(preparation_body(names[0]), preparation_body(names[1]));
+        for (name, backend) in names
+            .into_iter()
+            .zip(["KfdRuntimeBackendV1", "KfdMultiDeviceRuntimeBackendV1"])
+        {
+            assert!(method(name).contains(&format!("RuntimeAsyncProgressHandleV1<{backend}>")));
+            let body = preparation_body(name);
+            no_new_authority(body);
+            let protected = body.find("self.require_runtime_evidence()?").unwrap();
+            let budget = body
+                .find("let result_budget = result_budget.clone()")
+                .unwrap();
+            let enqueue = body
+                .find(".try_prepare_generated_gfx942_completion_v1(device, move |device|")
+                .unwrap();
+            let payload = body.find("self.prepare_context_payload(").unwrap();
+            let projection = body.find(".project_persistent()").unwrap();
+            assert!(
+                protected < budget && budget < enqueue && enqueue < payload && payload < projection
+            );
+            assert!(body.contains("&result_budget,"));
+        }
+        let projection = SOURCE
             .split_once("fn project_persistent(")
             .unwrap()
             .1
@@ -586,5 +769,47 @@ mod async_preparation_tests {
             .unwrap()
             .0;
         assert!(projection.contains("result_budget: self.result_budget"));
+    }
+
+    #[test]
+    fn both_sync_preparation_paths_gate_before_exact_child_callback_and_share_payload() {
+        let names = [
+            "prepare_generated_context_invocation<Arguments>(",
+            "prepare_generated_multi_context_invocation<Arguments>(",
+        ];
+        assert_eq!(preparation_body(names[0]), preparation_body(names[1]));
+        for (name, backend) in names
+            .into_iter()
+            .zip(["KfdRuntimeBackendV1", "KfdMultiDeviceRuntimeBackendV1"])
+        {
+            assert!(method(name).contains(&format!("RuntimeContextV1<{backend}>")));
+            let body = preparation_body(name);
+            no_new_authority(body);
+            let protected = body.find("self.require_runtime_evidence()").unwrap();
+            let context = body
+                .find("context.with_gfx942_preparation_device_v1(device, |device|")
+                .unwrap();
+            let payload = body.find("self.prepare_context_payload(").unwrap();
+            let projection = body.find(".project_persistent()").unwrap();
+            assert!(protected < context && context < payload && payload < projection);
+            assert!(body.contains(".map_err(RuntimeGfx942PreparationErrorV1::Preparation)?;"));
+            assert!(body.contains("result_budget,"));
+            assert!(body.ends_with("Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })"));
+        }
+    }
+
+    #[test]
+    fn both_validation_paths_delegate_only_original_private_preparation() {
+        for (name, backend) in [
+            ("validate_context(", "KfdRuntimeBackendV1"),
+            ("validate_multi_context(", "KfdMultiDeviceRuntimeBackendV1"),
+        ] {
+            let method = method(name);
+            assert!(method.contains(&format!("RuntimeContextV1<{backend}>")));
+            assert_eq!(
+                method.split_once(" {\n").unwrap().1.trim(),
+                "context.validate_gfx942_prepared_v1(&self.prepared)"
+            );
+        }
     }
 }

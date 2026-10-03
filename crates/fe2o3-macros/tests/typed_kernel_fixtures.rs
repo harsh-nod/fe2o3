@@ -294,6 +294,22 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             "context_invocation_nonexecuting",
             &["no method named `execute`"],
         ),
+        (
+            "multi_context_consumes_executable",
+            &["error[E0382]", "executable"],
+        ),
+        (
+            "multi_context_async_consumes_executable",
+            &["error[E0382]", "executable"],
+        ),
+        (
+            "multi_context_wrong_kernel",
+            &["error[E0277]", "CompilerGeneratedRuntimeArguments"],
+        ),
+        (
+            "multi_context_async_wrong_kernel",
+            &["error[E0277]", "CompilerGeneratedRuntimeArguments"],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {
@@ -306,6 +322,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
                 "{bin} omitted diagnostic `{expected_diagnostic}`:\n{stderr}"
             );
         }
+        eprintln!("generated adapter compile-fail accepted: {bin}");
     }
 }
 

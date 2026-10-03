@@ -199,6 +199,9 @@ pub fn prepare_chained_generated_arguments(
 }
 
 // Compile-only: callers must supply genuine executable and device owners.
+pub mod multi_context;
+
+// Compile-only: callers must supply genuine executable and device owners.
 pub fn prepare_owned_generated_invocation(
     executable: gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
     device: gpu_host::CheckedGfx942XnackMinusDevice,
