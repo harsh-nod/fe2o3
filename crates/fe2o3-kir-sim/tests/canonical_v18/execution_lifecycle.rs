@@ -449,13 +449,18 @@ fn v18_lifecycle_debug_keeps_memory_but_explicitly_loses_the_whole_value_stack()
         let mut request = request(target());
         request.grid = GridShapeV1([1, 1, 1]);
         request.workgroup = WorkgroupShapeV1([1, 1, 1]);
+        let SimulationArgumentV1::Buffer(input) = &request.arguments[0] else {
+            panic!("the lifecycle fixture must retain its original global buffer");
+        };
+        let checkpoint_bytes = input.bytes().len() + input.initialized().len();
+        assert_eq!(checkpoint_bytes, 2 * (64 * 4 + 8));
         let mut records = Records::default();
         let result = admitted
             .simulate_debugged_with_sink(
                 &request,
                 target(),
                 SimulationLimitsV1::default(),
-                SimulationDebugCaptureLimitsV1::new(8, 64, 8, 128).unwrap(),
+                SimulationDebugCaptureLimitsV1::new(8, 64, 8, checkpoint_bytes).unwrap(),
                 &mut records,
             )
             .unwrap();
@@ -517,6 +522,51 @@ fn v18_lifecycle_debug_keeps_memory_but_explicitly_loses_the_whole_value_stack()
                     && record.invocation.launch_extent == [1, 1, 1])
         );
         assert!(!result.grants_execution_authority());
+        let mut short_records = Records::default();
+        let short_result = admitted
+            .simulate_debugged_with_sink(
+                &request,
+                target(),
+                SimulationLimitsV1::default(),
+                SimulationDebugCaptureLimitsV1::new(8, 64, 8, checkpoint_bytes - 1).unwrap(),
+                &mut short_records,
+            )
+            .unwrap();
+        assert_eq!(
+            short_result.buffer(0).unwrap().bytes(),
+            result.buffer(0).unwrap().bytes()
+        );
+        assert_eq!(
+            short_result.buffer(0).unwrap().initialized(),
+            result.buffer(0).unwrap().initialized()
+        );
+        let checkpoints: Vec<_> = short_records
+            .0
+            .iter()
+            .filter_map(|record| match &record.kind {
+                SimulationDebugRecordKindV1::Checkpoint { memory, .. } => Some(memory),
+                _ => None,
+            })
+            .collect();
+        assert!(!checkpoints.is_empty());
+        assert!(checkpoints.iter().all(|memory| matches!(
+            memory,
+            SimulationDebugCollectionV1::Unavailable {
+                reason: SimulationDebugUnavailableReasonV1::MemoryByteLimit,
+                required,
+            } if *required == checkpoint_bytes as u64
+        )));
+        assert!(short_records.0.iter().any(|record| matches!(
+            &record.kind,
+            SimulationDebugRecordKindV1::Memory {
+                address_space: AddressSpace::Global,
+                access: SimulationDebugMemoryAccessV1::WriteCommitted,
+                byte_offset: 0,
+                byte_len: 4,
+                ..
+            }
+        )));
+        assert!(!short_result.grants_execution_authority());
     });
 }
 
