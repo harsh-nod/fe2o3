@@ -108,7 +108,16 @@ replayed target KIR against the same guarded index-fill behavior. It rejects
 safety-only predicates, changed values/addresses, extra effects, incomplete
 control flow and stale witness borrows. This is a bounded checked relation with
 CPU/compiler tests, not a new formal proof or a machine execution join.
-Next complete machine refinement and the protected conditional provider.
+The [dispatch composition checkpoint](evidence/dev-fill-dispatch-2026-10-03/README.md)
+now proves the shared full64 geometry validator, descriptor-shaped entry
+construction, actual per-wave execution, unique cross-group coverage, exact
+output bytes and untouched complement. Byte queries execute at most one wave;
+neither storage nor validation scales with the grid. Its 44 cumulative proof
+obligations include the original 30 wave obligations. Actual native entry,
+patched allocation backing, scheduling, visibility and completion remain
+premises, not established facts. Next bind the complete source/compiler owners
+to the authenticated analyzer's exact HSACO and implement the protected
+conditional provider.
 Only then qualify admitted fill, tracked upload, native XGMI and
 readback on two GPUs in both directions.
 
@@ -117,8 +126,11 @@ inputs and runs before invocation arguments exist. Do not retag the conditional
 owner as unconditional. A conditional artifact profile must retain the universal
 machine contract; a later invocation transition must consume coverage tied to
 the exact prepared dispatch, selected device and patched memory. Reuse the
-existing complete per-wave model and prove its dispatch-wide input/memory join,
-rather than adding more isolated opcode proofs.
+existing complete per-wave model and its now-proved dispatch projection. Join
+that projection to the actual prepared dispatch, selected device and patched
+storage instead of adding more isolated opcode proofs. The packed coverage
+checker permits G=65, but this full64 profile deliberately requires G=128 for
+N=65; rounding belongs to preparation, not to the proof checker.
 
 ## Required Multi-Device Bridge
 
@@ -239,10 +251,12 @@ machine-value relation or execution authority.
    is overwritten, OR equals addition only for local X below 64, and Y/Z geometry
    must not duplicate writes. Pointer validity, checked extent/address arithmetic,
    active lanes and memory visibility/completion remain separate obligations.
-   The existing shared per-wave execution proof still accepts projected lane IDs
-   and EXEC. Derive them from the inspected descriptor and validated dispatch;
-   prove dispatch-wide unique coverage parametrically, without a grid-sized
-   simulation or caller-supplied activity mask.
+   The shared dispatch proof now constructs projected lane IDs and full EXEC
+   from validated geometry and the selected descriptor profile. It proves
+   parametric dispatch-wide unique coverage without grid-sized simulation or a
+   caller-supplied activity mask. Authenticate the real entry/storage association
+   and complete source-to-machine correspondence; the projected construction
+   does not observe actual hardware registers or establish scheduling.
 4. Qualify altered parameters/components, offsets/address spaces, owner/artifact
    substitution, changed result/literal, wrong store address/value, missing
    termination and extra effects. Only a complete proved profile and authenticated

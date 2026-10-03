@@ -250,3 +250,6 @@ impl Error for Gfx942FillErrorV1 {}
 
 #[cfg(test)]
 mod tests;
+
+mod dispatch;
+pub use dispatch::{Gfx942FillDispatchErrorV1, Gfx942FillDispatchV1};

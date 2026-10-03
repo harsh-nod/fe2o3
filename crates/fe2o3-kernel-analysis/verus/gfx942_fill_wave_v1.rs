@@ -1,4 +1,4 @@
-//! Shared complete closed-wave projection; not ISA or compiler refinement.
+// Shared complete closed-wave projection; not ISA or compiler refinement.
 use vstd::prelude::*;
 include!("../src/gfx942_fill_wave_v1/body.rs");
 

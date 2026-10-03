@@ -22,8 +22,8 @@ TEST = V / "gfx942_fill_wave_test.py"
 SUPPORT = V / "gfx942_add_u32_check.py"
 SUPPORT_SHA = "a0f1ebfcbb1467c323658450e75811de861efb1d317a716f7b43014fb9207950"
 # Bind reviewed declarations, preconditions and forwarding; these hashes are not proofs.
-PROOF_SHA = "6e2e271057890edb93cc8e5ae50c2b8d096ffbfef1bb1676ab7b3910a78fd544"
-RUST_SHA = "e05898e869e36367470f945ce4eefcbd24f5809d56904c9e10c3aee66c30dc78"
+PROOF_SHA = "8bd4a3a836a2aab67f0b985491bbd6568bb2cf1bf8e07c7a4ce1e8aecff920b9"
+RUST_SHA = "569c5866fc294ca66c5b2622dc226799186411e55fc025252b969356bba1777d"
 VERIFIED = 30
 BODY_SHA = "58b80f2ce605d190ad94848c59b8e87496f3b0c64d47ca4115472bece2fbdf60"
 CONTROL_COUNT = 14
