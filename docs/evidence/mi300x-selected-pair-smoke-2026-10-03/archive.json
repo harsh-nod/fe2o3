@@ -1,0 +1,13 @@
+{
+  "archive": "qualification.tar.xz",
+  "archive_bytes": 350116,
+  "archive_sha256": "d8ad452b91db054cc1026e0fd35a5f25b43e6ee252681ea040341e8d3df73870",
+  "audit_capture": "audit-final-01",
+  "auditor_sha256": "d492b1d9641b8fcb68e52d710b39c5a6725da0f4025ffd8e6895d1c84cc9b676",
+  "base": "8eb0ebcb954c5cf795f08ba4265da54681bf40c9",
+  "changed_source_paths": 32,
+  "compression": "xz; member bytes independently compared with original gzip package",
+  "files": 190,
+  "source_patch_sha256": "6e77c7bd8ba15497d8e153d9f9af7448d883c93cc22b871388da61ea2eca2142",
+  "source_paths": 6179
+}

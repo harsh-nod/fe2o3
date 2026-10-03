@@ -61,6 +61,34 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Current Priority: Working Multi-GPU
 
+Expedited work order (2026-10-03): distinguish usable native multi-GPU from
+protected admission of ordinary application kernels. The existing finite
+compute and production copy-only paths are functional; adding compiler evidence
+must not become a prerequisite for running their already-admitted smoke tests.
+
+1. Selected-pair qualification is now repeatable on shared hardware. The
+   [four-case MI300X checkpoint](evidence/mi300x-selected-pair-smoke-2026-10-03/README.md)
+   passes native transfers in both directions and host-staged controls, with
+   fresh endpoint observations, exact binary identity, full-byte checks and cleanup.
+   Do not use the generic hardware-smoke job's all-device examples on this host.
+2. Close pending list-frame forwarding: an initialized gathered frame on GPU B
+   must feed a queued checked-window peer copy to GPU C, without a host join.
+   Retain the exact latest writer, frame ancestry and event dependencies; do not
+   substitute a compute producer for a frame or broaden scalar coverage.
+3. Qualify post-arm failure isolation and group cleanup. Indeterminate native
+   effects remain fail-stop until recovery has its own evidence. No resets or
+   destructive fault injection on the shared machine.
+4. In a separate admission lane, enable the first ordinary application kernel
+   through actual source/KIR/machine refinement and protected invocation custody.
+   [Actual-emission capture](evidence/dev-checked-u32-emission-capture-2026-10-03/README.md)
+   is now CPU-qualified; it is not a value-equality theorem or authorization to
+   launch a kernel.
+
+Distributed milestones, broader collective coverage, eight-device campaigns and
+performance optimization are outside this immediate critical path. Reuse
+accepted evidence only with explicit source/binary scope; do not rerun large
+unchanged fixture matrices merely to inflate the multi-GPU completion count.
+
 The accepted `1327f19b1` executable now passes both the explicit-copy-drain and
 queued-consumer witnesses on MI300X GPUs 6 -> 7 (2026-10-02, 03:52-03:53 UTC).
 Each run executes four exact R57 launches, one 262,144-byte native XGMI copy,

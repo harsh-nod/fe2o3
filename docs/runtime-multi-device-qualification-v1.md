@@ -33,6 +33,45 @@ consumers and two lists of 4096 descriptors. Broader application-kernel authorit
 pending-list-frame forwarding, post-arm native faults and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
 
+## Selected-Pair Smoke
+
+`benchmarks/runtime_gfx942/selected_pair_smoke.py` runs the production copy-only
+example on exactly two explicitly selected devices. It runs native XGMI and
+host-staged controls in both directions. Each case performs two changed-content
+8,388,581-byte copies, checks every source/destination byte and explicitly shuts
+down logical and native resources. Every kernel launch is denied; this does not
+depend on the `hardware-qualification` feature or ordinary application admission.
+
+Build the example separately, then run the controller locally on the GPU host:
+
+```sh
+cargo +nightly-2026-04-03 build --locked --offline -p fe2o3-runtime \
+  --no-default-features --example gfx942-runtime-peer-copy-smoke
+python3 -I -B benchmarks/runtime_gfx942/selected_pair_smoke.py \
+  --allow-hardware \
+  --binary "$PWD/target/debug/examples/gfx942-runtime-peer-copy-smoke" \
+  --binary-sha256 "$BINARY_SHA256" \
+  --device "$SOURCE_DEVICE" --device "$DESTINATION_DEVICE" \
+  --output "$NEW_RESULT_DIRECTORY"
+```
+
+`BINARY_SHA256` is the reviewed executable's lowercase SHA-256. Each device is
+an exact `index,0000:bb:dd.f,0x0123456789abcdef` tuple with a nonzero unique ID;
+all three identities must differ between endpoints. The output directory must
+not already exist. The controller never selects all devices, builds, uploads,
+resets GPUs or deletes files.
+
+Before and after every case, the existing pinned observation helper checks
+selected UID/BDF identity, sysfs/SMI activity and memory, and process attachments.
+Missing or ambiguous observations reject the run. These are point observations,
+not an exclusive reservation. The executable is retained by file descriptor and
+checked against its expected hash; commands and output are bounded. Exact PASS
+fields and post-run observations are required, including explicit cleanup.
+
+This is a selected-pair correctness entrypoint, not compute, native-fault,
+physical-overlap, eight-device, formal-refinement or performance qualification.
+Do not substitute the generic all-device hardware-smoke job on a shared host.
+
 ## Ordered Destination Lists
 
 `supports_ordered_peer_copy_segments_v1` is a default-false backend capability.
