@@ -462,7 +462,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let versions = self.versions.as_ref().ok_or(E::InvalidReference)?;
         let stable = self.validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?;
         let producer = self.validate_producer_read_v1(id)?;
-        let valid_input = if peer.compute_producer_v1().is_some() {
+        let valid_input = if peer.source_dependency_v1().is_some() {
             stable.is_none() && producer.is_some()
         } else {
             producer.is_none()
@@ -1107,7 +1107,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 {
                     return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
                 }
-                if root.compute_producer_v1().is_some() {
+                if root.source_dependency_v1().is_some() {
                     (None, self.prepare_segmented_peer_inputs_v1(root)?)
                 } else {
                     (self.prepare_submission_readers_v1(sources)?, None)

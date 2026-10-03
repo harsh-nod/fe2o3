@@ -680,6 +680,41 @@ fn settled_segments_completed_control_depth_preserves_legacy_transfer_limit() {
             owner(&p.f, p.f.allocations[1][3]),
             (p.identities[1], p.expected_input(4).as_slice())
         );
+        // A restored source's completed list is an ordinary control, even
+        // without a frame receipt or with a maximal historical frame rank.
+        let destination = p.f.allocations[0][6];
+        initialize_bytes(&mut p.f, destination, 0x79);
+        p.f.backend.compute_xgmi_routes.insert(
+            (1, 0),
+            Route::Scripted {
+                failure: None,
+                unwind: false,
+                pending_samples: 2,
+            },
+        );
+        let stream = p.f.backend.create_stream_v1(7).unwrap();
+        let completed =
+            p.f.backend
+                .record_event_v1(p.f.peer_stream, p.list)
+                .unwrap();
+        let forwarded =
+            p.f.backend
+                .peer_copy_segments_v1(
+                    stream,
+                    region(p.f.allocations[1][3], RuntimeAccessV1::Read),
+                    region(destination, RuntimeAccessV1::Write),
+                    &descriptors(),
+                    &[completed],
+                )
+                .unwrap();
+        assert_eq!(p.f.copy(forwarded).dependency_depth, 1);
+        assert!(p.f.copy(forwarded).frame_source.is_none());
+        p.f.backend.release_event_v1(completed).unwrap();
+        p.drive(stream, forwarded, None);
+        assert_eq!(
+            p.f.backend.poll_v1(forwarded).unwrap(),
+            BackendPollV1::Succeeded
+        );
         if depth == MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 - 1 {
             assert_eq!(
                 p.f.backend.compute_peer_dependency_depth_v1(p.list),

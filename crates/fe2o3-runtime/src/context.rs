@@ -774,6 +774,22 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Opt in to an ordered list reading an exact pending segmented frame.
+    ///
+    /// Requires the version journal, latest source-writer event, immutable frame
+    /// receipt and complete descriptor snapshot. Source and destination envelopes
+    /// may differ in length. Retain both original owners until every descriptor
+    /// and closing check completes; initialized destination gaps are preserved.
+    /// No extraction or publication precedes actual parent success and restoration.
+    /// This is independent of scalar forwarding and pending-compute-source support.
+    /// The destination must be fresh and initialized; pending destination writers
+    /// are excluded. Exact-event full-frame readback is supported, but pending
+    /// compute consumers require separate qualification. No kernel authority or
+    /// staged fallback follows from this capability.
+    fn supports_pending_segment_frame_peer_copy_segments_v1(&self) -> bool {
+        false
+    }
+
     /// Opt in to success-ordered lists sharing one initialized destination frame.
     ///
     /// Requires `supports_peer_copy_segments_frame_v1` and Context's version
@@ -4302,6 +4318,7 @@ mod tests {
         pending_compute_segments: bool,
         peer_segments_frame: bool,
         pending_segment_frame_peer_copy: bool,
+        pending_segment_frame_peer_segments: bool,
         ordered_peer_segments: bool,
         ordered_pending_compute_segments: bool,
         ordered_compute_peer: bool,
@@ -4957,6 +4974,10 @@ mod tests {
 
         fn supports_pending_segment_frame_peer_copy_v1(&self) -> bool {
             self.pending_segment_frame_peer_copy
+        }
+
+        fn supports_pending_segment_frame_peer_copy_segments_v1(&self) -> bool {
+            self.pending_segment_frame_peer_segments
         }
 
         fn supports_ordered_peer_copy_segments_v1(&self) -> bool {

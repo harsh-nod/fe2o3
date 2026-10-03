@@ -59,6 +59,99 @@ fn forward_cli_is_separate_bounded_and_preserves_legacy_modes() {
 }
 
 #[test]
+fn forward_segments_cli_and_last_descriptor_oracle_are_independent() {
+    for late in [false, true] {
+        for case in [Case::Overlap, Case::Packets] {
+            let prefix = if late {
+                "--late-forward-segments"
+            } else {
+                "--forward-segments"
+            };
+            let options =
+                options(&[prefix, "0x3", "0x2", "0x1", case.name()].map(str::to_owned)).unwrap();
+            assert!(options.forward_segments);
+            assert_eq!(options.forward_window, Some(late));
+            let layout = layout(case);
+            let window = Window::new(&layout);
+            let segments = forward_segments(window);
+            let mut hashes = Vec::new();
+            for round in 0..ROUNDS {
+                let source = source_bytes(window, round);
+                let [frame, target, host] = oracle(&layout, window, &source, round, true);
+                let mut reversed = vec![target_sentinel(round); window.target];
+                for segment in segments.iter().rev() {
+                    let src = FRAME_OFFSET + segment.source_offset as usize;
+                    let dst = TARGET_OFFSET + segment.destination_offset as usize;
+                    let len = segment.byte_len as usize;
+                    reversed[dst..dst + len].copy_from_slice(&frame[src..src + len]);
+                }
+                assert_ne!(target, reversed, "ordered overlap must be observable");
+                for (offset, byte) in frame.iter().enumerate() {
+                    assert_eq!(*byte, last_writer_byte(&layout, &source, offset, round));
+                }
+                for (offset, byte) in target.iter().enumerate() {
+                    let wanted = segments
+                        .iter()
+                        .rev()
+                        .find_map(|segment| {
+                            let start = TARGET_OFFSET + segment.destination_offset as usize;
+                            (start..start + segment.byte_len as usize)
+                                .contains(&offset)
+                                .then(|| {
+                                    frame[FRAME_OFFSET + segment.source_offset as usize + offset
+                                        - start]
+                                })
+                        })
+                        .unwrap_or(target_sentinel(round));
+                    assert_eq!(*byte, wanted);
+                }
+                for (offset, byte) in host.iter().enumerate() {
+                    let wanted = if (HOST_BASE..HOST_BASE + target.len()).contains(&offset) {
+                        target[offset - HOST_BASE]
+                    } else {
+                        host_sentinel(round)
+                    };
+                    assert_eq!(*byte, wanted);
+                }
+                let parts = [source, frame, target, host];
+                let digest = forward_digest(&parts, true);
+                assert_ne!(digest, forward_digest(&parts, false));
+                hashes.push(digest);
+            }
+            assert_ne!(hashes[0], hashes[1]);
+            let report = report(&options, &layout, window, late, &hashes);
+            let fields: BTreeMap<_, _> = report
+                .split_whitespace()
+                .skip(1)
+                .map(|word| word.split_once('=').unwrap())
+                .collect();
+            assert_eq!(fields["schema"], "fe2o3.segment-frame-peer-segments.v1");
+            assert_eq!(fields["lists"], "6");
+            assert_eq!(fields["scalar_peers"], "0");
+            assert_eq!(fields["peer_descriptors"], "4");
+            assert_eq!(fields["peer_copied_bytes"], (window.bytes + 24).to_string());
+            assert_eq!(
+                fields["peer_target_envelope"],
+                (window.target - TARGET_OFFSET - FRAME_SUFFIX).to_string()
+            );
+            assert_eq!(
+                fields["packets_per_round"],
+                if case == Case::Packets {
+                    "3,3,6"
+                } else {
+                    "2,2,4"
+                }
+            );
+        }
+    }
+    for prefix in ["--forward-segments", "--late-forward-segments"] {
+        for shape in ["disjoint", "duplicates", "4096"] {
+            assert!(options(&[prefix, "0x1", "0x2", "0x3", shape].map(str::to_owned)).is_err());
+        }
+    }
+}
+
+#[test]
 fn forward_window_crosses_frame_envelope_and_retains_independent_guards() {
     for case in [Case::Overlap, Case::Packets] {
         let layout = layout(case);
@@ -116,7 +209,7 @@ fn forward_oracle_matches_independent_last_writer_and_complete_target_host_bytes
         let mut hashes = Vec::new();
         for round in 0..ROUNDS {
             let source = source_bytes(window, round);
-            let [frame, target, host] = oracle(&layout, window, &source, round);
+            let [frame, target, host] = oracle(&layout, window, &source, round, false);
             for (offset, &byte) in frame.iter().enumerate() {
                 assert_eq!(byte, last_writer_byte(&layout, &source, offset, round));
             }
@@ -142,7 +235,7 @@ fn forward_oracle_matches_independent_last_writer_and_complete_target_host_bytes
                 destination_sentinel(round)
             );
             let parts = [source, frame, target, host];
-            let value = forward_digest(&parts);
+            let value = forward_digest(&parts, false);
             let mut independent = Vec::from(FORWARD_DOMAIN);
             for bytes in &parts {
                 independent.extend((bytes.len() as u64).to_le_bytes());

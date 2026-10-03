@@ -9153,11 +9153,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         } else {
             None
         };
-        let frame_source = if directed.is_none() && segments.is_none() && compute_producer.is_none()
-        {
+        let frame_source = if directed.is_none() && compute_producer.is_none() {
             self.prepare_peer_frame_source_v1(
                 [(source_route, source), (destination_route, destination)],
                 dependencies,
+                segments.as_ref(),
             )?
         } else {
             None
@@ -9324,7 +9324,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "cooperative copy dependency depth exceeds its admitted bound",
             ));
         }
-        if segments.is_some() && compute_producer.is_some() && segment_frame_depth.is_none() {
+        if segments.is_some()
+            && (compute_producer.is_some() || frame_source.is_some())
+            && segment_frame_depth.is_none()
+        {
             return Err(KfdRuntimeBackendV1::capacity(
                 "compute-backed segment frame dependency depth exceeds its admitted bound",
             ));
@@ -9421,7 +9424,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 destination_route,
                 destination,
                 plan,
-                (compute_producer.as_ref(), segment_predecessor.as_ref()),
+                (
+                    compute_producer.as_ref(),
+                    segment_predecessor.as_ref(),
+                    frame_source.as_ref(),
+                ),
             )?)
         } else if let Some(producer) = &compute_producer {
             Some(self.prepare_compute_xgmi_plan_v1(
@@ -9456,6 +9463,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     [(source_route, source), (destination_route, destination)],
                     compute_producer.as_ref(),
                     segment_predecessor,
+                    frame_source.as_ref(),
                 )
             } else {
                 None
@@ -12684,6 +12692,10 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     fn supports_pending_segment_frame_peer_copy_v1(&self) -> bool {
         // The exact retained whole-list frame gates one native scalar window;
         // its envelope is never treated as scalar produced-byte coverage.
+        true
+    }
+
+    fn supports_pending_segment_frame_peer_copy_segments_v1(&self) -> bool {
         true
     }
 

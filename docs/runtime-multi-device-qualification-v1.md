@@ -33,7 +33,11 @@ consumers and two lists of 4096 descriptors. The
 [frame-forwarding checkpoint](evidence/dev-pending-frame-forward-2026-10-03/README.md)
 adds pending initialized list frames feeding scalar peer windows and guarded
 whole-target D2H on three GPUs. Eight queued/late overlap/packet cases pass with
-forward and reversed rosters. Broader application-kernel authority, post-arm
+forward and reversed rosters. The
+[list-to-list checkpoint](evidence/dev-frame-segments-forward-2026-10-03/README.md)
+adds pending initialized list frames feeding another ordered list and guarded
+whole-target D2H, with eight corresponding three-GPU cases passing.
+Broader application-kernel authority, post-arm
 native faults and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
 
@@ -135,6 +139,36 @@ shapes, prequeued and late admission, and reversed routes. The controller reuses
 the pinned process/observation helpers and independently reconstructs full-byte
 digests. Direct witness modes are `--forward-window` and `--late-forward-window`,
 followed by three UIDs and `overlap` or `packets`. Legacy modes remain unchanged.
+
+## Pending Frame List Forwarding
+
+`supports_pending_segment_frame_peer_copy_segments_v1` is an independent
+default-false capability for the ordered-list successor. It requires the version
+journal, the exact latest list event and immutable source-frame receipt. The
+source and destination bounding envelopes may differ. The destination must be
+initialized with no pending writer; pending compute consumption of this new
+frame-derived list remains excluded. Existing scalar and compute-source list
+profiles retain their original contracts.
+
+The KFD backend retains the exact list plan, original owner pair and bounded
+source-frame ancestry. Resource occupancy through an ancestor is authenticated
+separately from permission to order destination writes. Both endpoint markers
+and child slots must match. Only successful parent completion and original-owner
+restoration permit publication. Quiescent receipts no longer require disposed
+operational ancestors; uncertain effects remain retained, not reusable input.
+
+Use the same build and three-device controller command above with `--segments`.
+Direct witness modes are `--forward-segments` and `--late-forward-segments`.
+The separate `fe2o3.segment-frame-peer-segments.v1` report checks four successor
+descriptors, including overlapping duplicates and nonuniform last-writer bytes.
+Each process runs two changed rounds, six native logical lists, two guarded
+whole-target D2H copies and eight exact completion callbacks, with no kernels.
+All eight queued/late, overlap/packet-tail, forward/reverse cases pass on GPUs
+1/6/7. Independent full-byte digests, fresh endpoint observations, bounded process
+closure and owned-directory cleanup are retained in the linked checkpoint.
+
+This is native copy correctness, not physical overlap, general application
+authority, new solver qualification or matched HIP/HSA performance acceptance.
 
 ## Ordered Destination Lists
 

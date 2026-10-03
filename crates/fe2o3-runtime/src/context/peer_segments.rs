@@ -19,6 +19,7 @@ pub enum RuntimePeerCopySegmentsV1 {}
 pub(super) enum SegmentedPeerSourceV1 {
     Settled,
     Compute(super::peer_custody::ScalarPeerDependencyV1),
+    Frame(super::peer_custody::ScalarPeerDependencyV1),
 }
 
 /// Optional ordered peer-copy SPI; not encoded by Worker V1-V5.

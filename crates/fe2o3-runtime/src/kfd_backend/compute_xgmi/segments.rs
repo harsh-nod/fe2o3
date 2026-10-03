@@ -13,7 +13,8 @@ impl RuntimePeerCopySegmentsBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     /// including duplicates and overlapping writes. One queue, mapping pair, and
     /// logical result cover the complete list; no intermediate result is exposed.
     /// A pending source requires its exact producer-aware full-allocation Write
-    /// event. Independently, either source profile may follow the exact same-stream
+    /// event or latest retained initialized segment-frame event. A frame source
+    /// requires a fresh destination; other sources may follow the exact same-stream
     /// destination-list event. Downstream reads retain the initialized frame,
     /// not its envelope.
     fn peer_copy_segments_v1(
@@ -86,9 +87,10 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         custody: (
             Option<&compute_peer::Producer>,
             Option<&compute_peer::SegmentDestinationPredecessor>,
+            Option<&peer_frame::Source>,
         ),
     ) -> Result<Box<Root>, Failure> {
-        let (producer, predecessor) = custody;
+        let (producer, predecessor, frame) = custody;
         let unsupported = || {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -100,6 +102,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             .get(&(source.child, destination.child))
             .copied()
             .ok_or_else(unsupported)?;
+        if frame.is_some_and(|frame| {
+            producer.is_some()
+                || predecessor.is_some()
+                || !frame.matches_segment_endpoints(
+                    [(source, source_region), (destination, destination_region)],
+                    &plan,
+                )
+        }) {
+            return Err(unsupported());
+        }
         if producer.is_some_and(|producer| {
             producer
                 .segments()
@@ -114,7 +126,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             let child = &self.children[endpoint.child];
             let record = &child.allocations[&endpoint.local];
             let pending_source = endpoint == source
-                && producer.is_some_and(|producer| producer.owns_source(self, endpoint));
+                && (producer.is_some_and(|producer| producer.owns_source(self, endpoint))
+                    || frame.is_some());
             let ordered_destination = endpoint == destination
                 && self.compute_xgmi_children[endpoint.child].is_some_and(|owner| {
                     predecessor

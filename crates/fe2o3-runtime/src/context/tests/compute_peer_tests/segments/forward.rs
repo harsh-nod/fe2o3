@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "forward_segments.rs"]
+mod segment_lists;
+
 struct Forward {
     chain: Chain,
     output: RuntimeAllocationIdV1,

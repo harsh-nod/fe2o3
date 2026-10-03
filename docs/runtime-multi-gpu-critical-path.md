@@ -17,18 +17,20 @@ examples select all devices. Select explicit freshly observed free GPU identitie
 bound each owned process, preserve outputs, and clean only owned resources.
 No resets, disruptive fault injection or exclusive-performance claims.
 
-## Next Native Capability
+## Completed Native Capability
 
-Implement one missing pipeline using the existing public API:
+The existing public API now supports this pipeline:
 
 ```text
 A --ordered segment lists--> B --ordered segment list--> C --whole-frame D2H
 ```
 
-The B-to-C list must read B's exact latest retained destination frame without a
-host join. It may read initialized gaps outside the earlier list envelopes.
-Currently a contiguous B-to-C window works, but an ordered list rejects because
-its source provenance supports only settled allocations or pending compute.
+The B-to-C list reads B's exact latest retained destination frame without a host
+join, including initialized gaps outside the earlier list envelopes. The
+[eight-case native checkpoint](evidence/dev-frame-segments-forward-2026-10-03/README.md)
+passes prequeued and late admission, overlap and packet-tail shapes, and reversed
+routes on MI300X GPUs 1/6/7. The complete runtime suite passes 2352 tests with
+32 hardware ignores. This closes this functional work item, not A3.
 
 | Lane | Scope | Acceptance |
 | --- | --- | --- |
@@ -36,30 +38,31 @@ its source provenance supports only settled allocations or pending compute.
 | Native backend | Generalize existing frame-source transfer identity from scalar window to window or immutable segment plan; reuse existing list queue, packet plan and progress | Authenticate exact plan and paired ancestry; wait for successful parent completion and both original owner restorations before successor publication; preserve successor destination-frame receipt |
 | Qualification and review | Extend existing Context/backend forwarding fixtures and three-GPU destination-segments witness | Final-readback-only progress; full output and guard bytes; exact callbacks/native counts; released event custody, cancellation/failure and explicit cleanup |
 
-The first profile deliberately excludes a pending destination writer. Make the
-source-origin ordering match explicit: adding a Frame variant must not inherit
-the existing compute-origin ordering permission. Retain whole original owners,
+The first profile deliberately excludes a pending destination writer and pending
+compute consumption of the new frame-derived list. Its Frame source origin does
+not inherit compute-origin ordering permission. It retains whole original owners,
 not per-descriptor owners. Parent quiescence or failure is not successful input
 readiness. Unknown effects remain retained and cannot authorize retry.
 
-CPU cases must include overlapping/duplicate descriptors, caller mutation after
-admission, source-envelope gaps, plan/owner/rank drift, released events, bounded
-ancestry, failed/cancelled/Unknown parents, unwind quarantine and independent-pair
-progress. Native cases use prequeued and late admission, reversed device order,
-two changed-content rounds and whole-C readback. Reuse the existing descriptor
-arithmetic proofs; they do not prove the new Context/backend adapter.
+Fifteen new CPU tests cover immutable descriptors, source-envelope gaps,
+plan/owner/rank drift, released events, bounded linear ancestry validation,
+failed/cancelled/Unknown parents and queued-reader rollback. The full suite also
+retains unwind quarantine and independent-pair controls. Native cases use two
+changed-content rounds and whole-C readback. Existing descriptor arithmetic proof
+bodies are unchanged; they do not prove the new Context/backend adapter.
 
 Relevant implementation boundaries are `context/peer_segments/custody.rs`,
 `context/versions/producer_readers.rs`, `context/versions/submissions.rs`,
 `kfd_backend/peer_frame.rs`, `kfd_backend.rs` and
 `kfd_backend/compute_xgmi/segments.rs`. Existing fixtures are
-`context/tests/compute_peer_tests/segments/forward.rs` and
-`kfd_backend/compute_peer/frame_peer_tests.rs`.
+`context/tests/compute_peer_tests/segments/forward_segments.rs` and
+`kfd_backend/compute_peer/frame_segment_tests.rs`.
 
-## Application Admission
+## Next: Application Admission
 
-In parallel with useful copy composition, advance the first ordinary application
-kernel through the existing production constructor. Genuine Rust extraction,
+Advance the first ordinary application kernel through the existing production
+constructor, then qualify compute -> native peer -> compute/readback across
+selected GPUs. Genuine Rust extraction,
 owner-bound captured KIR and shared argument-basis/fold proofs now exist for a
 bounded checked-u32 prefix. They do not cover a complete kernel.
 

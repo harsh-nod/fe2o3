@@ -1,4 +1,4 @@
-//! Settled source lists -> pending preserved frame -> scalar peer window -> D2H.
+//! Settled source lists -> pending preserved frame -> peer window/list -> D2H.
 
 use super::*;
 
@@ -7,6 +7,7 @@ const FRAME_SUFFIX: usize = 7;
 const TARGET_OFFSET: usize = 37;
 const TARGET_EXTRA: usize = 173;
 const FORWARD_DOMAIN: &[u8] = b"fe2o3.segment-frame-peer-window.full-bytes.v1\0";
+const SEGMENTS_DOMAIN: &[u8] = b"fe2o3.segment-frame-peer-segments.full-bytes.v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct Window {
@@ -40,22 +41,50 @@ fn source_bytes(window: Window, round: usize) -> Vec<u8> {
         .collect()
 }
 
-fn oracle(layout: &Layout, window: Window, source: &[u8], round: usize) -> [Vec<u8>; 3] {
+fn forward_segments(window: Window) -> Vec<RuntimePeerCopySegmentV1> {
+    descriptors(&[
+        (0, 5, window.bytes as u64 - 17),
+        (window.bytes as u64 - 31, 1, 23),
+        (192, 14, 9),
+        (192, 14, 9),
+    ])
+}
+
+fn oracle(
+    layout: &Layout,
+    window: Window,
+    source: &[u8],
+    round: usize,
+    segmented: bool,
+) -> [Vec<u8>; 3] {
     let mut frame = vec![destination_sentinel(round); window.frame];
     for (list, source_base) in layout.lists.iter().zip(SOURCE_BASES) {
         apply_list(&mut frame, source, source_base, list);
     }
     let mut target = vec![target_sentinel(round); window.target];
-    target[TARGET_OFFSET..TARGET_OFFSET + window.bytes]
-        .copy_from_slice(&frame[FRAME_OFFSET..FRAME_OFFSET + window.bytes]);
+    if segmented {
+        for segment in forward_segments(window) {
+            let src = FRAME_OFFSET + segment.source_offset as usize;
+            let dst = TARGET_OFFSET + segment.destination_offset as usize;
+            let len = segment.byte_len as usize;
+            target[dst..dst + len].copy_from_slice(&frame[src..src + len]);
+        }
+    } else {
+        target[TARGET_OFFSET..TARGET_OFFSET + window.bytes]
+            .copy_from_slice(&frame[FRAME_OFFSET..FRAME_OFFSET + window.bytes]);
+    }
     let mut host = vec![host_sentinel(round); window.host];
     host[HOST_BASE..HOST_BASE + window.target].copy_from_slice(&target);
     [frame, target, host]
 }
 
-fn forward_digest(parts: &[Vec<u8>]) -> String {
+fn forward_digest(parts: &[Vec<u8>], segmented: bool) -> String {
     let mut hash = Sha256::new();
-    hash.update(FORWARD_DOMAIN);
+    hash.update(if segmented {
+        SEGMENTS_DOMAIN
+    } else {
+        FORWARD_DOMAIN
+    });
     for bytes in parts {
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
@@ -105,6 +134,43 @@ pub(super) fn exercise(
     options: &Options,
     layout: &Layout,
     late: bool,
+) -> ResultV1<String> {
+    if options.forward_segments {
+        exercise_profile(
+            context,
+            options,
+            layout,
+            late,
+            |context, stream, source, destination, segments, events| {
+                context.peer_copy_segments(stream, source, destination, segments, events)
+            },
+        )
+    } else {
+        exercise_profile(
+            context,
+            options,
+            layout,
+            late,
+            |context, stream, source, destination, _, events| {
+                context.peer_copy(stream, source, destination, events)
+            },
+        )
+    }
+}
+
+fn exercise_profile<M>(
+    context: &mut Context,
+    options: &Options,
+    layout: &Layout,
+    late: bool,
+    submit: impl Fn(
+        &mut Context,
+        RuntimeStreamIdV1,
+        RuntimeMemoryRegionV1,
+        RuntimeMemoryRegionV1,
+        &[RuntimePeerCopySegmentV1],
+        &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
 ) -> ResultV1<String> {
     require(
         context.devices().len() == 3
@@ -173,7 +239,13 @@ pub(super) fn exercise(
         let source_initial = source_bytes(window, round);
         let frame_initial = vec![destination_sentinel(round); window.frame];
         let target_initial = vec![target_sentinel(round); window.target];
-        let wanted = oracle(layout, window, &source_initial, round);
+        let wanted = oracle(
+            layout,
+            window,
+            &source_initial,
+            round,
+            options.forward_segments,
+        );
         for (item, bytes) in storage
             .iter()
             .zip([&source_initial, &frame_initial, &target_initial])
@@ -255,24 +327,36 @@ pub(super) fn exercise(
                 "forward-publication-before-admission",
             )?;
         }
-        let peer = context
-            .peer_copy(
-                peer_stream,
-                region(
-                    frame,
-                    RuntimeAccessV1::Read,
-                    FRAME_OFFSET as u64,
-                    window.bytes as u64,
-                ),
-                region(
-                    target,
-                    RuntimeAccessV1::Write,
-                    TARGET_OFFSET as u64,
-                    window.bytes as u64,
-                ),
-                &[second_event],
-            )
-            .map_err(|error| failure("forward-scalar-admission", error))?;
+        let mut caller_segments = forward_segments(window);
+        let peer = submit(
+            context,
+            peer_stream,
+            region(
+                frame,
+                RuntimeAccessV1::Read,
+                FRAME_OFFSET as u64,
+                window.bytes as u64,
+            ),
+            region(
+                target,
+                RuntimeAccessV1::Write,
+                TARGET_OFFSET as u64,
+                if options.forward_segments {
+                    (window.target - TARGET_OFFSET - FRAME_SUFFIX) as u64
+                } else {
+                    window.bytes as u64
+                },
+            ),
+            &caller_segments,
+            &[second_event],
+        )
+        .map_err(|error| failure("forward-peer-admission", error))?;
+        caller_segments.fill(RuntimePeerCopySegmentV1 {
+            source_offset: u64::MAX,
+            destination_offset: u64::MAX,
+            byte_len: 0,
+        });
+        drop(caller_segments);
         if late {
             require(
                 tail_published(context, &second, completed + 1)?,
@@ -324,7 +408,7 @@ pub(super) fn exercise(
             read_exact(context, target, &wanted[1])?,
             read_exact(context, host, &wanted[2])?,
         ];
-        digests.push(forward_digest(&snapshots));
+        digests.push(forward_digest(&snapshots, options.forward_segments));
         let actual = receipts
             .lock()
             .map_err(|error| failure("forward-receipt-lock", error))?;
@@ -425,11 +509,52 @@ fn report(
             .map(|segment| segment.byte_len)
             .sum()
     });
-    let scalar_packets = Gfx942ComputeXgmiPacketPlanV1::new(window.bytes as u64)
-        .expect("bounded scalar window")
-        .count();
+    let segmented = options.forward_segments;
+    let peer_packets = if segmented {
+        forward_segments(window)
+            .iter()
+            .map(|segment| {
+                Gfx942ComputeXgmiPacketPlanV1::new(segment.byte_len)
+                    .unwrap()
+                    .count()
+            })
+            .sum()
+    } else {
+        Gfx942ComputeXgmiPacketPlanV1::new(window.bytes as u64)
+            .unwrap()
+            .count()
+    };
+    let schema = if segmented {
+        "fe2o3.segment-frame-peer-segments.v1"
+    } else {
+        "fe2o3.segment-frame-peer-window.v1"
+    };
+    let lists = if segmented { 6 } else { 4 };
+    let scalar_peers = if segmented { 0 } else { 2 };
+    let dependency = if segmented {
+        "exact-latest-list-events"
+    } else {
+        "exact-latest-list-and-scalar-events"
+    };
+    let results = if segmented {
+        "released-readback-third-second-first-before-refresh"
+    } else {
+        "released-readback-scalar-second-first-before-refresh"
+    };
+    let extra = if segmented {
+        format!(
+            " peer_descriptors=4 peer_target_envelope={} peer_copied_bytes={}",
+            window.target - TARGET_OFFSET - FRAME_SUFFIX,
+            forward_segments(window)
+                .iter()
+                .map(|segment| segment.byte_len)
+                .sum::<u64>()
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "PASS schema=fe2o3.segment-frame-peer-window.v1 authority=production-deny-all transport=NATIVE-XGMI devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} case={} late={} contexts=1 rounds=2 kernels=0 modules=0 allocations=7 streams=6 source_bytes={} frame_bytes={} target_bytes={} list_source_offsets=17,29 list_destination_offset=53 source_envelope={} destination_envelope={} descriptors_per_round={},{} list_copied_bytes_per_round={},{} packets_per_round={},{},{} peer_source_offset=7 peer_target_offset=37 peer_bytes={} readback_source_offset=0 readback_bytes={} host_offset=19 host_suffix=23 host_bytes={} lists=4 scalar_peers=2 d2h_copies=2 native_counter=0,3,6 completion_receipts=8 callbacks=exact-original-ids-once-successful admission={} dependency=exact-latest-list-and-scalar-events events=released-after-dependent-admission descriptor_snapshot=caller-overwritten-after-admission progress={} publication_observed={} publication_identity={} native_at_peer_admission={} retained_at_peer_admission={} source=full-byte-pass frame=full-byte-pass initialized_complement=full-byte-pass target_guards=full-byte-pass host_guards=full-byte-pass digest=domain-and-u64le-length-prefixed-source-frame-target-host round_sha256={},{} payloads_changed=true allocations_reused=true results=released-readback-scalar-second-first-before-refresh source_disposal=after-all-rounds-settled drain=completed-tail-only cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false",
+        "PASS schema={schema} authority=production-deny-all transport=NATIVE-XGMI devices=3 unique_ids=0x{:016x},0x{:016x},0x{:016x} case={} late={} contexts=1 rounds=2 kernels=0 modules=0 allocations=7 streams=6 source_bytes={} frame_bytes={} target_bytes={} list_source_offsets=17,29 list_destination_offset=53 source_envelope={} destination_envelope={} descriptors_per_round={},{} list_copied_bytes_per_round={},{} packets_per_round={},{},{} peer_source_offset=7 peer_target_offset=37 peer_bytes={} readback_source_offset=0 readback_bytes={} host_offset=19 host_suffix=23 host_bytes={} lists={lists} scalar_peers={scalar_peers} d2h_copies=2 native_counter=0,3,6 completion_receipts=8 callbacks=exact-original-ids-once-successful admission={} dependency={dependency} events=released-after-dependent-admission descriptor_snapshot=caller-overwritten-after-admission progress={} publication_observed={} publication_identity={} native_at_peer_admission={} retained_at_peer_admission={} source=full-byte-pass frame=full-byte-pass initialized_complement=full-byte-pass target_guards=full-byte-pass host_guards=full-byte-pass digest=domain-and-u64le-length-prefixed-source-frame-target-host round_sha256={},{} payloads_changed=true allocations_reused=true results={results} source_disposal=after-all-rounds-settled drain=completed-tail-only cleanup=logical-and-native-explicit physical_overlap=unmeasured performance_acceptance=false formal_refinement=false{extra}",
         options.ids[0],
         options.ids[1],
         options.ids[2],
@@ -446,12 +571,16 @@ fn report(
         copied[1],
         packets[0],
         packets[1],
-        scalar_packets,
+        peer_packets,
         window.bytes,
         window.target,
         window.host,
         if late {
-            "lists-before-seed-scalar-after-latest-publication"
+            if segmented {
+                "parents-before-seed-list-after-latest-publication"
+            } else {
+                "lists-before-seed-scalar-after-latest-publication"
+            }
         } else {
             "all-four-before-progress"
         },

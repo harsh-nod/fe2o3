@@ -16,13 +16,13 @@ SPEC = "producer_input_fold_spec_v1.rs"
 COMPOSITION = "context_producer_input_composition_v1.rs"
 NATIVE = "crates/fe2o3-runtime/src/context/versions/"
 PINS = {
-    "producer_readers.rs": "9af250d50e512689bf0c013a0cc1b194722627d1c4dad3b42d8be6336ceea8c7",
+    "producer_readers.rs": "d96a12dc625e527a496e46d8ece41e63c24a82b89ce6b9da41fe5a5e40f26fd4",
     "producer_journal_observer_bodies.rs": "5fb7f1572c41a6f2c6dffa74f040e870bb4ae874133c127ee5ae87d52c3fce59",
     "producer_input_fold_body.rs": "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
     "producer_input_fold_tests.rs": "39f37757239f9f6880caeddded618bb13952d863d8aef11dc5c53453084a2d00",
 }
-NATIVE_TREE_SHA = "f85e2dc808be1ce36bdfd2d63bc682987e580ce01cfc0c7f120186d12fdd8678"
-SCHEMA_TREE_SHA = "0d92cb4952ae6578561ec5c03e88d1dff7ab46844d7b7f0ed711b386db03168a"
+NATIVE_TREE_SHA = "f6401be7baebe70b3748a653f84a22aed4b18c10a7b63b940cc9cf0cb735c8d6"
+SCHEMA_TREE_SHA = "0280e5b82f55e73f6f4b1974d9ab2011e637cc22eed32c2d06bc02b5e76ec7b8"
 DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_version_journal/declarations.rs",
     "context_version_journal/enrollment_declarations.rs",
@@ -31,9 +31,9 @@ DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_queued_writers/read_declarations.rs",
 ))
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "3d4c4fb5f7735d2115a24f7702c3588ffe058a94a992a9fb1ba4d16eda47da25",
-    "check-producer-input-fold.py": "52a10213b3b26db789d30a987b0aab678ef8a3cea2add0db98b2169460b973fb",
-    "check-producer-input-composition.py": "4fdfa3d1803a04a46de6a92895839103efb3b414a17aff2a949c4a8fc381dec7",
+    "check-producer-input-validate.py": "58de601a04e35b06d681f936a333c6ee68a75d87b15396e9c9d221b2cdc82100",
+    "check-producer-input-fold.py": "c5c05d1d122e3de555fe3c18e6bd8caada4aa4c72c26329e3740d56835096c49",
+    "check-producer-input-composition.py": "1b9d9d473863f98844807ea71cc6ed97384473c5f90383ac9481fa1af03898c9",
 }
 PARTS = (DEFINITIONS, COMPOSITION, "producer_input_runtime_declarations_v1.rs",
          "producer_input_journal_comparison_declarations_v1.rs", "producer_input_outcome_spec_v1.rs",
@@ -270,11 +270,11 @@ class SourceControls(unittest.TestCase):
         for name, digest in PINS.items():
             self.assertEqual(hashlib.sha256((ROOT / (NATIVE + name)).read_bytes()).hexdigest(), digest)
         native = native_inventory()
-        self.assertEqual(len(native), 403)
+        self.assertEqual(len(native), 405)
         self.assertEqual(tree_hash(native), NATIVE_TREE_SHA)
         with_schemas = {**native, **{str(path): hashlib.sha256(raw_source(ROOT / path)).hexdigest()
                                    for path in DECLARATIONS}}
-        self.assertEqual(len(with_schemas), 408)
+        self.assertEqual(len(with_schemas), 410)
         self.assertEqual(tree_hash(with_schemas), SCHEMA_TREE_SHA)
 
     def test_reconstruction_and_roster_reject_unreviewed_edits(self):

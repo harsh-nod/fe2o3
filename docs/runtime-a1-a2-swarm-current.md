@@ -32,7 +32,10 @@ source disposal, full-frame D2H and prequeued/late compute consumers. Pending
 compute sources now also compose with ordered destination lists on three GPUs,
 with independently retained source and destination dependencies. Pending list
 frames now also feed checked scalar peer windows and guarded whole-target D2H
-on three GPUs, in prequeued and late-admitted copy-only pipelines. Earlier matched
+on three GPUs, in prequeued and late-admitted copy-only pipelines. The
+[list-to-list forwarding checkpoint](evidence/dev-frame-segments-forward-2026-10-03/README.md)
+now also qualifies pending list frames feeding another ordered list and guarded
+whole-target D2H on three GPUs, without a host join. Earlier matched
 wait-cadence measurements remain scoped
 to their recorded sources, not this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
@@ -50,7 +53,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, eight-GPU coverage and post-arm/native partial-failure qualification remain |
+| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar/list forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
@@ -78,14 +81,15 @@ must not become a prerequisite for running their already-admitted smoke tests.
    An initialized gathered frame on GPU B feeds a queued checked-window peer
    copy to GPU C and whole-target D2H, without a host join. Exact latest-writer,
    frame and event custody are retained; frame provenance is not compute authority.
-3. Next native functional priority: pending segmented frames must feed another
-   ordered segment list, not only one contiguous peer window. The reviewed
-   [three-lane work order](runtime-multi-gpu-critical-path.md) reuses the native
-   list queue and existing frame receipts. It requires exact latest-writer
-   source custody, a fresh initialized destination, final-readback-only progress,
-   full-byte native acceptance and failure/cancellation tests. No new transport,
-   kernel authority or arithmetic proof is needed for this copy-only packet.
-4. In the admission lane, enable the first ordinary application kernel
+3. Pending segmented frames now feed another ordered segment list, not only one
+   contiguous peer window. The
+   [eight-case native checkpoint](evidence/dev-frame-segments-forward-2026-10-03/README.md)
+   passes on three GPUs with exact latest-writer custody, initialized destination
+   preservation and final-readback-only progress. All 2352 runtime tests pass,
+   including 15 new admission/custody/failure tests; 32 hardware tests remain
+   ignored. This completes the reviewed copy-only work item without adding kernel
+   authority or claiming whole-adapter formal refinement.
+4. Next functional priority: enable the first ordinary application kernel
    through actual source/KIR/machine refinement and protected invocation custody.
    [Actual-emission capture](evidence/dev-checked-u32-emission-capture-2026-10-03/README.md)
    is now CPU-qualified. The [entry-prefix shared-fold proof](runtime-checked-u32-prefix-v1.md)

@@ -3,6 +3,9 @@
 use super::*;
 use crate::BackendCancellationV1;
 
+#[path = "frame_segment_tests.rs"]
+mod segment_lists;
+
 struct Forward {
     f: Fixture,
     lists: Vec<u64>,

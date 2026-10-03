@@ -33,7 +33,7 @@ class FakeRecorder(M.S.Recorder):
         folder = self.output / name
         folder.mkdir()
         devices = SELECTED if argv[2] == SELECTED[0][2] else tuple(reversed(SELECTED))
-        output = line(M.expected(devices, argv[-1], argv[1] == "--late-forward-window"))
+        output = line(M.expected(devices, argv[-1], argv[1].startswith("--late-"), argv[1].endswith("-segments")))
         receipt = dict(exit=0, error=None, group_absent=True)
         if self.mutate:
             output, receipt = self.mutate(output, receipt)
@@ -147,6 +147,35 @@ class ControllerTests(unittest.TestCase):
             report = self.run_campaign(self.recorder())
         self.assertFalse(report["accepted"])
         observe.assert_not_called()
+
+    def test_segment_profile_routes_counts_oracle_and_old_schema_rejection(self):
+        recorder = self.recorder()
+        with mock.patch.object(M.S, "observe_pair") as observe:
+            report = M.campaign(recorder, None, SELECTED, self.binary, self.fd, self.identity, Path("/smi"), True)
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["schema"], "fe2o3.forward-segments-smoke.v1")
+        self.assertEqual(len(recorder.calls), 8)
+        self.assertEqual(observe.call_count, 16)
+        for (_, shape, late, reverse), call in zip(M.CASES, recorder.calls):
+            self.assertEqual(call[1][1], "--late-forward-segments" if late else "--forward-segments")
+            selected = tuple(reversed(SELECTED)) if reverse else SELECTED
+            self.assertEqual(call[1][2:5], [row[2] for row in selected])
+            wanted = M.expected(selected, shape, late, True)
+            self.assertEqual(wanted["lists"], "6")
+            self.assertEqual(wanted["scalar_peers"], "0")
+            self.assertEqual(wanted["peer_descriptors"], "4")
+            self.assertEqual(wanted["packets_per_round"], "3,3,6" if shape == "packets" else "2,2,4")
+            self.assertEqual(int(wanted["peer_copied_bytes"]), int(wanted["peer_bytes"]) + 24)
+            self.assertGreater(int(wanted["peer_target_envelope"]), int(wanted["peer_bytes"]))
+            old = M.expected(selected, shape, late)
+            self.assertNotEqual(wanted["round_sha256"], old["round_sha256"])
+            with self.assertRaises(ValueError):
+                M.S.parse_pass(line(old), wanted)
+            for key in wanted:
+                bad = dict(wanted)
+                del bad[key]
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    M.S.parse_pass(line(bad), wanted)
 
 
 if __name__ == "__main__":

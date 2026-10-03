@@ -44,8 +44,8 @@ def endpoints(values):
     return selected
 
 
-@lru_cache(maxsize=2)
-def oracle(shape):
+@lru_cache(maxsize=4)
+def oracle(shape, segmented=False):
     """Independent byte arithmetic; no runtime, Rust output or native data input."""
     packet = 0x3fffe0
     if shape == "overlap":
@@ -68,6 +68,7 @@ def oracle(shape):
         source[i] = (x ^ (x >> 31)) & 255
     digests = []
     window = lengths[1] - 14
+    forward = ((0, 5, window - 17), (window - 31, 1, 23), (192, 14, 9), (192, 14, 9))
     for round_ in range(2):
         payload = source if not round_ else source.translate(bytes(i ^ 73 for i in range(256)))
         frame = bytearray([0xa5 ^ (round_ * 29)]) * lengths[1]
@@ -75,21 +76,27 @@ def oracle(shape):
             for src, dst, size in segments:
                 frame[53 + dst:53 + dst + size] = payload[base + src:base + src + size]
         target = bytearray([0xd3 ^ (round_ * 31)]) * lengths[2]
-        target[37:37 + window] = frame[7:7 + window]
+        if segmented:
+            for src, dst, size in forward:
+                target[37 + dst:37 + dst + size] = frame[7 + src:7 + src + size]
+        else:
+            target[37:37 + window] = frame[7:7 + window]
         host = bytearray([0x6c ^ (round_ * 41)]) * (lengths[2] + 42)
         host[19:19 + lengths[2]] = target
-        digest = hashlib.sha256(b"fe2o3.segment-frame-peer-window.full-bytes.v1\0")
+        digest = hashlib.sha256(b"fe2o3.segment-frame-peer-segments.full-bytes.v1\0" if segmented
+                                else b"fe2o3.segment-frame-peer-window.full-bytes.v1\0")
         for data in (payload, frame, target, host):
             digest.update(len(data).to_bytes(8, "little"))
             digest.update(data)
         digests.append(digest.hexdigest())
     copied = tuple(sum(n for _, _, n in segments) for segments in lists)
     packets = tuple(sum((n + packet - 1) // packet for _, _, n in segments) for segments in lists)
-    return lengths, envelopes, copied, (*packets, (window + packet - 1) // packet), tuple(digests)
+    peer_packets = sum((n + packet - 1) // packet for _, _, n in forward) if segmented else (window + packet - 1) // packet
+    return lengths, envelopes, copied, (*packets, peer_packets), tuple(digests)
 
 
-def expected(selected, shape, late):
-    lengths, envelopes, copied, packets, digests = oracle(shape)
+def expected(selected, shape, late, segmented=False):
+    lengths, envelopes, copied, packets, digests = oracle(shape, segmented)
     fields = dict(
         schema="fe2o3.segment-frame-peer-window.v1", authority="production-deny-all",
         transport="NATIVE-XGMI", devices=3, unique_ids=",".join(row[2] for row in selected),
@@ -116,25 +123,32 @@ def expected(selected, shape, late):
         results="released-readback-scalar-second-first-before-refresh", source_disposal="after-all-rounds-settled",
         drain="completed-tail-only", cleanup="logical-and-native-explicit", physical_overlap="unmeasured",
         performance_acceptance="false", formal_refinement="false")
+    if segmented:
+        fields.update(schema="fe2o3.segment-frame-peer-segments.v1", lists=6, scalar_peers=0,
+                      dependency="exact-latest-list-events", peer_descriptors=4,
+                      peer_target_envelope=lengths[2] - 44, peer_copied_bytes=lengths[1] + 10,
+                      admission="parents-before-seed-list-after-latest-publication" if late else "all-four-before-progress",
+                      results="released-readback-third-second-first-before-refresh")
     return {key: str(value) for key, value in fields.items()}
 
 
-def campaign(recorder, helper, selected, binary, fd, identity, smi):
-    report = dict(schema="fe2o3.forward-window-smoke.v1", accepted=False, binary=str(binary),
+def campaign(recorder, helper, selected, binary, fd, identity, smi, segmented=False):
+    report = dict(schema="fe2o3.forward-segments-smoke.v1" if segmented else "fe2o3.forward-window-smoke.v1", accepted=False, binary=str(binary),
                   binary_identity=identity, shared_sha256=SHARED_SHA, observer_sha256=S.OBSERVER_SHA,
                   devices=selected, started=S.stamp(), cases=[], errors=[],
                   scope="copy-only; point-observations-not-reservation; no-native-fault-injection")
     try:
         for name, shape, late, reverse in CASES:
             devices = tuple(reversed(selected)) if reverse else selected
-            wanted = expected(devices, shape, late)
+            wanted = expected(devices, shape, late, segmented)
             row = dict(name=name, accepted=False, cleanup_observed=False)
             report["cases"].append(row)
             S.require(S.fingerprint(fd) == identity, "pinned executable changed before admission")
             S.observe_pair(recorder, helper, selected, smi, name + "-before")
             try:
                 S.require(S.fingerprint(fd) == identity, "pinned executable changed during admission")
-                argv = [str(binary), "--late-forward-window" if late else "--forward-window",
+                mode = "segments" if segmented else "window"
+                argv = [str(binary), f"--{'late-' if late else ''}forward-{mode}",
                         *(device[2] for device in devices), shape]
                 receipt = recorder.run(name, argv, 180, executable=f"/proc/self/fd/{fd}", pass_fds=(fd,))
                 row["pass"] = S.parse_pass(S.command_text(recorder, name, receipt), wanted)
@@ -162,6 +176,7 @@ def main(argv=None):
     S.require(sys.flags.isolated and sys.flags.dont_write_bytecode, "use python3 -I -B")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-hardware", action="store_true", required=True)
+    parser.add_argument("--segments", action="store_true", help="qualify ordered-list forwarding instead of scalar windows")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--binary-sha256", required=True)
     parser.add_argument("--device", action="append", required=True)
@@ -182,7 +197,7 @@ def main(argv=None):
         identity = S.fingerprint(fd)
         S.require(identity["sha256"] == args.binary_sha256, "binary SHA256 mismatch")
         args.output.mkdir(parents=False, exist_ok=False)
-        result = campaign(S.Recorder(args.output), helper, selected, binary, fd, identity, args.rocm_smi)
+        result = campaign(S.Recorder(args.output), helper, selected, binary, fd, identity, args.rocm_smi, args.segments)
     finally:
         os.close(fd)
     print(json.dumps(dict(accepted=result["accepted"], cases=len(result["cases"]), errors=result["errors"],

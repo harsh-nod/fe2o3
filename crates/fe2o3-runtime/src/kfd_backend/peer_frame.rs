@@ -1,8 +1,8 @@
-//! A scalar native window whose input is an exact retained segmented frame.
+//! Native windows/lists whose input is an exact retained segmented frame.
 
 use super::*;
-use compute_peer::{AllocationIdentity, SegmentDestinationFrame};
-use fe2o3_kfd::Gfx942ComputeXgmiCopyWindowV1;
+use compute_peer::{AllocationIdentity, SegmentDestinationFrame, TransferIdentity};
+use fe2o3_kfd::{Gfx942ComputeXgmiCopyWindowV1, Gfx942ComputeXgmiSegmentsPlanV1};
 
 type Failure = RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>;
 
@@ -11,7 +11,7 @@ pub(super) struct Source {
     id: u64,
     frame: Arc<SegmentDestinationFrame>,
     endpoints: [(RoutedHandleV1, BackendMemoryRegionV1, AllocationIdentity); 2],
-    window: Gfx942ComputeXgmiCopyWindowV1,
+    transfer: TransferIdentity,
 }
 
 impl Source {
@@ -31,7 +31,45 @@ impl Source {
     }
 
     pub(super) fn window(&self) -> Gfx942ComputeXgmiCopyWindowV1 {
-        self.window
+        match self.transfer {
+            TransferIdentity::Window(window) => window,
+            TransferIdentity::Segments(_) => unreachable!("scalar frame profile requires a window"),
+        }
+    }
+
+    pub(super) fn segments(&self) -> Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>> {
+        match &self.transfer {
+            TransferIdentity::Window(_) => None,
+            TransferIdentity::Segments(plan) => Some(plan),
+        }
+    }
+
+    pub(super) fn ancestor(&self) -> (u64, Arc<SegmentDestinationFrame>) {
+        (self.id, Arc::clone(&self.frame))
+    }
+
+    pub(super) fn matches_segment_endpoints(
+        &self,
+        endpoints: [(RoutedHandleV1, BackendMemoryRegionV1); 2],
+        plan: &Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) -> bool {
+        self.endpoints.map(|(route, region, _)| (route, region)) == endpoints
+            && self.segments().is_some_and(|held| Arc::ptr_eq(held, plan))
+    }
+
+    pub(super) fn matches_segment_frame(
+        &self,
+        ancestor: (u64, &Arc<SegmentDestinationFrame>),
+        endpoints: [(u64, RoutedHandleV1, AllocationIdentity); 2],
+        plan: &Arc<Gfx942ComputeXgmiSegmentsPlanV1>,
+    ) -> bool {
+        self.id == ancestor.0
+            && Arc::ptr_eq(&self.frame, ancestor.1)
+            && self
+                .endpoints
+                .map(|(route, region, identity)| (region.allocation, route, identity))
+                == endpoints
+            && self.segments().is_some_and(|held| Arc::ptr_eq(held, plan))
     }
 
     pub(super) fn orders_owner(
@@ -60,7 +98,11 @@ impl Source {
             self.frame
                 .owns_occupied_child(backend, self.id, route.child, owner)
         };
-        if backend.compute_xgmi_children[route.child].is_some_and(|owner| !occupied(owner)) {
+        if backend.compute_xgmi_children[route.child].is_some_and(|owner| {
+            !self
+                .frame
+                .owns_occupied_ancestor_child(backend, self.id, route.child, owner)
+        }) {
             return false;
         }
         if backend
@@ -95,6 +137,18 @@ impl Source {
         id: u64,
         copy: &CooperativeCopySubmissionV1,
     ) -> bool {
+        self.local_is_intact(backend, id, copy)
+            && self.frame.is_intact(backend, self.id)
+            && (copy.phase != CooperativeCopyPhaseV1::Dependencies
+                || self.source_restorable(backend))
+    }
+
+    pub(super) fn local_is_intact(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        copy: &CooperativeCopySubmissionV1,
+    ) -> bool {
         // Check the rank and older ID before the bounded parent frame walk.
         if self.id >= id
             || self.depth() == 0
@@ -107,7 +161,10 @@ impl Source {
             || !copy
                 .compute_xgmi
                 .as_ref()
-                .is_some_and(|root| root.matches_window(self.window))
+                .is_some_and(|root| match &self.transfer {
+                    TransferIdentity::Window(window) => root.matches_window(*window),
+                    TransferIdentity::Segments(plan) => root.matches_segments(plan),
+                })
             || [
                 (copy.source, copy.source_region),
                 (copy.destination, copy.destination_region),
@@ -134,7 +191,6 @@ impl Source {
             .as_ref()
             .and_then(|root| root.segment_frame_v1())
             .is_some_and(|frame| Arc::ptr_eq(frame, &self.frame))
-            || !self.frame.is_intact(backend, self.id)
             || !self.frame.covers(backend, self.endpoints[0].1)
         {
             return false;
@@ -144,7 +200,7 @@ impl Source {
         if copy.phase != CooperativeCopyPhaseV1::Dependencies {
             return parent.status() == BackendPollV1::Succeeded && parent.is_quiescent();
         }
-        self.source_restorable(backend)
+        true
     }
 }
 
@@ -153,6 +209,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         &self,
         endpoints: [(RoutedHandleV1, BackendMemoryRegionV1); 2],
         events: &[u64],
+        segments: Option<&Arc<Gfx942ComputeXgmiSegmentsPlanV1>>,
     ) -> Result<Option<Source>, Failure> {
         let [(source, source_region), (destination, destination_region)] = endpoints;
         if source.child == destination.child {
@@ -169,6 +226,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             };
             (*child == source.child
                 && parent.destination == source
+                && !(segments.is_some()
+                    && parent.status() == BackendPollV1::Succeeded
+                    && parent.is_quiescent())
                 && parent
                     .compute_xgmi
                     .as_ref()
@@ -181,7 +241,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let reject = || {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
-                "native frame peer requires an exact current frame, checked window and fresh initialized destination",
+                "native frame peer requires an exact current frame, checked transfer and fresh initialized destination",
             )
         };
         let RoutedSubmissionV1::CooperativeCopy(parent) = &self.submissions[&id] else {
@@ -196,26 +256,45 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         );
         let source_record = &self.children[source.child].allocations[&source.local];
         let destination_record = &self.children[destination.child].allocations[&destination.local];
-        let Some(window) = Gfx942ComputeXgmiCopyWindowV1::new(
-            source_record.bytes.len() as u64,
-            destination_record.bytes.len() as u64,
-            source_region.byte_offset,
-            destination_region.byte_offset,
-            source_region.byte_len,
-        ) else {
-            return Err(reject());
+        let transfer = match segments {
+            Some(plan)
+                if compute_peer::segment_regions_match(
+                    plan,
+                    AllocationIdentity::of(source_record),
+                    AllocationIdentity::of(destination_record),
+                    source_region,
+                    destination_region,
+                ) =>
+            {
+                TransferIdentity::Segments(Arc::clone(plan))
+            }
+            Some(_) => return Err(reject()),
+            None => {
+                if source_region.byte_len != destination_region.byte_len {
+                    return Err(reject());
+                }
+                TransferIdentity::Window(
+                    Gfx942ComputeXgmiCopyWindowV1::new(
+                        source_record.bytes.len() as u64,
+                        destination_record.bytes.len() as u64,
+                        source_region.byte_offset,
+                        destination_region.byte_offset,
+                        source_region.byte_len,
+                    )
+                    .ok_or_else(reject)?,
+                )
+            }
         };
         if source_region.access != RuntimeAccessV1::Read
             || destination_region.access != RuntimeAccessV1::Write
-            || source_region.byte_len != destination_region.byte_len
             || !self
                 .compute_xgmi_routes
                 .contains_key(&(source.child, destination.child))
             || ![source.child, destination.child]
                 .into_iter()
                 .all(|child| self.children[child].peer_visible_device_allocations)
-            || !compute_xgmi::checked_region(source_record, source_region)
-            || !compute_xgmi::checked_region(destination_record, destination_region)
+            || !compute_xgmi::checked_envelope(source_record, source_region)
+            || !compute_xgmi::checked_envelope(destination_record, destination_region)
             || !destination_record.sdma_initialized
             || !matches!(
                 destination_record.sdma_storage,
@@ -256,7 +335,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         }
         for child in [source.child, destination.child] {
             if let Some(owner) = self.compute_xgmi_children[child]
-                && (!frame.owns_occupied_child(self, id, source.child, owner)
+                && (!frame.owns_occupied_ancestor_child(self, id, child, owner)
                     || !matches!(self.submissions.get(&owner),
                         Some(RoutedSubmissionV1::CooperativeCopy(copy))
                             if [copy.source.child, copy.destination.child].contains(&child)))
@@ -274,7 +353,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     AllocationIdentity::of(&self.children[route.child].allocations[&route.local]),
                 )
             }),
-            window,
+            transfer,
         };
         let mut controls = Vec::new();
         controls

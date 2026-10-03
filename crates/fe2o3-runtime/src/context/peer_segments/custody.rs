@@ -12,10 +12,12 @@ struct SegmentedPeerPlanV1 {
     destination: ContextReadSourceV1,
     identity: IdentityDigestV1,
     origin: SegmentedPeerSourceV1,
+    source_frame: Option<SegmentedPeerFrameV1>,
     predecessor: Option<(ScalarPeerDependencyV1, std::sync::Arc<SegmentedPeerPlanV1>)>,
     _segments: std::sync::Arc<Vec<RuntimePeerCopySegmentV1>>,
 }
 
+#[derive(Clone)]
 pub(in crate::context) struct SegmentedPeerFrameV1 {
     plan: std::sync::Arc<SegmentedPeerPlanV1>,
 }
@@ -81,9 +83,35 @@ impl SegmentedPeerCopyRootV1 {
 
     pub(in crate::context) fn compute_producer_v1(&self) -> Option<ScalarPeerDependencyV1> {
         match self.origin {
-            SegmentedPeerSourceV1::Settled => None,
+            SegmentedPeerSourceV1::Settled | SegmentedPeerSourceV1::Frame(_) => None,
             SegmentedPeerSourceV1::Compute(producer) => Some(producer),
         }
+    }
+
+    pub(in crate::context) fn source_dependency_v1(&self) -> Option<ScalarPeerDependencyV1> {
+        match self.origin {
+            SegmentedPeerSourceV1::Settled => None,
+            SegmentedPeerSourceV1::Compute(producer) | SegmentedPeerSourceV1::Frame(producer) => {
+                Some(producer)
+            }
+        }
+    }
+
+    pub(in crate::context) fn is_frame_source_v1(&self) -> bool {
+        matches!(self.origin, SegmentedPeerSourceV1::Frame(_))
+    }
+
+    pub(in crate::context) fn matches_source_frame_v1(
+        &self,
+        parent: &Self,
+        source: ContextReadSourceV1,
+    ) -> bool {
+        self.is_frame_source_v1()
+            && self
+                .plan
+                .source_frame
+                .as_ref()
+                .is_some_and(|frame| frame.matches_v1(parent, source))
     }
 
     pub(in crate::context) fn preserves_destination_frame_v1(
@@ -140,6 +168,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> bool {
         self.backend.supports_ordered_peer_copy_segments_v1()
             && self.backend.supports_peer_copy_segments_frame_v1()
+            && !matches!(origin, SegmentedPeerSourceV1::Frame(_))
+            && !matches!(predecessor, SegmentedPeerSourceV1::Frame(_))
             && (origin == SegmentedPeerSourceV1::Settled
                 && predecessor == SegmentedPeerSourceV1::Settled
                 || self
@@ -199,10 +229,28 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         dependencies: &[RuntimeEventIdV1],
     ) -> Result<Option<SegmentedPeerCopyRootV1>, RuntimeValidationErrorV1> {
         if self.versions.is_none()
+            && self
+                .backend
+                .supports_pending_segment_frame_peer_copy_segments_v1()
+            && self
+                .prepare_dependency_roster_v1(dependencies)?
+                .iter()
+                .any(|dependency| {
+                    let record = self.submissions[&dependency.submission];
+                    record.status == RuntimeCompletionStatusV1::Pending
+                        && record.segmented_destination == Some(source.allocation)
+                })
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        if self.versions.is_none()
             || !(self
                 .backend
                 .supports_pending_compute_peer_copy_segments_v1()
-                || self.backend.supports_peer_copy_segments_frame_v1())
+                || self.backend.supports_peer_copy_segments_frame_v1()
+                || self
+                    .backend
+                    .supports_pending_segment_frame_peer_copy_segments_v1())
             || source.access != RuntimeAccessV1::Read
             || destination.access != RuntimeAccessV1::Write
         {
@@ -222,7 +270,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Ok(None);
         }
         let dependencies = self.prepare_dependency_roster_v1(dependencies)?;
-        let producer = dependencies
+        let compute = dependencies
             .iter()
             .find(|dependency| {
                 self.submissions[&dependency.submission].status
@@ -233,7 +281,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .is_some_and(|launch| exact_source(launch, source))
             })
             .copied();
-        let origin = match producer {
+        let mut source_frame = None;
+        let origin = match compute {
             Some(producer)
                 if self
                     .backend
@@ -241,10 +290,41 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             {
                 SegmentedPeerSourceV1::Compute(producer)
             }
-            None if self.backend.supports_peer_copy_segments_frame_v1() => {
-                SegmentedPeerSourceV1::Settled
+            None => {
+                let frame = self
+                    .backend
+                    .supports_pending_segment_frame_peer_copy_segments_v1()
+                    .then(|| {
+                        dependencies.iter().find_map(|dependency| {
+                            (self.submissions[&dependency.submission].status
+                                == RuntimeCompletionStatusV1::Pending)
+                                .then(|| {
+                                    self.segmented_peer_copies
+                                        .get(&dependency.submission)?
+                                        .destination_frame_v1(source)
+                                })
+                                .flatten()
+                                .map(|frame| (*dependency, frame))
+                        })
+                    })
+                    .flatten();
+                match frame {
+                    Some((dependency, frame)) => {
+                        source_frame = Some(frame);
+                        SegmentedPeerSourceV1::Frame(dependency)
+                    }
+                    None if self.backend.supports_peer_copy_segments_frame_v1() => {
+                        SegmentedPeerSourceV1::Settled
+                    }
+                    None => return Ok(None),
+                }
             }
             _ => return Ok(None),
+        };
+        let producer = match origin {
+            SegmentedPeerSourceV1::Settled => None,
+            SegmentedPeerSourceV1::Compute(dependency)
+            | SegmentedPeerSourceV1::Frame(dependency) => Some(dependency),
         };
         let mut depth = 1;
         let mut predecessor = None;
@@ -257,7 +337,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if Some(*dependency) == producer {
                 if dependency.device != source.record.device
                     || record.quiescent
-                    || !record.producer_launch
+                    || match origin {
+                        SegmentedPeerSourceV1::Compute(_) => !record.producer_launch,
+                        SegmentedPeerSourceV1::Frame(_) => !record.segmented_peer_copy,
+                        SegmentedPeerSourceV1::Settled => true,
+                    }
                 {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
                 }
@@ -300,6 +384,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             destination,
             identity,
             origin,
+            source_frame,
             predecessor: predecessor.map(|dependency| {
                 (
                     dependency,
@@ -375,6 +460,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 SegmentedPeerSourceV1::Compute(_) => !self
                     .backend
                     .supports_pending_compute_peer_copy_segments_v1(),
+                SegmentedPeerSourceV1::Frame(_) => !self
+                    .backend
+                    .supports_pending_segment_frame_peer_copy_segments_v1(),
             }
             || self.scalar_peer_copies.contains_key(&id)
             || self.same_device_copies.contains_key(&id)
@@ -387,14 +475,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.source.region.access != RuntimeAccessV1::Read
             || root.destination.region.access != RuntimeAccessV1::Write
             || root.state.depth == 0
-            || root.compute_producer_v1().is_some() && root.state.depth < 2
+            || root.source_dependency_v1().is_some() && root.state.depth < 2
+            || root.is_frame_source_v1() != root.plan.source_frame.is_some()
+            || root.is_frame_source_v1() && root.predecessor.is_some()
             || root.state.depth > MAX_RUNTIME_DEPENDENCIES_V1
             || root.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1
             || root.state.cursor > root.dependencies.len()
             || root.state.terminal == Some(BackendPollV1::Pending)
             || root.state.terminal.is_none() && root.state.cursor != 0
             || root
-                .compute_producer_v1()
+                .source_dependency_v1()
                 .is_some_and(|producer| !root.dependencies.contains(&producer))
             || root.origin != root.plan.origin
             || root.predecessor
@@ -510,6 +600,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .producer_launches
                         .get(&dependency.submission)
                         .is_none_or(|launch| !exact_source(launch, root.source))
+                {
+                    return Err(invalid);
+                }
+            } else if root.is_frame_source_v1() && Some(*dependency) == root.source_dependency_v1()
+            {
+                if dependency.device != root.source.record.device
+                    || !parent.segmented_peer_copy
+                    || self
+                        .segmented_peer_copies
+                        .get(&dependency.submission)
+                        .is_none_or(|previous| !root.matches_source_frame_v1(previous, root.source))
                 {
                     return Err(invalid);
                 }

@@ -198,6 +198,11 @@ impl Root {
     }
 
     #[cfg(test)]
+    pub(super) fn clear_segment_frame_for_test_v1(&mut self) {
+        self.segment_frame = None;
+    }
+
+    #[cfg(test)]
     pub(super) fn replace_segments_for_test_v1(
         &mut self,
         plan: Arc<Gfx942ComputeXgmiSegmentsPlanV1>,

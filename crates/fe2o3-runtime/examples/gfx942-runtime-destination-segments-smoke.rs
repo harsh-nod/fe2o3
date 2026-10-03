@@ -22,7 +22,7 @@ const ROUNDS: usize = 2;
 const WAIT: Duration = Duration::from_secs(180);
 const TICKS: usize = 100_000;
 const DOMAIN: &[u8] = b"fe2o3.destination-peer-segments.full-bytes.v1\0";
-const USAGE: &str = "usage: gfx942-runtime-destination-segments-smoke [--dispose-source] <0xsource0> <0xsource1> <0xdestination> <disjoint|overlap|duplicates|packets>; or <--forward-window|--late-forward-window> <0xsource> <0xframe> <0xtarget> <overlap|packets>";
+const USAGE: &str = "usage: gfx942-runtime-destination-segments-smoke [--dispose-source] <0xsource0> <0xsource1> <0xdestination> <disjoint|overlap|duplicates|packets>; or <--forward-window|--late-forward-window|--forward-segments|--late-forward-segments> <0xsource> <0xframe> <0xtarget> <overlap|packets>";
 
 #[derive(Debug)]
 struct NoCompute;
@@ -59,14 +59,21 @@ struct Options {
     case: Case,
     dispose_source: bool,
     forward_window: Option<bool>,
+    forward_segments: bool,
 }
 
 fn options(arguments: &[String]) -> ResultV1<Options> {
     let forward_window = match arguments.first().map(String::as_str) {
-        Some("--forward-window") => Some(false),
-        Some("--late-forward-window") => Some(true),
+        Some("--forward-window" | "--forward-segments") => Some(false),
+        Some("--late-forward-window" | "--late-forward-segments") => Some(true),
         _ => None,
     };
+    let forward_segments = arguments.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "--forward-segments" | "--late-forward-segments"
+        )
+    });
     let dispose_source = arguments
         .first()
         .is_some_and(|arg| arg == "--dispose-source");
@@ -104,6 +111,7 @@ fn options(arguments: &[String]) -> ResultV1<Options> {
         case,
         dispose_source,
         forward_window,
+        forward_segments,
     })
 }
 

@@ -270,10 +270,17 @@ impl SegmentDestinationPredecessor {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum SegmentFrameOrigin {
     Settled,
-    Compute { id: u64, depth: usize },
+    Compute {
+        id: u64,
+        depth: usize,
+    },
+    Frame {
+        id: u64,
+        frame: Arc<SegmentDestinationFrame>,
+    },
 }
 
 impl SegmentDestinationFrame {
@@ -283,6 +290,13 @@ impl SegmentDestinationFrame {
         let mut frame = self;
         for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
             backend.poison_compute_xgmi_children_v1([frame.source.1.child, frame.endpoint.1.child]);
+            if let SegmentFrameOrigin::Frame { frame: source, .. } = &frame.origin {
+                if source.depth == 0 || source.depth >= frame.depth {
+                    return;
+                }
+                frame = source;
+                continue;
+            }
             let Some(prior) = &frame.predecessor else {
                 return;
             };
@@ -334,6 +348,26 @@ impl SegmentDestinationFrame {
             // A settled receipt no longer retains operational ancestor sources.
             if copy.is_quiescent() {
                 return true;
+            }
+            // Frame-source nodes have no destination predecessor. Following
+            // their one immutable edge keeps validation linear in chain depth.
+            if let SegmentFrameOrigin::Frame {
+                id: parent,
+                frame: source,
+            } = &frame.origin
+            {
+                if frame.predecessor.is_some()
+                    || *parent >= current
+                    || source.depth == 0
+                    || source.depth >= frame.depth
+                    || !copy.dependencies.contains(parent)
+                    || !backend.submission_retained_as_dependency(*parent)
+                {
+                    return false;
+                }
+                current = *parent;
+                frame = source;
+                continue;
             }
             let Some(prior) = &frame.predecessor else {
                 return true;
@@ -406,6 +440,57 @@ impl SegmentDestinationFrame {
                     }))
     }
 
+    pub(super) fn owns_occupied_ancestor_child(
+        &self,
+        backend: &KfdMultiDeviceRuntimeBackendV1,
+        id: u64,
+        child: usize,
+        owner: u64,
+    ) -> bool {
+        if !self.is_intact(backend, id) {
+            return false;
+        }
+        // Resource occupancy may follow source ancestry. It never establishes
+        // writer ordering for the current destination allocation.
+        let mut frame = self;
+        let mut current = id;
+        for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = backend.submissions.get(&current)
+            else {
+                return false;
+            };
+            if copy.is_quiescent() {
+                return false;
+            }
+            if current == owner {
+                return copy.status() == BackendPollV1::Pending
+                    && [frame.source.1.child, frame.endpoint.1.child].contains(&child)
+                    && copy.compute_xgmi.as_ref().is_some_and(|root| !root.is_quiescent())
+                    && [frame.source.1, frame.endpoint.1].iter().all(|endpoint| {
+                        backend.compute_xgmi_children.get(endpoint.child) == Some(&Some(owner))
+                            && backend.children.get(endpoint.child)
+                                .and_then(|child| child.allocations.get(&endpoint.local))
+                                .is_some_and(|record| matches!(record.sdma_storage,
+                                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::ComputeXgmi(id))
+                                        if id == owner))
+                    });
+            }
+            let (parent, ancestor) = match &frame.origin {
+                SegmentFrameOrigin::Frame { id, frame } => (*id, frame.as_ref()),
+                _ => match &frame.predecessor {
+                    Some(prior) => (prior.id, prior.frame.as_ref()),
+                    None => return false,
+                },
+            };
+            if parent >= current || ancestor.depth == 0 || ancestor.depth >= frame.depth {
+                return false;
+            }
+            current = parent;
+            frame = ancestor;
+        }
+        false
+    }
+
     fn node_is_intact(&self, backend: &KfdMultiDeviceRuntimeBackendV1, id: u64) -> bool {
         let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = backend.submissions.get(&id) else {
             return false;
@@ -443,6 +528,7 @@ impl SegmentDestinationFrame {
         // result. It proves frame identity, not successful completion.
         if copy.is_quiescent() {
             return copy.compute_producer.is_none()
+                && copy.frame_source.is_none()
                 && copy
                     .compute_xgmi
                     .as_ref()
@@ -457,9 +543,10 @@ impl SegmentDestinationFrame {
         }) {
             return false;
         }
-        match self.origin {
+        match &self.origin {
             SegmentFrameOrigin::Settled => {
                 copy.compute_producer.is_none()
+                    && copy.frame_source.is_none()
                     && backend.allocations.get(&self.source.0) == Some(&self.source.1)
                     && backend.children[self.source.1.child]
                         .allocations
@@ -473,16 +560,29 @@ impl SegmentDestinationFrame {
                 id: producer_id,
                 depth,
             } => {
-                copy.compute_producer.as_ref().is_some_and(|producer| {
-                    producer.endpoints == [self.source, self.endpoint]
-                        && (producer.id, producer.depth) == (producer_id, depth)
-                        && producer.predecessor.is_none()
-                        && producer
-                            .segments()
-                            .is_some_and(|plan| Arc::ptr_eq(plan, &self.plan))
-                }) && copy.compute_producer.as_ref().is_some_and(|producer| {
-                    backend.compute_peer_producer_intact_v1(id, copy, producer)
-                })
+                copy.frame_source.is_none()
+                    && copy.compute_producer.as_ref().is_some_and(|producer| {
+                        producer.endpoints == [self.source, self.endpoint]
+                            && (producer.id, producer.depth) == (*producer_id, *depth)
+                            && producer.predecessor.is_none()
+                            && producer
+                                .segments()
+                                .is_some_and(|plan| Arc::ptr_eq(plan, &self.plan))
+                    })
+                    && copy.compute_producer.as_ref().is_some_and(|producer| {
+                        backend.compute_peer_producer_intact_v1(id, copy, producer)
+                    })
+            }
+            SegmentFrameOrigin::Frame { id: parent, frame } => {
+                self.predecessor.is_none()
+                    && copy.compute_producer.is_none()
+                    && copy.frame_source.as_ref().is_some_and(|source| {
+                        source.matches_segment_frame(
+                            (*parent, frame),
+                            [self.source, self.endpoint],
+                            &self.plan,
+                        ) && source.local_is_intact(backend, id, copy)
+                    })
             }
         }
     }
@@ -502,7 +602,7 @@ impl SegmentDestinationFrame {
     }
 }
 
-fn segment_regions_match(
+pub(super) fn segment_regions_match(
     plan: &Gfx942ComputeXgmiSegmentsPlanV1,
     source_identity: AllocationIdentity,
     destination_identity: AllocationIdentity,
@@ -520,7 +620,7 @@ fn segment_regions_match(
 }
 
 #[derive(Clone, Debug)]
-enum TransferIdentity {
+pub(super) enum TransferIdentity {
     Window(Gfx942ComputeXgmiCopyWindowV1),
     Segments(Arc<Gfx942ComputeXgmiSegmentsPlanV1>),
 }
@@ -1262,7 +1362,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return None;
         }
         let frame = self.compute_peer_segment_frame_v1(id, destination)?;
-        (frame.stream == stream).then_some(SegmentDestinationPredecessor { id, frame })
+        (frame.stream == stream && !matches!(frame.origin, SegmentFrameOrigin::Frame { .. }))
+            .then_some(SegmentDestinationPredecessor { id, frame })
     }
 
     pub(super) fn prepare_segment_destination_frame_v1(
@@ -1272,6 +1373,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         endpoints: [(RoutedHandleV1, BackendMemoryRegionV1); 2],
         producer: Option<&Producer>,
         predecessor: Option<SegmentDestinationPredecessor>,
+        source_frame: Option<&peer_frame::Source>,
     ) -> Option<Arc<SegmentDestinationFrame>> {
         let plan = root.segment_plan_v1()?;
         if endpoints[0].1.access != RuntimeAccessV1::Read
@@ -1279,12 +1381,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         {
             return None;
         }
-        let origin = match producer {
-            Some(producer) => SegmentFrameOrigin::Compute {
+        let origin = match (producer, source_frame) {
+            (Some(_), Some(_)) => return None,
+            (None, Some(source)) => {
+                if predecessor.is_some()
+                    || source
+                        .segments()
+                        .is_none_or(|held| !Arc::ptr_eq(held, plan))
+                {
+                    return None;
+                }
+                let (id, frame) = source.ancestor();
+                SegmentFrameOrigin::Frame { id, frame }
+            }
+            (Some(producer), None) => SegmentFrameOrigin::Compute {
                 id: producer.id,
                 depth: producer.depth,
             },
-            None => {
+            (None, None) => {
                 // Unrelated pending controls are still success-gated by the
                 // existing copy scheduler. Pending endpoint writers are not a
                 // stable-source frame and retain only legacy transfer behavior.
@@ -1368,10 +1482,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 return Err(current);
             };
             if let Some(source) = &copy.frame_source {
-                return source
-                    .is_intact(self, current, copy)
-                    .then_some(())
-                    .ok_or(current);
+                return (source.is_intact(self, current, copy)
+                    && copy
+                        .compute_xgmi
+                        .as_ref()
+                        .and_then(|root| root.segment_frame_v1())
+                        .map_or_else(
+                            || source.segments().is_none(),
+                            |frame| frame.is_intact(self, current),
+                        ))
+                .then_some(())
+                .ok_or(current);
             }
             if let Some(frame) = copy
                 .compute_xgmi
