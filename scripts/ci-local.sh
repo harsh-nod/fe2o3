@@ -1084,6 +1084,9 @@ run_verus() {
   run_step gfx942-add-u32-verus \
     env VERUS="${runtime_model_verus}" \
       bash "${REPO_ROOT}/crates/fe2o3-kernel-analysis/verus/run-gfx942-add-u32.sh"
+  run_step checked-u32-prefix-verus \
+    env VERUS="${runtime_model_verus}" \
+      bash "${REPO_ROOT}/crates/fe2o3-verifier/verus/run-checked-u32-prefix.sh"
   run_step verus-fixtures \
     env VERUS="${default_verus}" \
       "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require

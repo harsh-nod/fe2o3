@@ -31,6 +31,12 @@ pub use captured::{
     check_gfx942_captured_mov_prefix_checked_u32_add_v1,
 };
 
+mod source_prefix;
+pub use source_prefix::{
+    CapturedCheckedU32PrefixV1, CheckedU32PrefixArgumentV1, CheckedU32PrefixErrorV1,
+    CheckedU32PrefixOriginV1, check_captured_checked_u32_prefix_v1,
+};
+
 mod mov_prefix;
 pub use mov_prefix::{
     Gfx942LocalMovPrefixCheckedU32AddErrorV1, Gfx942LocalMovPrefixCheckedU32AddObligationV1,

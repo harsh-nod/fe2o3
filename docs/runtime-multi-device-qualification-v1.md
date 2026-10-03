@@ -37,6 +37,21 @@ forward and reversed rosters. Broader application-kernel authority, post-arm
 native faults and performance remain open.
 Earlier sections below retain their original example and checkpoint scopes.
 
+## Immediate Priorities
+
+Healthy selected-pair copies and three-GPU pending-frame forwarding already have
+native correctness evidence. The critical functional gap is ordinary
+application-kernel admission, not another expansion of copy fixture counts.
+The [checked-u32 entry-prefix relation](runtime-checked-u32-prefix-v1.md) adds a
+same-owner source/KIR value checker with a proved shared fold, but does not yet
+prove its normalization adapters or authorize application kernels.
+
+Prioritize real rustc extraction into that retained owner, semantic/machine entry
+and continuation/memory composition, and protected invocation-bound admission.
+Then qualify one ordinary multi-GPU compute -> peer -> compute/readback workflow.
+Broader fault recovery, all-device matrices and matched HIP/HSA performance are
+separate follow-on gates; existing copy-only paths need not wait for them.
+
 ## Selected-Pair Smoke
 
 `benchmarks/runtime_gfx942/selected_pair_smoke.py` runs the production copy-only

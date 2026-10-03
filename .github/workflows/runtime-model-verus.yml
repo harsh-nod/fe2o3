@@ -11,6 +11,10 @@ on:
       - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics*"
       - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/**"
       - "crates/fe2o3-kernel-analysis/verus/**"
+      - "crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1*"
+      - "crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1/**"
+      - "crates/fe2o3-verifier/verus/checked_u32_prefix*"
+      - "crates/fe2o3-verifier/verus/run-checked-u32-prefix.sh"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   push:
@@ -24,6 +28,10 @@ on:
       - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics*"
       - "crates/fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/**"
       - "crates/fe2o3-kernel-analysis/verus/**"
+      - "crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1*"
+      - "crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1/**"
+      - "crates/fe2o3-verifier/verus/checked_u32_prefix*"
+      - "crates/fe2o3-verifier/verus/run-checked-u32-prefix.sh"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   workflow_dispatch:
@@ -69,6 +77,9 @@ jobs:
 
       - name: Verify shared gfx942 MOV/ADD state, composition and negative controls
         run: bash crates/fe2o3-kernel-analysis/verus/run-gfx942-add-u32.sh
+
+      - name: Verify shared checked-u32 source/KIR prefix fold and negative controls
+        run: bash crates/fe2o3-verifier/verus/run-checked-u32-prefix.sh
 
       - name: Verify shared native peer window arithmetic and negative controls
         run: bash crates/fe2o3-runtime-model/verus/run-compute-xgmi-window.sh
