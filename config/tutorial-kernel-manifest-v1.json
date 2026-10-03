@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "cc3f8003f98c9c09307cbb1d083d97c577e5957e",
-      "tree": "bf3c4b6c2a34621cebc248dd91e01e11c475494a"
+      "commit": "41ee837bf683e3442dc5ec9dea581b74a70366ee",
+      "tree": "f73371b79b3e4a1e70a9a26e25009707a8f443a6"
     },
     "status": "pending",
     "lessons": [
@@ -1179,15 +1179,15 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 2400,
-            "displayedSha256": "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4",
+            "displayedUtf8Bytes": 2384,
+            "displayedSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
             "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
-            "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
-            "sourceSha256": "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4",
-            "sourceDigestScope": null,
-            "explanatory": false,
-            "evidenceId": "wave64-collectives-source-v1",
+            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
+            "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+            "sourceDigestScope": "file",
             "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": "wave64-collectives-current-source-v1",
             "sourceItem": null,
             "sourceItemStatus": "pending"
           },
@@ -1202,9 +1202,9 @@
             "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
             "sourceSha256": "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": false,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1219,9 +1219,9 @@
             "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": "wave64-collectives-source-v1",
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1236,9 +1236,9 @@
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1247,34 +1247,17 @@
             "kind": "result",
             "label": "Expected result",
             "language": "text",
-            "displayedUtf8Bytes": 413,
-            "displayedSha256": "496ed7d3ac195dd11d2b4c131856cd39335e1752f2d96c2bbe67233a699a79ec",
+            "displayedUtf8Bytes": 562,
+            "displayedSha256": "106d0af754d6c229bb2ee2551ece12c4d310e276f728e87ddf7592edf72d0174",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
-          },
-          {
-            "ordinal": 5,
-            "kind": "kernel",
-            "label": "Current source [SOURCE-ONLY]",
-            "language": "rust",
-            "displayedUtf8Bytes": 2384,
-            "displayedSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
-            "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
-            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
-            "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
-            "sourceDigestScope": "file",
-            "explanatory": false,
-            "evidenceId": null,
-            "sourceFragmentsSha256": null,
-            "sourceItem": null,
-            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -15253,17 +15236,6 @@
         "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
       },
       {
-        "lessonId": "reductions-scans",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 842,
-        "kernelSymbol": "wave64_collectives_v1",
-        "classification": "kernel",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
-      },
-      {
         "lessonId": "typed-vecadd",
         "tabOrdinal": 0,
         "functionUtf8Offset": 668,
@@ -15442,7 +15414,7 @@
       },
       {
         "lessonId": "reductions-scans",
-        "tabOrdinal": 5,
+        "tabOrdinal": 0,
         "functionUtf8Offset": 842,
         "kernelSymbol": "wave64_collectives_v1",
         "classification": "kernel",

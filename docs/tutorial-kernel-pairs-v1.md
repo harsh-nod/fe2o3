@@ -134,12 +134,18 @@ For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
 The current projection records 61 known kernel identities and 123 variant
 obligations: 22 variants have exact source associations, 101 remain pending,
-and no pair is source-bound. Eight displayed declarations lack exact
+and no pair is source-bound. Seven displayed declarations lack exact
 source/display bindings; every existing positive selection has a display binding.
 Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
+
+The reductions-and-scans lesson now presents one exact current Wave64 kernel.
+Its former duplicate historical source remains archived with its original
+source-model identity and immutable link, rather than as a second active
+instructional implementation. All 61 kernel identities and 123 mode
+obligations are retained; this display migration qualifies no execution.
 
 The first-fill kernel display now binds the 680-byte library file at
 `f84c2a59ba34c3e4c12e316cc9b30f14342e36cf`, including its independent CPU

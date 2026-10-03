@@ -154,13 +154,13 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         lessons = curriculum["lessons"]
         self.assertEqual(len(lessons), 56)
         self.assertEqual(Counter(lesson["role"] for lesson in lessons), {"executable": 46, "conceptual": 10})
-        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 317)
+        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 316)
         self.assertEqual(
             [lesson["lessonId"] for lesson in lessons if any(v["kind"] == "mixed" for v in lesson["variants"])],
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f84b088b1a32edae3d9c086c6e56085dcbf9574961266668e2d867f392067dbd")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "e7618672b6f60d10b83be818cd36c78b656b628aac70fa487dc284f8fb7378a0")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -460,7 +460,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 123)
             self.assertEqual(counts["pendingVariantCount"], 101)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 8)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 7)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -472,9 +472,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
         self.assertEqual(len(report["fixtureSelections"]), 50)
         self.assertEqual(len(report["sourceDriverCases"]), 14)
-        self.assertEqual(len(report["displayObservations"]), 61)
+        self.assertEqual(len(report["displayObservations"]), 60)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
-                             for row in report["displayObservations"]), 59)
+                             for row in report["displayObservations"]), 58)
         self.assertTrue(all(row["lexicalKernelNames"] is None
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -640,12 +640,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "e2505dc43b8fc5c7e623e393199eefd025688b580118197b4aac9b74f039c248")
+                         "b2cc0427276e171ffb91fdc33508f85ceb7963e3bd880a436c892ee081dab57a")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 83, "required-negative": 3, "conceptual": 26, "helper": 23})
+                         {"kernel": 82, "required-negative": 3, "conceptual": 26, "helper": 23})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 8, "source-driver-contract": 14, "fixture-source-contract": 64,
+                         {"pending": 7, "source-driver-contract": 14, "fixture-source-contract": 64,
                           "not-applicable": 49})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
