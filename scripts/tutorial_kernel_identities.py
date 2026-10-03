@@ -487,7 +487,7 @@ class _FixtureIncludeScope:
     def imported(self, item: str) -> None:
         self.ambiguous |= re.search(r"\b(?:include|as)\b|\*", item) is not None
         self.derive_ambiguous |= (re.search(r"\bas\b|\*", item) is not None
-                                  or bool(set(IDENTIFIER.findall(item)) & BUILTIN_DERIVES))
+                                  or any(token[0] in BUILTIN_DERIVES for token in IDENTIFIER.finditer(item)))
 
     def validate(self) -> None:
         if self.derives and self.derive_ambiguous:

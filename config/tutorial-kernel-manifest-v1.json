@@ -11759,12 +11759,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-moe-top2",
+                "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1"
+              },
+              "selectionSha256": "33eebb7b5bc47385a2adf837eb2dc00f3390e137569ad81d2a1887608d3fe0aa",
+              "sourcePath": "examples/moe_top2_v1/src/kernel.rs",
+              "sourceSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
+              "functionUtf8Offset": 3605
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -15422,10 +15433,12 @@
         "functionUtf8Offset": 3605,
         "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The inventory source selector does not yet admit derive attributes and type declarations in the selected module closure; no source-selection association or execution qualification is claimed."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
       },
       {
         "lessonId": "reductions-scans",

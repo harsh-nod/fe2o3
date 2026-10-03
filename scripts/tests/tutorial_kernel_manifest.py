@@ -459,8 +459,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         identities = report["kernelInventory"]
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 123)
-            self.assertEqual(counts["pendingVariantCount"], 102)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 9)
+            self.assertEqual(counts["pendingVariantCount"], 101)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 8)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -479,7 +479,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertEqual(report["variantBindingStatus"], "partial")
-        self.assertEqual(report["sourceBoundVariantCount"], 21)
+        self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
@@ -640,12 +640,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "7c7c91f344bd6f6e742f0881951bd55512307bb297036b42206e231618730121")
+                         "e2505dc43b8fc5c7e623e393199eefd025688b580118197b4aac9b74f039c248")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 83, "required-negative": 3, "conceptual": 26, "helper": 23})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 9, "source-driver-contract": 14, "fixture-source-contract": 63,
+                         {"pending": 8, "source-driver-contract": 14, "fixture-source-contract": 64,
                           "not-applicable": 49})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -653,6 +653,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                  if variant["status"] == "source-bound"]
         self.assertEqual(bound, [
             ("fixture:gfx942-fill-simulation:fill", "simt"),
+            ("fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1", "simt"),
             ("fixture:gfx942-scalar-gemm:scalar_gemm_v1", "simt"),
             ("fixture:gfx942-typed-vecadd-source:vecadd", "simt"),
             ("fixture:gfx942-wave64-collectives:wave64_collectives_v1", "simt"),
@@ -676,7 +677,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         ])
         pending = [variant for row in inventory["kernels"] for variant in row["variants"]
                    if variant["status"] == "pending"]
-        self.assertEqual(len(pending), 102)
+        self.assertEqual(len(pending), 101)
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
@@ -896,7 +897,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(self.manifest, before)
         self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 21)
+        self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -965,7 +966,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 22)
+        self.assertEqual(report["sourceBoundVariantCount"], 23)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)

@@ -133,19 +133,25 @@ symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
 The current projection records 61 known kernel identities and 123 variant
-obligations: 21 variants have exact source associations, 102 remain pending,
-and no pair is source-bound. Nine displayed declarations and one positive
-selection lack exact source/display bindings. Stages are not evaluated unless a
+obligations: 22 variants have exact source associations, 101 remain pending,
+and no pair is source-bound. Eight displayed declarations lack exact
+source/display bindings; every existing positive selection has a display binding.
+Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
 
-The first-fill kernel display retains the historical 308-byte library file at
-`7a536e0a001202ac0bb9d8647c5395661f8fa1ec`, including its whole-file digest.
-The current library adds an independent CPU point reference. Its old display
-therefore has a pending current-source binding, not a fixture-source contract.
-The tutorial's recorded no-GPU execution keeps its historical source pin; the
-source migration supplies no new execution or tile-pair qualification.
+The first-fill kernel display now binds the 680-byte library file at
+`f84c2a59ba34c3e4c12e316cc9b30f14342e36cf`, including its independent CPU
+point reference and exact whole-file digest. Recorded no-GPU execution of the
+historical 308-byte library at `7a536e0a001202ac0bb9d8647c5395661f8fa1ec`
+keeps that historical identity; the current source association supplies no new
+execution or tile-pair qualification.
+
+The MoE routing lesson's current-source tab binds the existing top-2 fixture
+through its full physical module closure, including ordinary enum/struct
+declarations with checked builtin derives. This source selection is not a rustc,
+simulation or GPU result, and it does not bind the older displayed revision.
 
 The CPU simulation lesson's whole-file tab 6 binds
 `row_affine_sum_u32_v1` from
