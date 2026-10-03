@@ -112,8 +112,11 @@ must not become a prerequisite for running their already-admitted smoke tests.
    Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
    follow; no fixture authority can substitute for them. The generated invocation
-   path is currently single-device: exact-child preparation, generated issue
-   routing and authenticated generated-storage peer handoff are explicit
+   execution path is currently single-device. Exact-child inert preparation is
+   now [CPU- and two-GPU-qualified](evidence/dev-multi-preparation-2026-10-03/README.md),
+   with both selected-device orders and explicit owner-thread cleanup. Generated
+   reservation/adoption/issue routing and authenticated generated-storage peer
+   handoff remain explicit
    [remaining multi-device work](runtime-multi-gpu-critical-path.md#required-multi-device-bridge).
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute

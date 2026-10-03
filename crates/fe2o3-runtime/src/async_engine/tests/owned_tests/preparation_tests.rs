@@ -719,6 +719,47 @@ fn preparation_parked_custody_survives_all_owned_shutdown_failures() {
 }
 
 #[test]
+fn preparation_public_multi_gfx942_bridge_rejects_each_synthetic_owner_without_callback() {
+    let (engine, handle) = RuntimeAsyncOwnedEngineV1::spawn_with_progress(
+        || RuntimeContextV1::open(crate::KfdMultiDeviceRuntimeBackendV1::mock_preparation_v1()),
+        RuntimeAsyncEngineConfigV1::default(),
+        RuntimeAsyncProgressConfigV1::default(),
+    )
+    .unwrap();
+    let devices = handle
+        .observer()
+        .try_with_context(|context| {
+            context
+                .devices()
+                .iter()
+                .map(|device| device.id())
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    for device in devices {
+        let observed = calls.clone();
+        let result = join(
+            handle
+                .try_prepare_gfx942_v1(device, move |_| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, ()>(Rc::new(()))
+                })
+                .unwrap(),
+        );
+        assert!(matches!(
+            result,
+            Ok(Err(crate::RuntimeGfx942PreparationErrorV1::Context(_)))
+        ));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        engine.shutdown().unwrap().disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+}
+
+#[test]
 fn preparation_public_gfx942_bridge_rejects_synthetic_owner_without_callback() {
     use crate::KfdRuntimeBackendV1;
     fn assert_send<T: Send>() {}

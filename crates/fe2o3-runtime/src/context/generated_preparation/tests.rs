@@ -5,6 +5,74 @@ use super::*;
 
 mod shell_tests;
 
+#[test]
+fn preparation_multi_context_rejects_synthetic_foreign_unknown_and_terminal() {
+    let mut context =
+        RuntimeContextV1::open(KfdMultiDeviceRuntimeBackendV1::mock_preparation_v1()).unwrap();
+    let foreign =
+        RuntimeContextV1::open(KfdMultiDeviceRuntimeBackendV1::mock_preparation_v1()).unwrap();
+    let ids: Vec<_> = context.devices().iter().map(|device| device.id()).collect();
+    for device in ids.iter().copied().chain([
+        foreign.devices()[0].id(),
+        RuntimeDeviceIdV1::new(context.context_generation, u64::MAX),
+    ]) {
+        assert!(
+            context
+                .with_gfx942_preparation_device_v1(device, |_| -> Result<(), ()> {
+                    panic!("no checked native owner")
+                })
+                .is_err()
+        );
+        assert!(!context.is_terminal());
+    }
+    context.quarantine_after_async_command_panic_v1();
+    assert!(matches!(
+        context.with_gfx942_preparation_device_v1(ids[0], |_| -> Result<(), ()> {
+            panic!("terminal")
+        }),
+        Err(RuntimeGfx942PreparationErrorV1::Context(
+            RuntimeErrorV1::Validation(RuntimeValidationErrorV1::ContextTerminal)
+        ))
+    ));
+}
+
+#[test]
+fn preparation_multi_context_binding_rejects_cross_context_device_and_backend() {
+    let single = context();
+    let mut context =
+        RuntimeContextV1::open(KfdMultiDeviceRuntimeBackendV1::mock_preparation_v1()).unwrap();
+    let mut prepared = bound(&single, Rc::new(()));
+    assert!(matches!(
+        context.validate_gfx942_prepared_v1(&prepared),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::UnknownDevice
+        ))
+    ));
+    prepared.binding.device = context.devices()[0].id();
+    assert!(matches!(
+        context.validate_gfx942_prepared_v1(&prepared),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidBackendDescription
+        ))
+    ));
+    prepared.binding.context_generation = context.context_generation;
+    prepared.binding.backend_device = 8;
+    assert!(matches!(
+        context.validate_gfx942_prepared_v1(&prepared),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::InvalidBackendDescription
+        ))
+    ));
+    // A matching descriptive binding still cannot substitute for native custody.
+    prepared.binding.backend_device = 7;
+    assert!(context.validate_gfx942_prepared_v1(&prepared).is_err());
+    assert!(!context.is_terminal());
+    assert!(context.cleanup().is_complete());
+    context.shutdown_owned_backend_v1().unwrap();
+    assert!(context.validate_gfx942_prepared_v1(&prepared).is_err());
+    assert_eq!(Rc::strong_count(prepared.value()), 1);
+}
+
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
     pub(in crate::context) fn bound_preparation_for_test_v1<T>(
         &self,

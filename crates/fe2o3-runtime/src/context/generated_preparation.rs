@@ -6,7 +6,7 @@ use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime_model::ModelDeviceAdmissionV1;
 
 use super::*;
-use crate::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
+use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
 mod adoption;
 
@@ -205,109 +205,137 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             .map_err(Error::Context)?
         })
     }
-
-    /// Runs nonexecuting preparation against this Context's retained checked device.
-    ///
-    /// The immutable borrow cannot escape or replace device custody. Full native
-    /// currentness brackets the callback, including an error-valued result.
-    /// Runtime failures take precedence over callback results. Unwind seals the
-    /// Context. No queue or VM is created here, and neither callback success nor
-    /// the returned wrapper authorizes publication.
-    ///
-    /// ```compile_fail
-    /// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
-    /// fn escape(context: &mut RuntimeContextV1<KfdRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
-    ///     let _ = context.with_gfx942_preparation_device_v1(device, |owner| Ok::<_, ()>(owner));
-    /// }
-    /// ```
-    /// ```compile_fail,E0308
-    /// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
-    /// use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
-    /// fn replace(context: &mut RuntimeContextV1<KfdRuntimeBackendV1>, id: RuntimeDeviceIdV1,
-    ///            replacement: CheckedGfx942XnackMinusDevice) {
-    ///     let _ = context.with_gfx942_preparation_device_v1(id, |owner| {
-    ///         Ok::<_, ()>(std::mem::replace(owner, replacement))
-    ///     });
-    /// }
-    /// ```
-    pub fn with_gfx942_preparation_device_v1<T, E>(
-        &mut self,
-        device: RuntimeDeviceIdV1,
-        prepare: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> Result<T, E>,
-    ) -> Result<RuntimeGfx942PreparedV1<T>, RuntimeGfx942PreparationErrorV1<E>> {
-        let backend_device = self
-            .preparation_backend_device_v1(device)
-            .map_err(RuntimeGfx942PreparationErrorV1::Context)?;
-        let (native_device, value) = self
-            .with_preparation_owner_v1(backend_device, |owner| {
-                (owner.model_admission(), prepare(owner))
-            })
-            .map_err(RuntimeGfx942PreparationErrorV1::Context)?;
-        let value = value.map_err(RuntimeGfx942PreparationErrorV1::Preparation)?;
-        Ok(RuntimeGfx942PreparedV1 {
-            value,
-            binding: PreparationBindingV1 {
-                context_generation: self.context_generation,
-                device,
-                backend_device,
-                native_device,
-            },
-            owner_local: PhantomData,
-        })
-    }
-
-    /// Rechecks exact binding and native currentness without consuming the payload.
-    /// This is not operation admission, native completion or permission to replay.
-    pub fn validate_gfx942_prepared_v1<T>(
-        &mut self,
-        prepared: &RuntimeGfx942PreparedV1<T>,
-    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
-        let binding = prepared.binding;
-        let backend_device = self.preparation_backend_device_v1(binding.device)?;
-        if !binding.matches_context(self.context_generation, binding.device, backend_device) {
-            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
-        }
-        let current =
-            self.with_preparation_owner_v1(backend_device, |owner| owner.model_admission())?;
-        if !binding.matches_native(current) {
-            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
-        }
-        Ok(())
-    }
-
-    fn preparation_backend_device_v1(
-        &self,
-        device: RuntimeDeviceIdV1,
-    ) -> Result<u64, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
-        if self.terminal {
-            return Err(RuntimeValidationErrorV1::ContextTerminal.into());
-        }
-        Ok(self.device(device)?.backend_device)
-    }
-
-    fn with_preparation_owner_v1<T>(
-        &mut self,
-        backend_device: u64,
-        prepare: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> T,
-    ) -> Result<T, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.backend
-                .with_retained_preparation_device_v1(backend_device, prepare)
-        })) {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(failure)) => {
-                if matches!(failure, RuntimeBackendFailureV1::Terminal(_)) {
-                    self.quarantine_submission_writers_v1();
-                }
-                Err(map_backend_error(failure))
-            }
-            Err(payload) => {
-                self.quarantine_submission_writers_v1();
-                std::panic::resume_unwind(payload)
-            }
-        }
-    }
 }
+
+// Only inert preparation is shared. Generated reservation and execution remain
+// separately admitted, single-backend operations.
+macro_rules! impl_preparation_context {
+    ($backend:ty) => {
+        impl RuntimeContextV1<$backend> {
+            /// Runs nonexecuting preparation against this Context's retained checked device.
+            ///
+            /// The immutable borrow cannot escape or replace device custody. Full native
+            /// currentness brackets the callback, including an error-valued result.
+            /// Runtime failures take precedence over callback results. Unwind seals the
+            /// Context. No queue or VM is created here, and neither callback success nor
+            /// the returned wrapper authorizes publication.
+            ///
+            /// ```compile_fail
+            /// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
+            /// fn escape(context: &mut RuntimeContextV1<KfdRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
+            ///     let _ = context.with_gfx942_preparation_device_v1(device, |owner| Ok::<_, ()>(owner));
+            /// }
+            /// ```
+            /// ```compile_fail,E0308
+            /// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
+            /// use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
+            /// fn replace(context: &mut RuntimeContextV1<KfdRuntimeBackendV1>, id: RuntimeDeviceIdV1,
+            ///            replacement: CheckedGfx942XnackMinusDevice) {
+            ///     let _ = context.with_gfx942_preparation_device_v1(id, |owner| {
+            ///         Ok::<_, ()>(std::mem::replace(owner, replacement))
+            ///     });
+            /// }
+            /// ```
+            /// ```compile_fail
+            /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
+            /// fn escape(context: &mut RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
+            ///     let _ = context.with_gfx942_preparation_device_v1(device, |owner| Ok::<_, ()>(owner));
+            /// }
+            /// ```
+            /// ```compile_fail,E0308
+            /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeContextV1, RuntimeDeviceIdV1};
+            /// use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
+            /// fn replace(context: &mut RuntimeContextV1<KfdMultiDeviceRuntimeBackendV1>, id: RuntimeDeviceIdV1,
+            ///            replacement: CheckedGfx942XnackMinusDevice) {
+            ///     let _ = context.with_gfx942_preparation_device_v1(id, |owner| {
+            ///         Ok::<_, ()>(std::mem::replace(owner, replacement))
+            ///     });
+            /// }
+            /// ```
+            pub fn with_gfx942_preparation_device_v1<T, E>(
+                &mut self,
+                device: RuntimeDeviceIdV1,
+                prepare: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> Result<T, E>,
+            ) -> Result<RuntimeGfx942PreparedV1<T>, RuntimeGfx942PreparationErrorV1<E>> {
+                let backend_device = self
+                    .preparation_backend_device_v1(device)
+                    .map_err(RuntimeGfx942PreparationErrorV1::Context)?;
+                let (native_device, value) = self
+                    .with_preparation_owner_v1(backend_device, |owner| {
+                        (owner.model_admission(), prepare(owner))
+                    })
+                    .map_err(RuntimeGfx942PreparationErrorV1::Context)?;
+                let value = value.map_err(RuntimeGfx942PreparationErrorV1::Preparation)?;
+                Ok(RuntimeGfx942PreparedV1 {
+                    value,
+                    binding: PreparationBindingV1 {
+                        context_generation: self.context_generation,
+                        device,
+                        backend_device,
+                        native_device,
+                    },
+                    owner_local: PhantomData,
+                })
+            }
+
+            /// Rechecks exact binding and native currentness without consuming the payload.
+            /// This is not operation admission, native completion or permission to replay.
+            pub fn validate_gfx942_prepared_v1<T>(
+                &mut self,
+                prepared: &RuntimeGfx942PreparedV1<T>,
+            ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                let binding = prepared.binding;
+                let backend_device = self.preparation_backend_device_v1(binding.device)?;
+                if !binding.matches_context(self.context_generation, binding.device, backend_device)
+                {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+                let current = self
+                    .with_preparation_owner_v1(backend_device, |owner| owner.model_admission())?;
+                if !binding.matches_native(current) {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+                Ok(())
+            }
+
+            fn preparation_backend_device_v1(
+                &self,
+                device: RuntimeDeviceIdV1,
+            ) -> Result<u64, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                if self.terminal {
+                    return Err(RuntimeValidationErrorV1::ContextTerminal.into());
+                }
+                Ok(self.device(device)?.backend_device)
+            }
+
+            fn with_preparation_owner_v1<T>(
+                &mut self,
+                backend_device: u64,
+                prepare: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> T,
+            ) -> Result<T, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                match catch_unwind(AssertUnwindSafe(|| {
+                    self.backend
+                        .with_retained_preparation_device_v1(backend_device, prepare)
+                })) {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(failure)) => {
+                        if matches!(failure, RuntimeBackendFailureV1::Terminal(_)) {
+                            self.quarantine_submission_writers_v1();
+                        }
+                        Err(map_backend_error(failure))
+                    }
+                    Err(payload) => {
+                        self.quarantine_submission_writers_v1();
+                        std::panic::resume_unwind(payload)
+                    }
+                }
+            }
+        }
+    };
+}
+
+impl_preparation_context!(KfdRuntimeBackendV1);
+impl_preparation_context!(KfdMultiDeviceRuntimeBackendV1);
 
 fn install_checked_readback<T: crate::RuntimeGfx942GeneratedCarrierV1>(
     value: &mut T,

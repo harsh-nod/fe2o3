@@ -97,14 +97,25 @@ The authenticated generated-invocation path currently specializes
 `RuntimeContextV1<KfdRuntimeBackendV1>`. A production Worker provider alone will
 not turn it into a single-Context multi-device application pipeline.
 
-1. Route nonexecuting preparation through the exact retained multi-backend child.
-   Preserve Context generation, logical device, backend UID, native admission,
-   selected-child exclusion and pre/post callback currentness. Reuse generic
-   async preparation tickets and cleanup. This can proceed independently of the
-   remaining kernel proof and grants no launch authority.
+1. Completed: route nonexecuting preparation through the exact retained
+   multi-backend child, preserving Context generation, logical device, backend
+   UID, native admission, selected-child exclusion and pre/post callback
+   currentness. Generic async preparation tickets and cleanup are reused.
+   The [two-GPU preparation checkpoint](evidence/dev-multi-preparation-2026-10-03/README.md)
+   passes both device orders on MI300X GPUs 6/7, direct reverse-order validation,
+   callback errors, plain-ticket reservation rejection and owner-thread disposal.
+   It creates no VM, queue, allocation or execution authority. CPU acceptance is
+   2359 runtime tests (32 hardware ignores), 170 example tests and 71 doctests.
 2. Route generated reservation, shell adoption, issue and completion with exact
    global/local handle correspondence and original carrier ownership. Cleanup
    must return to the same child; ambiguous rollback remains quarantined.
+   First close nonpublishing reservation -> shell registration -> DATA adoption
+   -> retirement, using paired immutable global/child-local plans and the
+   existing move-only commit owner. Reserve routing capacity before transfer.
+   Active peer custody must block adoption; pristine adopted DATA must also
+   block peer owner extraction before generated-submission indexes exist.
+   Readiness and quarantine must identify the exact selected child. Keep
+   generated issue/completion unavailable until their separate routes qualify.
 3. Add an authenticated generated-storage peer handoff. Generated allocation
    slots are deliberately distinct from PUBLIC allocations; enabling multi-device
    generated dispatch must not relabel them or bypass ordinary peer-copy guards.

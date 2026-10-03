@@ -5,6 +5,57 @@ use crate::{KfdRuntimeBackendV1, RuntimeDeviceIdV1, RuntimeGfx942PreparationErro
 use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationErrorV1};
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
+impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
+    /// Prepares an inert payload on the exact selected retained GPU owner.
+    /// The payload stays owner-local and this plain ticket has no generated
+    /// reservation, adoption, issue or completion hooks.
+    ///
+    /// ```compile_fail,E0277
+    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
+    /// fn not_send(handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
+    ///     let local = std::rc::Rc::new(());
+    ///     let _ = handle.try_prepare_gfx942_v1(device, move |_| Ok::<_, ()>(local));
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
+    /// fn escape(handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
+    ///     let _ = handle.try_prepare_gfx942_v1(device, |owner| Ok::<_, ()>(owner));
+    /// }
+    /// ```
+    /// ```compile_fail,E0599
+    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
+    /// fn no_adoption<P: fe2o3_runtime::RuntimeGfx942GeneratedCarrierV1 + 'static>(
+    ///     handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, ()> + Send + 'static,
+    /// ) {
+    ///     let _ = handle.try_prepare_generated_gfx942_v1(device, prepare);
+    /// }
+    /// ```
+    /// ```compile_fail,E0599
+    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
+    /// fn no_completion<P: fe2o3_runtime::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static>(
+    ///     handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, ()> + Send + 'static,
+    /// ) {
+    ///     let _ = handle.try_prepare_generated_gfx942_completion_v1(device, prepare);
+    /// }
+    /// ```
+    #[doc(hidden)]
+    pub fn try_prepare_gfx942_v1<P: 'static, E: Send + 'static>(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        self.enqueue_preparation_v1(Box::new(move |context| {
+            context.with_gfx942_preparation_device_v1(device, prepare)
+        }))
+    }
+}
+
 pub(super) mod adoption;
 mod completion;
 pub(super) mod completion_contract;
