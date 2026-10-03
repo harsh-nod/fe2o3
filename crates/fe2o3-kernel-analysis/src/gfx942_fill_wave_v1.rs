@@ -6,7 +6,10 @@
 //! remain reviewed assumptions, not results of the arithmetic proof. There is
 //! no source/compiler refinement, authenticated memory snapshot, or authority.
 
-use fe2o3_hsaco::{KernelDescriptorBinding, inspect_and_bind_kernel_descriptors};
+use fe2o3_hsaco::{
+    ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, KernelDescriptorBinding,
+    inspect_and_bind_kernel_descriptors,
+};
 use std::{error::Error, fmt};
 
 include!("gfx942_fill_wave_v1/body.rs");
@@ -58,12 +61,35 @@ impl<'a> Gfx942FillKernelV1<'a> {
             .map_err(|_| E::EntryLayout)?;
         let descriptor = binding.descriptor();
         let kernel = &inspected.inspection().kernels()[kernel_index];
-        if layout.kernarg_pointer_sgprs() != Some([0, 1])
+        let [pointer, length] = kernel.explicit_arguments() else {
+            return Err(E::EntryLayout);
+        };
+        let kernarg_layout = match descriptor.kernarg_size() {
+            16 => {
+                kernel.implicit_argument_offset().is_none()
+                    && kernel.implicit_argument_size() == 0
+                    && kernel.hidden_arguments().is_empty()
+            }
+            272 => {
+                kernel.implicit_argument_offset() == Some(16)
+                    && kernel.implicit_argument_size() == 256
+            }
+            _ => false,
+        };
+        if inspected.inspection().code_object_version() != CodeObjectVersion::V6
+            || !kernarg_layout
+            || kernel.kernarg_segment_alignment() != 8
+            || pointer.offset() != 0 || pointer.size() != 8
+            || pointer.value_kind() != ExplicitValueKind::GlobalBuffer
+            || pointer.address_space() != Some(ArgumentAddressSpace::Global)
+            || length.offset() != 8 || length.size() != 8
+            || length.value_kind() != ExplicitValueKind::ByValue
+            || length.address_space().is_some()
+            || layout.kernarg_pointer_sgprs() != Some([0, 1])
             || layout.workgroup_id_sgprs() != [Some(2), None, None]
             || layout.workitem_id_vgprs() != [Some(0), None, None]
             || layout.workgroup_info_sgpr().is_some()
             || layout.user_sgpr_count() != 2
-            || descriptor.kernarg_size() != 16
             || descriptor.group_segment_fixed_size() != 0
             || kernel.required_workgroup_size() != Some([64, 1, 1])
             // Close over MODE/resource configuration as well as operand layout.
@@ -95,11 +121,19 @@ impl<'a> Gfx942FillKernelV1<'a> {
         self.binding
     }
 
+    /// Required allocation span, including the optional COV6 implicit argument tail.
+    /// Only the first 16 bytes are read by this exact machine-code profile.
+    pub const fn kernarg_storage_bytes(&self) -> u64 {
+        self.binding.descriptor().kernarg_size() as u64
+    }
+
     /// Executes a caller-supplied projection, after validating its spatial bounds.
     ///
     /// The caller must establish the actual dispatch's ordinary wave64 mode
     /// (VSKIP and GPR indexing disabled, 64-bit global addressing), initial
-    /// register values, and stable readable kernarg bytes. `output_base/bytes`
+    /// register values, and stable readable explicit kernarg bytes. The address
+    /// must back `kernarg_storage_bytes()` bytes, including any implicit tail.
+    /// Tail contents/initialization are not authenticated by this model. `output_base/bytes`
     /// describe a distinct writable allocation; this function cannot authenticate
     /// its backing or ownership. This checks this wave's coordinates and its
     /// 64-thread workgroup size, not dispatch-wide dimensions or coverage.
@@ -118,7 +152,9 @@ impl<'a> Gfx942FillKernelV1<'a> {
             return Err(E::Geometry);
         }
         let address = pair(state.sgprs[0], state.sgprs[1]);
-        let kernarg_end = address.checked_add(16).ok_or(E::KernargRegion)?;
+        let kernarg_end = address
+            .checked_add(self.kernarg_storage_bytes())
+            .ok_or(E::KernargRegion)?;
         if !address.is_multiple_of(8) {
             return Err(E::KernargRegion);
         }

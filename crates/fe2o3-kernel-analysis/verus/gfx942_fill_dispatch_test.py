@@ -39,11 +39,19 @@ class Controls(unittest.TestCase):
 
     def test_mutants_distinct_and_complete(self):
         cases = check.mutations(self.inputs[str(check.BODY)].decode("ascii"))
-        self.assertEqual(len(cases), 11)
-        self.assertEqual(len({body for _, body, _ in cases}), 11)
+        self.assertEqual(len(cases), 13)
+        self.assertEqual(len({body for _, body, _ in cases}), 13)
         self.assertEqual({name for name, _, _ in cases}, set(check.FAILURES))
         for name, _, target in cases:
             self.assertEqual(target, check.FAILURES[name][0])
+
+    def test_descriptor_storage_cannot_be_replaced_by_explicit_prefix(self):
+        inputs = dict(self.inputs)
+        before = b"kernarg_bytes: self.kernarg_storage_bytes()"
+        self.assertIn(before, inputs[str(check.RUST)])
+        inputs[str(check.RUST)] = inputs[str(check.RUST)].replace(before, b"kernarg_bytes: 16")
+        with self.assertRaises(ValueError):
+            check.validate_sources(inputs)
 
     def test_positive_exact_count_and_identity(self):
         result = {"verus": check.support.VERIFIER, "verification-results": {
@@ -69,8 +77,8 @@ class Controls(unittest.TestCase):
         result = {"verus": check.support.VERIFIER, "verification-results": {
             "encountered-error": True, "encountered-vir-error": False, "errors": 1,
             "verified": 0, "is-verifying-entire-crate": False}}
-        primary = dict(is_primary=True, file_name=str(proof), line_start=33,
-                       column_start=13, line_end=33, column_end=45)
+        primary = dict(is_primary=True, file_name=str(proof), line_start=35,
+                       column_start=13, line_end=35, column_end=45)
         expansion = dict(is_primary=False, file_name=str(body), expansion={
             "macro_decl_name": macro + "!", "span": {"file_name": str(proof), "line_start": call},
             "def_site_span": {"file_name": str(body), "line_start": definition}})
@@ -117,8 +125,8 @@ class Controls(unittest.TestCase):
             {"level": "note", "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
              "spans": [{"file_name": str(proof), "line_start": start}]},
             {"level": "error", "message": "precondition not satisfied", "spans": [
-                dict(is_primary=True, file_name=str(proof), line_start=212, column_start=13, line_end=212, column_end=49),
-                dict(is_primary=False, file_name=str(proof), line_start=86, column_start=37, line_end=86, column_end=63,
+                dict(is_primary=True, file_name=str(proof), line_start=214, column_start=13, line_end=214, column_end=49),
+                dict(is_primary=False, file_name=str(proof), line_start=88, column_start=37, line_end=88, column_end=63,
                      label="failed precondition")]},
             {"level": "error", "message": "aborting due to 1 previous error", "spans": []},
         ]

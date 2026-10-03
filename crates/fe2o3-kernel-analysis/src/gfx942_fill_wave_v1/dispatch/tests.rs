@@ -12,6 +12,7 @@ fn input(count: u64, grid: u32) -> DispatchInput {
     DispatchInput {
         kernarg,
         kernarg_address: 0x10_0000_1000,
+        kernarg_bytes: 16,
         output_base: base,
         output_bytes: count.checked_mul(4).unwrap_or(u64::MAX),
         grid: [grid, 1, 1],
@@ -26,6 +27,19 @@ fn seed() -> Gfx942FillWaveStateV1 {
         exec_mask: 1,
         vcc: 0x1234,
         scc: true,
+    }
+}
+
+#[test]
+fn descriptor_storage_extent_is_closed_before_arithmetic() {
+    let mut arguments = input(1, 64);
+    for bytes in [16, 272] {
+        arguments.kernarg_bytes = bytes;
+        assert!(valid_dispatch(&arguments));
+    }
+    for bytes in [0, 8, 24, 32, 256, 264, 280, u64::MAX] {
+        arguments.kernarg_bytes = bytes;
+        assert!(!valid_dispatch(&arguments));
     }
 }
 

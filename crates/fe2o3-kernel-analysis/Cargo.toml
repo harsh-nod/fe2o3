@@ -35,6 +35,9 @@ rustc_apfloat = { workspace = true, optional = true }
 [lib]
 name = "fe2o3_kernel_analysis"
 
+[dev-dependencies]
+rmpv = { version = "1.3.1", default-features = false }
+
 [[bin]]
 name = "fe2o3-machine-effect-worker-fixture"
 path = "tests/fixtures/machine_effect_worker_fixture.rs"

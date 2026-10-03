@@ -7,6 +7,7 @@ verus! {
 pub struct DispatchInput {
     pub kernarg: [u8; 16],
     pub kernarg_address: u64,
+    pub kernarg_bytes: u64,
     pub output_base: u64,
     pub output_bytes: u64,
     pub grid: [u32; 3],
@@ -18,14 +19,15 @@ spec fn dispatch_valid(input: DispatchInput) -> bool {
     && input.grid[1] == 1 && input.grid[2] == 1
     && input.workgroup[0] == 64 && input.workgroup[1] == 1 && input.workgroup[2] == 1
     && count(input.kernarg@) <= input.grid[0]
+    && (input.kernarg_bytes == 16 || input.kernarg_bytes == 272)
     && input.kernarg_address % 8 == 0
-    && input.kernarg_address as int + 16 <= u64::MAX
+    && input.kernarg_address as int + input.kernarg_bytes as int <= u64::MAX
     && pointer(input.kernarg@) == input.output_base
     && input.output_base % 4 == 0
     && input.output_bytes == 4 * count(input.kernarg@) as int
     && input.output_base as int + input.output_bytes as int <= u64::MAX
     && (input.output_bytes == 0
-        || input.output_base as int >= input.kernarg_address as int + 16
+        || input.output_base as int >= input.kernarg_address as int + input.kernarg_bytes as int
         || input.kernarg_address as int >= input.output_base as int + input.output_bytes as int)
 }
 

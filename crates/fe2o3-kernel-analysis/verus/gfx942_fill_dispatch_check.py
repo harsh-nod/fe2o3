@@ -20,26 +20,28 @@ RUST = S / "dispatch.rs"
 TEST = V / "gfx942_fill_dispatch_test.py"
 WAVE = V / "gfx942_fill_wave_check.py"
 PINS = {
-    WAVE: "41d376298ec25086660d01e40be8c005ac70bf41f4f209f0eb9d7547b746afcd",
-    PROOF: "3eef55ff4986b65ad46e4b6530ca6517e76d56a8028936baf76153f05189915e",
-    BODY: "8638b7d2860c457bebd681247c318b1aed9d478641c4b0f38200a1a0486fe06d",
-    RUST: "60f4ec252490f83fd704931d6690e7551a46953ff7c82bd0a3ef80344df40f10",
+    WAVE: "6994a2469011dd21f89da9bfb9a67055970d705d594ae826c30d4a20827433c5",
+    PROOF: "20ef2c3ede89b697d8548b8f67b1fc90542c1b19e548d770ebe2d6756f192dd0",
+    BODY: "bbf583482f4349e60300ff60bebece527329bd1a5a6d262c5bf4f5781bcbfaac",
+    RUST: "1173b08811ab35534554ae95eb1f5829877bde57486672da44d937f2be1625f1",
 }
 VERIFIED = 44
-CONTROL_COUNT = 11
+CONTROL_COUNT = 12
 # Exact logical failures of the reviewed shared-body mutations.
 FAILURES = {
-    "zero-grid": ("valid_dispatch", 0, [("postcondition not satisfied", (33, 13, 33, 45))]),
-    "partial-grid": ("valid_dispatch", 0, [("postcondition not satisfied", (33, 13, 33, 45))]),
-    "underlaunch": ("valid_dispatch", 0, [("postcondition not satisfied", (33, 13, 33, 45))]),
-    "region-overlap": ("valid_dispatch", 0, [("postcondition not satisfied", (33, 13, 33, 45))]),
-    "kernarg-register": ("initialize_entry", 1, [("invariant not satisfied before loop", (56, 13, 56, 65))]),
-    "group-register": ("initialize_entry", 1, [("invariant not satisfied before loop", (57, 13, 57, 36))]),
-    "partial-exec": ("initialize_entry", 1, [("invariant not satisfied before loop", (57, 38, 57, 65))]),
-    "local-id": ("initialize_entry", 1, [("invariant not satisfied at end of loop body", (60, 13, 62, 74))]),
-    "missing-last-group": ("execute_group", 0, [("postcondition not satisfied", (106, 9, 106, 57))]),
-    "byte-group": ("dispatch_byte_after", 0, [("precondition not satisfied", (212, 13, 212, 49))]),
-    "outside-byte": ("dispatch_byte_after", 0, [("postcondition not satisfied", (203, 13, 203, 59))]),
+    "zero-grid": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "partial-grid": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "underlaunch": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "region-overlap": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "kernarg-extent": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "implicit-overlap": ("valid_dispatch", 0, [("postcondition not satisfied", (35, 13, 35, 45))]),
+    "kernarg-register": ("initialize_entry", 1, [("invariant not satisfied before loop", (58, 13, 58, 65))]),
+    "group-register": ("initialize_entry", 1, [("invariant not satisfied before loop", (59, 13, 59, 36))]),
+    "partial-exec": ("initialize_entry", 1, [("invariant not satisfied before loop", (59, 38, 59, 65))]),
+    "local-id": ("initialize_entry", 1, [("invariant not satisfied at end of loop body", (62, 13, 64, 74))]),
+    "missing-last-group": ("execute_group", 0, [("postcondition not satisfied", (108, 9, 108, 57))]),
+    "byte-group": ("dispatch_byte_after", 0, [("precondition not satisfied", (214, 13, 214, 49))]),
+    "outside-byte": ("dispatch_byte_after", 0, [("postcondition not satisfied", (205, 13, 205, 59))]),
 }
 TARGET_MACROS = {
     "valid_dispatch": "gfx942_fill_dispatch_valid_body_v1",
@@ -50,7 +52,8 @@ TARGET_MACROS = {
 SCOPE = (
     "Shared full64 dispatch validator iff acceptance, descriptor-shaped entry construction, "
     "actual wave composition, unique cross-group output coverage, exact bytes and untouched "
-    "complement, and modeled termination. Constant storage and one-group byte queries. "
+    "complement, and modeled termination. Full 16/272-byte kernarg storage bounds with an exact "
+    "16-byte read prefix. Constant storage and one-group byte queries. "
     "Conditional on reviewed ISA/descriptor/AMDHSA interpretation; not authenticated native "
     "entry values, memory backing, scheduling, visibility, completion, compiler refinement, "
     "multi-GPU launch authority or performance."
@@ -102,8 +105,11 @@ def mutations(body):
         ("zero-grid", "$input.grid[0] > 0", "true", "valid_dispatch"),
         ("partial-grid", "$input.grid[0] % 64 == 0", "$input.grid[0] % 32 == 0", "valid_dispatch"),
         ("underlaunch", "count <= $input.grid[0] as u64", "count <= u32::MAX as u64", "valid_dispatch"),
-        ("region-overlap", "$input.output_base >= $input.kernarg_address + 16",
+        ("region-overlap", "$input.output_base >= $input.kernarg_address + $input.kernarg_bytes",
          "$input.output_base >= $input.kernarg_address", "valid_dispatch"),
+        ("kernarg-extent", "$input.kernarg_bytes == 272", "$input.kernarg_bytes == 32", "valid_dispatch"),
+        ("implicit-overlap", "$input.output_base >= $input.kernarg_address + $input.kernarg_bytes",
+         "$input.output_base >= $input.kernarg_address + 16", "valid_dispatch"),
         ("kernarg-register", "$state.sgprs[0] = $address as u32;",
          "$state.sgprs[0] = ($address >> 1) as u32;", "initialize_entry"),
         ("group-register", "$state.sgprs[2] = $group;", "$state.sgprs[2] = $group / 2;", "initialize_entry"),
@@ -177,7 +183,7 @@ def classify(status, stdout, stderr, proof, target=None, mutant=None):
             need(any(Path(span.get("file_name", "")).resolve() == proof
                      and span.get("is_primary") is False and span.get("label") == "failed precondition"
                      and tuple(span.get(key) for key in ("line_start", "column_start", "line_end", "column_end"))
-                         == (86, 37, 86, 63)
+                         == (88, 37, 88, 63)
                      for row in errors[:-1] for span in row.get("spans", [])), "exact group-range precondition")
         if mutant == "byte-group" or all(message == "invariant not satisfied before loop" for message, _ in diagnostics):
             need(any(row.get("message", "").startswith("function body check:")
@@ -283,9 +289,9 @@ def main():
             error = (error or "") + "; closing: " + type(failure).__name__ + ": " + str(failure)
         for number, handler in handlers.items():
             signal.signal(number, handler)
-    result = dict(accepted=error is None and unchanged and len(stages) == 16,
+    result = dict(accepted=error is None and unchanged and len(stages) == 18,
                   source_unchanged=unchanged, stages=stages, error=error, scope=SCOPE,
-                  verified_obligations=VERIFIED, logical_mutants=11, control_tests=CONTROL_COUNT,
+                  verified_obligations=VERIFIED, logical_mutants=13, control_tests=CONTROL_COUNT,
                   establishes_isa_or_compiler_refinement=False, grants_launch_authority=False)
     save(out / "result.json", result)
     print(support.json.dumps(result, indent=2))

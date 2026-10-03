@@ -4,6 +4,29 @@ Priority refresh: 2026-10-03. This is an implementation work order, not an A3
 completion claim. Native agents reviewed Context admission, backend custody and
 existing MI300X evidence independently. Primary owns edits, integration and tests.
 
+## Immediate Priority
+
+Expedite one ordinary admitted application across two selected GPUs. Native
+multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
+have scoped hardware qualification. Do not add more routing wrappers or expand
+opcode coverage before clearing application admission.
+
+1. Retain the genuine conditional fill compiler owners, exact finalizer lineage
+   and authenticated analyzer/model association in the host verification request.
+2. Implement a distinct pending conditional artifact and protected closed-fill
+   verifier/refinement path. Preserve unconditional admission; never expose the
+   pending state through existing unconditional executable/load APIs.
+3. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
+   and publication currentness before creating private invocation authority.
+4. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
+   -> PUBLIC XGMI -> full guarded readback in both directions, including N=65
+   with G=128. A second write-only fill does not prove consumption of peer input.
+
+Protected compiler-origin/currentness and native entry/storage/completion
+associations remain required. Test-signed carriage and an analyzer/model match
+cannot replace them. Defer general optimizer proofs, additional opcodes, more
+GPU counts, zero-copy generated-to-peer transfer and performance campaigns.
+
 ## Reuse What Works
 
 The selected-pair copy controller already qualifies production deny-all kernel
@@ -115,11 +138,17 @@ output bytes and untouched complement. Byte queries execute at most one wave;
 neither storage nor validation scales with the grid. Its 44 cumulative proof
 obligations include the original 30 wave obligations. Actual native entry,
 patched allocation backing, scheduling, visibility and completion remain
-premises, not established facts. Next bind the complete source/compiler owners
-to the authenticated analyzer's exact HSACO and implement the protected
-conditional provider.
-Only then qualify admitted fill, tracked upload, native XGMI and
-readback on two GPUs in both directions.
+premises, not established facts. The
+[authenticated fill checkpoint](evidence/dev-authenticated-fill-2026-10-03/README.md)
+now retains the actual analyzer execution with the exact inspected fill model.
+An unchanged genuine compiler handoff passes the actual Worker bootstrap/replay,
+finalizer and authenticated analysis. Its production 272-byte kernarg layout is
+accepted with full-storage bounds, while the model reads exactly 16 bytes.
+This is not a reusable host source-to-machine refinement or compiler-origin
+attestation. Bind the complete compiler owners to the host request and implement
+the protected conditional provider and invocation transition next. Only then
+qualify admitted fill, tracked upload, native XGMI and readback on two GPUs in
+both directions.
 
 The current Worker artifact verifier accepts only unconditional compiler proof
 inputs and runs before invocation arguments exist. Do not retag the conditional

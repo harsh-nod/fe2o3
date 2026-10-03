@@ -11,14 +11,15 @@ macro_rules! gfx942_fill_dispatch_valid_body_v1 {
             && $input.workgroup[1] == 1
             && $input.workgroup[2] == 1
             && count <= $input.grid[0] as u64
+            && ($input.kernarg_bytes == 16 || $input.kernarg_bytes == 272)
             && $input.kernarg_address % 8 == 0
-            && $input.kernarg_address <= u64::MAX - 16
+            && $input.kernarg_address <= u64::MAX - $input.kernarg_bytes
             && pair(words[0], words[1]) == $input.output_base
             && $input.output_base % 4 == 0
             && $input.output_bytes == count * 4
             && $input.output_base <= u64::MAX - $input.output_bytes
             && ($input.output_bytes == 0
-                || $input.output_base >= $input.kernarg_address + 16
+                || $input.output_base >= $input.kernarg_address + $input.kernarg_bytes
                 || $input.kernarg_address >= $input.output_base + $input.output_bytes)
     }};
 }

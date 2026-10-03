@@ -116,6 +116,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
+#[path = "fixtures/conditional_fill_analysis.rs"]
+mod conditional_fill_analysis;
 #[path = "fixtures/worker_v3_hsaco_test_support.rs"]
 mod hsaco_fixture;
 #[path = "../../../tests/support/production_semantic_debug_fixture_v1.rs"]

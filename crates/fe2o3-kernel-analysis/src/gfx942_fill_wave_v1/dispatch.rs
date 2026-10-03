@@ -10,6 +10,7 @@ include!("dispatch_body.rs");
 struct DispatchInput {
     kernarg: [u8; 16],
     kernarg_address: u64,
+    kernarg_bytes: u64,
     output_base: u64,
     output_bytes: u64,
     grid: [u32; 3],
@@ -18,9 +19,11 @@ struct DispatchInput {
 
 /// Complete full-wave dispatch projection over one retained inspected code object.
 ///
-/// Kernarg bytes are a stable snapshot, not an authenticated native read. Regions
-/// describe addresses, not allocation ownership. Entry construction models the
-/// stated descriptor/AMDHSA contract; it does not observe actual GPU registers.
+/// Kernarg bytes are a stable snapshot of the explicit prefix, not an authenticated
+/// native read. Bounds cover the complete descriptor-required storage, but do not
+/// establish allocation ownership or implicit-tail contents/initialization.
+/// Entry construction models the stated descriptor/AMDHSA contract; it does not
+/// observe actual GPU registers.
 /// Ordinary wave64 mode, disabled VSKIP/GPR indexing, and 64-bit global addressing
 /// remain premises; initializing the projected registers does not establish them.
 /// No ISA interpretation, scheduling, visibility or launch authority is granted.
@@ -45,6 +48,7 @@ impl<'code> Gfx942FillKernelV1<'code> {
         let input = DispatchInput {
             kernarg,
             kernarg_address,
+            kernarg_bytes: self.kernarg_storage_bytes(),
             output_base,
             output_bytes,
             grid,
