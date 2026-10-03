@@ -102,8 +102,14 @@ and protected Worker constructor remain unchanged. The
 now joins the exact semantic output, KIR parameter, canonical descriptor, typed
 packing plan, actual length/backing/fixup and AQL grid. It retains immutable
 borrows of the proof and packed owner; it creates no prepared dispatch or device
-authority. Next complete machine refinement and the protected conditional
-provider. Only then qualify admitted fill, tracked upload, native XGMI and
+authority. The [whole fill program checkpoint](evidence/dev-conditional-fill-program-2026-10-03/README.md)
+now checks the genuine source body, complete neutral KIR and independently
+replayed target KIR against the same guarded index-fill behavior. It rejects
+safety-only predicates, changed values/addresses, extra effects, incomplete
+control flow and stale witness borrows. This is a bounded checked relation with
+CPU/compiler tests, not a new formal proof or a machine execution join.
+Next complete machine refinement and the protected conditional provider.
+Only then qualify admitted fill, tracked upload, native XGMI and
 readback on two GPUs in both directions.
 
 The current Worker artifact verifier accepts only unconditional compiler proof

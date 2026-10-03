@@ -561,6 +561,16 @@ fn write_only_output_genuine_conditional_v9_handoff_is_imported_without_launch_a
         &std::fs::read(&handoff_output).expect("read singleton V3 handoff"),
     )
     .expect("decode singleton V3 handoff");
+    if let Some(path) = std::env::var_os("FE2O3_TEST_CAPTURE_FILL_HANDOFF_V1") {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .expect("create fresh genuine fill handoff capture")
+            .write_all(handoff.canonical_bytes())
+            .expect("write genuine fill handoff capture");
+    }
     let receipts = handoff.capsule().receipts();
     let proof = fe2o3_verifier::validate_conditional_compiler_proof_inputs_v1(
         receipts.proof_binding(),
@@ -637,6 +647,10 @@ fn write_only_output_genuine_conditional_v9_handoff_is_imported_without_launch_a
     assert!(!lineage.grants_runtime_authority());
     conditional_output_packing_v1::check_actual_fill_packing(&proof, &handoff);
     let module = fe2o3_kernel_ir::decode_module_v9(proof.kernel_ir().canonical_bytes()).unwrap();
+    let fill = fe2o3_verifier::check_conditional_fill_program_v1(&proof, &lineage)
+        .expect("check genuine source, neutral KIR and target KIR fill programs");
+    assert_eq!(fill.function_symbol(), "fill_write_only");
+    assert!(!fill.grants_runtime_authority());
     assert_eq!(module.kernels.len(), 1);
     assert_eq!(module.kernels[0].entry.as_str(), "fill_write_only");
     assert_eq!(
