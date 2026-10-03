@@ -40,6 +40,7 @@ const CPU_LIMIT_MAX_SECONDS: u64 = 601;
 const PROCESS_LIMIT: u64 = 4096;
 const DESCRIPTOR_LIMIT: u64 = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+const ACTIVE_POLL_INTERVAL: Duration = Duration::from_micros(50);
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
 const PTRACE_TRACEME: u32 = 0;
@@ -706,6 +707,7 @@ fn supervise(
         let mut auxiliary_started = false;
         let mut solver_started = false;
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
+        let mut idle_delay = Duration::ZERO;
         while !tracees.is_empty() {
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
@@ -898,8 +900,9 @@ fn supervise(
                     }
                 }
             }
-            if !progressed {
-                thread::sleep(POLL_INTERVAL);
+            idle_delay = next_supervision_delay(idle_delay, progressed);
+            if !idle_delay.is_zero() {
+                thread::sleep(idle_delay.min(deadline.saturating_duration_since(Instant::now())));
             }
         }
         let verifier_terminal = verifier_terminal
@@ -939,6 +942,18 @@ fn supervise(
         stdout: stdout_capture.bytes,
         stderr: stderr_capture.bytes,
     })
+}
+
+fn next_supervision_delay(previous: Duration, progressed: bool) -> Duration {
+    // A resumed tracee often reaches another mediated syscall before a full idle
+    // interval. Back off only while quiet, without skipping any trace checkpoint.
+    if progressed {
+        Duration::ZERO
+    } else if previous.is_zero() {
+        ACTIVE_POLL_INTERVAL
+    } else {
+        previous.saturating_mul(2).min(POLL_INTERVAL)
+    }
 }
 
 fn set_trace_options(process: i32) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -1981,6 +1996,19 @@ mod tests {
     }
 
     #[test]
+    fn supervision_backoff_is_bounded_and_resets_after_every_progress_event() {
+        let mut delay = Duration::ZERO;
+        for micros in [50, 100, 200, 400, 800, 1600, 2000, 2000] {
+            delay = next_supervision_delay(delay, false);
+            assert_eq!(delay, Duration::from_micros(micros));
+            assert_eq!(next_supervision_delay(delay, true), Duration::ZERO);
+        }
+        delay = next_supervision_delay(delay, true);
+        assert_eq!(next_supervision_delay(delay, false), ACTIVE_POLL_INTERVAL);
+        assert_eq!(next_supervision_delay(Duration::MAX, false), POLL_INTERVAL);
+    }
+
+    #[test]
     fn filter_denies_every_escape_and_keeps_process_creation_traceable() {
         assert!(DENIED_SYSCALLS.contains(&109));
         assert!(DENIED_SYSCALLS.contains(&112));
@@ -2074,6 +2102,38 @@ mod tests {
         let runtime = RetainedRuntimeClosureV2::open_for_test(Path::new(&root), &manifest).unwrap();
         let source = CanonicalGeneratedVerusProofInputV3::new(
             b"use vstd::prelude::*;\nverus! { pub proof fn retained_runtime_sample() {} }\n"
+                .to_vec(),
+        )
+        .unwrap();
+        let output = execute(
+            &runtime,
+            &source,
+            Instant::now() + Duration::from_secs(120),
+            4096,
+        )
+        .unwrap();
+        assert_eq!((output.exit_code, output.signal), (Some(0), None));
+        assert!(
+            std::str::from_utf8(&output.stdout)
+                .unwrap()
+                .contains("1 verified, 0 errors")
+        );
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires the root-owned pinned production functional-refinement runtime"]
+    fn protected_pinned_runtime_executes_a_real_verus_proof() {
+        let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
+            .expect("set the protected runtime root");
+        let manifest = super::super::ManifestV2::parse_functional_refinement_runtime_v1().unwrap();
+        let runtime =
+            RetainedRuntimeClosureV2::open_protected(Path::new(&root), &manifest).unwrap();
+        let source = CanonicalGeneratedVerusProofInputV3::new(
+            b"use vstd::prelude::*;\nverus! { pub proof fn protected_runtime_sample() {} }\n"
                 .to_vec(),
         )
         .unwrap();

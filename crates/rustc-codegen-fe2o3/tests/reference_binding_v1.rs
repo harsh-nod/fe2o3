@@ -79,6 +79,20 @@ fn run_feature(target: &Path, feature: &str) -> String {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_reference_rejects_initial_output_value_reads() {
+    let target = ScratchTarget::new();
+    let stderr = run_feature(&target.0, "write-only-reference-read");
+    assert!(
+        stderr.contains("reference")
+            && (stderr.contains("independently bound GPU load symbol")
+                || stderr.contains("unsupported place projection [Dereference]"))
+            && !stderr.contains("functional-refinement proof runtime unavailable"),
+        "write-only output was accepted as an initial reference value:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_rejected() {
     let target = ScratchTarget::new();
     let positive = run_feature(&target.0, "reference-positive");

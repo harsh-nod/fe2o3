@@ -664,9 +664,6 @@ fn append_contract_instantiations_v1(
     source.push_str(
         crate::functional_refinement_receipt_v2::ranked_effect_formula_replay_prelude_v2(),
     );
-    source.push_str(
-        crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_declaration_v2(),
-    );
     source.push('\n');
     let mut all_symbols = std::collections::BTreeSet::new();
     for replay in &replays {
@@ -692,6 +689,12 @@ fn append_contract_instantiations_v1(
         }
         write!(source, "s{symbol}: int").map_err(generated_format_error)?;
     }
+    if replays.iter().any(|replay| replay.needs_ieee_congruence()) {
+        if !all_symbols.is_empty() {
+            source.push_str(", ");
+        }
+        source.push_str(crate::functional_refinement_receipt_v2::IEEE_CONGRUENCE_PARAMETER_V2);
+    }
     source.push_str(") {\n");
     for (index, replay) in replays.iter().enumerate() {
         write!(source, "        fe2o3_output_{index}_effect_formula_v1(")
@@ -702,9 +705,15 @@ fn append_contract_instantiations_v1(
             }
             write!(source, "s{symbol}").map_err(generated_format_error)?;
         }
+        if replay.needs_ieee_congruence() {
+            if !replay.symbols().is_empty() {
+                source.push_str(", ");
+            }
+            source.push_str("fe2o3_ieee_operator_congruence_v2");
+        }
         source.push_str(");\n");
     }
-    source.push_str("    }\n}\n\nfn fe2o3_contract_instantiations_v1() {}\n");
+    source.push_str("    }\n}\n");
     if source.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
         return Err(
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(

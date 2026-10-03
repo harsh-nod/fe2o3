@@ -178,14 +178,40 @@ pub fn core_atomic_rmw_v1(unsigned: DeviceGlobalMutPtr<u32>, signed: DeviceGloba
 }
 
 #[cfg(feature = "write-only-output")]
-#[kernel(
-    typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1])
+#[cfg_attr(
+    feature = "write-only-reference",
+    kernel(typed, reference = write_only_reference, launch(required = [64, 1, 1], max = [64, 1, 1]))
+)]
+#[cfg_attr(
+    not(feature = "write-only-reference"),
+    kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))
 )]
 pub fn fill_write_only(mut output: WriteOnlyDisjointSlice<u32>) {
     let index = thread::index_1d();
     let value = index.get() as u32;
     let _ = output.write(index, value);
+}
+
+#[cfg(feature = "write-only-reference")]
+fn write_only_reference(point: usize, output: &mut u32) {
+    #[cfg(feature = "write-only-reference-read")]
+    {
+        *output = *output ^ point as u32;
+    }
+    #[cfg(all(
+        not(feature = "write-only-reference-read"),
+        feature = "write-only-reference-mutated"
+    ))]
+    {
+        *output = (point as u32) ^ 1;
+    }
+    #[cfg(not(any(
+        feature = "write-only-reference-read",
+        feature = "write-only-reference-mutated"
+    )))]
+    {
+        *output = point as u32;
+    }
 }
 
 #[cfg(feature = "write-only-disjoint-output")]

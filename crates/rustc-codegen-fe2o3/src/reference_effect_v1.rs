@@ -2482,9 +2482,12 @@ fn disjoint_slice_element_v1<'tcx>(
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
-    if trusted_device_items::classify(tcx, definition.did())
-        != Some(TrustedDeviceItem::DisjointSlice)
-    {
+    // Both types supply disjoint outputs. Only SharedSliceInput can supply an
+    // initial memory value to the reference expression.
+    if !matches!(
+        trusted_device_items::classify(tcx, definition.did()),
+        Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::WriteOnlyDisjointSlice)
+    ) {
         return None;
     }
     let element = arguments.first()?.as_type()?;

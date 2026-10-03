@@ -3337,8 +3337,18 @@ fn project_and_verify_ranked_root_v1(
         entry_operations,
         projected_blocks,
     )?;
-    let reference_writes =
-        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
+    let reference_writes = if reference_bindings.as_slice().is_empty() {
+        Vec::new()
+    } else {
+        projected_reference_gpu_writes_v2(
+            semantic.types(),
+            semantic.callables(),
+            function,
+            &blocks,
+            &sources,
+            &intrinsic,
+        )?
+    };
     let access_sources = production_access_sources(&blocks, &sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
@@ -3412,9 +3422,11 @@ fn project_and_verify_ranked_root_v1(
 
 fn projected_reference_gpu_writes_v2(
     types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
+    intrinsic: &IntrinsicProjectionV1,
 ) -> Result<
     Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
     ProductionRankedProjectionErrorV1,
@@ -3443,6 +3455,7 @@ fn projected_reference_gpu_writes_v2(
     let mut writes = Vec::new();
     let mut expressions =
         GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?;
+    expressions.bind_projected_indices_v2(callables, blocks, &intrinsic.index_values)?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -3481,19 +3494,34 @@ fn projected_reference_gpu_writes_v2(
                 "a projected write view has no exact allocation origin",
             ),
         )?;
-        let value = source
-            .semantic_site
-            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
-            .and_then(|(block, statement)| {
-                function
-                    .blocks()
-                    .get(block)
-                    .and_then(|block| block.statements().get(statement))
-            })
-            .map_or(
-                Err("GPU write has no authenticated semantic MIR statement"),
-                |statement| expressions.resolve_store_v2(statement.kind()),
-            );
+        let value = match source.semantic_site {
+            Some(site) => {
+                let block = function.blocks().get(site.block).ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "GPU write has no authenticated semantic MIR block",
+                    ),
+                )?;
+                expressions.use_site = Some(ScalarAssignmentSiteV1 {
+                    block: site.block,
+                    statement: site.statement.unwrap_or(block.statements().len()),
+                });
+                match site.statement {
+                    Some(statement) => block.statements().get(statement).map_or(
+                        Err("GPU write has no authenticated semantic MIR statement"),
+                        |statement| expressions.resolve_store_v2(statement.kind()),
+                    ),
+                    None => expressions.resolve_write_only_call_v2(
+                        callables,
+                        block.terminator().kind(),
+                        &intrinsic.local_contracts.allocations,
+                        &intrinsic.index_values,
+                        allocation_origin,
+                        &indices,
+                    ),
+                }
+            }
+            None => Err("GPU write has no authenticated semantic MIR site"),
+        };
         writes.push(
             crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
                 block: source.block,
@@ -3517,6 +3545,10 @@ struct GpuSemanticExpressionResolverV2<'a> {
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+    proofs: Option<SemanticAssertProofsV1<'a>>,
+    call_definitions: HashMap<u32, usize>,
+    index_symbols: HashMap<u32, u32>,
+    use_site: Option<ScalarAssignmentSiteV1>,
 }
 
 fn semantic_rvalue_read_places_v2<'a>(
@@ -3593,7 +3625,278 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
+            proofs: None,
+            call_definitions: HashMap::new(),
+            index_symbols: HashMap::new(),
+            use_site: None,
         }
+    }
+
+    // The capability projection supplies origins, not availability at arbitrary
+    // expression uses. Check each retained alias edge before exposing a symbol.
+    fn bind_projected_indices_v2(
+        &mut self,
+        callables: &[SemanticCallableDeclV1],
+        blocks: &[ProductionRankedBlockV1],
+        indices: &[Option<ProjectedDisjointIndexV1>],
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        if indices.len() != self.function.locals().len() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "reference index and semantic local tables have different lengths",
+            ));
+        }
+        let mut proofs = SemanticAssertProofsV1::new(self.types, self.function)?;
+        for (block, data) in self.function.blocks().iter().enumerate() {
+            if let SemanticTerminatorKindV1::Call(call) = data.terminator().kind()
+                && let Some(destination) = call.destination()
+                && destination.place().projections().is_empty()
+            {
+                self.call_definitions
+                    .insert(destination.place().local().index(), block);
+            }
+        }
+        let invocation_values = blocks
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::InvocationIndex {
+                    result,
+                    dimension: 0,
+                    ..
+                } => Some(ProductionRankedValueV1::Local(*result)),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        for (local, projected) in indices.iter().copied().enumerate() {
+            let Some(projected) = projected.filter(|index| {
+                index.mapping == SemanticDisjointIndexSpaceV1::Index1d
+                    && index.precondition.is_none()
+                    && index.availability.is_none()
+                    && invocation_values.contains(&index.value)
+            }) else {
+                continue;
+            };
+            require_index_scalar_custody_v1(
+                local,
+                &proofs.definition_counts,
+                &proofs.address_escaped,
+            )?;
+            let (input, use_site) = if let Some(site) = proofs.assignments[local] {
+                let SemanticStatementKindV1::Assign(assignment) =
+                    self.function.blocks()[site.block].statements()[site.statement].kind()
+                else {
+                    unreachable!();
+                };
+                let source = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => transparent_operand_place(operand),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. }
+                        if place.projections().is_empty() =>
+                    {
+                        Some(place)
+                    }
+                    _ => None,
+                };
+                (source.map(|place| place.local()), site)
+            } else {
+                let block = self.call_definitions.get(&(local as u32)).copied().ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "reference index has no exact scalar definition",
+                    ),
+                )?;
+                let data = &self.function.blocks()[block];
+                let SemanticTerminatorKindV1::Call(call) = data.terminator().kind() else {
+                    unreachable!();
+                };
+                if call.unwind() != SemanticUnwindActionV1::Unreachable {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "reference index call has unsupported unwind behavior",
+                    ));
+                }
+                match callables.get(call.callee().index() as usize) {
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. },
+                        ..
+                    }) if call.arguments().is_empty() => {
+                        self.index_symbols.insert(local as u32, 0);
+                        continue;
+                    }
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation:
+                            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
+                            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+                            | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. },
+                        ..
+                    }) if call.arguments().len() == 1 => (
+                        simple_operand_local(&call.arguments()[0]),
+                        ScalarAssignmentSiteV1 {
+                            block,
+                            statement: data.statements().len(),
+                        },
+                    ),
+                    _ => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "reference index definition is not an authenticated identity intrinsic",
+                        ));
+                    }
+                }
+            };
+            let input = input.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "reference index alias has no exact source local",
+            ))?;
+            if indices.get(input.index() as usize).copied().flatten() != Some(projected)
+                || !Self::definition_dominates_v2(
+                    &mut proofs,
+                    &self.call_definitions,
+                    input.index(),
+                    use_site,
+                )?
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "reference index alias lacks a dominating identical capability",
+                ));
+            }
+            self.index_symbols.insert(local as u32, 0);
+        }
+        self.proofs = Some(proofs);
+        Ok(())
+    }
+
+    fn definition_dominates_v2(
+        proofs: &mut SemanticAssertProofsV1<'a>,
+        calls: &HashMap<u32, usize>,
+        local: u32,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let index = local as usize;
+        if proofs.definition_counts.get(index).copied() != Some(1)
+            || proofs.address_escaped.get(index).copied() != Some(false)
+            || proofs.graph.reachable.get(use_site.block).copied() != Some(true)
+        {
+            return Ok(false);
+        }
+        if let Some(site) = proofs.assignments.get(index).copied().flatten() {
+            return proofs.assignment_dominates_use(site, use_site.block, use_site.statement);
+        }
+        let Some(block) = calls.get(&local).copied() else {
+            return Ok(false);
+        };
+        if block == use_site.block {
+            return Ok(false);
+        }
+        let SemanticTerminatorKindV1::Call(call) =
+            proofs.function.blocks()[block].terminator().kind()
+        else {
+            return Ok(false);
+        };
+        let Some(destination) = call.destination() else {
+            return Ok(false);
+        };
+        if call.unwind() != SemanticUnwindActionV1::Unreachable {
+            return Ok(false);
+        }
+        proofs.edge_set_dominates(
+            &HashSet::from([(block, destination.edge().target().index() as usize)]),
+            use_site.block,
+        )
+    }
+
+    fn resolve_write_only_call_v2(
+        &mut self,
+        callables: &[SemanticCallableDeclV1],
+        terminator: &'a SemanticTerminatorKindV1,
+        allocations: &[Option<AllocationContractV1>],
+        index_values: &[Option<ProjectedDisjointIndexV1>],
+        allocation_origin: u64,
+        indices: &[ProductionRankedValueV1],
+    ) -> Result<ProductionSemanticExpressionV2, &'static str> {
+        let SemanticTerminatorKindV1::Call(call) = terminator else {
+            return Err("GPU write semantic terminator is not a call");
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                    element,
+                    index_space: SemanticDisjointIndexSpaceV1::Index1d,
+                    kind: SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint: false },
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            return Err("GPU write terminator is not an authenticated write-only Index1d call");
+        };
+        let [receiver, index, value] = call.arguments() else {
+            return Err("GPU write-only call has the wrong argument count");
+        };
+        let receiver =
+            simple_operand_local(receiver).ok_or("GPU write-only receiver is not a local")?;
+        let contract = allocations
+            .get(receiver.index() as usize)
+            .copied()
+            .flatten()
+            .ok_or("GPU write-only receiver has no allocation origin")?;
+        let index = simple_operand_local(index).ok_or("GPU write-only index is not a local")?;
+        let projected = index_values
+            .get(index.index() as usize)
+            .copied()
+            .flatten()
+            .ok_or("GPU write-only index has no authenticated projection")?;
+        if !contract.writable
+            || contract.allocation_origin != allocation_origin
+            || projected.mapping != SemanticDisjointIndexSpaceV1::Index1d
+            || projected.precondition.is_some()
+            || projected.availability.is_some()
+            || !self.index_symbols.contains_key(&index.index())
+            || indices != [projected.value]
+            || value.ty() != *element
+            || call.destination().is_none()
+            || call.unwind() != SemanticUnwindActionV1::Unreachable
+        {
+            return Err(
+                "GPU write-only call changed its allocation, index, value type, or control",
+            );
+        }
+        let use_site = self
+            .use_site
+            .ok_or("GPU write-only call has no exact use site")?;
+        let proofs = self
+            .proofs
+            .as_mut()
+            .ok_or("GPU write-only call has no definition inventory")?;
+        for local in [index.index(), receiver.index()] {
+            if !Self::definition_dominates_v2(proofs, &self.call_definitions, local, use_site)
+                .map_err(|_| "GPU write-only call dominance proof exceeded its bounded work")?
+            {
+                return Err("GPU write-only operand does not dominate the write");
+            }
+        }
+        // This profile accepts a direct mutable borrow of the unchanged output
+        // argument. Global allocation-origin equality alone is not currentness.
+        let receiver_site = proofs.assignments[receiver.index() as usize]
+            .ok_or("GPU write-only receiver is not a direct output borrow")?;
+        let SemanticStatementKindV1::Assign(assignment) =
+            self.function.blocks()[receiver_site.block].statements()[receiver_site.statement]
+                .kind()
+        else {
+            return Err("GPU write-only receiver definition is not an assignment");
+        };
+        let SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Mutable,
+            place,
+        } = assignment.value().kind()
+        else {
+            return Err("GPU write-only receiver is not a direct mutable output borrow");
+        };
+        let root = place.local().index() as usize;
+        if !place.projections().is_empty()
+            || proofs.definition_counts.get(root).copied() != Some(0)
+            || !matches!(self.function.locals().get(root).map(|local| local.role()),
+                Some(SemanticLocalRoleV1::Argument(argument)) if u64::from(argument) + 1 == allocation_origin)
+        {
+            return Err("GPU write-only receiver is not rooted in the unchanged output argument");
+        }
+        self.resolve_operand_v2(value, 0)
     }
 
     fn with_ranked_reads(
@@ -3844,6 +4147,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             .get(local as usize)
             .ok_or("GPU semantic scalar local is out of bounds")?;
         if let SemanticLocalRoleV1::Argument(argument) = declaration.role() {
+            if let Some(proofs) = &self.proofs
+                && (proofs.definition_counts[local as usize] != 0
+                    || proofs.address_escaped[local as usize])
+            {
+                return Err("GPU semantic scalar argument was redefined or escaped");
+            }
             let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(argument)
                 .ok_or("kernel scalar argument exceeds the reserved semantic symbol namespace")?;
             return Ok(ProductionSemanticExpressionV2::Symbol {
@@ -3856,6 +4165,26 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 "GPU semantic scalar local has multiple definitions; select/phi normalization is incomplete",
             );
         }
+        if let (Some(proofs), Some(use_site)) = (&mut self.proofs, self.use_site)
+            && !Self::definition_dominates_v2(proofs, &self.call_definitions, local, use_site)
+                .map_err(|_| "GPU semantic scalar dominance proof exceeded its bounded work")?
+        {
+            return Err("GPU semantic scalar definition does not dominate its exact use");
+        }
+        if let Some(symbol) = self.index_symbols.get(&local).copied() {
+            let scalar = self.scalar_v2(declaration.ty())?;
+            if scalar
+                != (ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 64,
+                })
+            {
+                return Err(
+                    "GPU semantic index scalar is not the exact unsigned 64-bit coordinate",
+                );
+            }
+            return Ok(ProductionSemanticExpressionV2::Symbol { symbol, scalar });
+        }
         let value = self
             .definitions
             .get(&local)
@@ -3864,7 +4193,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if !self.visiting.insert(local) {
             return Err("GPU semantic scalar local has a cyclic definition");
         }
+        let previous_use = self.use_site;
+        if let Some(proofs) = &self.proofs {
+            self.use_site = proofs.assignments[local as usize];
+        }
         let resolved = self.resolve_rvalue_inner_v2(value, depth);
+        self.use_site = previous_use;
         self.visiting.remove(&local);
         resolved
     }
@@ -23351,6 +23685,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
+    include!("production_ranked_projection_v1/reference_write_only_v2_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));

@@ -510,16 +510,16 @@ fn assert_multi_root_extraction(
     );
 }
 
-#[test]
-#[ignore = "acceptance target: write-only output needs aggregate source proof and the pinned Verus runtime"]
-fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
-    let target = ScratchTarget::new();
-    let handoff_output = target.path().join("write-only-semantic.handoff");
-    let output = Command::new(env!("CARGO"))
+fn run_write_only_proof_extraction(
+    target: &ScratchTarget,
+    handoff_output: &Path,
+    feature: &str,
+) -> std::process::Output {
+    Command::new(env!("CARGO"))
         .current_dir(workspace())
         .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
         .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_extraction_fixture")
-        .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", &handoff_output)
+        .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff_output)
         .env(
             "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX",
             inert_invocation_v3::canonical_inert_gfx942_invocation_hex(),
@@ -535,12 +535,20 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
         )
         .args([
             "check", "--locked", "--offline", "-Zbuild-std=core",
-            "-p", "fe2o3-production-extraction-fixture", "--features", "write-only-output",
+            "-p", "fe2o3-production-extraction-fixture", "--features", feature,
             "--target", "amdgcn-amd-amdhsa", "--target-dir",
         ])
         .arg(target.path())
         .output()
-        .expect("run the genuine write-only Rust kernel through the proof-carrying compiler");
+        .expect("run the genuine write-only Rust kernel through the proof-carrying compiler")
+}
+
+#[test]
+#[ignore = "acceptance target: dynamic write-only output still needs total-view coverage; requires pinned Verus and AMD target"]
+fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
+    let target = ScratchTarget::new();
+    let handoff_output = target.path().join("write-only-semantic.handoff");
+    let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
     assert!(
         output.status.success(),
@@ -596,6 +604,46 @@ fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
             .count(),
         1
     );
+}
+
+#[test]
+#[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
+fn write_only_output_genuine_value_proof_reaches_the_dynamic_coverage_gate() {
+    let target = ScratchTarget::new();
+    let handoff_output = target.path().join("unproved-coverage.handoff");
+    let output = run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        !output.status.success(),
+        "unproved total coverage was admitted"
+    );
+    assert!(
+        stderr.contains("source-to-proof V2 ranked admission failed: error[FE2O3-OWN-002]")
+            && stderr.contains("launch dimension 0 is dynamic"),
+        "positive value proof did not reach the separate coverage gate:\n{stderr}"
+    );
+    assert!(!stderr.contains("functional-refinement Verus execution failed"));
+    assert!(
+        !handoff_output.exists(),
+        "unproved coverage emitted a handoff"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned production Verus runtime, nightly rust-src, and AMD target"]
+fn write_only_output_genuine_proof_rejects_a_changed_reference_value() {
+    let target = ScratchTarget::new();
+    let handoff_output = target.path().join("mutated-write-only-semantic.handoff");
+    let output =
+        run_write_only_proof_extraction(&target, &handoff_output, "write-only-reference-mutated");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(!output.status.success(), "a changed reference was accepted");
+    assert!(
+        stderr.contains("functional-refinement Verus execution failed: UnexpectedProofResult")
+            && stderr.contains("assertion failed"),
+        "changed reference did not reach genuine proof-result rejection:\n{stderr}"
+    );
+    assert!(!handoff_output.exists(), "a failed proof emitted a handoff");
 }
 
 #[test]
