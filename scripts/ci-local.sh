@@ -795,6 +795,8 @@ run_cpu_package_group() {
   local -a packages cargo_args=(test --locked)
   load_cpu_package_group "${group}" packages
   run_workspace_dependency_bootstrap "cpu-${group}"
+  # Each isolated lane must resolve tracked standalone locks before offline fixtures.
+  run_standalone_lockfiles
   ensure_production_cargo_fe2o3_driver "cpu-${group}" create-private
   for package in "${packages[@]}"; do
     cargo_args+=(-p "${package}")

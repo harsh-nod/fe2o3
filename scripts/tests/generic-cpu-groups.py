@@ -62,6 +62,10 @@ load_example_packages() {
   esac
 }
 show_cpu_roster() { record roster "${CPU_TEST_PACKAGES[@]}"; }
+repeat_package_group() {
+  run_cpu_package_group "$1"
+  run_cpu_package_group "$1"
+}
 "$@"
 '''
 
@@ -113,7 +117,8 @@ class CpuGroupTests(unittest.TestCase):
     def semantics(self, rows):
         result = []
         for row in rows:
-            if row[0].endswith("-workspace-dependencies") or row[0].startswith("driver-"):
+            if (row[0].endswith("-workspace-dependencies") or row[0].startswith("driver-")
+                    or row[0] == "standalone-lockfiles"):
                 continue
             if row[0] == "cpu-tests" or row[0] in {f"cpu-{group}-tests" for group in CPU_GROUPS}:
                 result.extend(("default-package", package) for package in self.package_command(row))
@@ -158,17 +163,33 @@ class CpuGroupTests(unittest.TestCase):
                     f"cpu-{group}-workspace-dependencies",
                     "cargo", "fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml"),
                 ))
-                self.assertEqual(rows[1], ("driver-bootstrap", f"cpu-{group}", "create-private"))
+                self.assertEqual(rows[1], (
+                    "standalone-lockfiles", "bash", str(ROOT / "scripts/check-standalone-lockfiles.sh"),
+                ))
+                self.assertEqual(rows[2], ("driver-bootstrap", f"cpu-{group}", "create-private"))
                 self.assertEqual(rows[-1][0], f"cpu-{group}-tests")
                 self.assertEqual(self.package_command(rows[-1]), expected[group])
-                self.assertEqual(len(rows), 4 if group == "pliron" else 3)
+                self.assertEqual(len(rows), 5 if group == "pliron" else 4)
                 if group == "pliron":
-                    self.assertEqual(rows[2], (
+                    self.assertEqual(rows[3], (
                         "fe2o3-pliron-default-api-ui", "cargo", "test", "--locked",
                         "-p", "fe2o3-pliron", "--no-default-features",
                         "--test", "middle_end_evidence_ui", "default_api_cannot_self_authorize",
                         "--", "--exact",
                     ))
+
+    def test_standalone_preflight_is_reused_only_after_successful_completion(self):
+        for group in PACKAGE_GROUPS:
+            with self.subTest(group=group):
+                baseline = self.successful("run_cpu_package_group", group)
+                rows = self.successful("repeat_package_group", group)
+                self.assertEqual(rows, baseline + [
+                    row for row in baseline if row[0] != "standalone-lockfiles"
+                ])
+                result, failed = self.invoke("repeat_package_group", group,
+                                             failure="standalone-lockfiles")
+                self.assertEqual(result.returncode, 29, result.stderr.decode())
+                self.assertEqual(failed, baseline[:2])
 
     def test_every_lane_stops_at_each_failed_stage_including_prefetch_and_driver(self):
         for group in CPU_GROUPS:
@@ -257,6 +278,19 @@ class CpuGroupTests(unittest.TestCase):
                 self.assertEqual(result.returncode == 0, statuses == ("success", "success"))
 
 
+def standalone_metadata_commands():
+    inventory = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--", "*/Cargo.lock"],
+        capture_output=True, check=True, timeout=10,
+    ).stdout
+    locks = sorted(Path(path.decode()) for path in inventory.split(b"\0") if path)
+    return [
+        ["metadata", "--locked", "--format-version", "1", "--manifest-path",
+         str(ROOT / lock.with_name("Cargo.toml"))]
+        for lock in locks
+    ]
+
+
 COLD_HARNESS = r'''
 set -Eeuo pipefail
 source "$1"
@@ -324,13 +358,21 @@ command = arguments[0]
 if command == "fetch":
     sys.exit(int(os.environ.get("FETCH_STATUS", "0")))
 if command == "metadata":
+    if "--manifest-path" in arguments:
+        manifest = arguments[arguments.index("--manifest-path") + 1]
+        if manifest == os.environ.get("STANDALONE_FAIL_MANIFEST"):
+            sys.exit(47)
+        print("{}")
+        sys.exit(0)
     if os.environ.get("INVALID_METADATA"):
         print("not JSON")
         sys.exit(0)
     target = os.environ["CARGO_TARGET_DIR"]
     if os.environ.get("METADATA_TARGET"):
         target = os.environ["METADATA_TARGET"]
-    if os.environ.get("METADATA_DRIFT") and any(row[0] == "metadata" for row in prior):
+    if os.environ.get("METADATA_DRIFT") and any(
+        row[0] == "metadata" and "--manifest-path" not in row for row in prior
+    ):
         target += "/substituted"
     root = Path(os.environ["COLD_REPO"])
     print(json.dumps({
@@ -425,6 +467,25 @@ class ColdTargetBootstrapTests(unittest.TestCase):
                 check=False, timeout=30,
             )
             observed = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+            standalone = [
+                row for row in observed if row[0] == "metadata" and "--manifest-path" in row
+            ]
+            expected_standalone = []
+            if entry == "group" and int(overrides.get("FETCH_STATUS", "0")) == 0:
+                expected_standalone = standalone_metadata_commands()
+                failed_manifest = overrides.get("STANDALONE_FAIL_MANIFEST")
+                if failed_manifest:
+                    stop = next(index for index, row in enumerate(expected_standalone)
+                                if row[-1] == failed_manifest)
+                    expected_standalone = expected_standalone[:stop + 1]
+            self.assertEqual(standalone, expected_standalone)
+            if standalone:
+                self.assertEqual(observed[0][0], "fetch")
+                self.assertEqual(observed[1:1 + len(standalone)], standalone)
+            # Check the full prerequisite above, then retain the existing custody trace.
+            observed = [
+                row for row in observed if not (row[0] == "metadata" and "--manifest-path" in row)
+            ]
             target_mode = stat.S_IMODE(target.lstat().st_mode) if target.exists() or target.is_symlink() else None
             sealed_modes = [
                 (int(parent, 8), int(binary, 8))
@@ -461,6 +522,49 @@ class ColdTargetBootstrapTests(unittest.TestCase):
                     "--message-format=json-render-diagnostics",
                 ])
                 self.assertIn("sealed:", result.stdout)
+
+    def test_real_standalone_preflight_covers_declared_macro_and_device_fixture_locks(self):
+        commands = standalone_metadata_commands()
+        self.assertTrue(commands)
+        manifests = [Path(row[-1]) for row in commands]
+        self.assertEqual(len(manifests), len(set(manifests)))
+        required = [
+            "crates/fe2o3-device/tests/fixtures/complete-body-packing-consumer/Cargo.toml",
+            "crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.toml",
+            "crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.toml",
+            "crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.toml",
+            "crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.toml",
+        ]
+        for relative in required:
+            self.assertIn(ROOT / relative, manifests)
+        snapshot = {
+            path: path.read_bytes()
+            for manifest in manifests for path in (manifest, manifest.with_name("Cargo.lock"))
+        }
+        result, calls, mode, sealed = self.invoke("foundation")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stage:standalone-lockfiles", result.stdout)
+        self.assertIn("build", [row[0] for row in calls])
+        self.assertEqual((mode, sealed), (0o700, [(0o500, 0o500)]))
+        self.assertEqual({path: path.read_bytes() for path in snapshot}, snapshot)
+
+    def test_real_standalone_failure_stops_every_group_before_target_driver_or_tests(self):
+        commands = standalone_metadata_commands()
+        failed_manifests = (
+            commands[0][-1],
+            str(ROOT / "crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.toml"),
+            commands[-1][-1],
+        )
+        for group in PACKAGE_GROUPS:
+            for manifest in failed_manifests:
+                with self.subTest(group=group, manifest=manifest):
+                    result, calls, mode, sealed = self.invoke(
+                        group, STANDALONE_FAIL_MANIFEST=manifest)
+                    self.assertEqual(result.returncode, 47, result.stderr)
+                    self.assertEqual([row[0] for row in calls], ["fetch"])
+                    self.assertEqual((mode, sealed), (None, []))
+                    self.assertNotIn(f"stage:cpu-{group}-cargo-fe2o3-bootstrap", result.stdout)
+                    self.assertNotIn(f"stage:cpu-{group}-tests", result.stdout)
 
     def test_existing_private_target_and_legacy_existing_only_policy(self):
         result, _, mode, sealed = self.invoke(shape="private")
