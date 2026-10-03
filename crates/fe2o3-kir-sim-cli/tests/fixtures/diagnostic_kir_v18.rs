@@ -97,6 +97,52 @@ fn refresh_capabilities(module: &mut Module) {
     module.required_capabilities = capabilities;
 }
 
+pub fn scalar_storage_module() -> Module {
+    let mut raw = module();
+    let block = &mut raw.functions[0].body.as_mut().unwrap().blocks[0];
+    let mut store = block.operations.pop().unwrap();
+    let OperationKind::Store { value, .. } = &mut store.kind else {
+        unreachable!()
+    };
+    *value = ValueId(8);
+    block.operations.extend([
+        Operation::effect_free(
+            ValueDef::new(
+                ValueId(7),
+                Type::pointer(
+                    Type::StorageObject(StorageLayoutIdV1(0)),
+                    AddressSpace::Private,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::Alloca {
+                element: Type::StorageObject(StorageLayoutIdV1(0)),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 4,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Storage(StorageOperationV1::WriteValue {
+                address: ValueId(7),
+                value: ValueId(5),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            }),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(8), Type::Scalar(ScalarType::U32)),
+            OperationKind::Storage(StorageOperationV1::ReadValue {
+                address: ValueId(7),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            }),
+        ),
+        store,
+    ]);
+    refresh_capabilities(&mut raw);
+    raw
+}
+
 pub fn storage_module(with_operation: bool) -> Module {
     let mut raw = module();
     let mut block = BasicBlock::new(BlockId(0));
@@ -104,13 +150,13 @@ pub fn storage_module(with_operation: bool) -> Module {
         ValueDef::new(
             ValueId(0),
             Type::pointer(
-                Type::StorageObject(StorageLayoutIdV1(0)),
+                Type::StorageObject(StorageLayoutIdV1(1)),
                 AddressSpace::Private,
                 AccessMode::ReadWrite,
             ),
         ),
         OperationKind::Alloca {
-            element: Type::StorageObject(StorageLayoutIdV1(0)),
+            element: Type::StorageObject(StorageLayoutIdV1(1)),
             count: None,
             address_space: AddressSpace::Private,
             alignment: 4,
@@ -122,12 +168,18 @@ pub fn storage_module(with_operation: bool) -> Module {
                 ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
                 OperationKind::Constant(Constant::U32(37)),
             ),
-            Operation::new(
-                vec![],
-                OperationKind::Storage(StorageOperationV1::WriteValue {
-                    address: ValueId(0),
-                    value: ValueId(1),
-                    access: MemoryAccess::new(AddressSpace::Private, 4),
+            Operation::effect_free(
+                ValueDef::new(
+                    ValueId(2),
+                    Type::pointer(
+                        Type::StorageObject(StorageLayoutIdV1(0)),
+                        AddressSpace::Private,
+                        AccessMode::ReadWrite,
+                    ),
+                ),
+                OperationKind::Storage(StorageOperationV1::Project {
+                    base: ValueId(0),
+                    step: StorageProjectionV1::Field(0),
                 }),
             ),
         ]);

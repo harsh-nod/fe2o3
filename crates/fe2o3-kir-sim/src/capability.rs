@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_096_673;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_096_789;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -629,7 +629,11 @@ fn top_level_capability(
     };
     let unsupported = |reason| SimulationCapabilityDispositionV1::Unsupported { reason };
     if operation == Surface::Storage {
-        return unsupported(Reason::InertStorage);
+        return if kir_wire_version == SimulationKirWireVersionV1::V18 {
+            owned(Owner::TypedMemory, &[Reason::InertStorage])
+        } else {
+            unsupported(Reason::InertStorage)
+        };
     }
     if kir_wire_version == SimulationKirWireVersionV1::V22 {
         return match (profile, operation) {
@@ -1020,7 +1024,10 @@ mod storage_compatibility_tests {
             SimulationUnsupportedReasonCodeV1::InertStorage
         );
         for profile in SimulationCapabilityProfileV1::ALL {
-            for version in SimulationKirWireVersionV1::ALL {
+            for version in SimulationKirWireVersionV1::ALL
+                .into_iter()
+                .filter(|version| *version != SimulationKirWireVersionV1::V18)
+            {
                 assert_eq!(
                     top_level_capability(SimulationOperationSurfaceV1::Storage, profile, version),
                     SimulationCapabilityDispositionV1::Unsupported {

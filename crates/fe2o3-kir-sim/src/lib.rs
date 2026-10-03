@@ -42,6 +42,7 @@ mod reduce;
 mod resident;
 mod schedule;
 mod soft_float;
+mod storage_scalar_v18;
 
 pub use capability::{
     POINTER_CAPABILITY_ROWS_V1, SCALAR_CAPABILITY_ROWS_V1,

@@ -514,7 +514,7 @@ fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
 }
 
 #[test]
-fn v18_rows_preserve_existing_semantics_and_explicit_storage_refusals() {
+fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
     let matrix = semantic_capability_matrix_v1();
     assert_eq!(matrix.top_level_rows.len(), 2_352);
     assert_eq!(matrix.pointer_rows.len(), 48);
@@ -537,19 +537,23 @@ fn v18_rows_preserve_existing_semantics_and_explicit_storage_refusals() {
             .unwrap();
         let mut projected = row.clone();
         projected.kir_wire_version = SimulationKirWireVersionV1::V12;
+        if row.operation == SimulationOperationSurfaceV1::Storage {
+            assert_eq!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Owned {
+                    owner: fe2o3_kir_sim::SimulationSemanticOwnerV1::TypedMemory,
+                    typed_rejections: &[SimulationUnsupportedReasonCodeV1::InertStorage],
+                }
+            );
+            projected.capability = SimulationCapabilityDispositionV1::Unsupported {
+                reason: SimulationUnsupportedReasonCodeV1::InertStorage,
+            };
+            storage += 1;
+        }
         assert_eq!(
             serde_json::to_vec(&projected).unwrap(),
             serde_json::to_vec(previous).unwrap()
         );
-        if row.operation == SimulationOperationSurfaceV1::Storage {
-            assert!(matches!(
-                row.capability,
-                SimulationCapabilityDispositionV1::Unsupported {
-                    reason: SimulationUnsupportedReasonCodeV1::InertStorage
-                }
-            ));
-            storage += 1;
-        }
         added_bytes += serde_json::to_vec(row).unwrap().len() + 1;
         rows += 1;
     }
@@ -579,7 +583,7 @@ fn v18_rows_preserve_existing_semantics_and_explicit_storage_refusals() {
         pointers += 1;
     }
     assert_eq!(pointers, 4);
-    assert_eq!(added_bytes, 35_546);
+    assert_eq!(added_bytes, 35_662); // Four storage rows each add 29 JSON bytes.
     assert_eq!(
         SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
         5_061_127 + added_bytes

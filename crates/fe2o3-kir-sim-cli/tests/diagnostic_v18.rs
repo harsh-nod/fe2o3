@@ -62,6 +62,45 @@ fn canonical_v18_binary_executes_generic_memory_and_preserves_canaries() {
     }
 }
 #[test]
+fn canonical_v18_binary_executes_private_scalar_storage_through_existing_pipeline() {
+    for value in [37, u32::MAX] {
+        let files = fixture::Files::new(
+            &fixture::bytes(&fixture::scalar_storage_module()),
+            &fixture::request(value),
+        );
+        let output = command(&files).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["simulated"], true);
+        assert_eq!(result["counts"]["invocations_executed"], 64);
+        for flag in [
+            "hardware_observed",
+            "hardware_validation",
+            "performance_prediction",
+        ] {
+            assert_eq!(result[flag], false);
+        }
+        let expected = fixture::output(value)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            result["arguments"][0]["value"]["bytes"],
+            format!("0x{expected}")
+        );
+        assert_eq!(
+            result["arguments"][0]["value"]["initialized"],
+            format!("0x{}00", "ff".repeat(32))
+        );
+    }
+}
+
+#[test]
 fn forbidden_schedule_and_wrong_version_leave_output_unpublished() {
     let files = fixture::Files::new(&fixture::bytes(&fixture::module()), &fixture::request(37));
     let output = files.path("output.json");
@@ -93,7 +132,7 @@ fn forbidden_schedule_and_wrong_version_leave_output_unpublished() {
     assert!(!output.exists());
 }
 #[test]
-fn storage_execution_is_rejected_instead_of_discarding_layouts() {
+fn aggregate_storage_is_rejected_instead_of_discarding_layouts() {
     let files = fixture::Files::new(
         &fixture::bytes(&fixture::storage_module(true)),
         &fixture::storage_request(),

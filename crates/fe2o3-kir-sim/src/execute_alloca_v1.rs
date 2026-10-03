@@ -24,11 +24,18 @@ pub(super) fn execute(
             ),
         ));
     };
-    let Type::Scalar(element) = element else {
-        return Err(engine.at(
-            site,
-            SimulationExecutionErrorKindV1::InternalInvariant("preflighted scalar allocation"),
-        ));
+    let (element, layout) = match element {
+        Type::Scalar(element) => (*element, None),
+        _ => crate::storage_scalar_v18::scalar_layout(engine.module, element, engine.target)
+            .map(|(layout, element)| (element, Some(layout)))
+            .ok_or_else(|| {
+                engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "preflighted scalar storage allocation",
+                    ),
+                )
+            })?,
     };
     if *address_space != AddressSpace::Private {
         return Err(engine.at(
@@ -43,7 +50,7 @@ pub(super) fn execute(
         }
         None => 1,
     };
-    let element_bytes = engine.target.scalar_bytes(*element).ok_or_else(|| {
+    let element_bytes = engine.target.scalar_bytes(element).ok_or_else(|| {
         engine.at(
             site,
             SimulationExecutionErrorKindV1::InternalInvariant("preflighted allocation element"),
@@ -96,14 +103,18 @@ pub(super) fn execute(
         },
         reserved,
     )?;
-    Ok(SmallResults::One(RuntimeValue::Pointer(PointerValue {
+    let pointer = PointerValue {
         allocation: id,
         byte_offset: 0,
-        element: *element,
+        element,
         address_space: AddressSpace::Private,
         access: AccessMode::ReadWrite,
         lower_bound: 0,
         upper_bound: bytes,
         abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
-    })))
+    };
+    Ok(SmallResults::One(match layout {
+        Some(layout) => RuntimeValue::StoragePointer(StoragePointerValueV18 { layout, pointer }),
+        None => RuntimeValue::Pointer(pointer),
+    }))
 }

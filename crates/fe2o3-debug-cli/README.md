@@ -763,8 +763,16 @@ allocations retain their existing separate bounds; no process-wide accounting
 claim is made. Raw V18 carries no authenticated source-variable mapping,
 persisted replay or GPU authority. Source maps, runtime-observation mode and
 Wave32 are rejected before input IO; diagnosis V2 reports unavailable rather
-than presenting V18 as a legacy source-bound graph. Executable storage operations
-remain explicit preflight refusals. This adds V18 diagnostic admission error
-codes but does not change debugger protocol or KIR formats.
-Generic pointer/slice casts remain unsupported. Raw canonical bytes do not
+than presenting V18 as a legacy source-bound graph.
+
+Private scalar storage allocation/read/write executes with exact target-sized
+layout rows and the existing memory and lifetime checks. Stepping and memory
+events/checkpoint snapshots remain available. A stack containing a tagged
+storage pointer is explicitly `NotCaptured`: the legacy debugger value format
+cannot represent its row identity, so it is never converted into an ordinary
+pointer or silently omitted. Aggregate/pointer storage, projections, copies,
+discriminants, storage-bearing function parameters/results and Generic
+pointer/slice casts remain unsupported.
+
+This adds no debugger protocol or KIR format change. Raw canonical bytes do not
 authenticate an original Rust source owner or a compiler continuation.

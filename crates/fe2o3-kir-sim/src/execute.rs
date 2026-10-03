@@ -64,6 +64,8 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 mod alloca_v1;
 #[path = "execute_matrix_bf16_exact_v1.rs"]
 mod matrix_bf16_exact_v1;
+#[path = "execute_storage_scalar_v18.rs"]
+mod storage_scalar_v18;
 pub(crate) fn matrix_bf16_exact_resident_bytes() -> Option<usize> {
     matrix_bf16_exact_v1::resident_bytes()
 }
@@ -1332,6 +1334,7 @@ impl AdmittedSimulationModuleV1 {
 enum RuntimeValue {
     Scalar(ScalarBitsV1),
     Pointer(PointerValue),
+    StoragePointer(StoragePointerValueV18),
     Slice(SliceValue),
     PhysicalEntry(physical_entry_state_v20::Value),
 }
@@ -1346,6 +1349,12 @@ struct PointerValue {
     lower_bound: usize,
     upper_bound: usize,
     abi_argument_ordinal: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StoragePointerValueV18 {
+    layout: fe2o3_kernel_ir::StorageLayoutIdV1,
+    pointer: PointerValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1955,7 +1964,7 @@ enum CallTarget {
 
 fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
     Some(match value {
-        RuntimeValue::PhysicalEntry(_) => return None,
+        RuntimeValue::PhysicalEntry(_) | RuntimeValue::StoragePointer(_) => return None,
         RuntimeValue::Scalar(value) => SimulationDebugValueV1::Scalar(*value),
         RuntimeValue::Pointer(value) => SimulationDebugValueV1::Pointer {
             allocation: value.allocation,
@@ -2030,8 +2039,8 @@ fn capture_debug_stack(
         }
         for (value, observed) in ordered {
             let Some(observed) = debug_value(observed) else {
-                // Defensive fence; physical capture is refused before execution.
-                // Never manufacture a scalar or silently omit a symbolic binding.
+                // Tagged storage and unsupported symbolic bindings have no legacy DTO.
+                // Never erase their type identity or silently omit a binding.
                 return SimulationDebugCollectionV1::Unavailable {
                     reason: SimulationDebugUnavailableReasonV1::NotCaptured,
                     required: u64::try_from(value_count).unwrap_or(u64::MAX),
@@ -6821,8 +6830,8 @@ fn execute_non_assembly_operation(
         OperationKind::MemoryIntrinsic(intrinsic) => {
             execute_memory_intrinsic(engine, values, intrinsic, &site)
         }
-        OperationKind::Storage(_)
-        | OperationKind::Execution(_)
+        OperationKind::Storage(_) => storage_scalar_v18::execute(engine, values, operation, site),
+        OperationKind::Execution(_)
         | OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
@@ -8063,6 +8072,11 @@ fn runtime_type(value: &RuntimeValue) -> Type {
             Type::Scalar(pointer.element),
             pointer.address_space,
             pointer.access,
+        ),
+        RuntimeValue::StoragePointer(storage) => Type::pointer(
+            Type::StorageObject(storage.layout),
+            storage.pointer.address_space,
+            storage.pointer.access,
         ),
         RuntimeValue::Slice(slice) => Type::slice(
             Type::Scalar(slice.element),

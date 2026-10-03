@@ -30,14 +30,24 @@ original owner's reservation live, immediately reserve the returned
 dropping the view. Failed admission restores the incoming storage floor without
 resetting cumulative work, peak storage or first-denial history.
 
-Ordinary supported scalar instructions can execute with inert layout metadata;
-storage operations and storage-object types still produce explicit
-`InertStorage` preflight refusals. Existing simulation limits remain unchanged.
-The capability matrix reports V18 with the existing supported scalar and
-non-Generic memory operations; executable storage and Generic pointer/slice
-casts remain unsupported. Raw V18 diagnostic CLI imports are separate from
-original-source custody. Neither route grants source or GPU execution authority
-or adds a bundle or persisted-schedule format.
+V18 additionally executes private scalar storage cells with nonvolatile access: `Alloca` over an exact
+`StorageObject` scalar row followed by `Storage::WriteValue` and
+`Storage::ReadValue`. The row's byte size must match the selected target,
+including 32-bit versus 64-bit Index. Values retain their row identity; the
+existing finite-width, bounds, alignment, initialization, memory-event and
+allocation-lifetime checks apply. Existing simulation limits remain unchanged.
+
+Aggregate/pointer storage, projections, object copies, discriminants, storage-bearing
+function parameters/results and Generic pointer/slice casts remain unsupported. Storage
+pointers are not ordinary scalar pointers. Debug capture executes this subset
+and retains memory events/checkpoints, but reports stacks containing tagged
+storage pointers as `NotCaptured`; it never erases their type into the legacy
+pointer DTO. The capability matrix names typed-memory ownership with explicit
+remaining `InertStorage` refusals.
+
+Raw V18 diagnostic CLI imports are separate from original-source custody.
+Neither route grants source or GPU execution authority or adds a bundle or
+persisted-schedule format.
 
 `admit_v20` borrows exact verified V20 custody for the separate
 `gfx942:xnack-` / Wave64 / `physical_entry_u32_out_v1` profile.

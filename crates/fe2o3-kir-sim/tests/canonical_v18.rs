@@ -11,6 +11,8 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_sim::*;
 #[path = "canonical_v18/limits.rs"]
 mod limits;
+#[path = "canonical_v18/scalar_storage.rs"]
+mod scalar_storage;
 
 const BOUND: usize = 16_000_000;
 const FLOOR: usize = 73;
@@ -358,7 +360,7 @@ fn table_only_change_is_a_different_replay_context() {
 }
 
 #[test]
-fn storage_object_and_operations_remain_explicitly_unsupported() {
+fn aggregate_storage_and_projection_remain_explicitly_unsupported() {
     for with_operations in [false, true] {
         let mut raw = module();
         let mut block = BasicBlock::new(BlockId(0));
@@ -366,13 +368,13 @@ fn storage_object_and_operations_remain_explicitly_unsupported() {
             ValueDef::new(
                 ValueId(0),
                 Type::pointer(
-                    Type::StorageObject(StorageLayoutIdV1(0)),
+                    Type::StorageObject(StorageLayoutIdV1(1)),
                     AddressSpace::Private,
                     AccessMode::ReadWrite,
                 ),
             ),
             OperationKind::Alloca {
-                element: Type::StorageObject(StorageLayoutIdV1(0)),
+                element: Type::StorageObject(StorageLayoutIdV1(1)),
                 count: None,
                 address_space: AddressSpace::Private,
                 alignment: 4,
@@ -384,12 +386,18 @@ fn storage_object_and_operations_remain_explicitly_unsupported() {
                     ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
                     OperationKind::Constant(Constant::U32(37)),
                 ),
-                Operation::new(
-                    vec![],
-                    OperationKind::Storage(StorageOperationV1::WriteValue {
-                        address: ValueId(0),
-                        value: ValueId(1),
-                        access: MemoryAccess::new(AddressSpace::Private, 4),
+                Operation::effect_free(
+                    ValueDef::new(
+                        ValueId(2),
+                        Type::pointer(
+                            Type::StorageObject(StorageLayoutIdV1(0)),
+                            AddressSpace::Private,
+                            AccessMode::ReadWrite,
+                        ),
+                    ),
+                    OperationKind::Storage(StorageOperationV1::Project {
+                        base: ValueId(0),
+                        step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
                     }),
                 ),
             ]);

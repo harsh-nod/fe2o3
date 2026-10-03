@@ -577,6 +577,7 @@ pub(crate) fn preflight(
             target,
             limits,
             OrderedProfiles {
+                storage_scalar: wire_version == fe2o3_kernel_ir::KERNEL_IR_VERSION_V18,
                 region: crate::ordered_region_v16::launch_profile_matches(
                     module, kernel, request, target,
                 ),
@@ -1254,6 +1255,7 @@ fn check_limit(
 
 #[derive(Clone, Copy)]
 struct OrderedProfiles {
+    storage_scalar: bool,
     region: bool,
     program: bool,
     complete_body: bool,
@@ -1358,6 +1360,7 @@ fn scan_reachable(
                     allow_dynamic_workgroup_memory,
                     target,
                     OrderedProfiles {
+                        storage_scalar: launch_profiles.storage_scalar,
                         region: ordered_region_profile,
                         program: ordered_program_profile,
                         complete_body: complete_body_profile,
@@ -1801,13 +1804,29 @@ fn scan_operation(
         };
     }
     for result in &operation.results {
+        if ordered_profiles.storage_scalar
+            && crate::storage_scalar_v18::private_pointer(module, &result.ty, target).is_some()
+        {
+            continue;
+        }
         if let Some(feature) = unsupported_type(&result.ty, target) {
             reject!(feature);
         }
     }
     match &operation.kind {
         OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
-        OperationKind::Storage(_) => reject!(UnsupportedFeatureV1::InertStorage),
+        OperationKind::Storage(storage) => {
+            if !ordered_profiles.storage_scalar
+                || !crate::storage_scalar_v18::supports_operation(
+                    module,
+                    storage,
+                    value_types,
+                    target,
+                )
+            {
+                reject!(UnsupportedFeatureV1::InertStorage);
+            }
+        }
         OperationKind::Constant(constant) => {
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
             {
@@ -1831,6 +1850,7 @@ fn scan_operation(
         } => match (kind, value_types.get(operand), to) {
             (CastKind::RestrictPointerAccess, Some(Type::Pointer(from)), Type::Pointer(to))
                 if from.pointee == to.pointee
+                    && !matches!(from.pointee.as_ref(), Type::StorageObject(_))
                     && from.address_space == to.address_space
                     && from.access == AccessMode::ReadWrite
                     && to.access == AccessMode::ReadOnly => {}
@@ -1929,7 +1949,10 @@ fn scan_operation(
                     *address_space,
                 ));
             }
-            if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
+            if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
+                && !(ordered_profiles.storage_scalar
+                    && crate::storage_scalar_v18::scalar_layout(module, element, target).is_some())
+            {
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
@@ -3243,6 +3266,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3303,6 +3327,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3368,6 +3393,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3416,6 +3442,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,

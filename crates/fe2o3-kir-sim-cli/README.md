@@ -378,10 +378,12 @@ include source lane and tile width. These are logical KIR diagnostics, not GPU
 `fe2o3-kir-sim --diagnostic-kir-v18 kernel-v18.kir --request request.json`
 uses the existing generic CPU engine after exact, budgeted canonical V18
 admission. The original layout table, function roles, version, digest and byte
-length are preserved. Inert layout metadata is accepted; executable storage
-operations and storage-object types still produce explicit preflight refusals.
-Generic-address-space pointer/slice casts also remain unsupported; preserving
-their inert layout records does not make those operations executable.
+length are preserved. The existing engine also executes private scalar
+`StorageObject` allocation/read/write with exact target-sized layout rows and
+its normal initialization, bounds, alignment and lifetime checks. Aggregate and
+pointer storage, projections, copies, discriminants, storage-bearing function parameters/results
+and Generic-address-space pointer/slice casts remain explicit refusals.
+Preserving their inert layout records does not make those operations executable.
 
 This opt-in diagnostic path grants no source, compiler, proof, launch or hardware
 authority. It does not predict GPU performance. Persisted schedule recording,
