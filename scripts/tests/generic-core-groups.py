@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +121,132 @@ class GenericCoreGroupTests(unittest.TestCase):
                 result = self.invoke("main", "generic-core", failure=failed)
                 self.assertEqual(result.returncode, 29, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), ALL[:ALL.index(failed) + 1])
+
+
+
+
+BOOTSTRAP_HARNESS = r'''
+set -Eeuo pipefail
+source "$1"
+run_step() {
+  printf 'stage:%s\n' "$1"
+  shift
+  "$@"
+}
+run_rustc_codegen_lib_tests
+'''
+TOOL_STUB = r'''#!{python}
+import json
+import os
+import sys
+from pathlib import Path
+
+name = Path(sys.argv[0]).name
+with Path(os.environ["BOOTSTRAP_CALLS"]).open("a") as output:
+    output.write(json.dumps({{"command": name, "arguments": sys.argv[1:]}}) + "\n")
+if name == "rustc":
+    status = int(os.environ.get("BOOTSTRAP_RUSTC_STATUS", "0"))
+    if status == 0:
+        print(os.environ["BOOTSTRAP_SYSROOT"])
+    sys.exit(status)
+if sys.argv[1:2] == ["fetch"]:
+    sys.exit(int(os.environ.get("BOOTSTRAP_FETCH_STATUS", "0")))
+if sys.argv[1:2] == ["test"]:
+    sys.exit(0)
+sys.exit(97)
+'''
+
+
+class RustcSysrootBootstrapTests(unittest.TestCase):
+    def invoke(self, *, rustc_status: int = 0, fetch_status: int = 0,
+               missing: str = "", malformed: str | None = None):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-sysroot-bootstrap-") as directory:
+            root = Path(directory)
+            selected = root / "selected toolchain"
+            library = selected / "lib/rustlib/src/rust/library"
+            library.mkdir(parents=True)
+            for filename in ("Cargo.toml", "Cargo.lock"):
+                if filename != missing:
+                    (library / filename).write_text("# fixture\n")
+            binary = root / "bin"
+            binary.mkdir()
+            for tool in ("rustc", "cargo"):
+                path = binary / tool
+                path.write_text(TOOL_STUB.format(python=sys.executable))
+                path.chmod(0o700)
+            calls = root / "calls.jsonl"
+            environment = {
+                "PATH": f"{binary}:/usr/bin:/bin",
+                "HOME": os.environ["HOME"],
+                "CARGO_TARGET_DIR": str(root / "target"),
+                "CI_LOG_DIR": str(root / "logs"),
+                "BOOTSTRAP_CALLS": str(calls),
+                "BOOTSTRAP_SYSROOT": str(selected) if malformed is None else malformed,
+                "BOOTSTRAP_RUSTC_STATUS": str(rustc_status),
+                "BOOTSTRAP_FETCH_STATUS": str(fetch_status),
+            }
+            result = subprocess.run(
+                ["bash", "-c", BOOTSTRAP_HARNESS, "bash", str(CI_LOCAL)],
+                cwd=ROOT, env=environment, text=True, capture_output=True,
+                check=False, timeout=30,
+            )
+            observed = [json.loads(line) for line in calls.read_text().splitlines()]
+            return result, observed, str(library / "Cargo.toml")
+
+    def test_cold_auxiliary_fetches_selected_sysroot_before_all_three_harnesses(self) -> None:
+        result, calls, manifest = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "stage:rustc-codegen-sysroot-dependencies",
+            "stage:rustc-codegen-lib-tests",
+            "stage:rustc-codegen-extractor-bin-tests",
+            "stage:rustc-codegen-exporter-bin-tests",
+        ])
+        self.assertEqual(calls, [
+            {"command": "rustc", "arguments": ["--print", "sysroot"]},
+            {"command": "cargo", "arguments": [
+                "fetch", "--locked", "--manifest-path", manifest,
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3",
+                "--bin", "fe2o3-rustc-extract",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3",
+                "--bin", "fe2o3-export-sim",
+            ]},
+        ])
+
+    def test_sysroot_resolution_failure_stops_before_fetch_and_tests(self) -> None:
+        result, calls, _ = self.invoke(rustc_status=23)
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual(calls, [{"command": "rustc", "arguments": ["--print", "sysroot"]}])
+
+    def test_missing_or_malformed_sysroot_stops_before_fetch_and_tests(self) -> None:
+        for fault in [
+            {"missing": "Cargo.toml"}, {"missing": "Cargo.lock"},
+            {"malformed": ""}, {"malformed": "relative"},
+            {"malformed": "/first\n/second"}, {"malformed": "/first\r/second"},
+        ]:
+            with self.subTest(fault=fault):
+                result, calls, _ = self.invoke(**fault)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(calls, [
+                    {"command": "rustc", "arguments": ["--print", "sysroot"]},
+                ])
+
+    def test_sysroot_fetch_failure_stops_before_offline_consumers(self) -> None:
+        result, calls, manifest = self.invoke(fetch_status=29)
+        self.assertEqual(result.returncode, 29, result.stderr)
+        self.assertEqual(calls, [
+            {"command": "rustc", "arguments": ["--print", "sysroot"]},
+            {"command": "cargo", "arguments": [
+                "fetch", "--locked", "--manifest-path", manifest,
+            ]},
+        ])
 
 
 if __name__ == "__main__":

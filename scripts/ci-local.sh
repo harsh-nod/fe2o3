@@ -998,6 +998,10 @@ load_rustc_codegen_shard_targets() {
 }
 
 run_rustc_codegen_lib_tests() {
+  # Offline build-std tests resolve the selected toolchain's complete sysroot
+  # lockfile, which is not part of the ordinary workspace dependency closure.
+  run_step rustc-codegen-sysroot-dependencies \
+    bash "${SCRIPT_DIR}/fetch-rustc-sysroot.sh"
   # Do not combine this with integration targets: Cargo can emit a test rlib
   # and an unversioned backend dylib with different Rust symbol hashes.
   # Keep the aggregate rustc-private harness bounded like the isolated targets;
