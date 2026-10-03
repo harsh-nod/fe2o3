@@ -17,6 +17,7 @@ mod complete_body_v19;
 mod distinct_invocation_v1_tests;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
+pub(crate) use guarded_access_v1::origins::{structural_origins_until_v1, structural_origins_v1};
 mod ordered_composition_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
@@ -1396,126 +1397,7 @@ impl OriginSummary {
 fn compute_unique_block_parameter_origins(
     inputs: &BTreeMap<ValueId, Vec<ValueId>>,
 ) -> BTreeMap<ValueId, Option<ValueId>> {
-    let values = inputs.keys().copied().collect::<Vec<_>>();
-    let positions = values
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(position, value)| (value, position))
-        .collect::<BTreeMap<_, _>>();
-    let mut edges = vec![Vec::new(); values.len()];
-    let mut reverse_edges = vec![Vec::new(); values.len()];
-    let mut local_origins = vec![OriginSummary::Empty; values.len()];
-    let mut invalid = vec![false; values.len()];
-    for (value, incoming) in inputs {
-        let position = positions[value];
-        invalid[position] = incoming.is_empty();
-        for input in incoming {
-            if let Some(dependency) = positions.get(input).copied() {
-                edges[position].push(dependency);
-                reverse_edges[dependency].push(position);
-            } else {
-                local_origins[position].include(*input);
-            }
-        }
-        edges[position].sort_unstable();
-        edges[position].dedup();
-    }
-
-    let mut visited = vec![false; values.len()];
-    let mut postorder = Vec::with_capacity(values.len());
-    for start in 0..values.len() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut stack = vec![(start, 0usize)];
-        while let Some((node, next_edge)) = stack.pop() {
-            if let Some(dependency) = edges[node].get(next_edge).copied() {
-                stack.push((node, next_edge + 1));
-                if !visited[dependency] {
-                    visited[dependency] = true;
-                    stack.push((dependency, 0));
-                }
-            } else {
-                postorder.push(node);
-            }
-        }
-    }
-
-    let mut component_of = vec![usize::MAX; values.len()];
-    let mut component_count = 0usize;
-    for start in postorder.into_iter().rev() {
-        if component_of[start] != usize::MAX {
-            continue;
-        }
-        component_of[start] = component_count;
-        let mut stack = vec![start];
-        while let Some(node) = stack.pop() {
-            for dependent in &reverse_edges[node] {
-                if component_of[*dependent] == usize::MAX {
-                    component_of[*dependent] = component_count;
-                    stack.push(*dependent);
-                }
-            }
-        }
-        component_count += 1;
-    }
-
-    let mut dependencies = vec![BTreeSet::new(); component_count];
-    let mut dependents = vec![BTreeSet::new(); component_count];
-    let mut component_origins = vec![OriginSummary::Empty; component_count];
-    let mut component_invalid = vec![false; component_count];
-    for node in 0..values.len() {
-        let component = component_of[node];
-        component_invalid[component] |= invalid[node];
-        match local_origins[node] {
-            OriginSummary::One(origin) => component_origins[component].include(origin),
-            OriginSummary::Ambiguous => component_invalid[component] = true,
-            OriginSummary::Empty => {}
-        }
-        for dependency in &edges[node] {
-            let dependency = component_of[*dependency];
-            if component != dependency {
-                dependencies[component].insert(dependency);
-                dependents[dependency].insert(component);
-            }
-        }
-    }
-
-    let mut remaining_dependencies = dependencies.iter().map(BTreeSet::len).collect::<Vec<_>>();
-    let mut pending = remaining_dependencies
-        .iter()
-        .enumerate()
-        .filter_map(|(component, count)| (*count == 0).then_some(component))
-        .collect::<Vec<_>>();
-    let mut component_results = vec![None; component_count];
-    while let Some(component) = pending.pop() {
-        let mut summary = component_origins[component];
-        let mut failed = component_invalid[component];
-        for dependency in &dependencies[component] {
-            match component_results[*dependency] {
-                Some(origin) => summary.include(origin),
-                None => failed = true,
-            }
-        }
-        component_results[component] = match (failed, summary) {
-            (false, OriginSummary::One(origin)) => Some(origin),
-            _ => None,
-        };
-        for dependent in &dependents[component] {
-            remaining_dependencies[*dependent] -= 1;
-            if remaining_dependencies[*dependent] == 0 {
-                pending.push(*dependent);
-            }
-        }
-    }
-
-    values
-        .into_iter()
-        .enumerate()
-        .map(|(position, value)| (value, component_results[component_of[position]]))
-        .collect()
+    guarded_access_v1::origins::legacy(inputs)
 }
 
 #[derive(Clone, Copy)]
