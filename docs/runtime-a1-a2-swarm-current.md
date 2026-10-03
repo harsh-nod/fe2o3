@@ -403,10 +403,19 @@ The expedited practical multi-GPU priority order is:
    preconditions, including old-input aliasing, SCC and untouched-register
    framing. It passes 813 CPU tests, 30 doctests, both LLVM-MC compatibility
    checks and eight required logical mutants; 12 existing tests remain ignored.
-   The next machine-value task is bounded decoded MOV-prefix/ADD composition,
-   retaining explicit span-entry equalities. The current single-add obligation
-   records decoded coordinates and reaching definitions; it does not yet execute
-   or compose the instruction semantics.
+   The [MOV-composition checkpoint](evidence/dev-gfx942-mov-composition-2026-10-03/README.md)
+   now adds a closed MOV model and at most 63 MOVs followed by one ADD, with
+   shared origin/execution folds proven against the same recurrence. It passes
+   832 CPU tests, 30 doctests, ADD/MOV checks on both LLVM versions and 21 logical
+   mutants; 13 tests are explicitly ignored in ordinary CPU runs. Its separate
+   borrowed verifier API retains the original owners and explicit span-entry
+   equalities. This composes projected machine values, not application authority.
+   Next reuse compiler-owned source-occurrence and actual emitted-KIR capture
+   for the existing checked-add profile, then prove the source/SSA value
+   invariant. The reviewed local `origin/main` reference `40509db14` has those
+   captures, but its borrowed consistency facts remain inert. Preserve exact
+   canonical versions: current V4 inputs retain KIR8; the upstream authored
+   physical-copy profile uses KIR21 and is not a general register-allocation map.
    Physical reaching definitions and deterministic LLVM replay do not discharge
    unresolved entry-value equalities or prove final-machine execution. Existing
    compiler-owned SSA and physical-copy work must be reused without treating its

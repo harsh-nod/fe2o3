@@ -502,10 +502,11 @@ fn evidence(request: &Request) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=35).contains(mode));
+        .filter(|mode| (19..=36).contains(mode));
     let semantic_fixture = semantic_mode.is_some_and(|mode| {
         request.payload.len()
             == match mode {
+                36 => 12,
                 35 => 8,
                 34 => 20,
                 _ => 16,
@@ -568,10 +569,11 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=35).contains(mode));
+        .filter(|mode| (19..=36).contains(mode));
     let semantic_fixture = semantic_mode.is_some_and(|mode| {
         request.payload.len()
             == match mode {
+                36 => 12,
                 35 => 8,
                 34 => 20,
                 _ => 16,
@@ -584,7 +586,9 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
         push_u64(&mut output, 0);
         push_u32(
             &mut output,
-            if semantic_fixture && semantic_mode == Some(35) {
+            if semantic_fixture && semantic_mode == Some(36) {
+                3
+            } else if semantic_fixture && semantic_mode == Some(35) {
                 2
             } else if semantic_fixture && semantic_mode == Some(34) {
                 5
@@ -600,7 +604,9 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     push_u32(
         &mut output,
         request.entries.len() as u32
-            * if semantic_fixture && semantic_mode == Some(35) {
+            * if semantic_fixture && semantic_mode == Some(36) {
+                3
+            } else if semantic_fixture && semantic_mode == Some(35) {
                 2
             } else if semantic_fixture && semantic_mode == Some(34) {
                 5
@@ -611,10 +617,45 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
             },
     );
     for entry in &request.entries {
-        if semantic_fixture && semantic_mode == Some(35) {
+        if semantic_fixture && semantic_mode == Some(36) {
+            // Exact finite TEST-worker trace, not compiler or ISA authority.
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                0,
+                "S_MOV_B32_vi",
+                &request.payload[..4],
+                "SGPR5",
+                &["SGPR36"],
+            );
+            push_synthetic_s_add_u32(
+                &mut output,
+                &entry.symbol,
+                4,
+                "SGPR5",
+                &request.payload[4..8],
+            );
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                8,
+                "S_ENDPGM",
+                &request.payload[8..12],
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        } else if semantic_fixture && semantic_mode == Some(35) {
             // Synthetic TEST-worker mode, not LLVM extraction or production analyzer evidence.
             // The encoded first byte (SGPR35) selects this mode without an artificial prefix.
-            push_synthetic_s_add_u32(&mut output, &entry.symbol, &request.payload[..4]);
+            push_synthetic_s_add_u32(
+                &mut output,
+                &entry.symbol,
+                0,
+                "SGPR35",
+                &request.payload[..4],
+            );
             push_trace_instruction(
                 &mut output,
                 &entry.symbol,
@@ -833,16 +874,22 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     output
 }
 
-fn push_synthetic_s_add_u32(output: &mut Vec<u8>, symbol: &str, encoding: &[u8]) {
+fn push_synthetic_s_add_u32(
+    output: &mut Vec<u8>,
+    symbol: &str,
+    offset: u64,
+    source: &str,
+    encoding: &[u8],
+) {
     push_text(output, symbol);
-    push_u64(output, 0);
+    push_u64(output, offset);
     push_u32(output, 0);
     push_text(output, "S_ADD_U32_vi");
     push_u16(output, 4);
     output.extend_from_slice(encoding);
     push_u16(output, 1);
     push_u16(output, 3);
-    for register in ["SGPR0", "SGPR35"] {
+    for register in ["SGPR0", source] {
         output.push(1);
         push_u16(output, u16::MAX);
         push_text(output, register);

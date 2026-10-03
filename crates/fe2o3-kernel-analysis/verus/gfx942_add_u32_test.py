@@ -19,23 +19,18 @@ class AddProofControls(unittest.TestCase):
         self.proof = CHECK.ROOT / CHECK.PROOF
         self.summary = {"verus": copy.deepcopy(CHECK.VERIFIER), "verification-results": {
             "encountered-error": False, "encountered-vir-error": False, "success": True,
-            "errors": 0, "verified": 4, "is-verifying-entire-crate": True,
+            "errors": 0, "verified": 16, "is-verifying-entire-crate": True,
         }}
 
     def positive(self, status=0, stderr=""):
         return CHECK.classify(status, json.dumps(self.summary), stderr, self.proof)
 
-    def negative(self, focus=CHECK.FOCUS):
-        lines = self.proof.read_text().splitlines()
-        macro, path = ((CHECK.MACRO, CHECK.BODY) if focus == CHECK.FOCUS
-                       else (CHECK.STATE_MACRO, CHECK.EXECUTE))
-        first = next(i for i, line in enumerate(lines) if line.strip().startswith("fn " + focus + "("))
-        contract = next(i + 1 for i, line in enumerate(lines)
-                        if i > first and "result.value as int ==" in line)
-        call = next(i + 1 for i, line in enumerate(lines) if line.strip().startswith(macro + "!("))
-        body = CHECK.ROOT / path
-        definition = next(i + 1 for i, line in enumerate(body.read_text().splitlines())
-                          if line.startswith("macro_rules! " + macro + " {"))
+    def negative(self, focus=CHECK.FOCUS, invariant=None):
+        lines, first, call, end, macro, body, definition = CHECK.target_lines(self.proof, focus)
+        contract = next(i + 2 for i, line in enumerate(lines)
+                        if first <= i < call and line.strip() == "ensures")
+        if invariant is not None:
+            contract = next(i + 1 for i in range(call, end) if lines[i].strip() == invariant)
         diagnostic = {"level": "error", "message": "postcondition not satisfied", "spans": [
             {"file_name": str(self.proof), "line_start": contract, "is_primary": True},
             {"file_name": str(body), "expansion": {
@@ -46,14 +41,20 @@ class AddProofControls(unittest.TestCase):
         ]}
         self.summary["verification-results"] = {
             "encountered-error": True, "encountered-vir-error": False, "errors": 1,
-            "verified": 0, "is-verifying-entire-crate": False,
+            "verified": 2 if focus == CHECK.ORIGIN_FOCUS else 1 if focus == CHECK.PREFIX_FOCUS else 0,
+            "is-verifying-entire-crate": False,
         }
-        return [diagnostic, {"level": "error", "message": "aborting due to 1 previous error", "spans": []}]
+        rows = [diagnostic, {"level": "error", "message": "aborting due to 1 previous error", "spans": []}]
+        if invariant is not None:
+            diagnostic["message"] = "invariant not satisfied at end of loop body"
+            body_span = diagnostic["spans"].pop()
+            rows.append({"level": "note", "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function", "spans": [body_span]})
+        return rows
 
     def changed_sources(self, path, before, after):
         sources = CHECK.source_snapshot()
-        self.assertEqual(sources[str(path)].count(before.encode("ascii")), 1)
-        sources[str(path)] = sources[str(path)].replace(before.encode("ascii"), after.encode("ascii"))
+        self.assertGreaterEqual(sources[str(path)].count(before.encode("ascii")), 1)
+        sources[str(path)] = sources[str(path)].replace(before.encode("ascii"), after.encode("ascii"), 1)
         return sources
 
     def test_sources_and_eight_mutations_are_closed(self):
@@ -88,7 +89,7 @@ class AddProofControls(unittest.TestCase):
             CHECK.strict_json('{"x":NaN}')
 
     def test_negative_requires_contract_and_shared_body_diagnostics(self):
-        for focus in (CHECK.FOCUS, CHECK.STATE_FOCUS):
+        for focus in (CHECK.FOCUS, CHECK.STATE_FOCUS, CHECK.MOV_FOCUS):
             diagnostics = self.negative(focus)
             encode = lambda: "\n".join(json.dumps(row) for row in diagnostics)
             self.assertTrue(CHECK.classify(1, json.dumps(self.summary), encode(), self.proof, True, focus))
@@ -117,7 +118,7 @@ class AddProofControls(unittest.TestCase):
             self.assertFalse(CHECK.classify(1, json.dumps(self.summary), encode(), self.proof, True, other))
 
     def test_negative_rejects_timeout_translation_and_unrelated_errors(self):
-        for focus in (CHECK.FOCUS, CHECK.STATE_FOCUS):
+        for focus in (CHECK.FOCUS, CHECK.STATE_FOCUS, CHECK.MOV_FOCUS):
             diagnostics = self.negative(focus)
             encode = lambda: "\n".join(json.dumps(row) for row in diagnostics)
             for status in [0, 2, 124, -9]:
@@ -214,7 +215,8 @@ class AddProofControls(unittest.TestCase):
 
     def test_logical_mutants_pass_source_shape_but_require_solver_rejection(self):
         sources = CHECK.source_snapshot()
-        for path, generator in ((CHECK.BODY, CHECK.mutations), (CHECK.EXECUTE, CHECK.state_mutations)):
+        for path, generator in ((CHECK.BODY, CHECK.mutations), (CHECK.EXECUTE, CHECK.state_mutations),
+                                (CHECK.MOV_BODY, CHECK.mov_mutations)):
             original = sources[str(path)].decode("ascii")
             for name, mutant in generator(original).items():
                 mutated = dict(sources)
@@ -225,6 +227,90 @@ class AddProofControls(unittest.TestCase):
                 generator("")
             with self.assertRaises(ValueError):
                 generator(original + original)
+
+    def test_mov_fields_getters_and_actual_execute_are_bound(self):
+        for before, after in (
+            ("destination: u8,", "destination: u16,"),
+            ("source: Gfx942U32SourceV1,", "source: u32,"),
+            ("bytes: [u8; 8],", "bytes: [u8; 4],"),
+            ("byte_len: usize,", "byte_len: u8,"),
+            ("        self.source\n", "        Gfx942U32SourceV1::Constant(0)\n"),
+            ("        self.destination\n", "        0\n"),
+            ("gfx942_s_mov_b32_execute_body_v1!(self, state)", "0"),
+        ):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                CHECK.validate_sources(self.changed_sources(CHECK.MOV_RUST, before, after))
+        with self.assertRaises(ValueError):
+            CHECK.validate_sources(self.changed_sources(CHECK.RUST, "        self.sources\n", "        [self.sources[0]; 2]\n"))
+
+    def test_prefix_schema_bound_and_dynamic_origin_query(self):
+        for before, after in (
+            ("usize = 64;", "usize = 65;"),
+            ("EntrySgpr(u8),", "EntrySgpr(u16),"),
+            ("moves: Vec<Gfx942SMovB32V1>,", "moves: Vec<Gfx942SAddU32V1>,"),
+            ("add: Gfx942SAddU32V1,", "add: Gfx942SAddU32V1, terminal_origins: [Gfx942U32OriginV1; 2],"),
+            ("let moves = self.moves.as_slice();", "let moves = &[];"),
+            ("prefix_origins(&self.moves, &self.add)", "[Gfx942U32OriginV1::Constant(0); 2]"),
+        ):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                CHECK.validate_sources(self.changed_sources(CHECK.PREFIX_RUST, before, after))
+
+    def test_erased_annotations_and_expression_adapter_are_exact(self):
+        for before, after in (
+            ("        $body\n", "        { let _ignored = stringify!($body); 0 }\n"),
+            ("state, index, [])", "state, index, [invariant false,])"),
+            ("origins, index, [], [])", "origins, index, [invariant false,], [])"),
+            ("macro_rules! prefix_rust_expr", "macro_rules! other_expr"),
+        ):
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                CHECK.validate_sources(self.changed_sources(CHECK.PREFIX_RUST, before, after))
+        sources = CHECK.source_snapshot()
+        sources[str(CHECK.PREFIX_BODY)] += b"\nfn unproved() {}\n"
+        with self.assertRaises(ValueError):
+            CHECK.validate_sources(sources)
+
+    def test_loop_negative_requires_exact_invariant_target_and_expansion(self):
+        for name, invariant in CHECK.INVARIANT_SITES.items():
+            focus = CHECK.ORIGIN_FOCUS if name.startswith("origin-") else CHECK.PREFIX_FOCUS
+            diagnostics = self.negative(focus, invariant)
+            encode = lambda: "\n".join(json.dumps(row) for row in diagnostics)
+            check = lambda: CHECK.classify(1, json.dumps(self.summary), encode(), self.proof, True,
+                                          focus, "invariant not satisfied at end of loop body", invariant)
+            self.assertTrue(check())
+            original = copy.deepcopy(diagnostics)
+            for path, value in (
+                ((0, "message"), "precondition not met: index in bounds for this access"),
+                ((0, "spans", 0, "line_start"), 1),
+                ((0, "spans", 0, "file_name"), "/tmp/foreign-proof.rs"),
+                ((2, "spans", 0, "expansion", "macro_decl_name"), CHECK.STATE_MACRO + "!"),
+                ((2, "spans", 0, "expansion", "span", "line_start"), 1),
+                ((2, "spans", 0, "expansion", "def_site_span", "file_name"), "/tmp/foreign-body.rs"),
+            ):
+                diagnostics[:] = copy.deepcopy(original)
+                current = diagnostics
+                for key in path[:-1]:
+                    current = current[key]
+                current[path[-1]] = value
+                with self.subTest(name=name, path=path):
+                    self.assertFalse(check())
+            diagnostics[:] = original
+            self.summary["verification-results"]["verified"] = 0
+            self.assertFalse(check())
+
+    def test_all_new_fold_mutants_are_distinct_and_remain_executable_shapes(self):
+        sources = CHECK.source_snapshot()
+        body = sources[str(CHECK.PREFIX_BODY)].decode("ascii")
+        mutants = CHECK.fold_mutations(body)
+        self.assertEqual(len(mutants), 8)
+        self.assertEqual(len({value[0] for value in mutants.values()}), 8)
+        for name, (mutant, focus, message) in mutants.items():
+            self.assertIn(focus, (CHECK.ORIGIN_FOCUS, CHECK.PREFIX_FOCUS))
+            self.assertEqual(name in CHECK.INVARIANT_SITES, message.startswith("invariant"))
+            changed = dict(sources)
+            changed[str(CHECK.PREFIX_BODY)] = mutant.encode("ascii")
+            CHECK.validate_sources(changed)
+        with self.assertRaises(ValueError):
+            CHECK.fold_mutations(body + body)
 
 
 if __name__ == "__main__":

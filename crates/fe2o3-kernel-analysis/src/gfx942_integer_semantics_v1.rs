@@ -1,4 +1,4 @@
-//! Closed local gfx942 `S_ADD_U32` semantics over ordinary SGPRs and SCC.
+//! Closed local gfx942 `S_ADD_U32` and `S_MOV_B32` semantics over ordinary SGPRs and SCC.
 //!
 //! The encoding and scalar operand rules follow AMD's MI300 ISA Reference Guide,
 //! 5-August-2025, sections 12.1 and 13.1.1 (tables 64-65). This is a projected
@@ -12,6 +12,14 @@ use crate::{
     PhysicalMachineOperandValueV1,
 };
 use std::{error::Error, fmt};
+
+mod mov_b32;
+pub use mov_b32::Gfx942SMovB32V1;
+mod mov_prefix_add;
+pub use mov_prefix_add::{
+    GFX942_MOV_PREFIX_ADD_MAX_INSTRUCTIONS_V1, Gfx942MovPrefixAddErrorV1, Gfx942MovPrefixAddU32V1,
+    Gfx942U32OriginV1,
+};
 
 /// Primary ISA reference; its exact bytes are pinned independently of LLVM.
 pub const GFX942_INTEGER_ISA_REFERENCE_URL_V1: &str = "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf";

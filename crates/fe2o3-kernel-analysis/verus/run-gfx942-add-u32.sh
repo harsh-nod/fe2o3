@@ -16,4 +16,4 @@ trap 'exit 143' TERM
 python3 -I -B "$here/gfx942_add_u32_test.py"
 python3 -I -B "$here/gfx942_add_u32_check.py" \
     --verus "$VERUS" --output "$base/proof"
-printf '%s\n' 'PASS: shared arithmetic and conditional 102-SGPR/SCC transition, 3 arithmetic + 5 state logical mutants, 12 runner controls; no decoder, ISA or application authority claim.'
+printf '%s\n' 'PASS: shared ADD/MOV and bounded origin/state folds, 3 arithmetic + 5 ADD-state + 5 MOV + 8 fold logical mutants, 17 runner controls; no decoder, ISA or application authority claim.'
