@@ -1280,6 +1280,7 @@ dependencies = [
  "dialect-kernel",
  "dialect-proof",
  "fe2o3-artifact-transaction",
+ "fe2o3-hsaco",
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
