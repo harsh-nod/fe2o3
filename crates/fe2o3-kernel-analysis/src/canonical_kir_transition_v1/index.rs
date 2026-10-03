@@ -31,8 +31,8 @@ pub(super) fn range(rows: Rows, bound: usize, budget: &mut Budget<'_>) -> Result
     Ok(start..end)
 }
 
-pub(super) fn function(
-    inventory: &Inventory<'_>,
+pub(super) fn function<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Function,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -46,8 +46,8 @@ pub(super) fn function(
     Ok(index)
 }
 
-pub(super) fn block(
-    inventory: &Inventory<'_>,
+pub(super) fn block<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Block,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -64,8 +64,8 @@ pub(super) fn block(
     Ok(index)
 }
 
-pub(super) fn operation(
-    inventory: &Inventory<'_>,
+pub(super) fn operation<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Operation,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -82,8 +82,8 @@ pub(super) fn operation(
     Ok(index)
 }
 
-pub(super) fn definition(
-    inventory: &Inventory<'_>,
+pub(super) fn definition<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Definition,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -131,8 +131,8 @@ pub(super) fn definition(
     Ok(index)
 }
 
-pub(super) fn used(
-    inventory: &Inventory<'_>,
+pub(super) fn used<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Use,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -167,8 +167,8 @@ pub(super) fn used(
     Ok(index)
 }
 
-pub(super) fn edge(
-    inventory: &Inventory<'_>,
+pub(super) fn edge<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: Edge,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {
@@ -185,8 +185,8 @@ pub(super) fn edge(
     Ok(index)
 }
 
-pub(super) fn edge_argument(
-    inventory: &Inventory<'_>,
+pub(super) fn edge_argument<O>(
+    inventory: &Inventory<'_, O>,
     coordinate: EdgeArgument,
     budget: &mut Budget<'_>,
 ) -> Result<usize> {

@@ -11,7 +11,7 @@ fn selector_prefix(terminator: &Terminator) -> usize {
     ))
 }
 
-impl State<'_, '_, '_, '_> {
+impl<O> State<'_, '_, '_, '_, O> {
     pub(super) fn edge_possible(&self, edge: usize, budget: &mut Budget<'_>) -> Result<bool> {
         budget.charge_work(1)?;
         let row = &self.input.edges()[edge];

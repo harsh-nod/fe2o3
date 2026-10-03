@@ -8,7 +8,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirDefinitionDescendantKindV1 as DescendantKind,
     CanonicalKirOperationOriginV1 as Origin, CanonicalKirTransitionCandidateV1 as Candidate,
-    ScalarType,
+    Module, ScalarType, VerifiedCanonicalKernelIrModuleV12,
 };
 use std::{error::Error as StdError, fmt, mem::size_of};
 
@@ -21,6 +21,8 @@ mod integer_identities;
 mod payload;
 #[path = "canonical_kir_transition_receipt_v1.rs"]
 mod receipt;
+#[path = "canonical_kir_transition_v18.rs"]
+mod storage_v18;
 mod structure;
 mod values;
 
@@ -28,6 +30,7 @@ pub use catalog_transport::*;
 pub use commutative_bitwise_cse::*;
 pub use control_index::*;
 pub use receipt::*;
+pub use storage_v18::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalKirTransitionErrorV1 {
@@ -65,16 +68,22 @@ impl StdError for Error {}
 /// The result borrows the actual checked inventories and immutable candidate
 /// rows. It cannot outlive either graph or authorize adoption of another owner.
 #[derive(Debug)]
-pub struct CheckedCanonicalKirTransitionV1<'a, 'input, 'output, 'rows> {
-    input: &'a Inventory<'input>,
-    output: &'a Inventory<'output>,
+pub struct CheckedCanonicalKirTransitionV1<
+    'a,
+    'input,
+    'output,
+    'rows,
+    O = VerifiedCanonicalKernelIrModuleV12,
+> {
+    input: &'a Inventory<'input, O>,
+    output: &'a Inventory<'output, O>,
     rows: Candidate<'rows>,
 }
-impl<'a, 'input, 'output, 'rows> CheckedCanonicalKirTransitionV1<'a, 'input, 'output, 'rows> {
-    pub const fn input(&self) -> &'a Inventory<'input> {
+impl<'a, 'input, 'output, 'rows, O> CheckedCanonicalKirTransitionV1<'a, 'input, 'output, 'rows, O> {
+    pub const fn input(&self) -> &'a Inventory<'input, O> {
         self.input
     }
-    pub const fn output(&self) -> &'a Inventory<'output> {
+    pub const fn output(&self) -> &'a Inventory<'output, O> {
         self.output
     }
     pub const fn rows(&self) -> Candidate<'rows> {
@@ -125,13 +134,34 @@ pub fn check_canonical_kir_transition_v1<'a, 'input, 'output, 'rows>(
     CheckedCanonicalKirTransitionV1<'a, 'input, 'output, 'rows>,
     CanonicalKirTransitionStorageV1,
 )> {
+    check_transition(
+        input,
+        output,
+        rows,
+        input.owner().module(),
+        output.owner().module(),
+        budget,
+    )
+}
+
+fn check_transition<'a, 'input, 'output, 'rows, O>(
+    input: &'a Inventory<'input, O>,
+    output: &'a Inventory<'output, O>,
+    rows: Candidate<'rows>,
+    input_module: &Module,
+    output_module: &Module,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    CheckedCanonicalKirTransitionV1<'a, 'input, 'output, 'rows, O>,
+    CanonicalKirTransitionStorageV1,
+)> {
     let floor = budget.storage();
-    let retained = size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>>();
+    let retained = size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_, O>>();
     let result = (|| {
         budget.charge_work(1)?;
         budget.reserve_storage(retained)?;
         let mut state = State::new(input, output, rows, budget)?;
-        state.check_structure(budget)?;
+        state.check_structure(input_module, output_module, budget)?;
         state.solve_values(budget)?;
         state.check_control(budget)?;
         state.check_values_and_uses(budget)?;
@@ -159,9 +189,9 @@ struct Literal {
     bits: u128,
 }
 
-struct State<'a, 'input, 'output, 'rows> {
-    input: &'a Inventory<'input>,
-    output: &'a Inventory<'output>,
+struct State<'a, 'input, 'output, 'rows, O = VerifiedCanonicalKernelIrModuleV12> {
+    input: &'a Inventory<'input, O>,
+    output: &'a Inventory<'output, O>,
     rows: Candidate<'rows>,
     function_input: Vec<usize>,
     function_output: Vec<usize>,
@@ -195,10 +225,10 @@ fn allocate<T: Copy>(count: usize, value: T, budget: &mut Budget<'_>) -> Result<
     Ok(values)
 }
 
-impl<'a, 'input, 'output, 'rows> State<'a, 'input, 'output, 'rows> {
+impl<'a, 'input, 'output, 'rows, O> State<'a, 'input, 'output, 'rows, O> {
     fn new(
-        input: &'a Inventory<'input>,
-        output: &'a Inventory<'output>,
+        input: &'a Inventory<'input, O>,
+        output: &'a Inventory<'output, O>,
         rows: Candidate<'rows>,
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
