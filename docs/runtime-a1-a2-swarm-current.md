@@ -78,18 +78,26 @@ must not become a prerequisite for running their already-admitted smoke tests.
    An initialized gathered frame on GPU B feeds a queued checked-window peer
    copy to GPU C and whole-target D2H, without a host join. Exact latest-writer,
    frame and event custody are retained; frame provenance is not compute authority.
-3. Next functional priority: enable the first ordinary application kernel
+3. Next native functional priority: pending segmented frames must feed another
+   ordered segment list, not only one contiguous peer window. The reviewed
+   [three-lane work order](runtime-multi-gpu-critical-path.md) reuses the native
+   list queue and existing frame receipts. It requires exact latest-writer
+   source custody, a fresh initialized destination, final-readback-only progress,
+   full-byte native acceptance and failure/cancellation tests. No new transport,
+   kernel authority or arithmetic proof is needed for this copy-only packet.
+4. In the admission lane, enable the first ordinary application kernel
    through actual source/KIR/machine refinement and protected invocation custody.
    [Actual-emission capture](evidence/dev-checked-u32-emission-capture-2026-10-03/README.md)
    is now CPU-qualified. The [entry-prefix shared-fold proof](runtime-checked-u32-prefix-v1.md)
    and [genuine Rust-source extraction](evidence/dev-rustc-checked-u32-prefix-2026-10-03/README.md)
    now pass their bounded qualification: actual nonempty copy/reassignment and
    direct-argument profiles, plus specific fail-closed compiler cases. These are
-   not launch authority. The next proof packet is actual normalization-adapter
-   refinement, beginning with argument-basis initialization. Machine/ABI/memory/
+   not launch authority. Shared argument-basis initialization now passes its
+   executable proof and acceptance-completeness controls. Actual ABI discovery
+   and statement normalization remain unproved. Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
    follow; no fixture authority can substitute for them.
-4. Qualify post-arm failure isolation and group cleanup as a separate resilience
+5. Qualify post-arm failure isolation and group cleanup as a separate resilience
    gate. It is not a prerequisite for already-admitted healthy copy/finite-compute
    execution. Indeterminate native effects remain fail-stop until recovery has
    its own evidence. No resets or destructive fault injection on the shared host.

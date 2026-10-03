@@ -16,16 +16,18 @@ class Controls(unittest.TestCase):
         self.proof = check.ROOT / check.PROOF
         self.data = {"verus": copy.deepcopy(check.base.VERIFIER), "verification-results": {
             "encountered-error": False, "encountered-vir-error": False, "success": True,
-            "errors": 0, "verified": 11, "is-verifying-entire-crate": True}}
+            "errors": 0, "verified": 18, "is-verifying-entire-crate": True}}
 
-    def accepted(self, status=0, rows=(), negative=False, invariant=False):
-        return check.classify(status, json.dumps(self.data), "\n".join(map(json.dumps, rows)), self.proof, negative, invariant)
+    def accepted(self, status=0, rows=(), target="fold", failure=None):
+        return check.classify(status, json.dumps(self.data), "\n".join(map(json.dumps, rows)), self.proof, target, failure)
 
-    def negative(self, invariant):
+    def negative(self, target, failure):
+        selected = check.TARGETS[target]
+        invariant = failure != "post"
         self.data["verification-results"] = {"encountered-error": True, "encountered-vir-error": False,
-            "errors": 1, "verified": 1, "is-verifying-entire-crate": False}
-        call, contract, loop, body, definition = check.locations(self.proof)
-        expanded = {"file_name": str(body), "expansion": {"macro_decl_name": check.MACRO + "!",
+            "errors": 1, "verified": selected["verified"], "is-verifying-entire-crate": False}
+        call, contract, loop, body, definition = check.locations(self.proof, target, failure)
+        expanded = {"file_name": str(body), "expansion": {"macro_decl_name": selected["macro"] + "!",
             "span": {"file_name": str(self.proof), "line_start": call},
             "def_site_span": {"file_name": str(body), "line_start": definition}}}
         rows = [{"level": "error", "message": "invariant not satisfied at end of loop body" if invariant else "postcondition not satisfied",
@@ -40,7 +42,7 @@ class Controls(unittest.TestCase):
     def test_source_contract_and_mutants(self):
         sources = check.snapshot()
         self.assertEqual(len(check.mutants(sources[str(check.BODY)].decode("ascii"))), 8)
-        for path in (check.PROOF, check.FOLD, check.HELPER):
+        for path in (check.PROOF, check.FOLD, check.HELPER, check.BASIS, check.ADAPTER):
             changed = dict(sources)
             changed[str(path)] += b"\n// changed\n"
             with self.assertRaises(ValueError):
@@ -48,10 +50,11 @@ class Controls(unittest.TestCase):
 
     def test_shared_body_escape_rejects(self):
         for escape in (b'include!("other.rs");\n', b'#[verifier::external_body]\n', b'#[cfg(any())]\n'):
-            sources = check.snapshot()
-            sources[str(check.BODY)] = escape + sources[str(check.BODY)]
-            with self.assertRaises(ValueError):
-                check.validate(sources)
+            for body in (check.BODY, check.BASIS_BODY):
+                sources = check.snapshot()
+                sources[str(body)] = escape + sources[str(body)]
+                with self.assertRaises(ValueError):
+                    check.validate(sources)
 
     def test_exact_positive(self):
         self.assertTrue(self.accepted())
@@ -66,34 +69,68 @@ class Controls(unittest.TestCase):
         self.assertFalse(self.accepted())
 
     def test_exact_logical_failures(self):
-        for invariant in (False, True):
-            rows = self.negative(invariant)
-            self.assertTrue(self.accepted(1, rows, True, invariant))
+        for target, failure in (("fold", "post"), ("fold", "loop"), ("basis", "post"), ("basis", "loop"), ("basis", "clear")):
+            rows = self.negative(target, failure)
+            self.assertTrue(self.accepted(1, rows, target, failure))
             for status in (0, 2, 124, -9):
-                self.assertFalse(self.accepted(status, rows, True, invariant))
-            self.assertFalse(self.accepted(1, rows, True, not invariant))
-            rows[0]["message"] = "arithmetic underflow/overflow"
-            self.assertFalse(self.accepted(1, rows, True, invariant))
+                self.assertFalse(self.accepted(status, rows, target, failure))
+            self.assertFalse(self.accepted(1, rows, target, "loop" if failure == "post" else "post"))
+            for message in ("arithmetic underflow/overflow", "precondition not satisfied", "assertion failed", "mismatched types"):
+                rows[0]["message"] = message
+                self.assertFalse(self.accepted(1, rows, target, failure))
 
     def test_exact_spans(self):
-        for invariant in (False, True):
-            original = self.negative(invariant)
+        for target, failure in (("fold", "post"), ("fold", "loop"), ("basis", "post"), ("basis", "loop"), ("basis", "clear")):
+            original = self.negative(target, failure)
             for field, value in (("file_name", "/tmp/wrong.rs"), ("line_start", 1), ("is_primary", False)):
                 rows = copy.deepcopy(original)
                 rows[0]["spans"][0][field] = value
-                self.assertFalse(self.accepted(1, rows, True, invariant))
+                self.assertFalse(self.accepted(1, rows, target, failure))
             rows = copy.deepcopy(original)
-            span = rows[-1]["spans"][0] if invariant else rows[0]["spans"][1]
+            span = rows[-1]["spans"][0] if failure != "post" else rows[0]["spans"][1]
             span["expansion"]["macro_decl_name"] = "wrong!"
-            self.assertFalse(self.accepted(1, rows, True, invariant))
+            self.assertFalse(self.accepted(1, rows, target, failure))
 
     def test_malformed_or_additional_diagnostics_reject(self):
         self.assertFalse(check.classify(0, "{", "", self.proof))
         with self.assertRaises(ValueError):
             check.strict_json('{"x":0,"x":1}')
-        rows = self.negative(False)
+        rows = self.negative("fold", "post")
         rows.append({"level": "note", "message": "unexpected"})
-        self.assertFalse(self.accepted(1, rows, True))
+        self.assertFalse(self.accepted(1, rows, "fold", "post"))
+
+    def test_basis_mutants_and_actual_forwarding(self):
+        sources = check.snapshot()
+        self.assertEqual(len(check.basis_mutants(sources[str(check.BASIS_BODY)].decode("ascii"))), 8)
+        for path, before, after in (
+            (check.ADAPTER, b"semantic_local: u32,", b"semantic_local: u64,"),
+            (check.PROOF, b"semantic_local: u32,", b"semantic_local: u64,"),
+            (check.KIR_SCHEMA, b"pub struct ValueId(pub u32);", b"pub struct ValueId(pub u64);"),
+            (check.ADAPTER, b"basis::initialize_argument_basis(&arguments, &mut source_state, &mut kernel_state)", b"true"),
+            (check.ADAPTER, b".insert(binding.kernel_ir_value, slot)", b".insert(binding.kernel_ir_value, 0)"),
+            (check.BASIS, b"ordinary_exec,\n        arguments,\n        source,\n        kernel,",
+             b"ordinary_exec,\n        arguments,\n        kernel,\n        source,"),
+        ):
+            self.assertEqual(sources[str(path)].count(before), 1, str(path))
+            changed = dict(sources)
+            changed[str(path)] = changed[str(path)].replace(before, after)
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+
+    def test_cross_target_diagnostics_reject(self):
+        for target, other in (("fold", "basis"), ("basis", "fold")):
+            for failure in ("post", "loop"):
+                rows = self.negative(target, failure)
+                self.data["verification-results"]["verified"] = check.TARGETS[other]["verified"]
+                self.assertFalse(self.accepted(1, rows, other, failure))
+                self.data["verification-results"]["verified"] = check.TARGETS[target]["verified"]
+                other_rows = self.negative(other, failure)
+                self.data["verification-results"]["verified"] = check.TARGETS[target]["verified"]
+                if failure == "post":
+                    rows[0]["spans"][1] = other_rows[0]["spans"][1]
+                else:
+                    rows[-1]["spans"][0] = other_rows[-1]["spans"][0]
+                self.assertFalse(self.accepted(1, rows, target, failure))
 
 
 if __name__ == "__main__":

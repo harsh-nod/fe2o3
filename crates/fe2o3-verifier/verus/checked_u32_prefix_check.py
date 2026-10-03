@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the shared prefix fold, not the MIR/KIR adapters or launch authority."""
+"""Qualify shared argument-basis initialization and folds, not full normalization or authority."""
 
 import argparse
 import hashlib
@@ -17,15 +17,37 @@ HELPER_SHA = "a0f1ebfcbb1467c323658450e75811de861efb1d317a716f7b43014fb9207950"
 PROOF = Path("crates/fe2o3-verifier/verus/checked_u32_prefix_v1.rs")
 FOLD = Path("crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1/source_prefix/fold.rs")
 BODY = FOLD.with_name("fold_body.rs")
+BASIS = FOLD.with_name("basis.rs")
+BASIS_BODY = FOLD.with_name("basis_body.rs")
 ADAPTER = FOLD.parent.with_suffix(".rs")
+KIR_SCHEMA = Path("crates/fe2o3-kernel-ir/src/ir.rs")
 TEST = PROOF.with_name("checked_u32_prefix_test.py")
 FOLD_SHA = "b987601f3c5008cc6333de06d6922ef79e07eea8e34871b68914144d4541cd22"
-PROOF_SHA = "664b99765a754c6c9ca0e322fb194459477e7bd3dd7fe4fa6b7a4c82818b36b9"
+PROOF_SHA = "d95f98f04d90a5f2521a71131f4445c6d4bf82e536c9945ff62e2ec0b3339eea"
+BASIS_SHA = "48fa84b1d850c92157ff217ca56eb1ce90c5d5225bd5e7a45143f56c5a82af7d"
+ADAPTER_SHA = "6314b71dab9daa5101f82d72451eddf1bf8a40229403b60253fed6bde5e8a9a1"
 MACRO = "checked_u32_prefix_fold_body_v1"
 INVARIANT = "symbolic_after(before, steps@, index as nat) == Some(state@),"
-SCOPE = ("Successful shared origin fold refines an independent concrete u32 fold for every "
+TARGETS = {
+    "fold": dict(body=BODY, macro=MACRO, function="fold", verified=1,
+                 contract="ensures accepted ==> symbolic_after(old(state)@, steps@, steps@.len()) == Some(final(state)@),",
+                 invariants={"loop": INVARIANT}),
+    "basis": dict(body=BASIS_BODY, macro="checked_u32_prefix_basis_body_v1",
+                  function="initialize_argument_basis", verified=2,
+                  contract="accepted == (old(kernel)@.len() == arguments@.len()",
+                  invariants={
+                      "loop": "paired_basis_prefix(arguments@, source@, kernel@, index as nat),",
+                      "clear": "forall|slot: int| 0 <= slot < clear ==> #[trigger] source@[slot] == Origin::Uninitialized,",
+                  }),
+}
+VERIFIED_COUNT = 18
+CONTROL_COUNT = 8
+SCOPE = ("Shared row initialization accepts exactly positional, bounded, source-injective rows "
+         "with matching KIR scratch length; it establishes exact paired origins and uninitialized "
+         "unmapped source cells. Its denotation composes with uninitialized KIR padding and the fold. "
+         "Successful shared origin fold refines an independent concrete u32 fold for every "
          "valid common argument vector; equal initialized terminal origins imply equal values. "
-         "Shared checked add proves modulo-2^32 value and overflow. No normalization-adapter, "
+         "Shared checked add proves modulo-2^32 value and overflow. No ABI discovery, MIR/KIR step normalization, "
          "rustc extraction, machine-entry, continuation, memory or launch-authority proof.")
 
 
@@ -48,14 +70,24 @@ save, strict_json = base.save, base.strict_json
 
 def validate(sources):
     base.validate_sources(sources)
-    for path, expected in ((HELPER, HELPER_SHA), (FOLD, FOLD_SHA), (PROOF, PROOF_SHA)):
+    for path, expected in ((HELPER, HELPER_SHA), (FOLD, FOLD_SHA), (PROOF, PROOF_SHA),
+                           (BASIS, BASIS_SHA), (ADAPTER, ADAPTER_SHA)):
         need(digest(sources[str(path)]) == expected, "reviewed forwarding/contract: " + str(path))
     base.shared_body(base.tokens(sources[str(BODY)].decode("ascii")), MACRO)
+    base.shared_body(base.tokens(sources[str(BASIS_BODY)].decode("ascii")), TARGETS["basis"]["macro"])
+    fields = base.tokens("argument: usize, semantic_local: u32, kernel_ir_value: ValueId,")
+    for path, declaration in ((ADAPTER, "pub struct CheckedU32PrefixArgumentV1"),
+                              (PROOF, "struct CheckedU32PrefixArgumentV1")):
+        need(base.one_block(base.tokens(sources[str(path)].decode("ascii")), declaration)[0] == fields,
+             "exact existing argument row schema")
+    need(len(base.positions(base.tokens(sources[str(KIR_SCHEMA)].decode("ascii")),
+                            base.tokens("pub struct ValueId(pub u32);"))) == 1,
+         "exact opaque KIR value identity shape")
 
 
 def snapshot():
     sources = base.source_snapshot()
-    for path in (HELPER, FOLD, BODY, ADAPTER, PROOF, TEST,
+    for path in (HELPER, FOLD, BODY, BASIS, BASIS_BODY, ADAPTER, KIR_SCHEMA, PROOF, TEST,
                  PROOF.with_name("run-checked-u32-prefix.sh"), Path(__file__).relative_to(ROOT)):
         selected = ROOT / path
         need(selected.is_file() and not selected.is_symlink(), "ordinary source: " + str(path))
@@ -86,23 +118,50 @@ def mutants(body):
     return cases
 
 
-def locations(proof):
+def basis_mutants(body):
+    cases = {}
+    for name, before, after, failure in (
+        ("length-success", "if $kernel.len() != $arguments.len() {\n                return false;",
+         "if $kernel.len() != $arguments.len() {\n                return true;", "post"),
+        ("invalid-row-success", "if binding.argument != $index || local >= $source.len() {\n                    return false;",
+         "if binding.argument != $index || local >= $source.len() {\n                    return true;", "post"),
+        ("duplicate-success", "if !matches!($source[local], Origin::Uninitialized) {\n                    return false;",
+         "if !matches!($source[local], Origin::Uninitialized) {\n                    return true;", "post"),
+        ("wrong-clear", "$source[$clear] = Origin::Uninitialized;", "$source[$clear] = Origin::Constant(0);", "clear"),
+        ("wrong-source-origin", "$source[local] = Origin::Argument($index);", "$source[local] = Origin::Constant(0);", "loop"),
+        ("wrong-kernel-origin", "$kernel[$index] = Origin::Argument($index);", "$kernel[$index] = Origin::Constant(0);", "loop"),
+        ("wrong-local", "$source[local] = Origin::Argument($index);", "$source[0] = Origin::Argument($index);", "loop"),
+        ("always-reject", "            true\n", "            false\n", "post"),
+    ):
+        need(body.count(before) == 1, "one basis mutation site: " + name)
+        cases[name] = (body.replace(before, after), failure)
+    need(len({value[0] for value in cases.values()}) == 8, "distinct basis mutants")
+    return cases
+
+
+def locations(proof, target="fold", failure="post"):
+    selected = TARGETS[target]
     lines = proof.read_text().splitlines()
-    call = next(i + 1 for i, line in enumerate(lines) if line.strip().startswith(MACRO + "!("))
-    contract = next(i + 1 for i, line in enumerate(lines) if "ensures accepted ==>" in line)
-    invariant = next(i + 1 for i, line in enumerate(lines) if line.strip() == INVARIANT)
-    body = (proof.parent / "../src/gfx942_local_checked_u32_add_v1/source_prefix/fold_body.rs").resolve()
+    call = next(i + 1 for i, line in enumerate(lines) if line.strip().startswith(selected["macro"] + "!("))
+    contract = next(i + 1 for i, line in enumerate(lines) if line.strip() == selected["contract"])
+    invariant = next(i + 1 for i, line in enumerate(lines)
+                     if line.strip() == selected["invariants"]["loop" if failure == "post" else failure])
+    body = (proof.parent / "../src/gfx942_local_checked_u32_add_v1/source_prefix" / selected["body"].name).resolve()
     definition = next(i + 1 for i, line in enumerate(body.read_text().splitlines())
-                      if line.startswith("macro_rules! " + MACRO + " {"))
+                      if line.startswith("macro_rules! " + selected["macro"] + " {"))
     return call, contract, invariant, body, definition
 
 
-def classify(status, stdout, stderr, proof, negative=False, invariant=False):
+def classify(status, stdout, stderr, proof, target="fold", failure=None):
     try:
+        selected = TARGETS[target]
+        negative = failure is not None
+        need(failure is None or failure == "post" or failure in selected["invariants"], "known failure target")
+        invariant = negative and failure != "post"
         data = strict_json(stdout)
         rows = [strict_json(line) for line in stderr.splitlines() if line]
         expected = {"encountered-error": negative, "encountered-vir-error": False,
-                    "errors": 1 if negative else 0, "verified": 1 if negative else 11,
+                    "errors": 1 if negative else 0, "verified": selected["verified"] if negative else VERIFIED_COUNT,
                     "is-verifying-entire-crate": not negative}
         if not negative:
             expected["success"] = True
@@ -122,12 +181,12 @@ def classify(status, stdout, stderr, proof, negative=False, invariant=False):
                  "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
                  "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"}
         need(all(row.get("message") in notes for row in rows if row["level"] == "note"), "known notes only")
-        call, contract, loop, body, definition = locations(proof)
+        call, contract, loop, body, definition = locations(proof, target, failure)
         need(any(span.get("is_primary") is True and Path(span.get("file_name", "")).resolve() == proof
                  and type(span.get("line_start")) is int and span["line_start"] == (loop if invariant else contract)
-                 for span in logical[0].get("spans", [])), "exact fold contract span")
+                 for span in logical[0].get("spans", [])), "exact target contract span")
         expansions = [row for row in rows if row["level"] == "note" and row.get("message", "").startswith("while loop:")] if invariant else logical
-        return any(base.macro_expansion(span, proof, call, MACRO, body, definition)
+        return any(base.macro_expansion(span, proof, call, selected["macro"], body, definition)
                    for row in expansions for span in row.get("spans", []))
     except (ValueError, KeyError, TypeError, AttributeError, IndexError, StopIteration, OSError):
         return False
@@ -181,21 +240,21 @@ def main():
             lambda status, stdout, stderr: status == 0 and not stderr and stdout ==
             "PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)\n")
 
-    def prove(name, changed=None, invariant=False):
+    def prove(name, changed=None, target="fold", failure=None):
         staged = out / (name + "-source")
-        inputs = {path: before[str(path)] for path in (PROOF, BODY, base.BODY)}
+        inputs = {path: before[str(path)] for path in (PROOF, BODY, BASIS_BODY, base.BODY)}
         if changed is not None:
-            inputs[BODY] = changed.encode("ascii")
+            inputs[TARGETS[target]["body"]] = changed.encode("ascii")
         for path, data in inputs.items():
-            target = staged / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            destination = staged / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
         proof = staged / PROOF
         run(name, ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", "120", str(verus),
                    "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating", "--output-json",
                    "--error-format=json", "--no-report-long-running", "--num-threads", "1", "--multiple-errors", "1",
-                   *(["--verify-function", "*fold", "--verify-root"] if changed is not None else []), str(proof)],
-            lambda status, stdout, stderr: classify(status, stdout, stderr, proof, changed is not None, invariant))
+                   *(["--verify-function", "*" + TARGETS[target]["function"], "--verify-root"] if changed is not None else []), str(proof)],
+            lambda status, stdout, stderr: classify(status, stdout, stderr, proof, target, failure))
         need(all((staged / path).is_file() and not (staged / path).is_symlink()
                  and (staged / path).read_bytes() == data for path, data in inputs.items()), "staged continuity")
 
@@ -203,11 +262,13 @@ def main():
     unchanged = False
     try:
         run("controls", [sys.executable, "-I", "-B", str(ROOT / TEST)],
-            lambda status, stdout, stderr: status == 0 and not stdout and "\nRan 6 tests in " in stderr and stderr.endswith("\nOK\n"))
+            lambda status, stdout, stderr: status == 0 and not stdout and f"\nRan {CONTROL_COUNT} tests in " in stderr and stderr.endswith("\nOK\n"))
         closure("release-before")
         prove("positive-before")
         for name, (changed, invariant) in mutants(before[str(BODY)].decode("ascii")).items():
-            prove("negative-" + name, changed, invariant)
+            prove("negative-" + name, changed, "fold", "loop" if invariant else "post")
+        for name, (changed, failure) in basis_mutants(before[str(BASIS_BODY)].decode("ascii")).items():
+            prove("negative-basis-" + name, changed, "basis", failure)
         prove("positive-after")
     except BaseException as failure:
         error = type(failure).__name__ + ": " + str(failure)
@@ -221,10 +282,11 @@ def main():
             error = (error or "") + "; closing: " + type(failure).__name__ + ": " + str(failure)
         for number, handler in handlers.items():
             signal.signal(number, handler)
-    accepted = error is None and unchanged and len(rows) == 13 and all(row["accepted"] for row in rows)
+    accepted = error is None and unchanged and len(rows) == 21 and all(row["accepted"] for row in rows)
     save(out / "result.json", dict(accepted=accepted, source_unchanged=unchanged, scope=SCOPE,
-         verified_obligations=11, logical_mutants=8, controls=6, stages=rows, error=error,
-         grants_application_authority=False, proves_normalization_adapters=False))
+         verified_obligations=VERIFIED_COUNT, logical_mutants=16, controls=CONTROL_COUNT, stages=rows, error=error,
+         grants_application_authority=False, proves_normalization_adapters=False,
+         proves_argument_basis_initialization=True))
     return 0 if accepted else 1
 
 

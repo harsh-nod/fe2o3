@@ -13,6 +13,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use std::collections::BTreeMap;
 
+mod basis;
 mod fold;
 use fold::{Origin, PrefixInput, PrefixStep};
 
@@ -55,7 +56,8 @@ impl CheckedU32PrefixArgumentV1 {
 /// checked-add value/overflow results on the first traversal from function
 /// entry. Later backedges and repeated block visits are not covered. This is
 /// not a claim about machine entry, continuation, compiler origin or authority.
-/// The normalization adapters remain separate from the shared fold theorem.
+/// ABI discovery and statement normalization remain separate from the shared
+/// argument-basis and fold theorems.
 #[derive(Debug)]
 pub struct CapturedCheckedU32PrefixV1<'a> {
     capture: ProductionCheckedU32AddCaptureV1<'a>,
@@ -386,8 +388,9 @@ fn check_parts(
         return Err(E::Span);
     }
     let mut source_state = vec![Origin::Uninitialized; function.locals().len()];
-    for binding in &arguments {
-        source_state[binding.semantic_local as usize] = Origin::Argument(binding.argument);
+    let mut kernel_state = vec![Origin::Uninitialized; arguments.len()];
+    if !basis::initialize_argument_basis(&arguments, &mut source_state, &mut kernel_state) {
+        return Err(E::Arguments);
     }
     let mut source_steps = Vec::with_capacity(statement_count - 1);
     let mut next_operation = 0u32;
@@ -461,15 +464,11 @@ fn check_parts(
         .get(..next_operation as usize)
         .ok_or(E::Kernel)?;
     let mut slots = BTreeMap::new();
-    let mut kernel_state = Vec::with_capacity(arguments.len() + operations.len() + 1);
-    for binding in &arguments {
-        if slots
-            .insert(binding.kernel_ir_value, kernel_state.len())
-            .is_some()
-        {
+    kernel_state.reserve(operations.len() + 1);
+    for (slot, binding) in arguments.iter().enumerate() {
+        if slots.insert(binding.kernel_ir_value, slot).is_some() {
             return Err(E::Kernel);
         }
-        kernel_state.push(Origin::Argument(binding.argument));
     }
     let mut kernel_steps = Vec::with_capacity(operations.len());
     for operation in &operations[..operations.len().checked_sub(1).ok_or(E::Kernel)?] {

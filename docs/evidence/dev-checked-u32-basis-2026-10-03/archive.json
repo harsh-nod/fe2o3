@@ -1,0 +1,11 @@
+{
+  "archive": "qualification.tar.xz",
+  "audit_sha256": "379ff616f69cdf177a45407efdfea2b69bcfa98ea42792504819d5b45b4e18c1",
+  "base": "902e05a54a665674d7f4106f123b161cf8690a8b",
+  "bytes": 413796,
+  "candidate_patch_sha256": "a86fb30234c9414d7512ece92972b00d8c1ef43b57b90e35382dab833aac5af7",
+  "gpu_execution": false,
+  "grants_application_authority": false,
+  "manifest_files": 556,
+  "sha256": "c1093a8db45831efa2bc12b789ab33783cfa6a4433d110074c632d85a1db6d4c"
+}

@@ -42,15 +42,22 @@ matching and ordered-map work. This is not an end-to-end allocation/RSS bound.
 
 ## Proof Boundary
 
-Ordinary Rust and Verus include the same executable origin-fold macro. The proof
-connects a successful symbolic fold to an independently defined concrete u32
-fold for every valid common input vector. Equal initialized terminal origins
-then imply equal concrete values. The existing shared widened-add body proves
-the modulo-2^32 result and carry. Failed folds may modify private temporary state;
-the checker discards it and returns no relation.
+Ordinary Rust and Verus include the same executable argument-basis initializer
+and origin-fold macros. Initialization accepts exactly positional argument rows
+with bounded, distinct source locals and matching dense KIR scratch length. It
+clears source scratch, installs paired argument origins and leaves every unmapped
+source local uninitialized. This takes O(locals + arguments) time and constant
+extra space beyond the caller's scratch; duplicate detection uses that scratch.
 
-The proof does **not** verify the MIR/KIR normalization adapters, actual rustc
-extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
+The basis denotation composes with an uninitialized KIR suffix and the existing
+fold theorem. A successful symbolic fold agrees with an independently defined
+concrete u32 fold for every valid common input vector. Equal initialized terminal
+origins then imply equal concrete values. The existing shared widened-add body
+proves the modulo-2^32 result and carry. Failed initialization or folding may
+modify private temporary state; the checker discards it and returns no relation.
+
+The proof does **not** verify ABI discovery, the MIR/KIR statement-normalization
+adapters, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
 continuation, memory effects, completion or protected compiler provenance.
 Those obligations cannot be replaced by the source hashes used to bind tests
 and solver runs to reviewed files.
@@ -103,8 +110,14 @@ cargo test --locked -p rustc-codegen-fe2o3 \
 
 ## Next Functional Gate
 
-Prove the actual normalization adapters, beginning with argument-basis
-initialization without substituting a proof-only parser. Then compose physical
+Argument-basis initialization now has a shared-executable proof, including an
+acceptance-completeness contract and an always-reject negative control. The
+[basis qualification](evidence/dev-checked-u32-basis-2026-10-03/README.md)
+records 18 verified obligations, 16 intended logical mutants and eight runner
+controls. Exact source pins bind the actual row schema, wrapper and caller;
+they are not a proof of how the adapter discovers those rows or KIR slots.
+
+Next prove the actual ABI and statement-normalization adapters. Then compose physical
 entry, continuation and memory obligations into protected per-invocation admission.
 Only that admission can authorize a general application-kernel multi-GPU witness.
 The A3 milestone, issue #182 and broad HIP/HSA parity remain incomplete.

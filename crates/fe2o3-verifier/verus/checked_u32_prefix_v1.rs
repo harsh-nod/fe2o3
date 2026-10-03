@@ -1,8 +1,9 @@
-//! Shared fold denotation, conditional on the independently checked input basis.
-//! No decoder, normalization-adapter, machine-entry, continuation or authority proof.
+//! Shared argument-basis initialization and fold denotation.
+//! No ABI discovery, MIR/KIR step normalization, machine-entry or authority proof.
 use vstd::prelude::*;
 
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/fold_body.rs");
+include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/basis_body.rs");
 include!("../../fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/add_u32_body.rs");
 
 verus! {
@@ -24,6 +25,16 @@ enum PrefixInput {
 struct PrefixStep {
     destination: usize,
     input: PrefixInput,
+}
+
+#[derive(Clone, Copy)]
+struct ValueId(u32);
+
+#[derive(Clone, Copy)]
+struct CheckedU32PrefixArgumentV1 {
+    argument: usize,
+    semantic_local: u32,
+    kernel_ir_value: ValueId,
 }
 
 struct Gfx942U32AddResultV1 {
@@ -71,6 +82,53 @@ fn fold(state: &mut [Origin], steps: &[PrefixStep]) -> (accepted: bool)
     ])
 }
 
+spec fn valid_basis_rows(rows: Seq<CheckedU32PrefixArgumentV1>, locals: nat, count: nat) -> bool {
+    count <= rows.len()
+    && (forall|i: int| 0 <= i < count ==> (#[trigger] rows[i]).argument == i
+        && rows[i].semantic_local < locals)
+    && (forall|i: int, j: int| 0 <= i < j < count ==>
+        (#[trigger] rows[i]).semantic_local != (#[trigger] rows[j]).semantic_local)
+}
+
+spec fn paired_basis_prefix(
+    rows: Seq<CheckedU32PrefixArgumentV1>, source: Seq<Origin>, kernel: Seq<Origin>, count: nat,
+) -> bool {
+    count <= rows.len() && kernel.len() == rows.len()
+    && (forall|i: int| 0 <= i < count ==>
+        source[(#[trigger] rows[i]).semantic_local as int] == Origin::Argument(i as usize))
+    && (forall|i: int| 0 <= i < count ==> #[trigger] kernel[i] == Origin::Argument(i as usize))
+    && (forall|slot: int| 0 <= slot < source.len()
+        && !(exists|i: int| 0 <= i < count && #[trigger] rows[i].semantic_local == slot)
+        ==> #[trigger] source[slot] == Origin::Uninitialized)
+}
+
+fn initialize_argument_basis(
+    arguments: &[CheckedU32PrefixArgumentV1], source: &mut [Origin], kernel: &mut [Origin],
+) -> (accepted: bool)
+    ensures
+        accepted == (old(kernel)@.len() == arguments@.len()
+            && valid_basis_rows(arguments@, old(source)@.len(), arguments@.len())),
+        accepted ==> paired_basis_prefix(arguments@, final(source)@, final(kernel)@, arguments@.len()),
+        final(source)@.len() == old(source)@.len(),
+        final(kernel)@.len() == old(kernel)@.len(),
+{
+    checked_u32_prefix_basis_body_v1!(verus_exec_expr, arguments, source, kernel,
+        clear, [
+            invariant
+                clear <= source.len(), source@.len() == old(source)@.len(),
+                kernel@.len() == old(kernel)@.len(), kernel@.len() == arguments@.len(),
+                forall|slot: int| 0 <= slot < clear ==> #[trigger] source@[slot] == Origin::Uninitialized,
+            decreases source.len() - clear,
+        ], index, [
+            invariant
+                index <= arguments.len(), source@.len() == old(source)@.len(),
+                kernel@.len() == old(kernel)@.len(), kernel@.len() == arguments@.len(),
+                valid_basis_rows(arguments@, old(source)@.len(), index as nat),
+                paired_basis_prefix(arguments@, source@, kernel@, index as nat),
+            decreases arguments.len() - index,
+        ])
+}
+
 spec fn valid_origins(state: Seq<Origin>, arguments: Seq<u32>) -> bool {
     forall|i: int| 0 <= i < state.len() ==> match #[trigger] state[i] {
         Origin::Argument(argument) => argument < arguments.len(),
@@ -88,6 +146,31 @@ spec fn denote_origin(origin: Origin, arguments: Seq<u32>) -> Option<u32> {
 
 spec fn denote(state: Seq<Origin>, arguments: Seq<u32>) -> Seq<Option<u32>> {
     Seq::new(state.len(), |i: int| denote_origin(state[i], arguments))
+}
+
+proof fn initialized_basis_denotation(
+    rows: Seq<CheckedU32PrefixArgumentV1>, source: Seq<Origin>, kernel: Seq<Origin>, values: Seq<u32>,
+)
+    requires
+        values.len() == rows.len(),
+        valid_basis_rows(rows, source.len(), rows.len()),
+        paired_basis_prefix(rows, source, kernel, rows.len()),
+    ensures
+        valid_origins(source, values), valid_origins(kernel, values),
+        forall|i: int| 0 <= i < rows.len() ==>
+            #[trigger] denote(source, values)[rows[i].semantic_local as int] == Some(values[i])
+            && #[trigger] denote(kernel, values)[i] == Some(values[i]),
+{
+    assert forall|slot: int| 0 <= slot < source.len() implies
+        match #[trigger] source[slot] {
+            Origin::Argument(argument) => argument < values.len(),
+            _ => true,
+        } by {
+        if exists|i: int| 0 <= i < rows.len() && #[trigger] rows[i].semantic_local == slot {
+            let i = choose|i: int| 0 <= i < rows.len() && #[trigger] rows[i].semantic_local == slot;
+            assert(source[slot] == Origin::Argument(i as usize));
+        }
+    }
 }
 
 spec fn concrete_step(state: Seq<Option<u32>>, step: PrefixStep) -> Option<Seq<Option<u32>>> {
@@ -180,6 +263,51 @@ proof fn equal_terminal_values(
 {
     prefix_denotation(source, source_steps, source_steps.len(), arguments);
     prefix_denotation(kernel, kernel_steps, kernel_steps.len(), arguments);
+}
+
+spec fn padded_kernel_basis(kernel: Seq<Origin>, padding: nat) -> Seq<Origin> {
+    kernel + Seq::new(padding, |_slot: int| Origin::Uninitialized)
+}
+
+proof fn initialized_terminal_values(
+    rows: Seq<CheckedU32PrefixArgumentV1>,
+    source: Seq<Origin>, source_steps: Seq<PrefixStep>, source_slot: int,
+    kernel: Seq<Origin>, padding: nat, kernel_steps: Seq<PrefixStep>, kernel_slot: int,
+    arguments: Seq<u32>,
+)
+    requires
+        arguments.len() == rows.len(),
+        valid_basis_rows(rows, source.len(), rows.len()),
+        paired_basis_prefix(rows, source, kernel, rows.len()),
+        symbolic_after(source, source_steps, source_steps.len()).is_some(),
+        symbolic_after(padded_kernel_basis(kernel, padding), kernel_steps, kernel_steps.len()).is_some(),
+        0 <= source_slot < source.len(),
+        0 <= kernel_slot < padded_kernel_basis(kernel, padding).len(),
+        symbolic_after(source, source_steps, source_steps.len()).unwrap()[source_slot]
+            == symbolic_after(padded_kernel_basis(kernel, padding), kernel_steps, kernel_steps.len()).unwrap()[kernel_slot],
+        symbolic_after(source, source_steps, source_steps.len()).unwrap()[source_slot] != Origin::Uninitialized,
+    ensures
+        denote(padded_kernel_basis(kernel, padding), arguments)
+            == denote(kernel, arguments) + Seq::new(padding, |_slot: int| None::<u32>),
+        concrete_after(denote(source, arguments), source_steps, source_steps.len()).is_some(),
+        concrete_after(denote(padded_kernel_basis(kernel, padding), arguments), kernel_steps, kernel_steps.len()).is_some(),
+        concrete_after(denote(source, arguments), source_steps, source_steps.len()).unwrap()[source_slot].is_some(),
+        concrete_after(denote(source, arguments), source_steps, source_steps.len()).unwrap()[source_slot]
+            == concrete_after(denote(padded_kernel_basis(kernel, padding), arguments), kernel_steps, kernel_steps.len()).unwrap()[kernel_slot],
+{
+    initialized_basis_denotation(rows, source, kernel, arguments);
+    let padded = padded_kernel_basis(kernel, padding);
+    assert(denote(padded, arguments) =~= denote(kernel, arguments)
+        + Seq::new(padding, |_slot: int| None::<u32>));
+    assert forall|slot: int| 0 <= slot < padded.len() implies
+        match #[trigger] padded[slot] {
+            Origin::Argument(argument) => argument < arguments.len(),
+            _ => true,
+        } by {
+        if slot < kernel.len() { assert(padded[slot] == kernel[slot]); }
+        else { assert(padded[slot] == Origin::Uninitialized); }
+    }
+    equal_terminal_values(source, source_steps, source_slot, padded, kernel_steps, kernel_slot, arguments);
 }
 
 fn checked_add_value(lhs: u32, literal: u32) -> (result: Gfx942U32AddResultV1)
