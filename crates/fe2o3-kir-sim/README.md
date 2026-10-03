@@ -53,6 +53,17 @@ storage pointers as `NotCaptured`; it never erases their type into the legacy
 pointer DTO. The capability matrix names typed-memory ownership with explicit
 remaining `InertStorage` refusals.
 
+V18 executes the verified lifecycle subset `ContextIssue`, `WorkgroupDerive`,
+and `ScopeEnd` with an empty discard list. Tokens retain the actual invocation,
+function, producer and checked generation; ending a workgroup scope releases its
+bounded SSA cell without inventing tile scheduling or memory operations.
+Execution-role arguments/results, unscheduled tiles/fragments, nonempty discards
+and older wire profiles remain refused. The V1 debugger cannot represent these
+tokens: after `ContextIssue`, the entire value stack is `NotCaptured`, including
+ordinary scalar and pointer values. Ending the workgroup does not restore stack
+capture because the context remains live. Operation events and concrete memory
+events/checkpoints remain available; no token is reported as a fake scalar.
+
 Raw V18 diagnostic CLI imports are separate from original-source custody.
 Neither route grants source or GPU execution authority or adds a bundle or
 persisted-schedule format.
