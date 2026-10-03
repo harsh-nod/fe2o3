@@ -599,6 +599,20 @@ pub struct GeneratedKfdPackingObservationV1 {
 }
 
 impl GeneratedKfdPackingObservationV1 {
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        let mut observation = Self {
+            identity: [0; 32],
+            explicit_kernarg_bytes: 0,
+            explicit_kernarg_sha256: Sha256::digest([]).into(),
+            kernarg_alignment: 1,
+            components: vec![],
+            buffers: vec![],
+        };
+        observation.identity = packing_observation_identity(&observation).unwrap();
+        observation
+    }
+
     pub const fn identity(&self) -> &[u8; 32] {
         &self.identity
     }

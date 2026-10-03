@@ -22,7 +22,8 @@ use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, CheckedBinaryOperator,
     FunctionBody, MemoryAccess, Module, OperationKind, Terminator,
     VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrErrorV8,
-    VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
@@ -45,7 +46,7 @@ use fe2o3_pliron::{InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEviden
 
 use crate::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1,
-    ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    ProductionMirPlironVerusExecutionEvidenceErrorV1, ValidatedCompilerKernelIrV1,
 };
 
 /// Independently decoded and cross-checked V3 compiler proof inputs.
@@ -90,7 +91,7 @@ pub struct ValidatedCompilerProofInputsV4 {
     receipt_identity: InertProofBindingReceiptIdentityV3,
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
-    kernel_ir: VerifiedCanonicalKernelIrV8,
+    kernel_ir: ValidatedCompilerKernelIrV1,
     correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
@@ -229,8 +230,8 @@ impl ValidatedCompilerProofInputsV4 {
         &self.middle_end
     }
 
-    /// Returns the independently decoded and semantically verified exact Kernel IR V8.
-    pub const fn kernel_ir(&self) -> &VerifiedCanonicalKernelIrV8 {
+    /// Returns the independently decoded and semantically verified exact Kernel IR V8 or V9.
+    pub const fn kernel_ir(&self) -> &ValidatedCompilerKernelIrV1 {
         &self.kernel_ir
     }
 
@@ -553,7 +554,7 @@ fn decode_and_cross_check_stages_v3(
 struct DecodedCompilerProofStagesV4 {
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
-    kernel_ir: VerifiedCanonicalKernelIrV8,
+    kernel_ir: ValidatedCompilerKernelIrV1,
     correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
@@ -574,11 +575,6 @@ fn decode_and_cross_check_stages_v4(
     let decoded_middle_end =
         InertProductionMiddleEndEvidenceV5::decode(middle_end.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::MiddleEndDecode)?;
-    let (decoded_kernel_ir, kernel_module) =
-        VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-            kernel_ir.canonical_preimage().to_vec(),
-        )
-        .map_err(CompilerProofInputValidationErrorV3::KernelIrV8)?;
     let correspondence_bytes = mir_to_kir_correspondence.canonical_preimage();
     let decoded_correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
         InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
@@ -591,6 +587,28 @@ fn decode_and_cross_check_stages_v4(
     let decoded_formal_memory =
         InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(formal_memory.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::FormalMemoryV4Decode)?;
+    let correspondence_kir = decoded_correspondence.canonical_kernel_ir_identity();
+    let (decoded_kernel_ir, kernel_module) = match correspondence_kir.version() {
+        ProductionCanonicalKernelIrVersionV1::V8 => {
+            let (owner, module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                kernel_ir.canonical_preimage().to_vec(),
+            )
+            .map_err(CompilerProofInputValidationErrorV3::KernelIrV8)?;
+            (ValidatedCompilerKernelIrV1::V8(owner), module)
+        }
+        ProductionCanonicalKernelIrVersionV1::V9 => {
+            let (owner, module) = VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(
+                kernel_ir.canonical_preimage().to_vec(),
+            )
+            .map_err(CompilerProofInputValidationErrorV3::KernelIrV9)?;
+            (ValidatedCompilerKernelIrV1::V9(owner), module)
+        }
+        version => {
+            return Err(
+                CompilerProofInputValidationErrorV3::UnsupportedKernelIrVersion { version },
+            );
+        }
+    };
 
     let semantic_identity = decoded_semantic_mir.semantic_sha256();
     for (actual, field) in [
@@ -613,12 +631,10 @@ fn decode_and_cross_check_stages_v4(
             return Err(CompilerProofInputValidationErrorV3::NestedIdentityMismatch { field });
         }
     }
-    let correspondence_kir = decoded_correspondence.canonical_kernel_ir_identity();
     let formal_kir = decoded_formal_memory.canonical_kernel_ir_identity();
     if correspondence_kir != formal_kir
-        || correspondence_kir.version() != ProductionCanonicalKernelIrVersionV1::V8
-        || correspondence_kir.digest() != decoded_kernel_ir.identity().digest()
-        || correspondence_kir.canonical_length() != decoded_kernel_ir.identity().canonical_length()
+        || correspondence_kir.digest() != decoded_kernel_ir.identity_digest()
+        || correspondence_kir.canonical_length() != decoded_kernel_ir.canonical_length()
     {
         return Err(
             CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
@@ -1349,6 +1365,13 @@ pub enum CompilerProofInputValidationErrorV3 {
     KernelIr(VerifiedCanonicalKernelIrErrorV5),
     /// Exact current canonical Kernel IR V8 could not be decoded or semantically verified.
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
+    /// Exact canonical Kernel IR V9 could not be decoded or semantically verified.
+    KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
+    /// This singleton proof contract does not accept the claimed canonical version.
+    UnsupportedKernelIrVersion {
+        /// The rejected version; no cross-version projection is attempted.
+        version: ProductionCanonicalKernelIrVersionV1,
+    },
     /// Exact MIR-to-KIR correspondence evidence could not be decoded.
     CorrespondenceDecode(ProductionLineageEvidenceErrorV3),
     /// Exact lossless MIR-to-KIR aggregate evidence could not be decoded.
@@ -1403,6 +1426,15 @@ impl fmt::Display for CompilerProofInputValidationErrorV3 {
                 write!(
                     formatter,
                     "cannot validate current compiler Kernel IR: {error}"
+                )
+            }
+            Self::KernelIrV9(error) => {
+                write!(formatter, "cannot validate compiler Kernel IR V9: {error}")
+            }
+            Self::UnsupportedKernelIrVersion { version } => {
+                write!(
+                    formatter,
+                    "singleton compiler proof does not support Kernel IR {version:?}"
                 )
             }
             Self::CorrespondenceDecode(error) => {
@@ -1461,13 +1493,15 @@ impl Error for CompilerProofInputValidationErrorV3 {
             Self::MiddleEndDecode(error) => Some(error),
             Self::KernelIr(error) => Some(error),
             Self::KernelIrV8(error) => Some(error),
+            Self::KernelIrV9(error) => Some(error),
             Self::CorrespondenceDecode(error) | Self::FormalMemoryDecode(error) => Some(error),
             Self::CorrespondenceV4Decode(error) => Some(error),
             Self::CorrespondenceV5Decode(error) => Some(error),
             Self::FormalMemoryV4Decode(error) => Some(error),
             Self::SemanticInductionAnalysis(error) => Some(error),
             Self::SemanticInductionEvidence(error) => Some(error),
-            Self::ProofBindingIdentityMismatch { .. }
+            Self::UnsupportedKernelIrVersion { .. }
+            | Self::ProofBindingIdentityMismatch { .. }
             | Self::NestedIdentityMismatch { .. }
             | Self::StructuralCorrespondence { .. } => None,
         }

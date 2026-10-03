@@ -49,8 +49,9 @@ pub fn check_gfx942_captured_mov_prefix_checked_u32_add_v1<'a>(
         return Err(E::SemanticOwner);
     }
     let kernel_ir = owner.canonical_kernel_ir_v8().ok_or(E::KernelIrOwner)?;
-    if kernel_ir.identity() != inputs.kernel_ir().identity()
-        || kernel_ir.canonical_bytes() != inputs.kernel_ir().canonical_bytes()
+    let input_kernel_ir = inputs.kernel_ir().as_v8().ok_or(E::KernelIrOwner)?;
+    if kernel_ir.identity() != input_kernel_ir.identity()
+        || kernel_ir.canonical_bytes() != input_kernel_ir.canonical_bytes()
     {
         return Err(E::KernelIrOwner);
     }

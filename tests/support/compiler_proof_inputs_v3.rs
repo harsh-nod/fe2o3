@@ -34,7 +34,7 @@ const PRODUCTION_AMDHSA_DATA_LAYOUT: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:
 const PRODUCTION_TARGET_CPU: &str = "gfx942";
 const PRODUCTION_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 
-fn production_target_layout_identity() -> SemanticLayoutIdentityV1 {
+pub(crate) fn production_target_layout_identity() -> SemanticLayoutIdentityV1 {
     SemanticLayoutIdentityV1::from_sha256(
         derive_semantic_target_layout_identity_v1(
             PRODUCTION_RUSTC_LLVM_TARGET,
@@ -187,7 +187,7 @@ fn canonical_compiler_proof_inputs(
     canonical_compiler_proof_inputs_from_owner(seed, semantic_kir, lossless_correspondence).0
 }
 
-fn canonical_compiler_proof_inputs_from_owner(
+pub(crate) fn canonical_compiler_proof_inputs_from_owner(
     seed: u8,
     semantic_kir: ProductionSemanticKirOwnerV1,
     lossless_correspondence: bool,
@@ -210,11 +210,7 @@ fn canonical_compiler_proof_inputs_from_owner(
                 .canonical_bytes()
                 .to_vec();
         (
-            semantic_kir
-                .canonical_kernel_ir_v8()
-                .expect("lossless induction fixture must retain canonical KIR V8")
-                .canonical_bytes()
-                .to_vec(),
+            semantic_kir.canonical_kernel_ir_bytes().to_vec(),
             correspondence,
         )
     } else {

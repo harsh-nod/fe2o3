@@ -21,6 +21,8 @@ use fe2o3_verifier::{
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
+#[path = "support/guarded_v9_proof_inputs.rs"]
+mod guarded_v9_proof_inputs;
 use compiler_proof_inputs_v3::{
     CanonicalCompilerProofInputsV3, canonical_compiler_proof_inputs_v4,
     canonical_compiler_proof_inputs_v4_with_induction,
@@ -295,6 +297,8 @@ fn validate(
 
 #[test]
 fn exact_current_inputs_reimport_the_signed_verus_receipt() {
+    use fe2o3_verifier::ValidatedCompilerMultiRootKernelIrV1::{V8, V9, V11};
+
     let receipts = receipts(0);
     let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
     let proof_binding = proof_binding(&receipts, None, evidence.canonical_bytes());
@@ -321,12 +325,229 @@ fn exact_current_inputs_reimport_the_signed_verus_receipt() {
         validated.kernel_ir().canonical_bytes(),
         receipts.kernel_ir.canonical_preimage()
     );
+    assert_eq!(validated.kernel_ir().wire_version(), 8);
+    assert!(validated.kernel_ir().as_v8().is_some());
+    assert!(validated.kernel_ir().as_v9().is_none());
+    assert!(matches!(validated.kernel_ir(), V8(_)));
+    assert!(!matches!(validated.kernel_ir(), V9(_) | V11(_)));
     assert!(validated.has_exact_decoded_input_association());
     assert!(validated.has_lossless_mir_to_kir_correspondence());
     assert!(validated.semantic_u32_induction_kir_anchors().is_empty());
     assert!(validated.authenticates_signed_verus_receipt_under_embedded_key());
     assert!(!validated.authenticates_compiler_origin());
     assert!(!validated.establishes_llvm_or_machine_refinement());
+    assert!(!validated.grants_runtime_authority());
+}
+
+#[test]
+fn actual_guarded_store_lowering_reaches_exact_v9_singleton_admission() {
+    let receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    let validated = validate(&binding, &receipts).unwrap();
+    assert_eq!(validated.kernel_ir().wire_version(), 9);
+    assert!(validated.kernel_ir().as_v9().is_some());
+    assert!(validated.kernel_ir().as_v8().is_none());
+    assert_eq!(
+        validated.kernel_ir().canonical_bytes(),
+        receipts.kernel_ir.canonical_preimage()
+    );
+    assert_eq!(
+        validated.formal_memory().canonical_bytes(),
+        receipts.formal_memory.canonical_preimage()
+    );
+    assert_eq!(
+        u16::from_le_bytes(
+            receipts.formal_memory.canonical_preimage()[128..130]
+                .try_into()
+                .unwrap()
+        ),
+        2
+    );
+    assert!(validated.has_lossless_mir_to_kir_correspondence());
+    assert!(validated.authenticates_signed_verus_receipt_under_embedded_key());
+    assert!(!validated.authenticates_compiler_origin());
+    assert!(!validated.establishes_llvm_or_machine_refinement());
+    assert!(!validated.grants_runtime_authority());
+}
+
+#[test]
+fn v9_bytes_cannot_be_decoded_under_a_v8_claim() {
+    let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+    let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+    bytes[52..54].copy_from_slice(&8_u16.to_le_bytes());
+    replace_correspondence(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::KernelIrV8(_)
+        ))
+    ));
+}
+
+#[test]
+fn v9_nested_custody_requires_the_decoded_version_digest_and_length() {
+    for axis in 0..5 {
+        let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+        let mut correspondence = receipts.correspondence.canonical_preimage().to_vec();
+        let mut formal = receipts.formal_memory.canonical_preimage().to_vec();
+        match axis {
+            0 => formal[20..22].copy_from_slice(&8_u16.to_le_bytes()),
+            1 => correspondence[64] ^= 1,
+            2 => formal[32] ^= 1,
+            3 => {
+                correspondence[64] ^= 1;
+                formal[32] ^= 1;
+            }
+            4 => {
+                let length = u64_at(&correspondence, 56) + 1;
+                put_u64(&mut correspondence, 56, length);
+                put_u64(&mut formal, 24, length);
+            }
+            _ => unreachable!(),
+        }
+        replace_correspondence(&mut receipts, correspondence);
+        replace_formal_memory(&mut receipts, formal);
+        let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+        let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+        assert!(
+            matches!(
+                validate(&binding, &receipts),
+                Err(CompilerProofInputValidationErrorV4::Stage(
+                    CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
+                        field: "current production Kernel IR custody",
+                    }
+                ))
+            ),
+            "axis {axis}"
+        );
+    }
+}
+
+#[test]
+fn malformed_truncated_and_trailing_v9_bytes_are_not_repaired() {
+    for axis in 0..3 {
+        let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+        let mut bytes = receipts.kernel_ir.canonical_preimage().to_vec();
+        match axis {
+            0 => bytes[0] ^= 1,
+            1 => {
+                bytes.pop().unwrap();
+            }
+            2 => bytes.push(0),
+            _ => unreachable!(),
+        }
+        receipts.kernel_ir = InertKernelIrReceiptV3::from_canonical_preimage(bytes).unwrap();
+        let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+        let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+        assert!(
+            matches!(
+                validate(&binding, &receipts),
+                Err(CompilerProofInputValidationErrorV4::Stage(
+                    CompilerProofInputValidationErrorV3::KernelIrV9(_)
+                ))
+            ),
+            "axis {axis}"
+        );
+    }
+}
+
+#[test]
+fn write_only_formal_obligation_receipt_cannot_be_downgraded_or_retagged() {
+    for version in [1_u16, 3] {
+        let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
+        let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
+        // V4's 120-byte header is followed by the exact V2 obligation receipt.
+        bytes[128..130].copy_from_slice(&version.to_le_bytes());
+        replace_formal_memory(&mut receipts, bytes);
+        let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+        let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+        assert!(matches!(
+            validate(&binding, &receipts),
+            Err(CompilerProofInputValidationErrorV4::Stage(
+                CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                    fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
+                )
+            ))
+        ));
+    }
+}
+
+#[test]
+fn v1_formal_obligations_without_write_only_allocations_cannot_claim_v2() {
+    let mut receipts = receipts(0);
+    let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
+    bytes[128..130].copy_from_slice(&2_u16.to_le_bytes());
+    replace_formal_memory(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
+            )
+        ))
+    ));
+}
+
+#[test]
+fn formal_witness_count_must_match_the_nested_receipt_for_both_versions() {
+    for mut receipts in [
+        receipts(0),
+        receipts_from(guarded_v9_proof_inputs::inputs(0)),
+    ] {
+        let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
+        let count = u64_at(&bytes, 96) + 1;
+        put_u64(&mut bytes, 96, count);
+        replace_formal_memory(&mut receipts, bytes);
+        let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+        let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+        assert!(matches!(
+            validate(&binding, &receipts),
+            Err(CompilerProofInputValidationErrorV4::Stage(
+                CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                    fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission
+                )
+            ))
+        ));
+    }
+}
+
+#[test]
+fn v9_encoding_is_retained_even_when_its_module_is_representable_in_v8() {
+    // Codec-only fixture, distinct from the actual guarded-store lowering positive above.
+    let mut receipts = receipts(0);
+    let module =
+        fe2o3_kernel_ir::decode_module_v8(receipts.kernel_ir.canonical_preimage()).unwrap();
+    let v9 = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
+    let mut correspondence = receipts.correspondence.canonical_preimage().to_vec();
+    correspondence[52..54].copy_from_slice(&9_u16.to_le_bytes());
+    put_u64(&mut correspondence, 56, v9.identity().canonical_length());
+    correspondence[64..96].copy_from_slice(v9.identity().digest());
+    let mut formal = receipts.formal_memory.canonical_preimage().to_vec();
+    formal[20..22].copy_from_slice(&9_u16.to_le_bytes());
+    put_u64(&mut formal, 24, v9.identity().canonical_length());
+    formal[32..64].copy_from_slice(v9.identity().digest());
+    replace_correspondence(&mut receipts, correspondence);
+    replace_formal_memory(&mut receipts, formal);
+    receipts.kernel_ir =
+        InertKernelIrReceiptV3::from_canonical_preimage(v9.canonical_bytes().to_vec()).unwrap();
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    let validated = validate(&binding, &receipts).unwrap();
+    assert_eq!(validated.kernel_ir().wire_version(), 9);
+    assert_eq!(
+        validated.kernel_ir().canonical_bytes(),
+        v9.canonical_bytes()
+    );
+    assert_eq!(
+        validated.kernel_ir().identity_digest(),
+        v9.identity().digest()
+    );
+    assert!(validated.kernel_ir().as_v8().is_none());
     assert!(!validated.grants_runtime_authority());
 }
 
@@ -451,6 +672,58 @@ fn independently_well_formed_kir_custody_substitutions_fail_closed() {
             ))
         ));
     }
+}
+
+#[test]
+fn claimed_v9_cannot_reinterpret_v8_bytes() {
+    let mut receipts = receipts(0);
+    let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+    bytes[52..54].copy_from_slice(&9_u16.to_le_bytes());
+    replace_correspondence(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::KernelIrV9(_)
+        ))
+    ));
+}
+
+#[test]
+fn singleton_contract_rejects_claimed_v11_before_version_projection() {
+    let mut receipts = receipts(0);
+    let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+    bytes[52..54].copy_from_slice(&11_u16.to_le_bytes());
+    replace_correspondence(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::UnsupportedKernelIrVersion {
+                version: fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11,
+            }
+        ))
+    ));
+}
+
+#[test]
+fn formal_memory_version_must_match_the_exact_decoded_owner() {
+    let mut receipts = receipts(0);
+    let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
+    bytes[20..22].copy_from_slice(&9_u16.to_le_bytes());
+    replace_formal_memory(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
+                field: "current production Kernel IR custody",
+            }
+        ))
+    ));
 }
 
 #[test]

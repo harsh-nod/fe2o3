@@ -321,8 +321,8 @@ pub fn prepare_physical_differential_v1(
         simulator_kir_version: 7,
         simulator_kir_sha256: *kir.digest(),
         simulator_kir_bytes: kir.canonical_length(),
-        production_kir_sha256: *binding.production_kir_v8_sha256(),
-        production_kir_bytes: binding.production_kir_v8_bytes(),
+        production_kir_sha256: *binding.production_kir_sha256(),
+        production_kir_bytes: binding.production_kir_bytes(),
         bundle_v1: *inner_v1.identity().as_bytes(),
         bundle_v2: *bundle.inner_v3().inner_v2().identity().as_bytes(),
         bundle_v3: *bundle.inner_v3().identity().as_bytes(),
@@ -542,8 +542,9 @@ fn validate_bundle_and_bridge(
     let v1 = v2.inner_v1();
     let production = v1.production_kir_identity();
     if production.version() != 8
-        || production.digest() != *binding.production_kir_v8_sha256()
-        || production.canonical_length() != binding.production_kir_v8_bytes()
+        || binding.production_kir_version() != 8
+        || production.digest() != *binding.production_kir_sha256()
+        || production.canonical_length() != binding.production_kir_bytes()
     {
         return Err(PhysicalDifferentialErrorV1::ProductionKirSubstitution);
     }

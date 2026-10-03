@@ -4,7 +4,8 @@ use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
     FORMAL_MEMORY_OBLIGATION_POLICY_V1, FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1,
-    FormalMemoryReceiptErrorV1, InertCanonicalFormalMemoryObligationReceiptV1,
+    FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2, FormalMemoryReceiptErrorV1,
+    InertCanonicalFormalMemoryObligationReceiptV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -414,7 +415,11 @@ fn validate_receipt_witness(
 ) -> Result<(), ProductionFormalMemoryEvidenceErrorV4> {
     let mut reader = ReaderV4::new(receipt);
     if reader.fixed::<8>()? != FORMAL_OBLIGATION_RECEIPT_MAGIC_V1
-        || reader.u16()? != FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1
+        || !matches!(
+            reader.u16()?,
+            FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1
+                | FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2
+        )
         || reader.u16()? != FORMAL_MEMORY_OBLIGATION_POLICY_V1
         || reader.u16()? != 0
         || reader.u16()? != 0

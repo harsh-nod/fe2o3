@@ -43,8 +43,8 @@ const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
 const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-verification-roster.v1\0";
 const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
-const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1: &[u8] =
-    b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v1\0";
+const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v2\0";
 
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;
@@ -659,6 +659,11 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
         (&self.host.kir_sha256, self.host.kir_bytes)
     }
 
+    /// Returns the canonical wire version bound into this receipt's identity.
+    pub const fn kir_version(&self) -> u16 {
+        self.host.kir_version
+    }
+
     /// Returns the exact final LLVM module identity covered by the refinement.
     pub const fn llvm_identity(&self) -> (&[u8; 32], u64) {
         (&self.host.llvm_sha256, self.host.llvm_bytes)
@@ -782,6 +787,7 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorkerV3SemanticMachineHostCoordinatesV1 {
+    kir_version: u16,
     kir_sha256: [u8; 32],
     kir_bytes: u64,
     llvm_sha256: [u8; 32],
@@ -901,6 +907,7 @@ pub(crate) fn admitted_semantic_machine_refinement_for_test_v1()
 #[cfg(test)]
 fn refinement_host_coordinates_for_test_v1() -> WorkerV3SemanticMachineHostCoordinatesV1 {
     WorkerV3SemanticMachineHostCoordinatesV1 {
+        kir_version: 8,
         kir_sha256: [1; 32],
         kir_bytes: 101,
         llvm_sha256: [2; 32],
@@ -943,7 +950,8 @@ fn semantic_machine_refinement_receipt_identity(
 ) -> [u8; 32] {
     let host = &receipt.host;
     let mut digest = Sha256::new();
-    digest.update(WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1);
+    digest.update(WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2);
+    digest.update(host.kir_version.to_le_bytes());
     for (sha256, byte_len) in [
         (host.kir_sha256, host.kir_bytes),
         (host.llvm_sha256, host.llvm_bytes),
@@ -2183,7 +2191,7 @@ where
 {
     let proof = decision.validated_compiler_proof_inputs()?;
     let target_lineage = decision.validated_compiler_target_lineage()?;
-    let kir = proof.kernel_ir().identity();
+    let kir = proof.kernel_ir();
     let llvm = target_lineage.final_llvm_identity();
     let binding = request.descriptor_binding();
     let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
@@ -2195,7 +2203,8 @@ where
     let attempt = published.attempt();
     let scope = published.scope();
     let coordinates = WorkerV3SemanticMachineHostCoordinatesV1 {
-        kir_sha256: *kir.digest(),
+        kir_version: kir.wire_version(),
+        kir_sha256: *kir.identity_digest(),
         kir_bytes: kir.canonical_length(),
         llvm_sha256: llvm.sha256(),
         llvm_bytes: llvm.byte_len(),
@@ -4930,7 +4939,8 @@ mod tests {
     #[test]
     fn semantic_machine_refinement_rejects_every_host_coordinate_substitution() {
         let expected = refinement_host_coordinates();
-        for axis in 0..34 {
+        let expected_identity = *refinement_receipt(expected.clone()).identity();
+        for axis in 0..35 {
             let mut substituted = expected.clone();
             match axis {
                 0 => substituted.kir_sha256[0] ^= 1,
@@ -4967,10 +4977,17 @@ mod tests {
                 31 => substituted.publication_kernel_set_identity[0] ^= 1,
                 32 => substituted.publication_target_identity[0] ^= 1,
                 33 => substituted.publication_identity[0] ^= 1,
+                34 => substituted.kir_version = 9,
                 _ => unreachable!(),
             }
+            let receipt = refinement_receipt(substituted);
+            assert_ne!(
+                expected_identity,
+                *receipt.identity(),
+                "unbound coordinate {axis}"
+            );
             assert!(
-                refinement_receipt(substituted).admit(&expected).is_none(),
+                receipt.admit(&expected).is_none(),
                 "substituted host coordinate {axis} was admitted"
             );
         }

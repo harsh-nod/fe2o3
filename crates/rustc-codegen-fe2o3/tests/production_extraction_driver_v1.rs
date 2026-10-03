@@ -9,6 +9,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_verifier::{
     validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
+    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
 };
 
 #[path = "support/inert_invocation_v3.rs"]
@@ -506,6 +507,94 @@ fn assert_multi_root_extraction(
     assert!(
         offsets.windows(2).all(|pair| pair[0] < pair[1]),
         "{features} LLVM changed canonical KernelId artifact order: {offsets:?}",
+    );
+}
+
+#[test]
+#[ignore = "acceptance target: write-only output needs aggregate source proof and the pinned Verus runtime"]
+fn write_only_output_genuine_v9_singleton_proof_inputs_are_admitted() {
+    let target = ScratchTarget::new();
+    let handoff_output = target.path().join("write-only-semantic.handoff");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+        .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_extraction_fixture")
+        .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", &handoff_output)
+        .env(
+            "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX",
+            inert_invocation_v3::canonical_inert_gfx942_invocation_hex(),
+        )
+        .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("FE2O3_EXTRACT_CHECKED_U32_PREFIX_V1")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check", "--locked", "--offline", "-Zbuild-std=core",
+            "-p", "fe2o3-production-extraction-fixture", "--features", "write-only-output",
+            "--target", "amdgcn-amd-amdhsa", "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run the genuine write-only Rust kernel through the proof-carrying compiler");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "write-only extraction failed:\n{stderr}"
+    );
+    let handoff = InertSemanticCompilerModuleHandoffV3::decode(
+        &std::fs::read(&handoff_output).expect("read singleton V3 handoff"),
+    )
+    .expect("decode singleton V3 handoff");
+    let receipts = handoff.capsule().receipts();
+    let proof = validate_compiler_proof_inputs_v4(
+        receipts.proof_binding(),
+        receipts.semantic_mir(),
+        receipts.middle_end(),
+        receipts.kernel_ir(),
+        receipts.mir_to_kir_correspondence(),
+        receipts.formal_memory(),
+    )
+    .expect("admit actual V9 singleton proof inputs without version projection");
+    assert_eq!(proof.kernel_ir().wire_version(), 9);
+    assert!(proof.kernel_ir().as_v9().is_some());
+    assert!(proof.kernel_ir().as_v8().is_none());
+    assert_eq!(
+        proof.kernel_ir().canonical_bytes(),
+        receipts.kernel_ir().canonical_preimage()
+    );
+    assert_eq!(proof.semantic_mir().roots().len(), 1);
+    assert!(proof.authenticates_signed_verus_receipt_under_embedded_key());
+    assert!(!proof.authenticates_compiler_origin());
+    assert!(!proof.establishes_llvm_or_machine_refinement());
+    assert!(!proof.grants_runtime_authority());
+    let lineage = validate_compiler_target_lineage_v1(handoff.capsule(), &proof)
+        .expect("replay the actual V9 target lineage");
+    assert!(lineage.has_exact_kir_to_llvm_replay());
+    let module = fe2o3_kernel_ir::decode_module_v9(proof.kernel_ir().canonical_bytes()).unwrap();
+    assert_eq!(module.kernels.len(), 1);
+    assert_eq!(module.kernels[0].entry.as_str(), "fill_write_only");
+    assert_eq!(
+        module.kernels[0].workgroup_size,
+        Some(fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1))
+    );
+    assert_eq!(
+        module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| matches!(
+                operation.kind,
+                fe2o3_kernel_ir::OperationKind::GuardedStore { .. }
+            ))
+            .count(),
+        1
     );
 }
 

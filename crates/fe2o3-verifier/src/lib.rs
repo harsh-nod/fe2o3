@@ -61,9 +61,9 @@ pub use authenticated_verus_execution_v2::{
     RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
 };
 pub use compiler_multi_root_proof_v1::{
-    CompilerMultiRootProofValidationErrorV1, ValidatedCompilerMultiRootKernelIrV1,
-    ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerMultiRootProofRootV1,
-    validate_compiler_multi_root_proof_inputs_v1,
+    CompilerMultiRootProofValidationErrorV1, ValidatedCompilerKernelIrV1,
+    ValidatedCompilerMultiRootKernelIrV1, ValidatedCompilerMultiRootProofInputsV1,
+    ValidatedCompilerMultiRootProofRootV1, validate_compiler_multi_root_proof_inputs_v1,
 };
 pub use compiler_multi_root_target_lineage_v1::{
     ValidatedCompilerMultiRootTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
