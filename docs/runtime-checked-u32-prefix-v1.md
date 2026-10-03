@@ -56,8 +56,24 @@ origins then imply equal concrete values. The existing shared widened-add body
 proves the modulo-2^32 result and carry. Failed initialization or folding may
 modify private temporary state; the checker discards it and returns no relation.
 
-The proof does **not** verify ABI discovery, the MIR/KIR statement-normalization
-adapters, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
+The typed source-statement normalizer now also shares its executable body with
+Verus. It consumes the actual borrowed semantic MIR types, locals, statement and
+retained operation count, without a caller-built normalized view. Its exact
+acceptance contract covers Nop/count0, unprojected typed Copy/count0 and bounded
+u32 Constant/count1. Direct AST statement evaluation agrees with the accepted
+step; that result composes with the origin-step theorem, including self-copy and
+uninitialized-read failure. Individual normalization uses bounded indexed reads
+and no allocation.
+
+The proof models every variant of the six inspected enums and every inspected
+field. Irrelevant payloads are explicitly erased; sequence length/order are
+preserved. Source-token guards bind the real schemas, getters, typed-ID macro and
+forwarding paths, including outer attributes and declaration nesting. This is a
+reviewed structural bridge, not a theorem about Rust parsing, layout or the
+entire semantic MIR model.
+
+The proof does **not** verify ABI discovery, KIR normalization, whole-prefix/span
+assembly, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
 continuation, memory effects, completion or protected compiler provenance.
 Those obligations cannot be replaced by the source hashes used to bind tests
 and solver runs to reviewed files.
@@ -117,7 +133,11 @@ records 18 verified obligations, 16 intended logical mutants and eight runner
 controls. Exact source pins bind the actual row schema, wrapper and caller;
 they are not a proof of how the adapter discovers those rows or KIR slots.
 
-Next prove the actual ABI and statement-normalization adapters. Then compose physical
+The [typed-source normalization qualification](evidence/dev-source-normalization-2026-10-03/README.md)
+adds exact source-statement normalization and direct-denotation composition.
+It does not prove how ABI rows, KIR slots or complete prefix spans are discovered.
+
+Next prove ABI discovery and KIR/whole-prefix assembly. Then compose physical
 entry, continuation and memory obligations into protected per-invocation admission.
 Only that admission can authorize a general application-kernel multi-GPU witness.
 The A3 milestone, issue #182 and broad HIP/HSA parity remain incomplete.

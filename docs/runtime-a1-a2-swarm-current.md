@@ -97,8 +97,12 @@ must not become a prerequisite for running their already-admitted smoke tests.
    now pass their bounded qualification: actual nonempty copy/reassignment and
    direct-argument profiles, plus specific fail-closed compiler cases. These are
    not launch authority. Shared argument-basis initialization now passes its
-   executable proof and acceptance-completeness controls. Actual ABI discovery
-   and statement normalization remain unproved. Machine/ABI/memory/
+   executable proof and acceptance-completeness controls. The actual borrowed
+   source-statement normalizer now has an exact shared-body acceptance and
+   denotation proof, with source-checked AST schema/getter correspondence.
+   [Qualification and limits](evidence/dev-source-normalization-2026-10-03/README.md)
+   keep ABI discovery, KIR normalization and whole-prefix/span assembly open.
+   Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
    follow; no fixture authority can substitute for them.
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience

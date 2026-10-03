@@ -64,13 +64,25 @@ Advance the first ordinary application kernel through the existing production
 constructor, then qualify compute -> native peer -> compute/readback across
 selected GPUs. Genuine Rust extraction,
 owner-bound captured KIR and shared argument-basis/fold proofs now exist for a
-bounded checked-u32 prefix. They do not cover a complete kernel.
+bounded checked-u32 prefix. The actual borrowed source-statement normalizer now
+also has a shared-executable exact acceptance and denotation proof, with checked
+schema/getter correspondence and explicit irrelevant-payload erasure. See the
+[normalization checkpoint](evidence/dev-source-normalization-2026-10-03/README.md).
+These proofs do not cover a complete kernel.
 
-The remaining path is actual ABI/statement normalization, semantic-to-machine
-entry/continuation/memory/completion evidence, protected invocation custody and
+Next compose the actual retained span walk and KIR Constant/CheckedAdd slot
+assembly with the existing source normalizer, basis and fold. Preserve exact
+owner identity, V8 IDs, contiguous spans and value/overflow ordering. Do not
+substitute a caller-built operation sequence for those production loops.
+
+The remaining path includes ABI discovery, whole-prefix assembly and
+semantic-to-machine entry/continuation/memory/completion evidence, protected invocation custody and
 the concrete deployment-approved Worker V3 verifier/refinement providers. Do not
 replace these with qualification metadata, caller digests or an always-allow
-backend. Qualify one complete bounded kernel profile before widening the language.
+backend. Affirmative Worker provider implementations remain test-only. Bound the
+first complete profile to a single-workitem u32 transform storing its value and
+overflow; it still needs physical entry, output-store, termination and exact
+LLVM/HSACO correspondence before an application launch can be admitted.
 
 ## Deferred Work
 

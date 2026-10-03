@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 mod basis;
 mod fold;
+mod normalize;
 use fold::{Origin, PrefixInput, PrefixStep};
 
 const MAX_STATEMENTS: usize = 256;
@@ -163,13 +164,7 @@ pub fn check_captured_checked_u32_prefix_v1(
 }
 
 fn is_u32(source: &AdmittedSemanticMirV1, ty: SemanticTypeIdV1) -> bool {
-    matches!(
-        source.types().get(ty.index() as usize).map(|ty| ty.shape()),
-        Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-            signed: false,
-            bits: 32
-        }))
-    )
+    normalize::is_u32(source.types(), ty)
 }
 
 fn scalar_local(
@@ -177,29 +172,11 @@ fn scalar_local(
     function: &SemanticFunctionDeclV1,
     place: &SemanticPlaceV1,
 ) -> Result<usize, CheckedU32PrefixErrorV1> {
-    let index = place.local().index() as usize;
-    if !place.projections().is_empty()
-        || !is_u32(source, place.ty())
-        || function
-            .locals()
-            .get(index)
-            .is_none_or(|local| local.ty() != place.ty())
-    {
-        return Err(CheckedU32PrefixErrorV1::Source);
-    }
-    Ok(index)
+    normalize::scalar_local(source.types(), function.locals(), place)
 }
 
 fn scalar_constant(source: &AdmittedSemanticMirV1, operand: &SemanticOperandV1) -> Option<u32> {
-    let SemanticOperandV1::Constant(constant) = operand else {
-        return None;
-    };
-    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
-        return None;
-    };
-    (is_u32(source, constant.ty()) && value.size_bytes() == 4)
-        .then(|| u32::try_from(value.bits()).ok())
-        .flatten()
+    normalize::scalar_constant(source.types(), operand)
 }
 
 fn check_arguments(
@@ -302,30 +279,12 @@ fn source_step(
     statement: &SemanticStatementV1,
     span: &SemanticKirStatementOperationSpanV1,
 ) -> Result<Option<PrefixStep>, CheckedU32PrefixErrorV1> {
-    use CheckedU32PrefixErrorV1 as E;
-    match statement.kind() {
-        SemanticStatementKindV1::Nop if span.operation_count() == 0 => Ok(None),
-        SemanticStatementKindV1::Assign(assign) => {
-            let destination = scalar_local(source, function, assign.destination())?;
-            if assign.value().result_type() != assign.destination().ty() {
-                return Err(E::Source);
-            }
-            let SemanticRvalueKindV1::Use(operand) = assign.value().kind() else {
-                return Err(E::Source);
-            };
-            let input = match operand {
-                SemanticOperandV1::Copy(place) if span.operation_count() == 0 => {
-                    PrefixInput::Cell(scalar_local(source, function, place)?)
-                }
-                _ if span.operation_count() == 1 => {
-                    PrefixInput::Constant(scalar_constant(source, operand).ok_or(E::Source)?)
-                }
-                _ => return Err(E::Source),
-            };
-            Ok(Some(PrefixStep { destination, input }))
-        }
-        _ => Err(E::Source),
-    }
+    normalize::source_step(
+        source.types(),
+        function.locals(),
+        statement,
+        span.operation_count(),
+    )
 }
 
 fn check_parts(

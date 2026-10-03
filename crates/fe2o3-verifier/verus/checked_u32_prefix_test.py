@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location("prefix_check", Path(__file__).with_name("checked_u32_prefix_check.py"))
@@ -16,7 +17,7 @@ class Controls(unittest.TestCase):
         self.proof = check.ROOT / check.PROOF
         self.data = {"verus": copy.deepcopy(check.base.VERIFIER), "verification-results": {
             "encountered-error": False, "encountered-vir-error": False, "success": True,
-            "errors": 0, "verified": 18, "is-verifying-entire-crate": True}}
+            "errors": 0, "verified": 45, "is-verifying-entire-crate": True}}
 
     def accepted(self, status=0, rows=(), target="fold", failure=None):
         return check.classify(status, json.dumps(self.data), "\n".join(map(json.dumps, rows)), self.proof, target, failure)
@@ -131,6 +132,104 @@ class Controls(unittest.TestCase):
                 else:
                     rows[-1]["spans"][0] = other_rows[-1]["spans"][0]
                 self.assertFalse(self.accepted(1, rows, target, failure))
+
+    def test_normalization_mutants_and_closed_body(self):
+        sources = check.snapshot()
+        self.assertEqual(len(check.normalization_mutants(sources[str(check.NORMALIZE_BODY)].decode("ascii"))), 17)
+        for escape in (b'include!("other.rs");\n', b'#[cfg(any())]\n', b'#[verifier::external_body]\n'):
+            changed = dict(sources)
+            changed[str(check.NORMALIZE_BODY)] = escape + sources[str(check.NORMALIZE_BODY)]
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+
+    def test_normalization_ast_schema_getters_and_forwarding(self):
+        sources = check.snapshot()
+        for path, before, after in (
+            (check.schema.MODEL, b"Integer { signed: bool, bits: u16 }", b"Integer { signed: bool, bits: u32 }"),
+            (check.schema.MODEL, b"pub enum SemanticOperandV1 {", b"pub enum SemanticOperandV1 { Extra,"),
+            (check.schema.MODEL, b"projections: Box<[SemanticProjectionV1]>", b"projections: Vec<SemanticProjectionV1>"),
+            (check.schema.MODEL, b"pub const fn index(self) -> u32 {\n                self.0", b"pub const fn index(self) -> u32 {\n                0"),
+            (check.schema.MODEL, b"pub const fn bits(self) -> u128 {\n        self.bits", b"pub const fn bits(self) -> u128 {\n        0"),
+            (check.schema.MODEL, b"pub const fn shape(&self)", b"#[transform]\n    pub const fn shape(&self)"),
+            (check.schema.MODEL, b"pub fn projections(&self) -> &[SemanticProjectionV1] {\n        &self.projections", b"pub fn projections(&self) -> &[SemanticProjectionV1] {\n        &[]"),
+            (check.schema.CORRESPONDENCE, b"pub const fn operation_count(self) -> u32 {\n        self.operation_count", b"pub const fn operation_count(self) -> u32 {\n        0"),
+            (check.schema.CORRESPONDENCE, b"pub const fn operation_count(self) -> u32", b"#[transform]\n    pub const fn operation_count(self) -> u32"),
+            (check.ADAPTER, b"        span.operation_count(),", b"        0,"),
+            (check.NORMALIZE, b"ordinary_exec, types, locals, statement, operations", b"ordinary_exec, types, locals, statement, 0"),
+        ):
+            expected_sites = 3 if path == check.schema.CORRESPONDENCE else 1
+            self.assertEqual(sources[str(path)].count(before), expected_sites, str(path))
+            changed = dict(sources)
+            changed[str(path)] = changed[str(path)].replace(before, after, 1)
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+
+        for declaration in (b"pub struct SemanticKirStatementOperationSpanV1 {", b"impl SemanticKirStatementOperationSpanV1 {"):
+            original = sources[str(check.schema.CORRESPONDENCE)]
+            for prefix in (b"#[cfg(any())]\n", b"mod replacement {\n"):
+                changed = dict(sources)
+                changed[str(check.schema.CORRESPONDENCE)] = original.replace(declaration, prefix + declaration, 1)
+                with self.assertRaises(ValueError):
+                    check.validate(changed)
+        original = sources[str(check.schema.MODEL)]
+        declaration = b"""#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SemanticOperandV1 {
+    Copy(SemanticPlaceV1),
+    Move(SemanticPlaceV1),
+    Constant(SemanticConstantV1),
+}"""
+        self.assertEqual(original.count(declaration), 1)
+        changed = dict(sources)
+        changed[str(check.schema.MODEL)] = original.replace(declaration, b"mod hidden {\n" + declaration + b"\n}")
+        with self.assertRaises(ValueError):
+            check.validate(changed)
+        for opening, closing in ((b"discard!(;\n", b"\n);"), (b"discard![;\n", b"\n];")):
+            changed = dict(sources)
+            changed[str(check.schema.MODEL)] = original.replace(declaration, opening + declaration + closing)
+            with self.assertRaises(ValueError):
+                check.validate(changed)
+
+    def test_exact_normalization_failures_and_wrong_targets(self):
+        for target in ("is_u32", "scalar_local", "scalar_constant", "source_step"):
+            rows = self.negative(target, "post")
+            self.assertTrue(self.accepted(1, rows, target, "post"))
+            for other in ("is_u32", "scalar_local", "scalar_constant", "source_step"):
+                if other != target:
+                    self.assertFalse(self.accepted(1, rows, other, "post"))
+            for status in (0, 2, 124, -9):
+                self.assertFalse(self.accepted(status, rows, target, "post"))
+            for message in ("precondition not satisfied", "assertion failed", "mismatched types"):
+                changed = copy.deepcopy(rows)
+                changed[0]["message"] = message
+                self.assertFalse(self.accepted(1, changed, target, "post"))
+
+        rows = self.negative("source_step", "post")
+        call = check.locations(self.proof, "source_step")[0]
+        span = {"is_primary": False, "label": "at the end of the function body",
+                "expansion": None, "file_name": str(self.proof),
+                "line_start": call - 1, "line_end": call + 1}
+        rows[0]["spans"][1] = span
+        self.assertTrue(self.accepted(1, rows, "source_step", "post"))
+        missing = copy.deepcopy(rows)
+        del missing[0]["spans"][1]["expansion"]
+        self.assertFalse(self.accepted(1, missing, "source_step", "post"))
+        for field, value in (("is_primary", True), ("label", "elsewhere"),
+                             ("expansion", {}), ("file_name", "/tmp/wrong.rs"),
+                             ("line_start", call), ("line_end", call)):
+            changed = copy.deepcopy(rows)
+            changed[0]["spans"][1][field] = value
+            self.assertFalse(self.accepted(1, changed, "source_step", "post"))
+        for other in ("is_u32", "scalar_local", "scalar_constant", "fold", "basis"):
+            changed = self.negative(other, "post")
+            changed[0]["spans"][1] = span
+            self.assertFalse(self.accepted(1, changed, other, "post"))
+        with tempfile.TemporaryDirectory(prefix="fe2o3-prefix-control-") as temporary:
+            proof = Path(temporary) / "proof.rs"
+            changed_span = dict(span, file_name=str(proof))
+            proof.write_bytes(self.proof.read_bytes().replace(
+                b"!(verus_exec_expr, types, locals, statement, operations)",
+                b"!(verus_exec_expr, types, locals, statement, 0)"))
+            self.assertFalse(check.source_step_exit(changed_span, proof, call, "source_step", "post"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify shared argument-basis initialization and folds, not full normalization or authority."""
+"""Qualify shared typed source normalization and basis/folds, not application authority."""
 
 import argparse
 import hashlib
@@ -19,13 +19,17 @@ FOLD = Path("crates/fe2o3-verifier/src/gfx942_local_checked_u32_add_v1/source_pr
 BODY = FOLD.with_name("fold_body.rs")
 BASIS = FOLD.with_name("basis.rs")
 BASIS_BODY = FOLD.with_name("basis_body.rs")
+NORMALIZE = FOLD.with_name("normalize.rs")
+NORMALIZE_BODY = FOLD.with_name("normalize_body.rs")
+SCHEMA = PROOF.with_name("checked_u32_normalization_schema.py")
 ADAPTER = FOLD.parent.with_suffix(".rs")
 KIR_SCHEMA = Path("crates/fe2o3-kernel-ir/src/ir.rs")
 TEST = PROOF.with_name("checked_u32_prefix_test.py")
 FOLD_SHA = "b987601f3c5008cc6333de06d6922ef79e07eea8e34871b68914144d4541cd22"
-PROOF_SHA = "d95f98f04d90a5f2521a71131f4445c6d4bf82e536c9945ff62e2ec0b3339eea"
+PROOF_SHA = "d42481cf21fefd3529f70997966f2a9013d83d4ac90259eabdf21f93c945227e"
 BASIS_SHA = "48fa84b1d850c92157ff217ca56eb1ce90c5d5225bd5e7a45143f56c5a82af7d"
-ADAPTER_SHA = "6314b71dab9daa5101f82d72451eddf1bf8a40229403b60253fed6bde5e8a9a1"
+ADAPTER_SHA = "324f6333b02ff11c56017d54c92456f8a5ac629ed876ef7d496f839ca196c0c5"
+NORMALIZE_SHA = "d57442f493ef03158925e784dfb3332e8bccfc57132a7f0a058cf3b043eaa99a"
 MACRO = "checked_u32_prefix_fold_body_v1"
 INVARIANT = "symbolic_after(before, steps@, index as nat) == Some(state@),"
 TARGETS = {
@@ -40,14 +44,25 @@ TARGETS = {
                       "clear": "forall|slot: int| 0 <= slot < clear ==> #[trigger] source@[slot] == Origin::Uninitialized,",
                   }),
 }
-VERIFIED_COUNT = 18
-CONTROL_COUNT = 8
+for name, macro, contract in (
+    ("is_u32", "type", "ensures accepted == u32_type(types@, ty),"),
+    ("scalar_local", "local", "ensures result == if valid_place(types@, locals@, *place) { Ok(place.local.0 as usize) }"),
+    ("scalar_constant", "constant", "ensures result == constant_value(types@, *operand),"),
+    ("source_step", "source_step", "ensures result == typed_step(types@, locals@, *statement, operations),"),
+):
+    TARGETS[name] = dict(body=NORMALIZE_BODY, macro="checked_u32_prefix_" + macro + "_body_v1",
+                         function=name, verified=0, contract=contract, invariants={}, module="normalization")
+VERIFIED_COUNT = 45
+CONTROL_COUNT = 11
 SCOPE = ("Shared row initialization accepts exactly positional, bounded, source-injective rows "
          "with matching KIR scratch length; it establishes exact paired origins and uninitialized "
          "unmapped source cells. Its denotation composes with uninitialized KIR padding and the fold. "
          "Successful shared origin fold refines an independent concrete u32 fold for every "
          "valid common argument vector; equal initialized terminal origins imply equal values. "
-         "Shared checked add proves modulo-2^32 value and overflow. No ABI discovery, MIR/KIR step normalization, "
+         "Shared typed source-AST normalization accepts exactly Nop/count0, typed Copy/count0 and u32 Constant/count1; "
+         "it preserves direct statement denotation and composes with the origin step. AST field/variant/getter "
+         "correspondence is source-checked with explicit irrelevant-payload erasure, not a parser/layout theorem. "
+         "Shared checked add proves modulo-2^32 value and overflow. No ABI discovery, KIR slot/span normalization, "
          "rustc extraction, machine-entry, continuation, memory or launch-authority proof.")
 
 
@@ -66,15 +81,26 @@ base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 support = base.support
 save, strict_json = base.save, base.strict_json
+schema_spec = importlib.util.spec_from_file_location("prefix_normalization_schema", ROOT / SCHEMA)
+schema = importlib.util.module_from_spec(schema_spec)
+schema_spec.loader.exec_module(schema)
 
 
 def validate(sources):
     base.validate_sources(sources)
     for path, expected in ((HELPER, HELPER_SHA), (FOLD, FOLD_SHA), (PROOF, PROOF_SHA),
-                           (BASIS, BASIS_SHA), (ADAPTER, ADAPTER_SHA)):
+                           (BASIS, BASIS_SHA), (ADAPTER, ADAPTER_SHA), (NORMALIZE, NORMALIZE_SHA)):
         need(digest(sources[str(path)]) == expected, "reviewed forwarding/contract: " + str(path))
     base.shared_body(base.tokens(sources[str(BODY)].decode("ascii")), MACRO)
     base.shared_body(base.tokens(sources[str(BASIS_BODY)].decode("ascii")), TARGETS["basis"]["macro"])
+    remaining = base.tokens(sources[str(NORMALIZE_BODY)].decode("ascii"))
+    for name in ("is_u32", "scalar_local", "scalar_constant", "source_step"):
+        macro = TARGETS[name]["macro"]
+        _, end = base.one_block(remaining, "macro_rules! " + macro)
+        base.shared_body(remaining[:end], macro)
+        remaining = remaining[end:]
+    need(not remaining, "closed four-macro normalizer")
+    schema.validate(base, sources, ADAPTER, NORMALIZE, PROOF)
     fields = base.tokens("argument: usize, semantic_local: u32, kernel_ir_value: ValueId,")
     for path, declaration in ((ADAPTER, "pub struct CheckedU32PrefixArgumentV1"),
                               (PROOF, "struct CheckedU32PrefixArgumentV1")):
@@ -87,7 +113,8 @@ def validate(sources):
 
 def snapshot():
     sources = base.source_snapshot()
-    for path in (HELPER, FOLD, BODY, BASIS, BASIS_BODY, ADAPTER, KIR_SCHEMA, PROOF, TEST,
+    for path in (HELPER, FOLD, BODY, BASIS, BASIS_BODY, NORMALIZE, NORMALIZE_BODY, SCHEMA,
+                 schema.MODEL, schema.CORRESPONDENCE, ADAPTER, KIR_SCHEMA, PROOF, TEST,
                  PROOF.with_name("run-checked-u32-prefix.sh"), Path(__file__).relative_to(ROOT)):
         selected = ROOT / path
         need(selected.is_file() and not selected.is_symlink(), "ordinary source: " + str(path))
@@ -139,17 +166,70 @@ def basis_mutants(body):
     return cases
 
 
+def normalization_mutants(body):
+    cases = {}
+    for name, target, before, after in (
+        ("type-oob-success", "is_u32", "return false;", "return true;"),
+        ("signed-type", "is_u32", "signed: false,", "signed: true,"),
+        ("wide-type", "is_u32", "bits: 32", "bits: 64"),
+        ("projected-local", "scalar_local", "!$place.projections().is_empty()", "false"),
+        ("wrong-local-type", "scalar_local", "$locals[index].ty().index() != $place.ty().index()", "false"),
+        ("wrong-local-index", "scalar_local", "Ok(index)", "Ok(0usize)"),
+        ("constant-size", "scalar_constant", "value.size_bytes() != 4", "value.size_bytes() != 8"),
+        ("constant-truncation", "scalar_constant", "value.bits() > u32::MAX as u128", "false"),
+        ("wrong-constant", "scalar_constant", "Some(value.bits() as u32)", "Some((value.bits() as u32) ^ 1)"),
+        ("copy-count", "source_step", "SemanticOperandV1::Copy(place) if $operations == 0", "SemanticOperandV1::Copy(place) if $operations == 1"),
+        ("constant-count", "source_step", "_ if $operations == 1", "_ if $operations == 0"),
+        ("result-type", "source_step", "assign.value().result_type().index() != assign.destination().ty().index()", "false"),
+        ("wrong-destination", "source_step", "PrefixStep { destination, input }", "PrefixStep { destination: destination ^ 1, input }"),
+        ("wrong-copy-source", "source_step", "PrefixInput::Cell(scalar_local($types, $locals, place)?)", "PrefixInput::Cell(scalar_local($types, $locals, assign.destination())?)"),
+        ("nop-count", "source_step", "SemanticStatementKindV1::Nop if $operations == 0", "SemanticStatementKindV1::Nop"),
+        ("move-as-copy", "source_step", "SemanticOperandV1::Copy(place) if",
+         "SemanticOperandV1::Move(place) if $operations == 0 => { PrefixInput::Cell(scalar_local($types, $locals, place)?) }, SemanticOperandV1::Copy(place) if"),
+    ):
+        need(body.count(before) == 1, "one normalization mutation site: " + name)
+        changed = body.replace(before, after)
+        if name == "constant-truncation":
+            changed = changed.replace("Some(value.bits() as u32)", "Some((value.bits() % 0x1_0000_0000u128) as u32)")
+        cases[name] = (changed, target)
+    nop, step = "=> Ok(None)", "Ok(Some(PrefixStep { destination, input }))"
+    need(body.count(nop) == body.count(step) == 1, "two success sites for always-reject")
+    changed = body.replace(nop, "=> Err(CheckedU32PrefixErrorV1::Source)").replace(
+        step, "{ let _ = (destination, input); Err(CheckedU32PrefixErrorV1::Source) }")
+    cases["always-reject"] = (changed, "source_step")
+    need(len(cases) == len({value[0] for value in cases.values()}) == 17, "distinct normalization mutants")
+    return cases
+
+
 def locations(proof, target="fold", failure="post"):
     selected = TARGETS[target]
     lines = proof.read_text().splitlines()
     call = next(i + 1 for i, line in enumerate(lines) if line.strip().startswith(selected["macro"] + "!("))
     contract = next(i + 1 for i, line in enumerate(lines) if line.strip() == selected["contract"])
-    invariant = next(i + 1 for i, line in enumerate(lines)
+    invariant = (next(i + 1 for i, line in enumerate(lines)
                      if line.strip() == selected["invariants"]["loop" if failure == "post" else failure])
+                 if selected["invariants"] else contract)
     body = (proof.parent / "../src/gfx942_local_checked_u32_add_v1/source_prefix" / selected["body"].name).resolve()
     definition = next(i + 1 for i, line in enumerate(body.read_text().splitlines())
                       if line.startswith("macro_rules! " + selected["macro"] + " {"))
     return call, contract, invariant, body, definition
+
+
+def source_step_exit(span, proof, call, target, failure):
+    # Verus may locate a tail-expression failure at the one-macro wrapper exit.
+    if target != "source_step" or failure != "post":
+        return False
+    content = proof.read_bytes()
+    lines = content.decode("ascii").splitlines()
+    return (digest(content) == PROOF_SHA
+            and lines[call - 2:call + 1] == ["{",
+                "    checked_u32_prefix_source_step_body_v1!(verus_exec_expr, types, locals, statement, operations)", "}"]
+            and span.get("is_primary") is False
+            and span.get("label") == "at the end of the function body"
+            and "expansion" in span and span["expansion"] is None
+            and Path(span.get("file_name", "")).resolve() == proof
+            and type(span.get("line_start")) is int and span["line_start"] == call - 1
+            and type(span.get("line_end")) is int and span["line_end"] == call + 1)
 
 
 def classify(status, stdout, stderr, proof, target="fold", failure=None):
@@ -177,7 +257,7 @@ def classify(status, stdout, stderr, proof, target="fold", failure=None):
         abort = [row for row in errors if row.get("message") == "aborting due to 1 previous error"
                  and row.get("spans") == []]
         need(len(errors) == 2 and len(logical) == len(abort) == 1, "one exact logical rejection")
-        notes = {"verifying root module (selected functions)",
+        notes = {"verifying root module (selected functions)", "verifying module normalization (selected functions)",
                  "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
                  "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"}
         need(all(row.get("message") in notes for row in rows if row["level"] == "note"), "known notes only")
@@ -187,6 +267,7 @@ def classify(status, stdout, stderr, proof, target="fold", failure=None):
                  for span in logical[0].get("spans", [])), "exact target contract span")
         expansions = [row for row in rows if row["level"] == "note" and row.get("message", "").startswith("while loop:")] if invariant else logical
         return any(base.macro_expansion(span, proof, call, selected["macro"], body, definition)
+                   or source_step_exit(span, proof, call, target, failure)
                    for row in expansions for span in row.get("spans", []))
     except (ValueError, KeyError, TypeError, AttributeError, IndexError, StopIteration, OSError):
         return False
@@ -242,7 +323,7 @@ def main():
 
     def prove(name, changed=None, target="fold", failure=None):
         staged = out / (name + "-source")
-        inputs = {path: before[str(path)] for path in (PROOF, BODY, BASIS_BODY, base.BODY)}
+        inputs = {path: before[str(path)] for path in (PROOF, BODY, BASIS_BODY, NORMALIZE_BODY, base.BODY)}
         if changed is not None:
             inputs[TARGETS[target]["body"]] = changed.encode("ascii")
         for path, data in inputs.items():
@@ -253,7 +334,9 @@ def main():
         run(name, ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", "120", str(verus),
                    "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating", "--output-json",
                    "--error-format=json", "--no-report-long-running", "--num-threads", "1", "--multiple-errors", "1",
-                   *(["--verify-function", "*" + TARGETS[target]["function"], "--verify-root"] if changed is not None else []), str(proof)],
+                   *(["--verify-function", "*" + TARGETS[target]["function"],
+                      *(["--verify-only-module", TARGETS[target]["module"]] if "module" in TARGETS[target] else ["--verify-root"])]
+                     if changed is not None else []), str(proof)],
             lambda status, stdout, stderr: classify(status, stdout, stderr, proof, target, failure))
         need(all((staged / path).is_file() and not (staged / path).is_symlink()
                  and (staged / path).read_bytes() == data for path, data in inputs.items()), "staged continuity")
@@ -269,6 +352,8 @@ def main():
             prove("negative-" + name, changed, "fold", "loop" if invariant else "post")
         for name, (changed, failure) in basis_mutants(before[str(BASIS_BODY)].decode("ascii")).items():
             prove("negative-basis-" + name, changed, "basis", failure)
+        for name, (changed, target) in normalization_mutants(before[str(NORMALIZE_BODY)].decode("ascii")).items():
+            prove("negative-normalization-" + name, changed, target, "post")
         prove("positive-after")
     except BaseException as failure:
         error = type(failure).__name__ + ": " + str(failure)
@@ -282,11 +367,12 @@ def main():
             error = (error or "") + "; closing: " + type(failure).__name__ + ": " + str(failure)
         for number, handler in handlers.items():
             signal.signal(number, handler)
-    accepted = error is None and unchanged and len(rows) == 21 and all(row["accepted"] for row in rows)
+    accepted = error is None and unchanged and len(rows) == 38 and all(row["accepted"] for row in rows)
     save(out / "result.json", dict(accepted=accepted, source_unchanged=unchanged, scope=SCOPE,
-         verified_obligations=VERIFIED_COUNT, logical_mutants=16, controls=CONTROL_COUNT, stages=rows, error=error,
+         verified_obligations=VERIFIED_COUNT, logical_mutants=33, controls=CONTROL_COUNT, stages=rows, error=error,
          grants_application_authority=False, proves_normalization_adapters=False,
-         proves_argument_basis_initialization=True))
+         proves_argument_basis_initialization=True, proves_typed_source_statement_normalization=True,
+         structural_ast_correspondence="source-checked explicit irrelevant-payload erasure"))
     return 0 if accepted else 1
 
 
