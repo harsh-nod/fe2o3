@@ -249,5 +249,89 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
         ])
 
 
+
+CPU_BOOTSTRAP_HARNESS = r'''
+set -Eeuo pipefail
+source "$1"
+shift
+run_step() {
+  local name="$1"
+  shift
+  printf 'stage:%s\n' "$name"
+  case "$name" in
+    cpu-workspace-dependencies | auxiliary-workspace-dependencies) "$@" ;;
+    *) return 43 ;;
+  esac
+}
+run_host_reference_tests() { printf 'host-reference-tests\n'; }
+ensure_production_cargo_fe2o3_driver() { printf 'driver-bootstrap:%s\n' "$1"; }
+load_example_packages() {
+  local -n output="$2"
+  output=()
+}
+"$@"
+'''
+
+
+class WorkspaceDependencyBootstrapTests(unittest.TestCase):
+    def invoke(self, entry: str, *, fetch_status: int = 0):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-workspace-bootstrap-") as directory:
+            root = Path(directory)
+            binary = root / "bin"
+            binary.mkdir()
+            cargo = binary / "cargo"
+            cargo.write_text(TOOL_STUB.format(python=sys.executable))
+            cargo.chmod(0o700)
+            cargo_home = root / "empty cargo home"
+            cargo_home.mkdir()
+            self.assertEqual(list(cargo_home.iterdir()), [])
+            calls = root / "calls.jsonl"
+            environment = {
+                "PATH": f"{binary}:/usr/bin:/bin",
+                "HOME": os.environ["HOME"],
+                "CARGO_HOME": str(cargo_home),
+                "CARGO_TARGET_DIR": str(root / "target"),
+                "CI_LOG_DIR": str(root / "logs"),
+                "BOOTSTRAP_CALLS": str(calls),
+                "BOOTSTRAP_FETCH_STATUS": str(fetch_status),
+            }
+            result = subprocess.run(
+                ["bash", "-c", CPU_BOOTSTRAP_HARNESS, "bash", str(CI_LOCAL), entry],
+                cwd=ROOT, env=environment, text=True, capture_output=True,
+                check=False, timeout=30,
+            )
+            observed = [json.loads(line) for line in calls.read_text().splitlines()]
+            return result, observed
+
+    def test_isolated_cpu_and_auxiliary_fetch_workspace_before_offline_test_consumers(self) -> None:
+        for entry, prefix, after_fetch in [
+            ("run_cpu_tests", "cpu", [
+                "host-reference-tests", "driver-bootstrap:cpu-tests", "stage:cargo-fe2o3-tests",
+            ]),
+            ("run_auxiliary_tests", "auxiliary", ["stage:core-doc-tests"]),
+        ]:
+            with self.subTest(entry=entry):
+                result, calls = self.invoke(entry)
+                # The first test stage is the deliberate mocked stop boundary.
+                self.assertEqual(result.returncode, 43, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [
+                    f"stage:{prefix}-workspace-dependencies", *after_fetch,
+                ])
+                self.assertEqual(calls, [{
+                    "command": "cargo",
+                    "arguments": ["fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")],
+                }])
+
+    def test_workspace_fetch_failure_stops_both_lanes_before_build_or_tests(self) -> None:
+        for entry, prefix in [("run_cpu_tests", "cpu"), ("run_auxiliary_tests", "auxiliary")]:
+            with self.subTest(entry=entry):
+                result, calls = self.invoke(entry, fetch_status=29)
+                self.assertEqual(result.returncode, 29, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [f"stage:{prefix}-workspace-dependencies"])
+                self.assertEqual(calls, [{
+                    "command": "cargo",
+                    "arguments": ["fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")],
+                }])
+
 if __name__ == "__main__":
     unittest.main()

@@ -713,7 +713,15 @@ run_host_reference_tests() {
   done
 }
 
+run_workspace_dependency_bootstrap() {
+  # Offline closure checks include optional workspace packages that the selected
+  # test binary need not build. Each isolated lane must fetch their locked input.
+  run_step "$1-workspace-dependencies" \
+    cargo fetch --locked --manifest-path "${REPO_ROOT}/Cargo.toml"
+}
+
 run_cpu_tests() {
+  run_workspace_dependency_bootstrap cpu
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
   local -a raw_cpu_examples wrapper_cpu_examples wrapper_managed_packages
@@ -797,6 +805,7 @@ run_cpu_tests() {
 }
 
 run_auxiliary_tests() {
+  run_workspace_dependency_bootstrap auxiliary
   # The default core is a DeviceCopy-only contract crate. Deprecated HIP/HSA
   # compatibility is qualified separately and never enters default resolution.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
