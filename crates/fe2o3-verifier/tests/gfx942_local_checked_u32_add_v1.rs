@@ -9,7 +9,8 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::decode_module_v8;
 use fe2o3_verifier::{
-    Gfx942LocalCheckedU32AddErrorV1, Gfx942LocalMovPrefixCheckedU32AddErrorV1,
+    Gfx942CapturedMovPrefixCheckedU32AddErrorV1, Gfx942LocalCheckedU32AddErrorV1,
+    Gfx942LocalMovPrefixCheckedU32AddErrorV1, check_gfx942_captured_mov_prefix_checked_u32_add_v1,
     check_gfx942_local_checked_u32_add_v1, check_gfx942_local_mov_prefix_checked_u32_add_v1,
 };
 use std::{path::Path, time::Duration};
@@ -250,4 +251,164 @@ fn public_mov_prefix_entry_rejects_substituted_intervals_and_trace_disagreement(
         ));
     }
     assert!(check_gfx942_local_mov_prefix_checked_u32_add_v1(&inputs, &execution, 0, 0, 4).is_ok());
+}
+
+#[test]
+fn captured_public_entry_retains_same_compiler_owner_through_formal_admission() {
+    let ordinary = source_fixture::source_inputs();
+    let (inputs, formal) = source_fixture::captured_source_inputs(0);
+    let owner = formal.semantic_kir();
+    formal.verify_equivalence().unwrap();
+    assert_eq!(
+        ordinary.semantic_mir().canonical_encoding(),
+        inputs.semantic_mir().canonical_encoding()
+    );
+    assert_eq!(
+        ordinary.kernel_ir().canonical_bytes(),
+        inputs.kernel_ir().canonical_bytes()
+    );
+    assert_eq!(
+        ordinary.correspondence().canonical_bytes(),
+        inputs.correspondence().canonical_bytes()
+    );
+    assert_eq!(
+        ordinary.formal_memory().canonical_bytes(),
+        inputs.formal_memory().canonical_bytes()
+    );
+    let capture = owner.checked_u32_add_capture_v1().unwrap();
+    let execution = test_worker_execution(
+        capture.kernel_ir_function(),
+        SYNTHETIC_MOV_ADD_PAYLOAD.to_vec(),
+    );
+    let joined =
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(&inputs, &execution, capture, 0, 0, 4)
+            .unwrap();
+    assert!(std::ptr::eq(joined.capture().owner(), owner));
+    assert!(std::ptr::eq(joined.local_obligation().inputs(), &inputs));
+    assert!(std::ptr::eq(
+        joined.local_obligation().execution(),
+        &execution
+    ));
+    assert_eq!(joined.capture().lhs_local().index(), 1);
+    assert_eq!(joined.capture().tuple_local().index(), 4);
+    assert_eq!(
+        joined.capture().use_event().checked_add(1),
+        Some(joined.capture().define_event())
+    );
+    assert_ne!(joined.capture().lhs_ssa(), joined.capture().tuple_ssa());
+    let local = joined.local_obligation();
+    assert_eq!(
+        local.unresolved_entry_relation().kernel_ir_value,
+        joined.capture().operand().0
+    );
+    assert_eq!(local.unresolved_entry_relation().machine_source_sgpr, 36);
+    assert_eq!(
+        local.unresolved_entry_relation().machine_instruction_offset,
+        0
+    );
+    assert_eq!(
+        local.conditional_results().kernel_ir_value,
+        joined.capture().value().0
+    );
+    assert_eq!(
+        local.conditional_results().kernel_ir_overflow,
+        joined.capture().overflow().0
+    );
+    assert!(!local.machine_span().grants_launch_authority());
+    assert!(!inputs.authenticates_compiler_origin());
+    // Capture supplies genuine emission coordinates, not source runtime values.
+    assert_eq!(local.unresolved_entry_relation().semantic_local, 1);
+}
+
+#[test]
+fn captured_public_entry_rejects_substitutions_without_consuming_owners() {
+    let (inputs, formal) = source_fixture::captured_source_inputs(0);
+    let (foreign_inputs, foreign_formal) = source_fixture::captured_source_inputs(1);
+    let owner = formal.semantic_kir();
+    let capture = || owner.checked_u32_add_capture_v1().unwrap();
+    let execution = test_worker_execution(
+        capture().kernel_ir_function(),
+        SYNTHETIC_MOV_ADD_PAYLOAD.to_vec(),
+    );
+    assert!(matches!(
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(
+            &foreign_inputs,
+            &execution,
+            capture(),
+            0,
+            0,
+            4
+        ),
+        Err(Gfx942CapturedMovPrefixCheckedU32AddErrorV1::SemanticOwner)
+    ));
+    assert!(matches!(
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(
+            &inputs,
+            &execution,
+            foreign_formal
+                .semantic_kir()
+                .checked_u32_add_capture_v1()
+                .unwrap(),
+            0,
+            0,
+            4,
+        ),
+        Err(Gfx942CapturedMovPrefixCheckedU32AddErrorV1::SemanticOwner)
+    ));
+    for (anchor, first, last) in [(1, 0, 4), (0, 2, 4), (0, 0, 8)] {
+        assert!(matches!(
+            check_gfx942_captured_mov_prefix_checked_u32_add_v1(
+                &inputs,
+                &execution,
+                capture(),
+                anchor,
+                first,
+                last
+            ),
+            Err(Gfx942CapturedMovPrefixCheckedU32AddErrorV1::Local(_))
+        ));
+    }
+    let mut changed = SYNTHETIC_MOV_ADD_PAYLOAD.to_vec();
+    changed[5] ^= 1;
+    let changed = test_worker_execution(capture().kernel_ir_function(), changed);
+    assert!(matches!(
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(&inputs, &changed, capture(), 0, 0, 4),
+        Err(Gfx942CapturedMovPrefixCheckedU32AddErrorV1::Local(_))
+    ));
+    assert!(
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(
+            &inputs,
+            &execution,
+            capture(),
+            0,
+            0,
+            4
+        )
+        .is_ok()
+    );
+    formal.verify_equivalence().unwrap();
+}
+
+#[test]
+fn equal_content_compiler_captures_keep_their_distinct_owner_borrows() {
+    let (inputs, first) = source_fixture::captured_source_inputs(0);
+    let (_, second) = source_fixture::captured_source_inputs(0);
+    let capture = second.semantic_kir().checked_u32_add_capture_v1().unwrap();
+    let execution = test_worker_execution(
+        capture.kernel_ir_function(),
+        SYNTHETIC_MOV_ADD_PAYLOAD.to_vec(),
+    );
+    let joined =
+        check_gfx942_captured_mov_prefix_checked_u32_add_v1(&inputs, &execution, capture, 0, 0, 4)
+            .unwrap();
+    assert!(std::ptr::eq(
+        joined.capture().owner(),
+        second.semantic_kir()
+    ));
+    assert!(!std::ptr::eq(
+        joined.capture().owner(),
+        first.semantic_kir()
+    ));
+    assert!(std::ptr::eq(joined.local_obligation().inputs(), &inputs));
+    assert!(!inputs.authenticates_compiler_origin());
 }

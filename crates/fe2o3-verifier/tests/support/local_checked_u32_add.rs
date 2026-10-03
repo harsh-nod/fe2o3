@@ -17,6 +17,27 @@ use fe2o3_verifier::{ValidatedCompilerProofInputsV4, validate_compiler_proof_inp
 
 pub fn source_inputs() -> ValidatedCompilerProofInputsV4 {
     let source = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4_with_induction(0);
+    validate_source_inputs(source)
+}
+
+#[allow(
+    dead_code,
+    reason = "capture is used by the public integration harness"
+)]
+pub fn captured_source_inputs(
+    seed: u8,
+) -> (
+    ValidatedCompilerProofInputsV4,
+    fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+) {
+    let (source, owner) =
+        compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4_with_captured_induction(seed);
+    (validate_source_inputs(source), owner)
+}
+
+fn validate_source_inputs(
+    source: compiler_proof_inputs_v3::CanonicalCompilerProofInputsV3,
+) -> ValidatedCompilerProofInputsV4 {
     let evidence =
         compiler_proof_inputs_v3::canonical_verus_execution_evidence_v1(source.middle_end(), 0);
     let mir =

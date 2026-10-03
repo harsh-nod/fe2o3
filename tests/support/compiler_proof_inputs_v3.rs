@@ -6,11 +6,15 @@ use fe2o3_functional_proof::{
     FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2, SafeReferenceKindV2,
     UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
 };
-use fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1, CanonicalKernelIrWorkBudgetV1,
+    VerifiedCanonicalKernelIrV5,
+};
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    ProductionFormalMemoryOwnerV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    ProductionCheckedU32AddCaptureRequestV1, ProductionFormalMemoryOwnerV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
 };
 use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -111,6 +115,44 @@ pub(crate) fn canonical_compiler_proof_inputs_v4_with_induction(
     )
 }
 
+/// Runs the actual current lowerer with capture and keeps that same owner after
+/// formal-memory admission. The surrounding source and signed transport are TEST data.
+#[allow(
+    dead_code,
+    reason = "shared support is also compiled by legacy transport tests"
+)]
+pub(crate) fn canonical_compiler_proof_inputs_v4_with_captured_induction(
+    seed: u8,
+) -> (
+    CanonicalCompilerProofInputsV3,
+    ProductionFormalMemoryOwnerV1,
+) {
+    let semantic =
+        semantic_induction_owner(seed, false, ProductionSourceIsaKernelFamilyV1::Elementwise);
+    let root = semantic.semantic().roots()[0];
+    let report = analyze_semantic_u32_induction_no_overflow_v1(semantic.semantic(), root).unwrap();
+    let [certificate] = report.certificates() else {
+        panic!("capture fixture must have one actual induction certificate");
+    };
+    let site = certificate.checked_addition();
+    let request = ProductionCheckedU32AddCaptureRequestV1::new(
+        root,
+        certificate.function(),
+        site.block().block(),
+        site.statement(),
+    );
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 4_194_304);
+    let owner = ProductionSemanticKirOwnerV1::try_lower_with_checked_u32_add_capture_v1(
+        semantic,
+        ProductionSemanticKirLimitsV1::default(),
+        request,
+        &mut budget,
+    )
+    .unwrap();
+    canonical_compiler_proof_inputs_from_owner(seed, owner, true)
+}
+
 #[allow(dead_code, reason = "shared sourceful V4 finalizer fixture")]
 pub(crate) fn canonical_compiler_proof_inputs_v4_with_sourceful_induction(
     seed: u8,
@@ -142,6 +184,17 @@ fn canonical_compiler_proof_inputs(
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
+    canonical_compiler_proof_inputs_from_owner(seed, semantic_kir, lossless_correspondence).0
+}
+
+fn canonical_compiler_proof_inputs_from_owner(
+    seed: u8,
+    semantic_kir: ProductionSemanticKirOwnerV1,
+    lossless_correspondence: bool,
+) -> (
+    CanonicalCompilerProofInputsV3,
+    ProductionFormalMemoryOwnerV1,
+) {
     let semantic = semantic_kir.semantic().semantic();
     let semantic_mir = semantic.canonical_encoding().to_vec();
     let semantic_identity = *semantic.semantic_sha256().as_bytes();
@@ -185,13 +238,16 @@ fn canonical_compiler_proof_inputs(
             .into_canonical_bytes()
     };
 
-    CanonicalCompilerProofInputsV3 {
-        semantic_mir,
-        middle_end: middle_end_v5_bytes(semantic_identity, seed),
-        kernel_ir,
-        correspondence,
-        formal_memory,
-    }
+    (
+        CanonicalCompilerProofInputsV3 {
+            semantic_mir,
+            middle_end: middle_end_v5_bytes(semantic_identity, seed),
+            kernel_ir,
+            correspondence,
+            formal_memory,
+        },
+        formal_owner,
+    )
 }
 
 /// Builds internally valid signed aggregate evidence for cross-crate transport tests.

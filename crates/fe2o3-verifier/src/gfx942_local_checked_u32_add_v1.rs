@@ -25,6 +25,12 @@ use std::{error::Error, fmt};
 
 use crate::{ValidatedCompilerProofInputsV4, VerifiedSemanticU32InductionKirAnchorV1};
 
+mod captured;
+pub use captured::{
+    Gfx942CapturedMovPrefixCheckedU32AddErrorV1, Gfx942CapturedMovPrefixCheckedU32AddObligationV1,
+    check_gfx942_captured_mov_prefix_checked_u32_add_v1,
+};
+
 mod mov_prefix;
 pub use mov_prefix::{
     Gfx942LocalMovPrefixCheckedU32AddErrorV1, Gfx942LocalMovPrefixCheckedU32AddObligationV1,

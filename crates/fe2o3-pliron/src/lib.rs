@@ -81,6 +81,15 @@ pub use production::{
     require_total_output_staging_v2, typed_semantic_commitment_reconciliation_v2,
     typed_semantic_obligation_summary_v2,
 };
+pub use production::{
+    ProductionSemanticSsaConstantOccurrenceV1, ProductionSemanticSsaEdgeDefinitionOccurrenceV1,
+    ProductionSemanticSsaEntryDefinitionOccurrenceV1, ProductionSemanticSsaEntryOriginV1,
+    ProductionSemanticSsaEventOccurrenceV1, ProductionSemanticSsaEventRoleV1,
+    ProductionSemanticSsaFunctionOccurrencesV1, ProductionSemanticSsaOccurrenceErrorV1,
+    ProductionSemanticSsaOccurrenceSiteV1, ProductionSemanticSsaOccurrenceStorageV1,
+    ProductionSemanticSsaOccurrenceViewV1, ProductionSemanticSsaOperandRoleV1,
+    ProductionSemanticSsaSuccessorOccurrenceV1,
+};
 
 #[cfg(feature = "internal-proof-staging")]
 pub use production::{

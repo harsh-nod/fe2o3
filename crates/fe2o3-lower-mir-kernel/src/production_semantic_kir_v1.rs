@@ -77,6 +77,13 @@ const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
 const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
 
+#[path = "production_checked_u32_add_capture_v1.rs"]
+mod checked_u32_add_capture_v1;
+pub use checked_u32_add_capture_v1::{
+    ProductionCheckedU32AddCaptureErrorV1, ProductionCheckedU32AddCaptureRequestV1,
+    ProductionCheckedU32AddCaptureV1,
+};
+
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionSemanticKirLimitsV1 {
@@ -1605,6 +1612,7 @@ pub struct ProductionSemanticKirOwnerV1 {
     limits: ProductionSemanticKirLimitsV1,
     launch_roots: Option<Box<[RetainedRankedLaunchRootV1]>>,
     generic_checks: Box<[RetainedGenericKernelChecksV1]>,
+    checked_u32_add_capture: Option<checked_u32_add_capture_v1::Captured>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1846,6 +1854,7 @@ impl ProductionSemanticKirOwnerV1 {
             limits,
             launch_roots: None,
             generic_checks: Vec::new().into_boxed_slice(),
+            checked_u32_add_capture: None,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -1950,6 +1959,7 @@ impl ProductionSemanticKirOwnerV1 {
             limits,
             launch_roots: Some(launch_roots),
             generic_checks: generic_checks.into_boxed_slice(),
+            checked_u32_add_capture: None,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -1962,11 +1972,22 @@ impl ProductionSemanticKirOwnerV1 {
             .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
         self.canonical_kernel_ir.revalidate()?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
-        let (rederived_module, rederived_correspondence) = lower_module(
+        let mut capture = self
+            .checked_u32_add_capture
+            .as_ref()
+            .map(|capture| {
+                checked_u32_add_capture_v1::Pending::prepare(&self.semantic_ssa, capture.request())
+            })
+            .transpose()?;
+        let (rederived_module, rederived_correspondence) = lower_module_with_capture_v1(
             &self.semantic_ssa,
             self.limits,
             self.launch_roots.as_deref(),
+            capture.as_mut(),
         )?;
+        let rederived_capture = capture
+            .map(checked_u32_add_capture_v1::Pending::finish)
+            .transpose()?;
         let rederived_canonical_kernel_ir =
             ProductionCanonicalKernelIrV1::from_module(rederived_module.clone())?;
         if self.module != rederived_module
@@ -1974,6 +1995,12 @@ impl ProductionSemanticKirOwnerV1 {
             || self.canonical_kernel_ir != rederived_canonical_kernel_ir
             || self.canonical_kernel_ir.canonical_bytes()
                 != rederived_canonical_kernel_ir.canonical_bytes()
+            || self.checked_u32_add_capture != rederived_capture
+            || (self.checked_u32_add_capture.is_some()
+                && !matches!(
+                    self.canonical_kernel_ir,
+                    ProductionCanonicalKernelIrV1::V8(_)
+                ))
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -10041,6 +10068,7 @@ fn lower_one_semantic_function_v1(
     launch_rank: u8,
     authenticated_ranked_control: bool,
     max_operations: usize,
+    capture: Option<&mut checked_u32_add_capture_v1::Pending>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -10250,6 +10278,9 @@ fn lower_one_semantic_function_v1(
         block.terminator = Some(Terminator::Unreachable);
         target_blocks.push(block);
     }
+    if let Some(capture) = capture {
+        capture.record_function(plan, &lowering, &target_blocks, &statement_operation_spans)?;
+    }
     let emitted_operations = lowering.emitted_operations;
     let generated_terminator_values = lowering.generated_terminator_values;
     let operation_capabilities = target_blocks
@@ -10362,6 +10393,15 @@ fn lower_module(
     limits: ProductionSemanticKirLimitsV1,
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    lower_module_with_capture_v1(owner, limits, authenticated_launch_roots, None)
+}
+
+fn lower_module_with_capture_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    mut capture: Option<&mut checked_u32_add_capture_v1::Pending>,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
@@ -10380,6 +10420,7 @@ fn lower_module(
             None,
             &mut closure_budget,
             true,
+            capture,
         );
     };
     if authenticated_launch_roots.is_empty()
@@ -10433,6 +10474,7 @@ fn lower_module(
             Some(launch),
             &mut closure_budget,
             false,
+            capture.as_deref_mut(),
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10763,6 +10805,7 @@ fn lower_single_root_module(
     authenticated_launch: Option<RetainedRankedLaunchRootV1>,
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     validate_correspondence: bool,
+    mut capture: Option<&mut checked_u32_add_capture_v1::Pending>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let launch_rank = authenticated_launch.map_or(1, |launch| launch.launch_rank);
@@ -11122,6 +11165,7 @@ fn lower_single_root_module(
             launch_rank,
             authenticated_launch.is_some() && index == 0,
             remaining_operations,
+            capture.as_deref_mut(),
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
