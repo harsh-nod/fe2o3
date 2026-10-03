@@ -33,8 +33,14 @@ pub mod dominance_cse_v1;
 pub mod integer_identity_v1;
 pub use integer_identity_v1::worklist_v2 as integer_identity_v2;
 pub mod optimization_v1;
+pub mod storage_operations_v18;
+pub mod storage_types_v18;
 pub mod switch_v3;
 pub mod vector_v12;
+
+#[cfg(test)]
+#[path = "storage_v18_tests.rs"]
+mod storage_v18_tests;
 
 pub use registration::dialect_registration;
 
@@ -923,6 +929,24 @@ pub fn register_dialect(
     <optimization_v1::PointerType as Type>::register(context);
     <optimization_v1::SliceType as Type>::register(context);
     <vector_v12::FixedVectorTypeV12 as Type>::register(context);
+    <storage_types_v18::StorageTableKeyAttrV18 as Attribute>::register::<
+        storage_types_v18::StorageTableKeyAttrV18,
+    >(context);
+    <storage_types_v18::StorageOrdinalAttrV18 as Attribute>::register::<
+        storage_types_v18::StorageOrdinalAttrV18,
+    >(context);
+    <storage_operations_v18::StorageKindAttrV18 as Attribute>::register::<
+        storage_operations_v18::StorageKindAttrV18,
+    >(context);
+    <storage_operations_v18::StorageOverlapAttrV18 as Attribute>::register::<
+        storage_operations_v18::StorageOverlapAttrV18,
+    >(context);
+    <storage_operations_v18::StorageAccessAttrV18 as Attribute>::register::<
+        storage_operations_v18::StorageAccessAttrV18,
+    >(context);
+    <storage_types_v18::StorageObjectTypeV18 as Type>::register(context);
+    <storage_types_v18::ExecutionRoleTypeV18 as Type>::register(context);
+    <storage_operations_v18::StorageOpV18 as Op>::register(context);
     <HierarchyIdOp as Op>::register(context);
     <ExecutionLayoutOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);

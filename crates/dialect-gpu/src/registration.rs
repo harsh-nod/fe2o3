@@ -45,6 +45,11 @@ fn registration_hook(
     service.register_attribute::<crate::switch_v3::SwitchSuccessorOffsetsAttrV3>()?;
     service.register_attribute::<VectorLaneCountAttrV12>()?;
     service.register_attribute::<VectorLayoutAttrV12>()?;
+    service.register_attribute::<crate::storage_types_v18::StorageTableKeyAttrV18>()?;
+    service.register_attribute::<crate::storage_types_v18::StorageOrdinalAttrV18>()?;
+    service.register_attribute::<crate::storage_operations_v18::StorageKindAttrV18>()?;
+    service.register_attribute::<crate::storage_operations_v18::StorageOverlapAttrV18>()?;
+    service.register_attribute::<crate::storage_operations_v18::StorageAccessAttrV18>()?;
     service.register_type::<HierarchyIndexType>()?;
     service.register_type::<MemorySpaceType>()?;
     service.register_type::<IndexType>()?;
@@ -52,6 +57,8 @@ fn registration_hook(
     service.register_type::<PointerType>()?;
     service.register_type::<SliceType>()?;
     service.register_type::<FixedVectorTypeV12>()?;
+    service.register_type::<crate::storage_types_v18::StorageObjectTypeV18>()?;
+    service.register_type::<crate::storage_types_v18::ExecutionRoleTypeV18>()?;
     service.register_operation::<HierarchyIdOp>()?;
     service.register_operation::<ExecutionLayoutOp>()?;
     service.register_operation::<MemorySpaceOp>()?;
@@ -75,6 +82,7 @@ fn registration_hook(
     service.register_operation::<PreservedOperationOp>()?;
     service.register_operation::<PreservedTerminatorOp>()?;
     service.register_operation::<crate::switch_v3::SwitchOpV3>()?;
+    service.register_operation::<crate::storage_operations_v18::StorageOpV18>()?;
     Ok(())
 }
 

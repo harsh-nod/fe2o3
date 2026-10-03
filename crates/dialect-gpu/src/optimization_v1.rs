@@ -146,6 +146,9 @@ pub enum PreservedOperationKindAttr {
     VectorLoadV12,
     VectorStoreV12,
     VectorLayoutConvertV12,
+    ExecutionV18,
+    OrderedRegionV18,
+    OrderedProgramV18,
 }
 
 /// Canonical Kernel IR terminators whose payload is retained by the bridge.
