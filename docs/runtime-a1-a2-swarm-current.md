@@ -101,7 +101,11 @@ must not become a prerequisite for running their already-admitted smoke tests.
    source-statement normalizer now has an exact shared-body acceptance and
    denotation proof, with source-checked AST schema/getter correspondence.
    [Qualification and limits](evidence/dev-source-normalization-2026-10-03/README.md)
-   keep ABI discovery, KIR normalization and whole-prefix/span assembly open.
+   keep ABI discovery and KIR normalization open. The
+   [source-span assembly checkpoint](evidence/dev-source-assembly-2026-10-03/README.md)
+   now proves exact original-row selection and pre-add AST/fold composition
+   through the actual linear scan/walk. Terminal AST validation and KIR assembly
+   are the next semantic work, not completed application admission.
    Machine/ABI/memory/
    continuation refinement and a deployment-approved production verifier still
    follow; no fixture authority can substitute for them.

@@ -1,10 +1,11 @@
 //! Shared argument-basis, typed source-statement normalization and fold denotation.
-//! No ABI discovery, whole-prefix/KIR assembly, machine-entry or authority proof.
+//! Includes actual source-span assembly; terminal AST, KIR, ABI and authority remain separate.
 use vstd::prelude::*;
 
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/fold_body.rs");
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/basis_body.rs");
 include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/normalize_body.rs");
+include!("../src/gfx942_local_checked_u32_add_v1/source_prefix/assemble_body.rs");
 include!("../../fe2o3-kernel-analysis/src/gfx942_integer_semantics_v1/add_u32_body.rs");
 
 verus! {
@@ -545,6 +546,282 @@ proof fn source_statement_denotation(
         },
         _ => {},
     }
+}
+
+#[derive(Clone, Copy)]
+struct SemanticFunctionIdV1(u32);
+#[derive(Clone, Copy)]
+struct SemanticBlockIdV1(u32);
+#[derive(Clone, Copy)]
+struct BlockId(u32);
+impl SemanticFunctionIdV1 {
+    fn index(self) -> (value: u32) ensures value == self.0 { self.0 }
+}
+impl SemanticBlockIdV1 {
+    fn index(self) -> (value: u32) ensures value == self.0 { self.0 }
+}
+#[derive(Clone, Copy)]
+struct SemanticKirStatementOperationSpanV1 {
+    correspondence_owner: SemanticFunctionIdV1, semantic_function: SemanticFunctionIdV1,
+    semantic_block: SemanticBlockIdV1, statement_ordinal: u32, kernel_ir_block: BlockId,
+    first_operation_ordinal: u32, operation_count: u32,
+}
+impl SemanticKirStatementOperationSpanV1 {
+    fn correspondence_owner(self) -> (value: SemanticFunctionIdV1) ensures value == self.correspondence_owner { self.correspondence_owner }
+    fn semantic_function(self) -> (value: SemanticFunctionIdV1) ensures value == self.semantic_function { self.semantic_function }
+    fn semantic_block(self) -> (value: SemanticBlockIdV1) ensures value == self.semantic_block { self.semantic_block }
+    fn statement_ordinal(self) -> (value: u32) ensures value == self.statement_ordinal { self.statement_ordinal }
+    fn kernel_ir_block(self) -> (value: BlockId) ensures value == self.kernel_ir_block { self.kernel_ir_block }
+    fn first_operation_ordinal(self) -> (value: u32) ensures value == self.first_operation_ordinal { self.first_operation_ordinal }
+    fn operation_count(self) -> (value: u32) ensures value == self.operation_count { self.operation_count }
+}
+
+spec fn selects(span: SemanticKirStatementOperationSpanV1, root: u32, function: u32, block: u32, length: nat) -> bool {
+    span.correspondence_owner.0 == root && span.semantic_function.0 == function
+        && span.semantic_block.0 == block && span.statement_ordinal < length
+}
+
+spec fn select_spans(spans: Seq<SemanticKirStatementOperationSpanV1>, root: u32, function: u32,
+                     block: u32, length: nat, count: nat) -> Option<Seq<Option<usize>>>
+    decreases count,
+{
+    if count > spans.len() || count > usize::MAX { None }
+    else if count == 0 { Some(Seq::new(length, |_i: int| None)) }
+    else {
+        match select_spans(spans, root, function, block, length, (count - 1) as nat) {
+            None => None,
+            Some(before) => {
+                let span = spans[count - 1];
+                if selects(span, root, function, block, length) {
+                    if before[span.statement_ordinal as int].is_some() { None }
+                    else { Some(before.update(span.statement_ordinal as int, Some((count - 1) as usize))) }
+                } else { Some(before) }
+            },
+        }
+    }
+}
+
+proof fn selection_success_prefix(spans: Seq<SemanticKirStatementOperationSpanV1>, root: u32,
+    function: u32, block: u32, length: nat, total: nat, count: nat)
+    requires count <= total <= spans.len(), select_spans(spans, root, function, block, length, total).is_some(),
+    ensures select_spans(spans, root, function, block, length, count).is_some(),
+    decreases total - count,
+{
+    if count < total { selection_success_prefix(spans, root, function, block, length, (total - 1) as nat, count); }
+}
+
+spec fn walk_spans(types: Seq<SemanticTypeDeclV1>, locals: Seq<SemanticLocalDeclV1>,
+    prefix: Seq<SemanticStatementV1>, spans: Seq<SemanticKirStatementOperationSpanV1>,
+    selected: Seq<Option<usize>>, kernel_block: u32, operation: u32, count: nat)
+    -> Option<(Seq<PrefixStep>, u32)>
+    decreases count,
+{
+    if count == 0 { Some((Seq::empty(), 0u32)) }
+    else {
+        match walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, (count - 1) as nat) {
+            None => None,
+            Some((steps, next)) => match selected[count - 1] {
+                None => None,
+                Some(index) => {
+                    let span = spans[index as int];
+                    let end = next as int + span.operation_count as int;
+                    if span.kernel_ir_block.0 != kernel_block || span.first_operation_ordinal != next || end > u32::MAX {
+                        None
+                    } else if count < prefix.len() {
+                        match typed_step(types, locals, prefix[count - 1], span.operation_count) {
+                            Ok(None) => Some((steps, end as u32)),
+                            Ok(Some(step)) => Some((steps.push(step), end as u32)),
+                            Err(_) => None,
+                        }
+                    } else if span.operation_count != 2 || span.first_operation_ordinal as int + 1 != operation {
+                        None
+                    } else { Some((steps, end as u32)) }
+                },
+            },
+        }
+    }
+}
+
+proof fn walk_success_prefix(types: Seq<SemanticTypeDeclV1>, locals: Seq<SemanticLocalDeclV1>,
+    prefix: Seq<SemanticStatementV1>, spans: Seq<SemanticKirStatementOperationSpanV1>, selected: Seq<Option<usize>>,
+    kernel_block: u32, operation: u32, total: nat, count: nat)
+    requires count <= total <= prefix.len(), selected.len() == prefix.len(),
+        walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, total).is_some(),
+    ensures walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, count).is_some(),
+    decreases total - count,
+{
+    if count < total {
+        walk_success_prefix(types, locals, prefix, spans, selected, kernel_block, operation, (total - 1) as nat, count);
+    }
+}
+
+spec fn source_assembly(types: Seq<SemanticTypeDeclV1>, locals: Seq<SemanticLocalDeclV1>,
+    prefix: Seq<SemanticStatementV1>, spans: Seq<SemanticKirStatementOperationSpanV1>,
+    root: u32, function: u32, block: u32, kernel_block: u32, operation: u32) -> Option<(Seq<PrefixStep>, u32)>
+{
+    if prefix.len() == 0 || prefix.len() > 256 { None }
+    else {
+        match select_spans(spans, root, function, block, prefix.len(), spans.len()) {
+            None => None,
+            Some(selected) => walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, prefix.len()),
+        }
+    }
+}
+
+spec fn assembly_result(result: Result<(Vec<PrefixStep>, u32), CheckedU32PrefixErrorV1>) -> Option<(Seq<PrefixStep>, u32)> {
+    match result { Ok((steps, end)) => Some((steps@, end)), Err(_) => None }
+}
+
+fn assemble_source(types: &[SemanticTypeDeclV1], locals: &[SemanticLocalDeclV1],
+    prefix: &[SemanticStatementV1], spans: &[SemanticKirStatementOperationSpanV1],
+    root: u32, function: u32, block: u32, kernel_block: u32, operation: u32)
+    -> (result: Result<(Vec<PrefixStep>, u32), CheckedU32PrefixErrorV1>)
+    ensures assembly_result(result) == source_assembly(types@, locals@, prefix@, spans@, root, function, block, kernel_block, operation),
+{
+    checked_u32_prefix_assemble_body_v1!(verus_exec_expr, types, locals, prefix, spans, root, function, block,
+        kernel_block, operation, selected, index, [
+            invariant
+                0 < prefix.len() <= 256, index <= spans.len(), selected.len() == prefix.len(),
+                select_spans(spans@, root, function, block, prefix@.len(), index as nat) == Some(selected@),
+                forall|i: int| 0 <= i < selected.len() && (#[trigger] selected@[i]).is_some()
+                    ==> selected@[i].unwrap() < index,
+            decreases spans.len() - index,
+        ], [proof {
+            if select_spans(spans@, root, function, block, prefix@.len(), spans@.len()).is_some() {
+                selection_success_prefix(spans@, root, function, block, prefix@.len(), spans@.len(), (index + 1) as nat);
+            }
+        }], steps, next_operation, ordinal, [
+            invariant
+                0 < prefix.len() <= 256, ordinal <= prefix.len(), selected.len() == prefix.len(),
+                select_spans(spans@, root, function, block, prefix@.len(), spans@.len()) == Some(selected@),
+                forall|i: int| 0 <= i < selected.len() && (#[trigger] selected@[i]).is_some()
+                    ==> selected@[i].unwrap() < spans.len(),
+                walk_spans(types@, locals@, prefix@, spans@, selected@, kernel_block, operation, ordinal as nat)
+                    == Some((steps@, next_operation)),
+            decreases prefix.len() - ordinal,
+        ], [proof {
+            if walk_spans(types@, locals@, prefix@, spans@, selected@, kernel_block, operation, prefix@.len()).is_some() {
+                walk_success_prefix(types@, locals@, prefix@, spans@, selected@, kernel_block, operation, prefix@.len(), (ordinal + 1) as nat);
+            }
+        }])
+}
+
+proof fn selected_original_spans(spans: Seq<SemanticKirStatementOperationSpanV1>, root: u32,
+    function: u32, block: u32, length: nat, count: nat)
+    requires count <= spans.len(), select_spans(spans, root, function, block, length, count).is_some(),
+    ensures
+        select_spans(spans, root, function, block, length, count).unwrap().len() == length,
+        forall|i: int| 0 <= i < count && selects(#[trigger] spans[i], root, function, block, length)
+            ==> select_spans(spans, root, function, block, length, count).unwrap()[spans[i].statement_ordinal as int] == Some(i as usize),
+        forall|ordinal: int| 0 <= ordinal < length
+            && (#[trigger] select_spans(spans, root, function, block, length, count).unwrap()[ordinal]).is_some()
+            ==> {
+                let index = select_spans(spans, root, function, block, length, count).unwrap()[ordinal].unwrap();
+                index < count && selects(spans[index as int], root, function, block, length)
+                    && spans[index as int].statement_ordinal == ordinal
+            },
+    decreases count,
+{
+    if count > 0 {
+        selected_original_spans(spans, root, function, block, length, (count - 1) as nat);
+        let before = select_spans(spans, root, function, block, length, (count - 1) as nat).unwrap();
+        let span = spans[count - 1];
+        if selects(span, root, function, block, length) {
+            let after = before.update(span.statement_ordinal as int, Some((count - 1) as usize));
+            assert forall|i: int| 0 <= i < count && selects(#[trigger] spans[i], root, function, block, length)
+                implies after[spans[i].statement_ordinal as int] == Some(i as usize) by {
+                if i < count - 1 {
+                    assert(before[spans[i].statement_ordinal as int] == Some(i as usize));
+                }
+            }
+            assert forall|ordinal: int| 0 <= ordinal < length && (#[trigger] after[ordinal]).is_some()
+                implies {
+                    let index = after[ordinal].unwrap();
+                    index < count && selects(spans[index as int], root, function, block, length)
+                        && spans[index as int].statement_ordinal == ordinal
+                } by {
+                if ordinal != span.statement_ordinal { assert(after[ordinal] == before[ordinal]); }
+            }
+        }
+    }
+}
+
+// The terminal checked-add AST node is validated separately by check_parts.
+// This evaluates only its preceding statements, preserving the terminal boundary.
+spec fn execute_prefix(prefix: Seq<SemanticStatementV1>, initial: Seq<Option<u32>>, count: nat)
+    -> Option<Seq<Option<u32>>>
+    decreases count,
+{
+    if count == 0 { Some(initial) }
+    else {
+        match execute_prefix(prefix, initial, (count - 1) as nat) {
+            None => None,
+            Some(before) => if count < prefix.len() { execute_statement(prefix[count - 1], before) }
+                else { Some(before) },
+        }
+    }
+}
+
+proof fn concrete_appended_prefix(initial: Seq<Option<u32>>, steps: Seq<PrefixStep>, step: PrefixStep, count: nat)
+    requires count <= steps.len(),
+    ensures concrete_after(initial, steps.push(step), count) == concrete_after(initial, steps, count),
+    decreases count,
+{
+    if count > 0 { concrete_appended_prefix(initial, steps, step, (count - 1) as nat); }
+}
+
+proof fn concrete_length(initial: Seq<Option<u32>>, steps: Seq<PrefixStep>, count: nat)
+    requires count <= steps.len(), concrete_after(initial, steps, count).is_some(),
+    ensures concrete_after(initial, steps, count).unwrap().len() == initial.len(),
+    decreases count,
+{
+    if count > 0 { concrete_length(initial, steps, (count - 1) as nat); }
+}
+
+proof fn walk_source_denotation(types: Seq<SemanticTypeDeclV1>, locals: Seq<SemanticLocalDeclV1>,
+    prefix: Seq<SemanticStatementV1>, spans: Seq<SemanticKirStatementOperationSpanV1>, selected: Seq<Option<usize>>,
+    kernel_block: u32, operation: u32, count: nat, initial: Seq<Option<u32>>)
+    requires count <= prefix.len(), selected.len() == prefix.len(), initial.len() == locals.len(),
+        walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, count).is_some(),
+    ensures {
+        let steps = walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, count).unwrap().0;
+        execute_prefix(prefix, initial, count) == concrete_after(initial, steps, steps.len())
+    },
+    decreases count,
+{
+    if count > 0 {
+        walk_source_denotation(types, locals, prefix, spans, selected, kernel_block, operation, (count - 1) as nat, initial);
+        let before = walk_spans(types, locals, prefix, spans, selected, kernel_block, operation, (count - 1) as nat).unwrap();
+        if count < prefix.len() {
+            let span = spans[selected[count - 1].unwrap() as int];
+            let normalized = typed_step(types, locals, prefix[count - 1], span.operation_count).unwrap();
+            if let Some(step) = normalized {
+                concrete_appended_prefix(initial, before.0, step, before.0.len());
+            }
+            if concrete_after(initial, before.0, before.0.len()).is_some() {
+                concrete_length(initial, before.0, before.0.len());
+                source_statement_denotation(types, locals, prefix[count - 1], span.operation_count,
+                    concrete_after(initial, before.0, before.0.len()).unwrap());
+            }
+        }
+    }
+}
+
+proof fn assembled_source_symbolic_denotation(types: Seq<SemanticTypeDeclV1>, locals: Seq<SemanticLocalDeclV1>,
+    prefix: Seq<SemanticStatementV1>, spans: Seq<SemanticKirStatementOperationSpanV1>,
+    root: u32, function: u32, block: u32, kernel_block: u32, operation: u32,
+    steps: Seq<PrefixStep>, end: u32, initial: Seq<Origin>, arguments: Seq<u32>)
+    requires
+        source_assembly(types, locals, prefix, spans, root, function, block, kernel_block, operation) == Some((steps, end)),
+        initial.len() == locals.len(), valid_origins(initial, arguments),
+        symbolic_after(initial, steps, steps.len()).is_some(),
+    ensures execute_prefix(prefix, denote(initial, arguments), prefix.len())
+        == Some(denote(symbolic_after(initial, steps, steps.len()).unwrap(), arguments)),
+{
+    let selected = select_spans(spans, root, function, block, prefix.len(), spans.len()).unwrap();
+    selected_original_spans(spans, root, function, block, prefix.len(), spans.len());
+    walk_source_denotation(types, locals, prefix, spans, selected, kernel_block, operation, prefix.len(), denote(initial, arguments));
+    prefix_denotation(initial, steps, steps.len(), arguments);
 }
 
 proof fn source_statement_symbolic_composition(

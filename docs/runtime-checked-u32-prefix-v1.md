@@ -72,8 +72,25 @@ forwarding paths, including outer attributes and declaration nesting. This is a
 reviewed structural bridge, not a theorem about Rust parsing, layout or the
 entire semantic MIR model.
 
-The proof does **not** verify ABI discovery, KIR normalization, whole-prefix/span
-assembly, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
+Actual retained source-span selection and the source prefix walk also share
+their executable body with Verus. A private vector of at most 256 ordinal slots
+indexes the original borrowed span slice; no caller-built normalized roster is
+accepted. One linear scan filters exact root/function/block coordinates and
+rejects duplicates. The ordinal walk rejects missing rows, wrong KIR blocks,
+noncontiguous offsets, overflow and incorrect terminal count/add coordinates.
+Its result has an exact acceptance-and-value contract, not merely a conditional
+success theorem. Two-way correspondence identifies every selected original row.
+
+Direct AST evaluation of all statements **before** the captured add agrees with
+the assembled step sequence and composes with the symbolic fold. The terminal
+span is checked, but the terminal AST expression is deliberately not evaluated
+by this theorem; `check_parts` validates that expression separately. Span selection
+and walking take O(retained spans + prefix length) time and O(prefix length)
+scratch, replacing the former ordinal tree map. Sparse KIR IDs still use a tree
+map; no allocation is sized by the largest raw ID.
+
+The proof does **not** verify ABI discovery, terminal AST validation, KIR
+normalization/assembly, actual rustc extraction, LLVM/ISA lowering, physical ABI/EXEC entry state, control-flow
 continuation, memory effects, completion or protected compiler provenance.
 Those obligations cannot be replaced by the source hashes used to bind tests
 and solver runs to reviewed files.
@@ -135,9 +152,16 @@ they are not a proof of how the adapter discovers those rows or KIR slots.
 
 The [typed-source normalization qualification](evidence/dev-source-normalization-2026-10-03/README.md)
 adds exact source-statement normalization and direct-denotation composition.
-It does not prove how ABI rows, KIR slots or complete prefix spans are discovered.
+It does not prove how ABI rows or KIR slots are discovered.
 
-Next prove ABI discovery and KIR/whole-prefix assembly. Then compose physical
+The [source-assembly qualification](evidence/dev-source-assembly-2026-10-03/README.md)
+extends that bridge through the actual span scan/walk and pre-add AST denotation.
+Reviewed structural guards bind the original container fields and getter chains,
+capture coordinates, typed IDs, wrapper and caller. These source checks are not
+a proof of compiler provenance or Rust name resolution/layout.
+
+Next prove actual KIR constant/checked-add assembly and terminal AST validation,
+and finish ABI discovery. Then compose physical
 entry, continuation and memory obligations into protected per-invocation admission.
 Only that admission can authorize a general application-kernel multi-GPU witness.
 The A3 milestone, issue #182 and broad HIP/HSA parity remain incomplete.

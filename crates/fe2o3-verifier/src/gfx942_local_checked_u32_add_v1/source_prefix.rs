@@ -13,6 +13,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use std::collections::BTreeMap;
 
+mod assemble;
 mod basis;
 mod fold;
 mod normalize;
@@ -57,8 +58,8 @@ impl CheckedU32PrefixArgumentV1 {
 /// checked-add value/overflow results on the first traversal from function
 /// entry. Later backedges and repeated block visits are not covered. This is
 /// not a claim about machine entry, continuation, compiler origin or authority.
-/// ABI discovery and statement normalization remain separate from the shared
-/// argument-basis and fold theorems.
+/// ABI discovery and complete KIR assembly remain separate from the shared
+/// source-normalization, argument-basis and fold theorems.
 #[derive(Debug)]
 pub struct CapturedCheckedU32PrefixV1<'a> {
     capture: ProductionCheckedU32AddCaptureV1<'a>,
@@ -273,20 +274,6 @@ fn check_arguments(
     Ok(arguments)
 }
 
-fn source_step(
-    source: &AdmittedSemanticMirV1,
-    function: &SemanticFunctionDeclV1,
-    statement: &SemanticStatementV1,
-    span: &SemanticKirStatementOperationSpanV1,
-) -> Result<Option<PrefixStep>, CheckedU32PrefixErrorV1> {
-    normalize::source_step(
-        source.types(),
-        function.locals(),
-        statement,
-        span.operation_count(),
-    )
-}
-
 fn check_parts(
     capture: ProductionCheckedU32AddCaptureV1<'_>,
     source: &AdmittedSemanticMirV1,
@@ -328,48 +315,18 @@ fn check_parts(
         return Err(E::Entry);
     }
     let arguments = check_arguments(source, function, kernel, capture, correspondence)?;
-    let mut spans = BTreeMap::new();
-    for span in correspondence
-        .statement_operation_spans()
-        .iter()
-        .filter(|span| {
-            span.correspondence_owner() == request.root()
-                && span.semantic_function() == request.function()
-                && span.semantic_block() == request.block()
-                && span.statement_ordinal() <= request.statement()
-        })
-    {
-        if spans.insert(span.statement_ordinal(), span).is_some() {
-            return Err(E::Span);
-        }
-    }
-    if spans.len() != statement_count {
-        return Err(E::Span);
-    }
+    let (source_steps, next_operation) = assemble::source_prefix(
+        source,
+        function,
+        prefix,
+        correspondence.statement_operation_spans(),
+        capture,
+        entry.id,
+    )?;
     let mut source_state = vec![Origin::Uninitialized; function.locals().len()];
     let mut kernel_state = vec![Origin::Uninitialized; arguments.len()];
     if !basis::initialize_argument_basis(&arguments, &mut source_state, &mut kernel_state) {
         return Err(E::Arguments);
-    }
-    let mut source_steps = Vec::with_capacity(statement_count - 1);
-    let mut next_operation = 0u32;
-    for (ordinal, statement) in prefix.iter().enumerate() {
-        let span = *spans.get(&(ordinal as u32)).ok_or(E::Span)?;
-        if span.kernel_ir_block() != entry.id || span.first_operation_ordinal() != next_operation {
-            return Err(E::Span);
-        }
-        next_operation = next_operation
-            .checked_add(span.operation_count())
-            .ok_or(E::Span)?;
-        if ordinal + 1 < statement_count {
-            if let Some(step) = source_step(source, function, statement, span)? {
-                source_steps.push(step);
-            }
-        } else if span.operation_count() != 2
-            || span.first_operation_ordinal().checked_add(1) != Some(capture.operation())
-        {
-            return Err(E::Span);
-        }
     }
     if !fold::fold(&mut source_state, &source_steps) {
         return Err(E::Uninitialized);

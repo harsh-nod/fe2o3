@@ -14,4 +14,4 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 python3 -I -B "$here/checked_u32_prefix_check.py" --verus "$VERUS" --output "$base/proof"
-printf '%s\n' 'PASS: shared checked-u32 typed source normalization, argument basis and prefix fold; 45 verified obligations, 33 logical mutants, 11 runner controls; no full normalization or application authority claim.'
+printf '%s\n' 'PASS: shared checked-u32 source assembly, normalization, basis and fold; 71 verified obligations, 48 logical mutants, 12 runner controls; terminal AST, KIR and application authority remain separate.'

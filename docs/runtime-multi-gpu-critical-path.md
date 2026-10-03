@@ -70,12 +70,16 @@ schema/getter correspondence and explicit irrelevant-payload erasure. See the
 [normalization checkpoint](evidence/dev-source-normalization-2026-10-03/README.md).
 These proofs do not cover a complete kernel.
 
-Next compose the actual retained span walk and KIR Constant/CheckedAdd slot
-assembly with the existing source normalizer, basis and fold. Preserve exact
-owner identity, V8 IDs, contiguous spans and value/overflow ordering. Do not
-substitute a caller-built operation sequence for those production loops.
+The [source-assembly checkpoint](evidence/dev-source-assembly-2026-10-03/README.md)
+now composes the actual retained span scan/walk with source normalization and
+pre-add AST/fold denotation. Its bounded private ordinal vector replaces the
+source tree map, making the scan/walk linear. Terminal AST evaluation is separate.
 
-The remaining path includes ABI discovery, whole-prefix assembly and
+Next prove KIR Constant/CheckedAdd slot assembly and terminal AST validation.
+Preserve exact owner identity, sparse V8 IDs, contiguous spans and value/overflow
+ordering. Do not substitute a caller-built operation sequence for those loops.
+
+The remaining path includes ABI discovery, terminal source/KIR assembly and
 semantic-to-machine entry/continuation/memory/completion evidence, protected invocation custody and
 the concrete deployment-approved Worker V3 verifier/refinement providers. Do not
 replace these with qualification metadata, caller digests or an always-allow

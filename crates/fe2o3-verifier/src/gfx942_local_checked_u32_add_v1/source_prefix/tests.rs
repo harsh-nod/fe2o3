@@ -12,6 +12,9 @@ use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1};
 #[path = "tests/normalization.rs"]
 mod normalization;
 
+#[path = "tests/assembly.rs"]
+mod assembly;
+
 fn ty(index: u32) -> SemanticTypeIdV1 {
     SemanticTypeIdV1::from_index(index)
 }

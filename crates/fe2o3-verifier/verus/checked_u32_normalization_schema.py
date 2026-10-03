@@ -5,6 +5,7 @@ from functools import lru_cache
 
 MODEL = Path("crates/fe2o3-mir-model/src/semantic_mir_v1.rs")
 CORRESPONDENCE = Path("crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs")
+CAPTURE = CORRESPONDENCE.with_name("production_checked_u32_add_capture_v1.rs")
 DECLARATIONS = {
     "enum": ("SemanticScalarTypeV1", "SemanticTypeShapeV1", "SemanticConstantValueV1",
              "SemanticOperandV1", "SemanticRvalueKindV1", "SemanticStatementKindV1"),
@@ -80,12 +81,17 @@ def top_level(base, source, prefix, attributes=""):
               and (begin == 0 or source[begin - 1] in ("}", ";")), "exact unconditional item attributes: " + prefix)
 
 
-def validate(base, sources, adapter, normalizer, proof):
-    return validate_bytes(base, *(sources[str(path)] for path in (MODEL, CORRESPONDENCE, adapter, normalizer, proof)))
+def container(base, source, prefix, derives, fields):
+    top_level(base, source, prefix, "#[derive(" + derives + ")]")
+    base.need(base.one_block(source, prefix)[0] == base.tokens(fields), "direct retained container: " + prefix)
+
+
+def validate(base, sources, adapter, normalizer, proof, assembler):
+    return validate_bytes(base, *(sources[str(path)] for path in (MODEL, CORRESPONDENCE, adapter, normalizer, proof, assembler, CAPTURE)))
 
 
 @lru_cache(maxsize=8)
-def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, normalizer_bytes, proof_bytes):
+def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, normalizer_bytes, proof_bytes, assembler_bytes, capture_bytes):
     # Cache only completed checks keyed by every consulted byte, never paths.
     need, block, tokens = base.need, base.one_block, base.tokens
     source = tokens(model_bytes.decode("ascii"))
@@ -93,6 +99,22 @@ def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, norma
     need(source.count("cfg") == 1 and "cfg_attr" not in source
          and len(base.positions(source, tokens("#[cfg(test)] mod private_tests {"))) == 1
          and block(source, "mod private_tests")[1] == len(source), "only final private-test cfg")
+    for name, fields in (
+        ("SemanticBasicBlockV1", """identity: SemanticBlockIdentityV1, source: SemanticSourceProvenanceV1,
+            statements: Box<[SemanticStatementV1]>, terminator: SemanticTerminatorV1,"""),
+        ("SemanticFunctionDeclV1", """identity: SemanticFunctionIdentityV1, role: SemanticFunctionRoleV1,
+            export: Option<SemanticFunctionExportV1>, item_definition_identity: SemanticItemDefinitionIdentityV1,
+            monomorphization_identity: SemanticMonomorphizationIdentityV1, generic_type_arguments_identity: SemanticGenericTypeArgumentsIdentityV1,
+            const_generic_arguments_identity: SemanticConstGenericArgumentsIdentityV1, source: SemanticSourceProvenanceV1,
+            abi: SemanticFunctionAbiV1, locals: Box<[SemanticLocalDeclV1]>, entry: SemanticBlockIdV1, blocks: Box<[SemanticBasicBlockV1]>,"""),
+        ("InertSemanticMirRequestV1", """target: SemanticTargetDataLayoutV1, types: Box<[SemanticTypeDeclV1]>,
+            allocations: Box<[SemanticAllocationDeclV1]>, statics: Box<[SemanticStaticDeclV1]>, vtables: Box<[SemanticVTableDeclV1]>,
+            functions: Box<[SemanticFunctionDeclV1]>, callables: Box<[SemanticCallableDeclV1]>, roots: Box<[SemanticFunctionIdV1]>,"""),
+    ):
+        container(base, source, "pub struct " + name, "Clone, Debug, Eq, PartialEq", fields)
+    container(base, source, "pub struct AdmittedInertSemanticMirV1", "Debug", """
+        request: InertSemanticMirRequestV1, wire_version: SemanticMirWireVersionV1,
+        canonical: Vec<u8>, semantic_sha256: InertSemanticMirSha256V1,""")
     for kind, names in DECLARATIONS.items():
         for name in names:
             derives = ("Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd"
@@ -115,7 +137,7 @@ def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, norma
     };"""
     need(block(source, "macro_rules! index_id")[0] == tokens(id_macro), "exact typed index implementation")
     top_level(base, source, "macro_rules! index_id")
-    for name in ("SemanticTypeIdV1", "SemanticLocalIdV1"):
+    for name in ("SemanticTypeIdV1", "SemanticLocalIdV1", "SemanticFunctionIdV1", "SemanticBlockIdV1"):
         top_level(base, source, "index_id!(" + name + ");")
         need(len(base.positions(source, tokens("index_id!(" + name + ");"))) == 1,
              "unique typed index invocation: " + name)
@@ -139,12 +161,22 @@ def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, norma
         need(block(model_impl, " ".join(model_impl[begin:brace]))[0] == tokens(body), "same getter projection")
     for owner, signature, body in (
         ("SemanticFunctionDeclV1", "pub fn locals(&self) -> &[SemanticLocalDeclV1]", "&self.locals"),
+        ("SemanticFunctionDeclV1", "pub fn blocks(&self) -> &[SemanticBasicBlockV1]", "&self.blocks"),
+        ("SemanticFunctionDeclV1", "pub const fn entry(&self) -> SemanticBlockIdV1", "self.entry"),
+        ("SemanticBasicBlockV1", "pub fn statements(&self) -> &[SemanticStatementV1]", "&self.statements"),
         ("AdmittedInertSemanticMirV1", "pub fn types(&self) -> &[SemanticTypeDeclV1]", "&self.request.types"),
+        ("AdmittedInertSemanticMirV1", "pub fn functions(&self) -> &[SemanticFunctionDeclV1]", "&self.request.functions"),
     ):
         top_level(base, source, "impl " + owner + " {")
         top_level(base, block(source, "impl " + owner)[0], signature)
         base.method(source, owner, signature, body)
     correspondence = tokens(correspondence_bytes.decode("ascii"))
+    container(base, correspondence, "pub struct SemanticKirCorrespondenceV1", "Clone, Debug, Eq, PartialEq", """
+        semantic_sha256: [u8; 32], function_count: usize, lowered_functions: Box<[SemanticKirFunctionCorrespondenceV1]>,
+        blocks: Box<[SemanticKirBlockCorrespondenceV1]>, statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>,
+        terminator_operation_spans: Box<[SemanticKirTerminatorOperationSpanV1]>, generated_terminator_values: Box<[SemanticKirGeneratedTerminatorValuesV1]>,
+        synthetic_operation_spans: Box<[SemanticKirSyntheticOperationSpanV1]>, parameter_bindings: Box<[SemanticKirParameterBindingV1]>,
+        parameter_component_bindings: Box<[SemanticKirParameterComponentBindingV1]>, ignored_parameter_bindings: Box<[SemanticKirIgnoredParameterBindingV1]>,""")
     span = "SemanticKirStatementOperationSpanV1"
     top_level(base, correspondence, "pub struct " + span, "#[derive(Clone, Copy, Debug, Eq, PartialEq)]")
     top_level(base, correspondence, "impl " + span + " {")
@@ -155,14 +187,63 @@ def validate_bytes(base, model_bytes, correspondence_bytes, adapter_bytes, norma
     """), "exact retained span schema")
     need(not any(token in block(correspondence, "impl " + span)[0]
                  for token in ("cfg", "cfg_attr", "include")), "unconditional span getter")
-    top_level(base, block(correspondence, "impl " + span)[0], "pub const fn operation_count(self) -> u32")
-    base.method(correspondence, span, "pub const fn operation_count(self) -> u32", "self.operation_count")
+    need(canonical(block(correspondence, "pub struct " + span)[0])
+         == canonical(block(harness, "struct " + span)[0]), "actual span fields match proof")
+    for name, kind in (("correspondence_owner", "SemanticFunctionIdV1"),
+                       ("semantic_function", "SemanticFunctionIdV1"), ("semantic_block", "SemanticBlockIdV1"),
+                       ("statement_ordinal", "u32"), ("kernel_ir_block", "BlockId"),
+                       ("first_operation_ordinal", "u32"), ("operation_count", "u32")):
+        signature = "pub const fn " + name + "(self) -> " + kind
+        top_level(base, block(correspondence, "impl " + span)[0], signature)
+        base.method(correspondence, span, signature, "self." + name)
+        base.method(harness, span, "fn " + name + "(self) -> (value: " + kind
+                    + ") ensures value == self." + name, "self." + name)
+    roster = "SemanticKirCorrespondenceV1"
+    top_level(base, correspondence, "impl " + roster + " {")
+    signature = "pub fn statement_operation_spans(&self) -> &[SemanticKirStatementOperationSpanV1]"
+    top_level(base, block(correspondence, "impl " + roster)[0], signature)
+    base.method(correspondence, roster, signature, "&self.statement_operation_spans")
+    capture = tokens(capture_bytes.decode("ascii"))
+    for prefix, fields in (
+        ("pub struct ProductionCheckedU32AddCaptureRequestV1", """root: SemanticFunctionIdV1,
+            function: SemanticFunctionIdV1, block: SemanticBlockIdV1, statement: u32,"""),
+        ("struct Source", """request: ProductionCheckedU32AddCaptureRequestV1, lhs_local: SemanticLocalIdV1,
+            tuple_local: SemanticLocalIdV1, lhs_ssa: SsaValueV1, tuple_ssa: SsaValueV1, use_event: u32, define_event: u32, literal: u32,"""),
+        ("pub(super) struct Captured", """source: Source, block: BlockId, operation: u32, operand: ValueId, value: ValueId, overflow: ValueId,"""),
+    ):
+        container(base, capture, prefix, "Clone, Copy, Debug, Eq, PartialEq", fields)
+    container(base, capture, "pub struct ProductionCheckedU32AddCaptureV1<'a>", "Clone, Copy, Debug", """
+        owner: &'a ProductionSemanticKirOwnerV1, capture: &'a Captured,""")
+    request = "ProductionCheckedU32AddCaptureRequestV1"
+    top_level(base, capture, "impl " + request + " {")
+    for name, kind in (("root", "SemanticFunctionIdV1"), ("function", "SemanticFunctionIdV1"), ("block", "SemanticBlockIdV1"), ("statement", "u32")):
+        signature = "pub const fn " + name + "(self) -> " + kind
+        top_level(base, block(capture, "impl " + request)[0], signature)
+        base.method(capture, request, signature, "self." + name)
+    implementation = "impl<'a> ProductionCheckedU32AddCaptureV1<'a>"
+    top_level(base, capture, implementation)
+    methods = block(capture, implementation)[0]
+    for name, kind, body in (("request", request, "self.capture.source.request"),
+                             ("operation", "u32", "self.capture.operation")):
+        signature = "pub const fn " + name + "(self) -> " + kind
+        top_level(base, methods, signature)
+        need(block(methods, signature)[0] == tokens(body), "actual capture projection: " + name)
     caller = tokens(adapter_bytes.decode("ascii"))
-    need(block(caller, """fn source_step(source: &AdmittedSemanticMirV1,
-        function: &SemanticFunctionDeclV1, statement: &SemanticStatementV1,
-        span: &SemanticKirStatementOperationSpanV1,) -> Result<Option<PrefixStep>, CheckedU32PrefixErrorV1>""")[0]
-        == tokens("normalize::source_step(source.types(), function.locals(), statement, span.operation_count(),)"),
-        "actual retained AST/span forwarding")
+    need(len(base.positions(caller, tokens("""let (source_steps, next_operation) = assemble::source_prefix(
+        source, function, prefix, correspondence.statement_operation_spans(), capture, entry.id,)?;"""))) == 1,
+        "actual retained source assembly forwarding")
+    assembly = tokens(assembler_bytes.decode("ascii"))
+    base.includes(assembly, ["assemble_body.rs"])
+    need(block(assembly, "macro_rules! ordinary_exec")[0] == tokens("($body:expr) => { $body };"), "identity assembly adapter")
+    need(block(assembly, """pub(super) fn source_prefix(source: &AdmittedSemanticMirV1,
+        function: &SemanticFunctionDeclV1, prefix: &[SemanticStatementV1], spans: &[SemanticKirStatementOperationSpanV1],
+        capture: ProductionCheckedU32AddCaptureV1<'_>, entry: BlockId,) -> Result<(Vec<PrefixStep>, u32), CheckedU32PrefixErrorV1>""")[0]
+        == tokens("""let types = source.types(); let locals = function.locals();
+            let root = capture.request().root().index(); let function_index = capture.request().function().index();
+            let block = capture.request().block().index(); let kernel_block = entry.0; let operation = capture.operation();
+            checked_u32_prefix_assemble_body_v1!(ordinary_exec, types, locals, prefix, spans, root, function_index, block,
+                kernel_block, operation, selected, index, [], [], steps, next_operation, ordinal, [], [])"""),
+        "direct actual source assembler wrapper")
     normal = tokens(normalizer_bytes.decode("ascii"))
     base.includes(normal, ["normalize_body.rs"])
     need(block(normal, "macro_rules! ordinary_exec")[0] == tokens("($body:expr) => { $body };"), "identity expression adapter")

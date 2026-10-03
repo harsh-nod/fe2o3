@@ -7,13 +7,13 @@ pub(super) enum Origin {
     Constant(u32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PrefixInput {
     Cell(usize),
     Constant(u32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PrefixStep {
     pub(super) destination: usize,
     pub(super) input: PrefixInput,

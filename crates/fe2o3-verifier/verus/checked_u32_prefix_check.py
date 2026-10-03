@@ -21,15 +21,18 @@ BASIS = FOLD.with_name("basis.rs")
 BASIS_BODY = FOLD.with_name("basis_body.rs")
 NORMALIZE = FOLD.with_name("normalize.rs")
 NORMALIZE_BODY = FOLD.with_name("normalize_body.rs")
+ASSEMBLE = FOLD.with_name("assemble.rs")
+ASSEMBLE_BODY = FOLD.with_name("assemble_body.rs")
 SCHEMA = PROOF.with_name("checked_u32_normalization_schema.py")
 ADAPTER = FOLD.parent.with_suffix(".rs")
 KIR_SCHEMA = Path("crates/fe2o3-kernel-ir/src/ir.rs")
 TEST = PROOF.with_name("checked_u32_prefix_test.py")
-FOLD_SHA = "b987601f3c5008cc6333de06d6922ef79e07eea8e34871b68914144d4541cd22"
-PROOF_SHA = "d42481cf21fefd3529f70997966f2a9013d83d4ac90259eabdf21f93c945227e"
+FOLD_SHA = "fc5167c5ea5eb019e872ed332b94b7aec697b32cf613cffae865d0037f537f5d"
+PROOF_SHA = "93df6af8fea1f12516f3f44c3d4d24e3fbb942d47ba9321a7936a3d81a9c29a8"
 BASIS_SHA = "48fa84b1d850c92157ff217ca56eb1ce90c5d5225bd5e7a45143f56c5a82af7d"
-ADAPTER_SHA = "324f6333b02ff11c56017d54c92456f8a5ac629ed876ef7d496f839ca196c0c5"
+ADAPTER_SHA = "ea02b41668a6bdb93c336a265f8785042fb011854ec1f7e57e91c68ae3f3bc81"
 NORMALIZE_SHA = "d57442f493ef03158925e784dfb3332e8bccfc57132a7f0a058cf3b043eaa99a"
+ASSEMBLE_SHA = "c9faa74b7401cfe751fe1f1ed806ee014443186b7ba70d55df4b17a0f8164610"
 MACRO = "checked_u32_prefix_fold_body_v1"
 INVARIANT = "symbolic_after(before, steps@, index as nat) == Some(state@),"
 TARGETS = {
@@ -52,8 +55,15 @@ for name, macro, contract in (
 ):
     TARGETS[name] = dict(body=NORMALIZE_BODY, macro="checked_u32_prefix_" + macro + "_body_v1",
                          function=name, verified=0, contract=contract, invariants={}, module="normalization")
-VERIFIED_COUNT = 45
-CONTROL_COUNT = 11
+TARGETS["assemble"] = dict(body=ASSEMBLE_BODY, macro="checked_u32_prefix_assemble_body_v1",
+    function="assemble_source", verified=2, module="normalization",
+    contract="ensures assembly_result(result) == source_assembly(types@, locals@, prefix@, spans@, root, function, block, kernel_block, operation),",
+    invariants={
+        "select": "select_spans(spans@, root, function, block, prefix@.len(), index as nat) == Some(selected@),",
+        "loop": "walk_spans(types@, locals@, prefix@, spans@, selected@, kernel_block, operation, ordinal as nat)",
+    })
+VERIFIED_COUNT = 71
+CONTROL_COUNT = 12
 SCOPE = ("Shared row initialization accepts exactly positional, bounded, source-injective rows "
          "with matching KIR scratch length; it establishes exact paired origins and uninitialized "
          "unmapped source cells. Its denotation composes with uninitialized KIR padding and the fold. "
@@ -62,7 +72,9 @@ SCOPE = ("Shared row initialization accepts exactly positional, bounded, source-
          "Shared typed source-AST normalization accepts exactly Nop/count0, typed Copy/count0 and u32 Constant/count1; "
          "it preserves direct statement denotation and composes with the origin step. AST field/variant/getter "
          "correspondence is source-checked with explicit irrelevant-payload erasure, not a parser/layout theorem. "
-         "Shared checked add proves modulo-2^32 value and overflow. No ABI discovery, KIR slot/span normalization, "
+         "Actual retained source-span selection and prefix assembly have exact acceptance and pre-ADD AST denotation; "
+         "the last span is checked but terminal AST evaluation is separate. "
+         "Shared checked add proves modulo-2^32 value and overflow. No ABI discovery, KIR slot normalization, "
          "rustc extraction, machine-entry, continuation, memory or launch-authority proof.")
 
 
@@ -89,10 +101,11 @@ schema_spec.loader.exec_module(schema)
 def validate(sources):
     base.validate_sources(sources)
     for path, expected in ((HELPER, HELPER_SHA), (FOLD, FOLD_SHA), (PROOF, PROOF_SHA),
-                           (BASIS, BASIS_SHA), (ADAPTER, ADAPTER_SHA), (NORMALIZE, NORMALIZE_SHA)):
+                           (BASIS, BASIS_SHA), (ADAPTER, ADAPTER_SHA), (NORMALIZE, NORMALIZE_SHA), (ASSEMBLE, ASSEMBLE_SHA)):
         need(digest(sources[str(path)]) == expected, "reviewed forwarding/contract: " + str(path))
     base.shared_body(base.tokens(sources[str(BODY)].decode("ascii")), MACRO)
     base.shared_body(base.tokens(sources[str(BASIS_BODY)].decode("ascii")), TARGETS["basis"]["macro"])
+    base.shared_body(base.tokens(sources[str(ASSEMBLE_BODY)].decode("ascii")), TARGETS["assemble"]["macro"])
     remaining = base.tokens(sources[str(NORMALIZE_BODY)].decode("ascii"))
     for name in ("is_u32", "scalar_local", "scalar_constant", "source_step"):
         macro = TARGETS[name]["macro"]
@@ -100,7 +113,7 @@ def validate(sources):
         base.shared_body(remaining[:end], macro)
         remaining = remaining[end:]
     need(not remaining, "closed four-macro normalizer")
-    schema.validate(base, sources, ADAPTER, NORMALIZE, PROOF)
+    schema.validate(base, sources, ADAPTER, NORMALIZE, PROOF, ASSEMBLE)
     fields = base.tokens("argument: usize, semantic_local: u32, kernel_ir_value: ValueId,")
     for path, declaration in ((ADAPTER, "pub struct CheckedU32PrefixArgumentV1"),
                               (PROOF, "struct CheckedU32PrefixArgumentV1")):
@@ -109,12 +122,15 @@ def validate(sources):
     need(len(base.positions(base.tokens(sources[str(KIR_SCHEMA)].decode("ascii")),
                             base.tokens("pub struct ValueId(pub u32);"))) == 1,
          "exact opaque KIR value identity shape")
+    kir = base.tokens(sources[str(KIR_SCHEMA)].decode("ascii"))
+    schema.top_level(base, kir, "pub struct BlockId(pub u32);",
+                     "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]")
 
 
 def snapshot():
     sources = base.source_snapshot()
-    for path in (HELPER, FOLD, BODY, BASIS, BASIS_BODY, NORMALIZE, NORMALIZE_BODY, SCHEMA,
-                 schema.MODEL, schema.CORRESPONDENCE, ADAPTER, KIR_SCHEMA, PROOF, TEST,
+    for path in (HELPER, FOLD, BODY, BASIS, BASIS_BODY, NORMALIZE, NORMALIZE_BODY, ASSEMBLE, ASSEMBLE_BODY, SCHEMA,
+                 schema.MODEL, schema.CORRESPONDENCE, schema.CAPTURE, ADAPTER, KIR_SCHEMA, PROOF, TEST,
                  PROOF.with_name("run-checked-u32-prefix.sh"), Path(__file__).relative_to(ROOT)):
         selected = ROOT / path
         need(selected.is_file() and not selected.is_symlink(), "ordinary source: " + str(path))
@@ -198,6 +214,32 @@ def normalization_mutants(body):
         step, "{ let _ = (destination, input); Err(CheckedU32PrefixErrorV1::Source) }")
     cases["always-reject"] = (changed, "source_step")
     need(len(cases) == len({value[0] for value in cases.values()}) == 17, "distinct normalization mutants")
+    return cases
+
+
+def assembly_mutants(body):
+    cases = {}
+    for name, before, after, failure in (
+        ("wrong-root", "span.correspondence_owner().index() == $root", "span.correspondence_owner().index() == ($root ^ 1)", "post"),
+        ("wrong-function", "span.semantic_function().index() == $function", "span.semantic_function().index() == ($function ^ 1)", "post"),
+        ("wrong-block", "span.semantic_block().index() == $block", "span.semantic_block().index() == ($block ^ 1)", "post"),
+        ("duplicate", "if $selected[ordinal].is_some()", "if false && $selected[ordinal].is_some()", "select"),
+        ("wrong-row", "$selected[ordinal] = Some($index);", "$selected[ordinal] = Some(0usize);", "select"),
+        ("missing-success", "let Some(index) = $selected[$ordinal] else {\n                    return Err(CheckedU32PrefixErrorV1::Span);",
+         "let Some(index) = $selected[$ordinal] else {\n                    return Ok(($steps, $next));", "post"),
+        ("kernel-block", "span.kernel_ir_block().0 != $kernel_block", "false", "loop"),
+        ("first-operation", "span.first_operation_ordinal() != $next", "false", "loop"),
+        ("terminal-count", "span.operation_count() != 2", "span.operation_count() > 2", "loop"),
+        ("terminal-operation", "span.first_operation_ordinal().checked_add(1) != Some($operation)", "false", "loop"),
+        ("wrong-end", "$next = end;", "$next = end ^ 1;", "loop"),
+        ("discard-step", "$steps.push(step);", "let _ = step;", "loop"),
+        ("wrong-destination", "$steps.push(step);", "$steps.push(PrefixStep { destination: step.destination ^ 1, input: step.input });", "loop"),
+        ("reject-boundary", "$prefix.len() > 256", "$prefix.len() > 255", "post"),
+        ("always-reject", "$prefix.len() > 256", "$prefix.len() > 0", "post"),
+    ):
+        need(body.count(before) == 1, "one source assembly mutation: " + name)
+        cases[name] = (body.replace(before, after), failure)
+    need(len(cases) == len({v[0] for v in cases.values()}) == 15, "distinct assembly mutants")
     return cases
 
 
@@ -323,7 +365,7 @@ def main():
 
     def prove(name, changed=None, target="fold", failure=None):
         staged = out / (name + "-source")
-        inputs = {path: before[str(path)] for path in (PROOF, BODY, BASIS_BODY, NORMALIZE_BODY, base.BODY)}
+        inputs = {path: before[str(path)] for path in (PROOF, BODY, BASIS_BODY, NORMALIZE_BODY, ASSEMBLE_BODY, base.BODY)}
         if changed is not None:
             inputs[TARGETS[target]["body"]] = changed.encode("ascii")
         for path, data in inputs.items():
@@ -354,6 +396,8 @@ def main():
             prove("negative-basis-" + name, changed, "basis", failure)
         for name, (changed, target) in normalization_mutants(before[str(NORMALIZE_BODY)].decode("ascii")).items():
             prove("negative-normalization-" + name, changed, target, "post")
+        for name, (changed, failure) in assembly_mutants(before[str(ASSEMBLE_BODY)].decode("ascii")).items():
+            prove("negative-assembly-" + name, changed, "assemble", failure)
         prove("positive-after")
     except BaseException as failure:
         error = type(failure).__name__ + ": " + str(failure)
@@ -367,11 +411,12 @@ def main():
             error = (error or "") + "; closing: " + type(failure).__name__ + ": " + str(failure)
         for number, handler in handlers.items():
             signal.signal(number, handler)
-    accepted = error is None and unchanged and len(rows) == 38 and all(row["accepted"] for row in rows)
+    accepted = error is None and unchanged and len(rows) == 53 and all(row["accepted"] for row in rows)
     save(out / "result.json", dict(accepted=accepted, source_unchanged=unchanged, scope=SCOPE,
-         verified_obligations=VERIFIED_COUNT, logical_mutants=33, controls=CONTROL_COUNT, stages=rows, error=error,
+         verified_obligations=VERIFIED_COUNT, logical_mutants=48, controls=CONTROL_COUNT, stages=rows, error=error,
          grants_application_authority=False, proves_normalization_adapters=False,
          proves_argument_basis_initialization=True, proves_typed_source_statement_normalization=True,
+         proves_actual_source_span_assembly=True, proves_terminal_source_statement=False,
          structural_ast_correspondence="source-checked explicit irrelevant-payload erasure"))
     return 0 if accepted else 1
 

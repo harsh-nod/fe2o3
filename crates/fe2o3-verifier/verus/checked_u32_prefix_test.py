@@ -17,7 +17,7 @@ class Controls(unittest.TestCase):
         self.proof = check.ROOT / check.PROOF
         self.data = {"verus": copy.deepcopy(check.base.VERIFIER), "verification-results": {
             "encountered-error": False, "encountered-vir-error": False, "success": True,
-            "errors": 0, "verified": 45, "is-verifying-entire-crate": True}}
+            "errors": 0, "verified": 71, "is-verifying-entire-crate": True}}
 
     def accepted(self, status=0, rows=(), target="fold", failure=None):
         return check.classify(status, json.dumps(self.data), "\n".join(map(json.dumps, rows)), self.proof, target, failure)
@@ -43,7 +43,7 @@ class Controls(unittest.TestCase):
     def test_source_contract_and_mutants(self):
         sources = check.snapshot()
         self.assertEqual(len(check.mutants(sources[str(check.BODY)].decode("ascii"))), 8)
-        for path in (check.PROOF, check.FOLD, check.HELPER, check.BASIS, check.ADAPTER):
+        for path in (check.PROOF, check.FOLD, check.HELPER, check.BASIS, check.ADAPTER, check.ASSEMBLE):
             changed = dict(sources)
             changed[str(path)] += b"\n// changed\n"
             with self.assertRaises(ValueError):
@@ -51,7 +51,7 @@ class Controls(unittest.TestCase):
 
     def test_shared_body_escape_rejects(self):
         for escape in (b'include!("other.rs");\n', b'#[verifier::external_body]\n', b'#[cfg(any())]\n'):
-            for body in (check.BODY, check.BASIS_BODY):
+            for body in (check.BODY, check.BASIS_BODY, check.ASSEMBLE_BODY):
                 sources = check.snapshot()
                 sources[str(body)] = escape + sources[str(body)]
                 with self.assertRaises(ValueError):
@@ -154,7 +154,7 @@ class Controls(unittest.TestCase):
             (check.schema.MODEL, b"pub fn projections(&self) -> &[SemanticProjectionV1] {\n        &self.projections", b"pub fn projections(&self) -> &[SemanticProjectionV1] {\n        &[]"),
             (check.schema.CORRESPONDENCE, b"pub const fn operation_count(self) -> u32 {\n        self.operation_count", b"pub const fn operation_count(self) -> u32 {\n        0"),
             (check.schema.CORRESPONDENCE, b"pub const fn operation_count(self) -> u32", b"#[transform]\n    pub const fn operation_count(self) -> u32"),
-            (check.ADAPTER, b"        span.operation_count(),", b"        0,"),
+            (check.ASSEMBLE, b"let operation = capture.operation();", b"let operation = 0;"),
             (check.NORMALIZE, b"ordinary_exec, types, locals, statement, operations", b"ordinary_exec, types, locals, statement, 0"),
         ):
             expected_sites = 3 if path == check.schema.CORRESPONDENCE else 1
@@ -230,6 +230,37 @@ pub enum SemanticOperandV1 {
                 b"!(verus_exec_expr, types, locals, statement, operations)",
                 b"!(verus_exec_expr, types, locals, statement, 0)"))
             self.assertFalse(check.source_step_exit(changed_span, proof, call, "source_step", "post"))
+
+    def test_assembly_bindings_mutants_and_diagnostics(self):
+        sources = check.snapshot()
+        self.assertEqual(len(check.assembly_mutants(sources[str(check.ASSEMBLE_BODY)].decode("ascii"))), 15)
+        for failure in ("post", "select", "loop"):
+            rows = self.negative("assemble", failure)
+            self.assertTrue(self.accepted(1, rows, "assemble", failure))
+            for status in (0, 2, 124, -9):
+                self.assertFalse(self.accepted(status, rows, "assemble", failure))
+            for other in ("post", "select", "loop"):
+                if other != failure:
+                    self.assertFalse(self.accepted(1, rows, "assemble", other))
+            changed = copy.deepcopy(rows)
+            changed[0]["spans"][0]["line_start"] = 1
+            self.assertFalse(self.accepted(1, changed, "assemble", failure))
+        for path, before, after in (
+            (check.schema.CORRESPONDENCE, b"pub const fn statement_ordinal(self) -> u32 {\n        self.statement_ordinal", b"pub const fn statement_ordinal(self) -> u32 {\n        0"),
+            (check.schema.CORRESPONDENCE, b"&self.statement_operation_spans", b"&[]"),
+            (check.schema.CAPTURE, b"pub const fn root(self)", b"#[transform]\n    pub const fn root(self)"),
+            (check.schema.CAPTURE, b"self.capture.operation", b"0"),
+            (check.schema.MODEL, b"statements: Box<[SemanticStatementV1]>", b"statements: Proxy"),
+            (check.schema.CORRESPONDENCE, b"statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>", b"statement_operation_spans: Proxy"),
+            (check.schema.CAPTURE, b"source: Source,", b"source: Proxy,"),
+            (check.KIR_SCHEMA, b"pub struct BlockId(pub u32);", b"pub struct BlockId(pub u64);"),
+            (check.ASSEMBLE, b"let function_index = capture.request().function().index();", b"let function_index = capture.request().root().index();"),
+        ):
+            self.assertGreater(sources[str(path)].count(before), 0, str(path))
+            changed = dict(sources)
+            changed[str(path)] = changed[str(path)].replace(before, after, 1)
+            with self.assertRaises(ValueError):
+                check.validate(changed)
 
 
 if __name__ == "__main__":
