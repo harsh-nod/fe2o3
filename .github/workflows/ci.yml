@@ -99,14 +99,21 @@ jobs:
           # id-token permission or invoke the production publisher service.
 
   generic-core:
-    name: Generic core
+    name: Generic core (${{ matrix.group }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - policy
+          - cpu
+          - auxiliary
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core
-      CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core-${{ matrix.group }}
+      CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core-${{ matrix.group }}
       CARGO_PROFILE_DEV_DEBUG: '1'
       CARGO_PROFILE_TEST_DEBUG: '1'
       CARGO_INCREMENTAL: '0'
@@ -172,13 +179,13 @@ jobs:
           printf 'TMPDIR=%s\n' "${resource_tmp}" >> "${GITHUB_ENV}"
 
       - name: Run generic core validation
-        run: scripts/ci-local.sh generic-core
+        run: scripts/ci-local.sh generic-core "${{ matrix.group }}"
 
       - name: Upload failure logs
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: generic-core-logs-${{ github.run_attempt }}
+          name: generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}
           path: ${{ env.CI_LOG_DIR }}/
           if-no-files-found: ignore
           retention-days: 7

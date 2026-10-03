@@ -161,7 +161,7 @@ Usage: scripts/ci-local.sh <command>
 
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
-  generic-core    Run generic validation except codegen integration shards
+  generic-core [policy|cpu|auxiliary]  Run all core validation or one required group
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -1274,6 +1274,27 @@ run_parity_matrix_checks() {
 }
 
 run_generic_core() {
+  if (($# > 1)); then
+    printf 'generic-core accepts at most one group\n' >&2
+    return 2
+  fi
+  local group="${1-all}"
+  case "${group}" in
+    all | policy) ;;
+    cpu)
+      run_cpu_tests
+      return
+      ;;
+    auxiliary)
+      run_rustc_codegen_lib_tests
+      run_auxiliary_tests
+      return
+      ;;
+    *)
+      printf 'unknown generic-core group: %s\n' "${group}" >&2
+      return 2
+      ;;
+  esac
   run_workspace_dependency_policy
   run_standalone_lockfiles
   run_runtime_pure_rust_policy
@@ -1308,9 +1329,12 @@ run_generic_core() {
     cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
       f32-run-v3
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
-  run_cpu_tests
-  run_rustc_codegen_lib_tests
-  run_auxiliary_tests
+  run_step generic-core-group-tests \
+    python3 -I -B scripts/tests/generic-core-groups.py
+  if [[ "${group}" == all ]]; then
+    run_generic_core cpu
+    run_generic_core auxiliary
+  fi
 }
 
 run_generic() {
@@ -1634,7 +1658,7 @@ main() {
 
   case "${1:-}" in
     generic) run_generic ;;
-    generic-core) run_generic_core ;;
+    generic-core) run_generic_core "${@:2}" ;;
     workspace-policy) run_workspace_dependency_policy ;;
     hygiene-delta)
       if (($# != 3)); then

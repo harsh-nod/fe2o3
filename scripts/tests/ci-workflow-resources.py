@@ -59,6 +59,31 @@ def profiles(owner: str) -> None:
         raise ValueError("unexpected extra Cargo profile setting")
 
 
+def core_groups(source: str) -> None:
+    owner = job(source, "generic-core")
+    strategy = (
+        "    strategy:\n"
+        "      fail-fast: false\n"
+        "      matrix:\n"
+        "        group:\n"
+        "          - policy\n"
+        "          - cpu\n"
+        "          - auxiliary\n"
+    )
+    if owner.count("    strategy:\n") != 1 or owner.count(strategy + "    env:\n") != 1:
+        raise ValueError("core matrix must run each required group exactly once")
+    for required in (
+        'run: scripts/ci-local.sh generic-core "${{ matrix.group }}"',
+        "CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core-${{ matrix.group }}",
+        "CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core-${{ matrix.group }}",
+        "name: generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}",
+    ):
+        if owner.count(required) != 1:
+            raise ValueError(f"missing or duplicated core group routing: {required}")
+    if "continue-on-error" in owner or "    if:" in owner.split("    steps:", 1)[0]:
+        raise ValueError("required core groups cannot be optional")
+
+
 class WorkflowContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -95,7 +120,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_existing_mandatory_commands_and_limits_remain(self) -> None:
         generic = job(self.ci, "generic-core")
         host = job(self.row, "host-contract")
-        self.assertEqual(generic.count("run: scripts/ci-local.sh generic-core"), 1)
+        core_groups(self.ci)
         self.assertIn("    timeout-minutes: 90\n", generic)
         self.assertIn("    timeout-minutes: 15\n", host)
         proof = job(self.row, "proof-contract")
@@ -133,6 +158,23 @@ class WorkflowContractTests(unittest.TestCase):
         for changed in (self.ci.replace(marker, "", 1), self.ci.replace(marker, marker + marker, 1)):
             with self.assertRaises(ValueError):
                 prepare_script(changed)
+
+    def test_core_group_mutations_cannot_omit_or_duplicate_work(self) -> None:
+        core_groups(self.ci)
+        for old, new in (
+            ("          - cpu\n", ""),
+            ("          - auxiliary\n", "          - auxiliary\n          - cpu\n"),
+            ("          - policy\n", "          - all\n"),
+            ("      fail-fast: false\n", "      fail-fast: true\n"),
+            ("          - auxiliary\n", "          - auxiliary\n        exclude: []\n"),
+            ('generic-core "${{ matrix.group }}"', "generic-core policy"),
+            ("generic-core-${{ matrix.group }}", "generic-core"),
+            ("name: Generic core (${{ matrix.group }})\n", "name: Generic core\n    continue-on-error: true\n"),
+            ("name: Generic core (${{ matrix.group }})\n", "name: Generic core\n    if: false\n"),
+        ):
+            with self.subTest(old=old, new=new):
+                with self.assertRaises(ValueError):
+                    core_groups(self.ci.replace(old, new, 1))
 
 
 class TemporaryDirectoryShellTests(unittest.TestCase):

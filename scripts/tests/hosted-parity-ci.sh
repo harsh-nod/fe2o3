@@ -260,7 +260,7 @@ done
 require_text "${GENERIC_WORKFLOW}" 'direct default-branch parity promotion is forbidden; repository rules must prevent this push'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic parity policy gate'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic validation'
-require_text "${GENERIC_WORKFLOW}" 'name: Generic core'
+require_text "${GENERIC_WORKFLOW}" 'name: Generic core (${{ matrix.group }})'
 require_text "${GENERIC_WORKFLOW}" 'name: Rustc codegen shard (${{ matrix.shard }})'
 if ! sed -n '/^  parity-policy:/,/^  generic-core:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '    timeout-minutes: 10' >/dev/null; then
@@ -282,7 +282,7 @@ if ! sed -n '/^  generic-validation:/,$p' "${GENERIC_WORKFLOW}" |
   printf 'generic aggregate timeout is not exactly 10 minutes\n' >&2
   exit 1
 fi
-require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core'
+require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core "${{ matrix.group }}"'
 if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '          sudo apt-get install --yes llvm ripgrep' >/dev/null; then
   printf 'generic core must install the llvm-as provider and ripgrep\n' >&2
@@ -290,11 +290,11 @@ if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW
 fi
 require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh rustc-codegen-shard "${{ matrix.shard }}"'
 require_text "${GENERIC_WORKFLOW}" 'fail-fast: false'
-require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core'
-require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core'
+require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core-${{ matrix.group }}'
+require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core-${{ matrix.group }}'
 require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}'
 require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}'
-require_text "${GENERIC_WORKFLOW}" 'name: generic-core-logs-${{ github.run_attempt }}'
+require_text "${GENERIC_WORKFLOW}" 'name: generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}'
 require_text "${GENERIC_WORKFLOW}" 'name: rustc-codegen-${{ matrix.shard }}-logs-${{ github.run_attempt }}'
 if [[ "$(rg -Fc 'if: ${{ failure() || cancelled() }}' "${GENERIC_WORKFLOW}")" -ne 2 ]]; then
   printf 'generic core and shards do not both upload logs after failure or cancellation\n' >&2
