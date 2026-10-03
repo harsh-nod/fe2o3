@@ -13,6 +13,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.deferred_compute_retains.is_empty()
             || self.children.iter().any(|child| {
                 child.capture_has_pending_custody_v1()
+                    || child.has_live_generated_native_v1()
                     || child.native_reconciliations.iter().any(Option::is_some)
             })
             || self
@@ -146,6 +147,47 @@ mod tests {
         backend
             .allocate_v1(device, RuntimeMemoryKindV1::HostVisible, 32, 8)
             .unwrap()
+    }
+
+    #[test]
+    fn multi_capture_generated_adopted_metadata_on_other_child_blocks_reader() {
+        let mut backend = backend();
+        let allocation = allocate(&mut backend, 7);
+        let plan = backend.children[1].park_generated_adopted_metadata_for_test_v1();
+        let mut destination = [0x5a; 8];
+        assert!(matches!(
+            backend.capture_coherent_host_range_with_v1(
+                7,
+                allocation,
+                0,
+                &mut destination,
+                |_, _, _, _, _| panic!("reader must not run with generated custody"),
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeHostCaptureErrorV1::Pending
+            ))
+        ));
+        assert_eq!(destination, [0x5a; 8]);
+        assert!(!backend.terminal);
+        backend.children[1].unpark_generated_adopted_metadata_for_test_v1(plan);
+        let mut calls = 0;
+        backend
+            .capture_coherent_host_range_with_v1(
+                7,
+                allocation,
+                0,
+                &mut destination,
+                |_, _, _, _, bytes| {
+                    calls += 1;
+                    bytes.fill(0x91);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(destination, [0x91; 8]);
+        backend.release_allocation_v1(allocation).unwrap();
+        backend.shutdown_native_v1().unwrap();
     }
 
     #[test]

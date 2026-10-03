@@ -37,6 +37,44 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
     }
 }
 
+impl KfdRuntimeBackendV1 {
+    pub(crate) fn park_generated_adopted_metadata_for_test_v1(&mut self) -> GeneratedShellPlanV1 {
+        let uid = self.description.backend_device;
+        let stream = self.create_stream_v1(uid).unwrap();
+        let (hsaco, projection) = source_projection();
+        let authority =
+            crate::authorized_execution::tests::source_authority_for_device(&projection, uid);
+        let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
+        let (binding, logical) =
+            crate::RuntimeContextV1::generated_route_ids_for_test_v1(uid, stream, roster.count);
+        let plan = self
+            .prepare_generated_shells_v1(binding, &roster, &logical)
+            .unwrap();
+        let bound = self
+            .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
+            .unwrap();
+        let mut storage = projection.into_generated_storage_v1();
+        let mut source = RuntimeGfx942GeneratedSourceMutV1::new(&mut storage, &hsaco, &authority);
+        self.commit_generated_shells_v1(bound, &mut source, &roster);
+        // Deliberately incomplete metadata exercises exclusion only, not native adoption.
+        self.generated_shells.get_mut(&plan.key).unwrap().native =
+            Some(native_state(PhaseV1::Adopted, 0));
+        assert!(self.generated_submissions.is_empty());
+        assert!(!self.any_compute_active_v1());
+        assert!(self.has_live_generated_native_v1());
+        plan
+    }
+
+    pub(crate) fn unpark_generated_adopted_metadata_for_test_v1(
+        &mut self,
+        plan: GeneratedShellPlanV1,
+    ) {
+        self.generated_shells.get_mut(&plan.key).unwrap().native = None;
+        self.dispose_generated_shells_v1(&plan);
+        self.destroy_stream_v1(plan.binding.backend_stream).unwrap();
+    }
+}
+
 #[test]
 fn rooted_n1_generated_startup_rejects_consumed_policy_before_native_acquisition() {
     for policy in [

@@ -747,6 +747,44 @@ fn native_route_rejects_new_endpoint_dirty_state_before_cache_release() {
 }
 
 #[test]
+fn native_route_generated_adopted_metadata_blocks_only_selected_endpoints() {
+    for child in 0..3 {
+        let mut f = Fixture::configured(None, false, 0, 4);
+        let plan = f.backend.children[child].park_generated_adopted_metadata_for_test_v1();
+        let identities = [
+            f.owner(true).scripted_owner_id(),
+            f.owner(false).scripted_owner_id(),
+        ];
+        let copy = f.submit(&[]);
+        assert_eq!(
+            f.backend.progress_cooperative_copy(copy).unwrap(),
+            BackendPollV1::Pending
+        );
+        f.backend.progress_cooperative_copy(copy).unwrap();
+        if child < 2 {
+            assert!(f.root(copy).trace.is_empty());
+            assert!(f.backend.compute_xgmi_children.iter().all(Option::is_none));
+            assert_eq!(
+                [
+                    f.owner(true).scripted_owner_id(),
+                    f.owner(false).scripted_owner_id()
+                ],
+                identities
+            );
+            assert_eq!(f.owner(false).scripted_bytes().unwrap(), &[0x17; BYTES]);
+        } else {
+            assert!(!f.root(copy).trace.is_empty());
+        }
+        assert!(!f.backend.terminal);
+        f.backend.children[child].unpark_generated_adopted_metadata_for_test_v1(plan);
+        let stream = f.stream;
+        f.backend.flush_stream_v1(stream).unwrap();
+        assert_eq!(f.backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        f.clean();
+    }
+}
+
+#[test]
 fn native_route_every_failure_and_unwind_retains_both_owners_and_poisons_both_children() {
     for (index, stage) in STAGES.into_iter().enumerate() {
         for unwind in [false, true] {

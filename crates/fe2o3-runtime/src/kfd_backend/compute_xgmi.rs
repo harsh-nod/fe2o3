@@ -1073,6 +1073,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                     origin,
                     PeerAccessPurposeV1::Reconcile,
                 ) || child.any_compute_active_v1()
+                    || child.has_live_generated_native_v1()
                     || !child.active_sdma.is_empty()
                     || child.native_reconciliations.iter().any(Option::is_some)
                 {

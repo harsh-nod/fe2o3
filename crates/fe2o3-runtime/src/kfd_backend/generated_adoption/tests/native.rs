@@ -6,6 +6,8 @@ use crate::qualification_gfx942_vecadd_v1::*;
 use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
 use fe2o3_hsaco::ArgumentAccess;
 
+mod multi;
+
 fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlanV1 {
     install_with_roster(backend, stream).0
 }
@@ -22,11 +24,41 @@ fn install_roster(
     stream: u64,
     full_roster: bool,
 ) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
-    let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
     let uid = backend.description.backend_device;
     let model = backend
         .with_retained_preparation_device_v1(uid, |device| device.model_admission())
         .unwrap();
+    let (roster, program, buffers, packet) = native_fixture(full_roster);
+    let (binding, logical) =
+        RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model, buffers.len());
+    let plan = backend
+        .prepare_generated_shells_v1(binding, &roster, &logical)
+        .unwrap();
+    let bound = backend
+        .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
+        .unwrap();
+    // Bypass only protected carrier registration. Native admission and shell
+    // installation use their ordinary paths; no TestAuthority is constructed.
+    backend.commit_generated_shell_control_v1(bound, &roster, |control| {
+        assert!(control.is_none());
+        *control = Some(packet);
+        true
+    });
+    backend
+        .adopt_generated_data_v1(&plan, &roster, program, &buffers)
+        .unwrap();
+    (plan, roster)
+}
+
+fn native_fixture(
+    full_roster: bool,
+) -> (
+    GeneratedHostRosterV1,
+    ValidatedKernelEnvelope<'static>,
+    Vec<crate::Gfx942KfdDispatchBufferV1>,
+    Gfx942FixedDispatchPacketV1,
+) {
+    let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
     let (left, right, mut output, _expected) = admitted.host_buffers().unwrap().into_parts();
     if full_roster {
         output.extend_from_slice(&[0x7b; 16]);
@@ -38,8 +70,6 @@ fn install_roster(
     if full_roster {
         buffers.push(crate::Gfx942KfdDispatchBufferV1::new(vec![0x5a; 80]).unwrap());
     }
-    let (binding, logical) =
-        RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model, buffers.len());
     let roster = GeneratedHostRosterV1 {
         source_identity: Arc::new(()),
         buffers: core::array::from_fn(|index| {
@@ -107,29 +137,7 @@ fn install_roster(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     );
-    let plan = backend
-        .prepare_generated_shells_v1(binding, &roster, &logical)
-        .unwrap();
-    // This test bypasses only carrier registration, never native device or loader
-    // admission. No TestAuthority is used for these native calls.
-    backend.generated_shells.insert(
-        plan.key,
-        generated_shells::GeneratedShellRecordV1::legacy_native_fixture(
-            plan,
-            Arc::clone(&roster.source_identity),
-            packet,
-        ),
-    );
-    backend.next_handle = plan.key + 1 + plan.count as u64;
-    for member in plan.members.iter().flatten() {
-        backend
-            .allocations
-            .insert_generated(member.backend, member.description);
-    }
-    backend
-        .adopt_generated_data_v1(&plan, &roster, program, &buffers)
-        .unwrap();
-    (plan, roster)
+    (roster, program, buffers, packet)
 }
 
 fn retire(backend: &mut KfdRuntimeBackendV1, plan: &GeneratedShellPlanV1) {

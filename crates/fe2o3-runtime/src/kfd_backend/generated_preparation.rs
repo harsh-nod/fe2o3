@@ -13,7 +13,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })
     }
 
-    fn with_preparation_child_v1<R>(
+    pub(super) fn with_preparation_child_v1<R>(
         &mut self,
         backend_device: u64,
         prepare: impl FnOnce(

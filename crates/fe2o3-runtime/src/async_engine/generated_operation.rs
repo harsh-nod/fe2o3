@@ -6,6 +6,45 @@ use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationEr
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
 impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
+    /// Retains generated reservation and nonpublishing DATA adoption on one exact
+    /// child. Stop/drain retires the original storage; issue and completion hooks
+    /// remain unavailable on the multi-device bridge.
+    ///
+    /// ```no_run
+    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
+    /// fn adoption<P: fe2o3_runtime::RuntimeGfx942GeneratedCarrierV1 + 'static>(
+    ///     handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, ()> + Send + 'static,
+    /// ) {
+    ///     let _ = handle.try_prepare_generated_gfx942_v1(device, prepare);
+    /// }
+    /// ```
+    #[doc(hidden)]
+    pub fn try_prepare_generated_gfx942_v1<
+        P: RuntimeGfx942GeneratedCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        type Context = RuntimeContextV1<crate::KfdMultiDeviceRuntimeBackendV1>;
+        self.enqueue_preparation_with_adoption_v1(
+            Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
+            Some(Context::reserve_gfx942_prepared_v1::<P>),
+            Some(adoption::AdoptionHooksV1 {
+                preflight: Context::preflight_gfx942_adoption_v1::<P>,
+                ready: Context::gfx942_adoption_ready_v1,
+                adopt: Context::adopt_gfx942_prepared_v1::<P>,
+                retire: Context::retire_gfx942_adoption_v1,
+                issue: None,
+            }),
+        )
+    }
+
     /// Prepares an inert payload on the exact selected retained GPU owner.
     /// The payload stays owner-local and this plain ticket has no generated
     /// reservation, adoption, issue or completion hooks.
@@ -21,15 +60,6 @@ impl RuntimeAsyncProgressHandleV1<crate::KfdMultiDeviceRuntimeBackendV1> {
     /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
     /// fn escape(handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1) {
     ///     let _ = handle.try_prepare_gfx942_v1(device, |owner| Ok::<_, ()>(owner));
-    /// }
-    /// ```
-    /// ```compile_fail,E0599
-    /// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeAsyncProgressHandleV1, RuntimeDeviceIdV1};
-    /// fn no_adoption<P: fe2o3_runtime::RuntimeGfx942GeneratedCarrierV1 + 'static>(
-    ///     handle: &RuntimeAsyncProgressHandleV1<KfdMultiDeviceRuntimeBackendV1>, device: RuntimeDeviceIdV1,
-    ///     prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, ()> + Send + 'static,
-    /// ) {
-    ///     let _ = handle.try_prepare_generated_gfx942_v1(device, prepare);
     /// }
     /// ```
     /// ```compile_fail,E0599
@@ -510,12 +540,12 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
     > {
         self.enqueue_preparation_with_adoption_v1(
             Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
-            Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
+            Some(RuntimeContextV1::<KfdRuntimeBackendV1>::reserve_gfx942_prepared_v1::<P>),
             Some(adoption::AdoptionHooksV1 {
-                preflight: RuntimeContextV1::preflight_gfx942_adoption_v1::<P>,
-                ready: RuntimeContextV1::gfx942_adoption_ready_v1,
-                adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
-                retire: RuntimeContextV1::retire_gfx942_adoption_v1,
+                preflight: RuntimeContextV1::<KfdRuntimeBackendV1>::preflight_gfx942_adoption_v1::<P>,
+                ready: RuntimeContextV1::<KfdRuntimeBackendV1>::gfx942_adoption_ready_v1,
+                adopt: RuntimeContextV1::<KfdRuntimeBackendV1>::adopt_gfx942_prepared_v1::<P>,
+                retire: RuntimeContextV1::<KfdRuntimeBackendV1>::retire_gfx942_adoption_v1,
                 issue: Some(adoption::IssueHooksV1 {
                     progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
                     retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,

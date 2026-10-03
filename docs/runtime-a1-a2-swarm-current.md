@@ -114,8 +114,13 @@ must not become a prerequisite for running their already-admitted smoke tests.
    follow; no fixture authority can substitute for them. The generated invocation
    execution path is currently single-device. Exact-child inert preparation is
    now [CPU- and two-GPU-qualified](evidence/dev-multi-preparation-2026-10-03/README.md),
-   with both selected-device orders and explicit owner-thread cleanup. Generated
-   reservation/adoption/issue routing and authenticated generated-storage peer
+   with both selected-device orders and explicit owner-thread cleanup.
+   Nonpublishing reservation, shell registration, native DATA adoption and
+   retirement now also have a
+   [two-GPU checkpoint](evidence/dev-multi-adoption-2026-10-03/README.md), with
+   private generated routes and exact-child cleanup. Its finite native fixture
+   does not qualify protected Worker or public Context application admission.
+   Generated issue/completion routing and authenticated generated-storage peer
    handoff remain explicit
    [remaining multi-device work](runtime-multi-gpu-critical-path.md#required-multi-device-bridge).
 5. Qualify post-arm failure isolation and group cleanup as a separate resilience

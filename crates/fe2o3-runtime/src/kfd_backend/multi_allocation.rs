@@ -60,6 +60,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             if child >= self.children.len()
                 || self.next_handle == 0
                 || self.allocations.contains_key(&self.next_handle)
+                || self.generated_allocations.contains_key(&self.next_handle)
+                || self.generated_shells.contains_key(&self.next_handle)
             {
                 self.terminal = true;
                 return Err(RuntimeBackendFailureV1::Terminal(

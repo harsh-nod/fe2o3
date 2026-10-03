@@ -93,9 +93,10 @@ LLVM/HSACO correspondence before an application launch can be admitted.
 
 ## Required Multi-Device Bridge
 
-The authenticated generated-invocation path currently specializes
-`RuntimeContextV1<KfdRuntimeBackendV1>`. A production Worker provider alone will
-not turn it into a single-Context multi-device application pipeline.
+Generated issue/completion currently specializes
+`RuntimeContextV1<KfdRuntimeBackendV1>`. Preparation and nonpublishing DATA
+adoption now also route through the multi-device backend. A production Worker
+provider alone will not finish a single-Context multi-device application pipeline.
 
 1. Completed: route nonexecuting preparation through the exact retained
    multi-backend child, preserving Context generation, logical device, backend
@@ -106,22 +107,43 @@ not turn it into a single-Context multi-device application pipeline.
    callback errors, plain-ticket reservation rejection and owner-thread disposal.
    It creates no VM, queue, allocation or execution authority. CPU acceptance is
    2359 runtime tests (32 hardware ignores), 170 example tests and 71 doctests.
-2. Route generated reservation, shell adoption, issue and completion with exact
-   global/local handle correspondence and original carrier ownership. Cleanup
-   must return to the same child; ambiguous rollback remains quarantined.
-   First close nonpublishing reservation -> shell registration -> DATA adoption
-   -> retirement, using paired immutable global/child-local plans and the
-   existing move-only commit owner. Reserve routing capacity before transfer.
-   Active peer custody must block adoption; pristine adopted DATA must also
-   block peer owner extraction before generated-submission indexes exist.
-   Readiness and quarantine must identify the exact selected child. Keep
-   generated issue/completion unavailable until their separate routes qualify.
+2. Nonpublishing reservation -> shell registration -> DATA adoption -> retirement
+   is implemented with paired immutable global/child-local plans, private
+   generated allocation routes and the existing move-only commit owner.
+   Readiness and quarantine capture the exact child; routing capacity is reserved
+   before transfer. Pristine adopted DATA blocks peer owner extraction and
+   coherent capture even before submission indexes exist. The
+   [two-GPU DATA checkpoint](evidence/dev-multi-adoption-2026-10-03/README.md)
+   passes native adoption, independent retirement and primary-lane rebound in
+   both device orders. This is finite native mechanics, not protected Worker
+   application admission. Generated issue/completion remains the next step.
 3. Add an authenticated generated-storage peer handoff. Generated allocation
    slots are deliberately distinct from PUBLIC allocations; enabling multi-device
    generated dispatch must not relabel them or bypass ordinary peer-copy guards.
 4. Qualify the complete admitted compute -> native peer -> compute/readback path
    on freshly observed free devices. Existing finite native witnesses do not
    substitute for this application-admission gate.
+
+### Next Integration Packet
+
+Keep generated submission routes separate from ordinary `RoutedSubmissionV1`
+and peer producer indexes. Bind each route to its captured child, global shell
+key and exact local submission. Reserve capacity before child publication and
+root returned custody before handling protocol errors. Generalize the existing
+Context issue/completion bodies and owner-thread hooks without changing their
+readback, decoder or closing-authority gates. Physical recycled completion is
+not logical output success. Release validation must accept retired DATA without
+requiring the child issue helper's earlier Adopted phase. Stop/drain must never
+publish a Ready receipt.
+
+For the first generated-result peer handoff, prefer an explicitly authenticated
+host-staged export into a fresh ordinary DeviceLocal allocation, then reuse
+existing PUBLIC peer paths. Generated DATA is coherent HostVisible storage and
+has no SDMA-promotion bridge; do not relabel it as DeviceLocal or as a PUBLIC
+frame. Bind the original full-roster readback and selected output before the
+completion path destroys DATA. A native ownership transfer needs its own lower
+typed transition and accounting/failure evidence. Neither export route is
+implemented or qualified by the nonpublishing DATA checkpoint.
 
 ## Deferred Work
 

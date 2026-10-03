@@ -1104,12 +1104,19 @@ pub(crate) mod tests {
     pub(crate) fn source_authority(
         projection: &crate::PreparedGfx942PersistentDispatchV1,
     ) -> TestAuthorityV1 {
+        source_authority_for_device(projection, 7)
+    }
+
+    pub(crate) fn source_authority_for_device(
+        projection: &crate::PreparedGfx942PersistentDispatchV1,
+        device: u64,
+    ) -> TestAuthorityV1 {
         TestAuthorityV1 {
             object: projection.identity().object_sha256(),
             length: projection.finalized_hsaco_length(),
             kernel: "vecadd",
             dispatch: projection.dispatch_contract_sha256(),
-            device: 7,
+            device,
             current: Cell::new(true),
             checks: Cell::new(0),
             fault: Cell::new(None),

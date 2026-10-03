@@ -3,6 +3,7 @@ use std::cell::Cell;
 
 use super::*;
 
+mod multi_shell_tests;
 mod shell_tests;
 
 #[test]
@@ -74,6 +75,30 @@ fn preparation_multi_context_binding_rejects_cross_context_device_and_backend() 
 }
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(crate) fn generated_route_ids_for_test_v1(
+        device: u64,
+        stream: u64,
+        count: usize,
+    ) -> (
+        crate::kfd_backend::GeneratedShellBindingV1,
+        Vec<RuntimeAllocationIdV1>,
+    ) {
+        (
+            crate::kfd_backend::GeneratedShellBindingV1 {
+                context_generation: 1,
+                device: RuntimeDeviceIdV1::new(1, device),
+                stream: RuntimeStreamIdV1::new(1, stream),
+                hold: stream,
+                backend_device: device,
+                backend_stream: stream,
+                native_device: admission_for_device(1, 1, device).1,
+            },
+            (0..count)
+                .map(|ordinal| RuntimeAllocationIdV1::new(1, stream * 16 + ordinal as u64))
+                .collect(),
+        )
+    }
+
     pub(in crate::context) fn bound_preparation_for_test_v1<T>(
         &self,
         value: T,
@@ -242,6 +267,14 @@ fn generated_reservation_context_rejections_do_not_call_source_or_install() {
 
 // Model-only identity fixtures never construct a native checked device.
 fn admission(domain_seed: u8, generation: u64) -> (DeviceIdentityStateV1, ModelDeviceAdmissionV1) {
+    admission_for_device(domain_seed, generation, 7)
+}
+
+fn admission_for_device(
+    domain_seed: u8,
+    generation: u64,
+    device: u64,
+) -> (DeviceIdentityStateV1, ModelDeviceAdmissionV1) {
     let digest = |seed| IdentityDigestV1::from_untrusted_bytes([seed; 32]);
     let domain = DeviceObservationDomainIdV1::from_untrusted_digest(digest(domain_seed));
     let profile = DeviceAdmissionProfileV1::gfx942_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
@@ -274,7 +307,7 @@ fn admission(domain_seed: u8, generation: u64) -> (DeviceIdentityStateV1, ModelD
             epoch,
             topology_node_id: 1,
             kfd_gpu_id: 2,
-            gpu_unique_id: 7,
+            gpu_unique_id: device,
             drm_render_minor: DRM_RENDER_MIN_MINOR_V1,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
@@ -290,7 +323,7 @@ fn admission(domain_seed: u8, generation: u64) -> (DeviceIdentityStateV1, ModelD
                 major: DRM_DEVICE_MAJOR_V1,
                 minor: DRM_RENDER_MIN_MINOR_V1,
             },
-            gpu_unique_id: 7,
+            gpu_unique_id: device,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
             device_id: MI300X_PCI_DEVICE_ID_V1,

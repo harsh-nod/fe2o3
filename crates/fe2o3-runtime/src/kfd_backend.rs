@@ -89,6 +89,8 @@ mod allocation_request;
 mod allocation_table;
 mod multi_admission;
 mod multi_allocation;
+mod multi_generated;
+pub(crate) use multi_generated::GeneratedAdoptionScopeV1;
 mod multi_open;
 #[cfg(feature = "hardware-qualification")]
 mod multi_qualification;
@@ -7098,6 +7100,8 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     next_handle: u64,
     streams: HashMap<u64, RoutedHandleV1>,
     allocations: HashMap<u64, RoutedHandleV1>,
+    generated_allocations: HashMap<u64, RoutedHandleV1>,
+    generated_shells: HashMap<u64, multi_generated::MultiGeneratedShellPlanV1>,
     modules: HashMap<u64, RoutedHandleV1>,
     kernels: HashMap<u64, RoutedHandleV1>,
     kernel_modules: HashMap<u64, u64>,
@@ -7866,6 +7870,8 @@ impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
             .field("devices", &self.device_children.len())
             .field("streams", &self.streams.len())
             .field("allocations", &self.allocations.len())
+            .field("generated_allocations", &self.generated_allocations.len())
+            .field("generated_shells", &self.generated_shells.len())
             .field("modules", &self.modules.len())
             .field("kernels", &self.kernels.len())
             .field("submissions", &self.submissions.len())
@@ -7967,6 +7973,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             next_handle: 1,
             streams: HashMap::new(),
             allocations: HashMap::new(),
+            generated_allocations: HashMap::new(),
+            generated_shells: HashMap::new(),
             modules: HashMap::new(),
             kernels: HashMap::new(),
             kernel_modules: HashMap::new(),
@@ -7995,6 +8003,8 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         self.require_live()?;
         if !self.streams.is_empty()
             || !self.allocations.is_empty()
+            || !self.generated_allocations.is_empty()
+            || !self.generated_shells.is_empty()
             || !self.modules.is_empty()
             || !self.kernels.is_empty()
             || !self.kernel_modules.is_empty()
@@ -8052,6 +8062,12 @@ impl KfdMultiDeviceRuntimeBackendV1 {
 
     fn next_id(&mut self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let id = self.next_handle;
+        if self.generated_allocations.contains_key(&id) || self.generated_shells.contains_key(&id) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "multi-device handle collides with generated custody",
+            ));
+        }
         self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
             KfdRuntimeBackendV1::capacity("multi-device routing handle space exhausted")
         })?;

@@ -32,7 +32,13 @@ pub(crate) struct GeneratedShellPlanV1 {
     pub key: u64,
     pub count: usize,
     pub members: [Option<GeneratedShellMemberV1>; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
-    next_handle: u64,
+    pub(super) next_handle: u64,
+}
+
+impl GeneratedShellPlanV1 {
+    pub(crate) fn plan(&self) -> &Self {
+        self
+    }
 }
 
 /// One-use authentication for committing this exact inert plan.
@@ -55,23 +61,6 @@ pub(super) struct GeneratedShellRecordV1 {
     // rooted phase and must disable metadata-only disposal before its first effect.
     pub(super) control: Option<Gfx942FixedDispatchPacketV1>,
     pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
-}
-
-#[cfg(all(test, feature = "hardware-qualification"))]
-impl GeneratedShellRecordV1 {
-    pub(super) fn legacy_native_fixture(
-        plan: GeneratedShellPlanV1,
-        source_identity: Arc<()>,
-        control: Gfx942FixedDispatchPacketV1,
-    ) -> Self {
-        Self {
-            plan,
-            request_bound: false,
-            source_identity,
-            control: Some(control),
-            native: None,
-        }
-    }
 }
 
 impl KfdRuntimeBackendV1 {
@@ -228,15 +217,26 @@ impl KfdRuntimeBackendV1 {
         source: &mut RuntimeGfx942GeneratedSourceMutV1<'_, E>,
         roster: &GeneratedHostRosterV1,
     ) {
+        assert!(
+            source.matches_roster(roster),
+            "same reserved source with available control"
+        );
+        self.commit_generated_shell_control_v1(authenticated, roster, |control| {
+            source.transfer_control_into(control)
+        });
+    }
+
+    pub(super) fn commit_generated_shell_control_v1(
+        &mut self,
+        authenticated: GeneratedShellCommitPlanV1,
+        roster: &GeneratedHostRosterV1,
+        transfer: impl FnOnce(&mut Option<Gfx942FixedDispatchPacketV1>) -> bool,
+    ) {
         let GeneratedShellCommitPlanV1 {
             plan,
             request_bound,
         } = authenticated;
         assert_eq!(self.next_handle, plan.key, "preflighted handle range");
-        assert!(
-            source.matches_roster(roster),
-            "same reserved source with available control"
-        );
         assert!(!self.generated_shells.contains_key(&plan.key));
         for member in plan.members[..plan.count].iter().flatten() {
             assert!(!self.allocations.contains_key(&member.backend));
@@ -264,10 +264,7 @@ impl KfdRuntimeBackendV1 {
             &record.source_identity,
             &roster.source_identity
         ));
-        assert!(
-            source.transfer_control_into(&mut record.control),
-            "one closed control transfer"
-        );
+        assert!(transfer(&mut record.control), "one closed control transfer");
     }
 
     pub(crate) fn generated_shell_plan_v1(
