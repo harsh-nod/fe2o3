@@ -143,6 +143,60 @@ pub fn scalar_storage_module() -> Module {
     raw
 }
 
+pub fn generic_exposure_module(private: bool) -> Module {
+    let mut raw = module();
+    let scalar = Type::Scalar(ScalarType::U32);
+    let generic = Type::pointer(scalar.clone(), AddressSpace::Generic, AccessMode::ReadWrite);
+    let block = &mut raw.functions[0].body.as_mut().unwrap().blocks[0];
+    let mut output = block.operations.pop().unwrap();
+    let OperationKind::Store { value, .. } = &mut output.kind else {
+        unreachable!()
+    };
+    *value = ValueId(9);
+    if private {
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(
+                ValueId(7),
+                Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite),
+            ),
+            OperationKind::Alloca {
+                element: scalar.clone(),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 4,
+            },
+        ));
+    }
+    block.operations.extend([
+        Operation::effect_free(
+            ValueDef::new(ValueId(8), generic.clone()),
+            OperationKind::Cast {
+                kind: CastKind::PointerToGeneric,
+                value: ValueId(if private { 7 } else { 3 }),
+                to: generic,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(8),
+                value: ValueId(5),
+                access: MemoryAccess::new(AddressSpace::Generic, 4),
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(9), scalar),
+            OperationKind::Load {
+                pointer: ValueId(8),
+                access: MemoryAccess::new(AddressSpace::Generic, 4),
+            },
+        ),
+        output,
+    ]);
+    refresh_capabilities(&mut raw);
+    raw
+}
+
 pub fn storage_module(with_operation: bool) -> Module {
     let mut raw = module();
     let mut block = BasicBlock::new(BlockId(0));

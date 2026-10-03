@@ -88,6 +88,7 @@ fn identity(commit: &AllocationCommit) -> SimulationAllocationStorageIdentityV1 
 
 fn pointer(allocation: u64) -> PointerValue {
     PointerValue {
+        exposed_generic: false,
         allocation,
         byte_offset: 0,
         element: ScalarType::U32,

@@ -1314,7 +1314,12 @@ fn scan_reachable(
             && crate::physical_entry_v20::scope_profile_matches(&function.required_capabilities);
         let complete_body_profile = launch_profiles.complete_body
             && crate::complete_body_v19::scope_profile_matches(&function.required_capabilities);
-        scan_signature(function, target, &mut findings);
+        scan_signature(
+            function,
+            target,
+            &mut findings,
+            launch_profiles.storage_scalar && function.role == FunctionRole::InternalHelper,
+        );
         let Some(body) = &function.body else {
             let identifier_bytes = function.id.retained_capacity_bytes().saturating_mul(2);
             findings.push(identifier_bytes, || {
@@ -1682,6 +1687,7 @@ fn scan_signature(
     function: &Function,
     target: SimulationTargetV1,
     findings: &mut UnsupportedCollectorV1,
+    allow_generic: bool,
 ) {
     let identifier_bytes = function.id.retained_capacity_bytes();
     for ty in function
@@ -1690,7 +1696,7 @@ fn scan_signature(
         .iter()
         .chain(&function.signature.results)
     {
-        if let Some(feature) = unsupported_type(ty, target) {
+        if let Some(feature) = unsupported_type_with_generic(ty, target, allow_generic) {
             findings.push(identifier_bytes, || signature_finding(function, feature));
         }
     }
@@ -1809,7 +1815,9 @@ fn scan_operation(
         {
             continue;
         }
-        if let Some(feature) = unsupported_type(&result.ty, target) {
+        if let Some(feature) =
+            unsupported_type_with_generic(&result.ty, target, ordered_profiles.storage_scalar)
+        {
             reject!(feature);
         }
     }
@@ -1848,6 +1856,9 @@ fn scan_operation(
             value: operand,
             to,
         } => match (kind, value_types.get(operand), to) {
+            (kind, Some(from), to)
+                if ordered_profiles.storage_scalar
+                    && crate::generic_exposure_v18::supports_cast(*kind, from, to, target) => {}
             (CastKind::RestrictPointerAccess, Some(Type::Pointer(from)), Type::Pointer(to))
                 if from.pointee == to.pointee
                     && !matches!(from.pointee.as_ref(), Type::StorageObject(_))
@@ -1963,6 +1974,7 @@ fn scan_operation(
                     slice.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -1975,6 +1987,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -1985,6 +1998,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -2001,6 +2015,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    false,
                 );
             }
         }
@@ -2249,6 +2264,7 @@ fn scan_memory_type(
     address_space: AddressSpace,
     reject: &mut impl FnMut(UnsupportedFeatureV1),
     target: SimulationTargetV1,
+    allow_generic: bool,
 ) {
     if !matches!(
         address_space,
@@ -2256,7 +2272,8 @@ fn scan_memory_type(
             | AddressSpace::Private
             | AddressSpace::Workgroup
             | AddressSpace::Constant
-    ) {
+    ) && !(allow_generic && address_space == AddressSpace::Generic)
+    {
         reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
     }
     if !matches!(pointee, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
@@ -2378,6 +2395,18 @@ fn scan_terminator(
                 feature: UnsupportedFeatureV1::FloatOperation,
             }
         });
+    }
+}
+
+fn unsupported_type_with_generic(
+    ty: &Type,
+    target: SimulationTargetV1,
+    allow_generic: bool,
+) -> Option<UnsupportedFeatureV1> {
+    if allow_generic && crate::generic_exposure_v18::supports_type(ty, target) {
+        None
+    } else {
+        unsupported_type(ty, target)
     }
 }
 

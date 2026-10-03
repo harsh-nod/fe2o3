@@ -9,6 +9,8 @@ use fe2o3_kernel_ir::{
     ValueId, VerifiedCanonicalKernelIrModuleV18 as Owner,
 };
 use fe2o3_kir_sim::*;
+#[path = "canonical_v18/generic_exposure.rs"]
+mod generic_exposure;
 #[path = "canonical_v18/limits.rs"]
 mod limits;
 #[path = "canonical_v18/scalar_storage.rs"]

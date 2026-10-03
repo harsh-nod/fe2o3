@@ -104,6 +104,7 @@ pub(super) fn execute(
         reserved,
     )?;
     let pointer = PointerValue {
+        exposed_generic: false,
         allocation: id,
         byte_offset: 0,
         element,

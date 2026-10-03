@@ -49,6 +49,7 @@ pub(super) fn execute(
                     )
                 })?;
             one(RuntimeValue::Pointer(PointerValue {
+                exposed_generic: slice.exposed_generic,
                 allocation: slice.allocation,
                 byte_offset: slice.byte_offset,
                 element: slice.element,

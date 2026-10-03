@@ -62,6 +62,8 @@ pub use observed_storage::ObservationExecutionOptionsV1;
 
 #[path = "execute_alloca_v1.rs"]
 mod alloca_v1;
+#[path = "execute_generic_exposure_v18.rs"]
+mod generic_exposure_v18;
 #[path = "execute_matrix_bf16_exact_v1.rs"]
 mod matrix_bf16_exact_v1;
 #[path = "execute_storage_scalar_v18.rs"]
@@ -1341,6 +1343,7 @@ enum RuntimeValue {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PointerValue {
+    exposed_generic: bool,
     allocation: u64,
     byte_offset: usize,
     element: ScalarType,
@@ -1359,6 +1362,7 @@ struct StoragePointerValueV18 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SliceValue {
+    exposed_generic: bool,
     allocation: u64,
     elements: usize,
     element: ScalarType,
@@ -1780,7 +1784,7 @@ fn validate_access(
     width: usize,
     write: bool,
 ) -> Result<(), SimulationExecutionErrorKindV1> {
-    if access.address_space != pointer.address_space {
+    if access.address_space != pointer.logical_address_space() {
         return Err(SimulationExecutionErrorKindV1::AddressSpaceMismatch);
     }
     if write
@@ -1970,7 +1974,7 @@ fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
             allocation: value.allocation,
             byte_offset: value.byte_offset,
             element: value.element,
-            address_space: value.address_space,
+            address_space: value.logical_address_space(),
             access: value.access,
             lower_bound: value.lower_bound,
             upper_bound: value.upper_bound,
@@ -1979,7 +1983,7 @@ fn debug_value(value: &RuntimeValue) -> Option<SimulationDebugValueV1> {
             allocation: value.allocation,
             elements: value.elements,
             element: value.element,
-            address_space: value.address_space,
+            address_space: value.logical_address_space(),
             access: value.access,
             byte_offset: value.byte_offset,
             byte_len: value.byte_len,
@@ -2803,6 +2807,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ));
             }
             return Ok(PointerValue {
+                exposed_generic: false,
                 allocation: existing.id,
                 byte_offset: 0,
                 element,
@@ -2861,6 +2866,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             reserved,
         )?;
         Ok(PointerValue {
+            exposed_generic: false,
             allocation: id,
             byte_offset: 0,
             element,
@@ -4824,6 +4830,7 @@ fn initialize_arguments(
                 };
                 let allocation = allocate_argument(engine, index, buffer, AddressSpace::Global)?;
                 Ok(RuntimeValue::Slice(SliceValue {
+                    exposed_generic: false,
                     allocation,
                     elements: buffer.element_count(engine.target).map_err(|_| {
                         engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
@@ -4848,6 +4855,7 @@ fn initialize_arguments(
                 };
                 let allocation = allocate_argument(engine, index, buffer, AddressSpace::Global)?;
                 Ok(RuntimeValue::Pointer(PointerValue {
+                    exposed_generic: false,
                     allocation,
                     byte_offset: 0,
                     element: *element,
@@ -4881,6 +4889,7 @@ fn initialize_arguments(
                     ))
                 })?;
                 Ok(RuntimeValue::Slice(SliceValue {
+                    exposed_generic: false,
                     allocation,
                     elements: view.elements(),
                     element: *element,
@@ -4921,6 +4930,7 @@ fn initialize_arguments(
                         ))
                     })?;
                 Ok(RuntimeValue::Pointer(PointerValue {
+                    exposed_generic: false,
                     allocation,
                     byte_offset: view.byte_offset(),
                     element: *element,
@@ -7854,6 +7864,7 @@ fn guarded_transpose_source_byte(
         return Ok(0);
     }
     let base = PointerValue {
+        exposed_generic: source.exposed_generic,
         allocation: source.allocation,
         byte_offset: source.byte_offset,
         element: ScalarType::U8,
@@ -8070,7 +8081,7 @@ fn runtime_type(value: &RuntimeValue) -> Type {
         RuntimeValue::PhysicalEntry(value) => Type::Scalar(value.scalar_type()),
         RuntimeValue::Pointer(pointer) => Type::pointer(
             Type::Scalar(pointer.element),
-            pointer.address_space,
+            pointer.logical_address_space(),
             pointer.access,
         ),
         RuntimeValue::StoragePointer(storage) => Type::pointer(
@@ -8080,7 +8091,7 @@ fn runtime_type(value: &RuntimeValue) -> Type {
         ),
         RuntimeValue::Slice(slice) => Type::slice(
             Type::Scalar(slice.element),
-            slice.address_space,
+            slice.logical_address_space(),
             slice.access,
         ),
     }
@@ -8666,6 +8677,7 @@ mod tests {
             (
                 ValueId(0),
                 RuntimeValue::Pointer(PointerValue {
+                    exposed_generic: false,
                     allocation: pointer_allocation,
                     byte_offset: 0,
                     element: ScalarType::U32,
@@ -8837,6 +8849,7 @@ mod tests {
             observation_descriptor: Vec::new(),
         };
         let pointer = PointerValue {
+            exposed_generic: false,
             allocation: 7,
             byte_offset: 0,
             element: ScalarType::U32,

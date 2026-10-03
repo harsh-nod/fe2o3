@@ -751,7 +751,7 @@ actual-source CLI qualification is [recorded separately](../../../docs/physical-
 
 `fe2o3-debug sim --diagnostic-kir-v18 kernel-v18.kir --request request.json --protocol jsonl --wave-width 64`
 uses the ordinary simulator capture and JSONL debugger backend. Existing
-supported scalar and non-Generic memory operations support logical stepping,
+supported scalar memory operations support logical stepping,
 dispatch/workgroup/wave/lane
 inspection and checkpoint memory inspection while retaining exact V18 identity
 and inert layout metadata. Configuration identity binds the typed request,
@@ -770,9 +770,14 @@ layout rows and the existing memory and lifetime checks. Stepping and memory
 events/checkpoint snapshots remain available. A stack containing a tagged
 storage pointer is explicitly `NotCaptured`: the legacy debugger value format
 cannot represent its row identity, so it is never converted into an ordinary
-pointer or silently omitted. Aggregate/pointer storage, projections, copies,
-discriminants, storage-bearing function parameters/results and Generic
-pointer/slice casts remain unsupported.
+pointer or silently omitted. V18 scalar pointer/slice exposure to Generic keeps
+the concrete allocation, permissions, view bounds and lifetime. Debug values
+retain the logical Generic address space; memory events and allocation snapshots
+retain the concrete backing. Slice source types remain Global/Constant and root
+buffers remain Global-only; Private/Workgroup slices are not newly admitted.
+Generic kernel arguments, allocations, atomics and
+memory intrinsics remain refused. Aggregate/pointer storage, projections, copies,
+discriminants and storage-bearing function parameters/results remain unsupported.
 
 This adds no debugger protocol or KIR format change. Raw canonical bytes do not
 authenticate an original Rust source owner or a compiler continuation.

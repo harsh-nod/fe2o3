@@ -37,8 +37,16 @@ including 32-bit versus 64-bit Index. Values retain their row identity; the
 existing finite-width, bounds, alignment, initialization, memory-event and
 allocation-lifetime checks apply. Existing simulation limits remain unchanged.
 
-Aggregate/pointer storage, projections, object copies, discriminants, storage-bearing
-function parameters/results and Generic pointer/slice casts remain unsupported. Storage
+V18 scalar pointer and admitted slice exposure to Generic retains the concrete allocation,
+view bounds, permissions and lifetime. Ordinary scalar memory, slice/GEP operations,
+internal calls and CFG/select transport use that retained backing. Debug values
+show the logical Generic type; memory events keep the concrete address space.
+Concrete slice inputs remain limited to Global/Constant types; the root buffer
+ABI remains Global-only. Private/Workgroup slices do not become newly admitted.
+Generic kernel arguments, allocations, atomics and memory intrinsics remain refused.
+
+Aggregate/pointer storage, projections, object copies, discriminants and storage-bearing
+function parameters/results remain unsupported. Storage
 pointers are not ordinary scalar pointers. Debug capture executes this subset
 and retains memory events/checkpoints, but reports stacks containing tagged
 storage pointers as `NotCaptured`; it never erases their type into the legacy

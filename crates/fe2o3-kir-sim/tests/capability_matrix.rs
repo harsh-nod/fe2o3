@@ -137,7 +137,11 @@ fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
                 matrix
                     .pointer_rows
                     .iter()
-                    .find(|row| { row.profile == profile && row.kir_wire_version == version })
+                    .find(|row| {
+                        row.profile == profile
+                            && row.kir_wire_version == version
+                            && row.operation == "restrict_pointer_access"
+                    })
                     .unwrap()
                     .capability,
                 SimulationCapabilityDispositionV1::Unsupported {
@@ -158,7 +162,9 @@ fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
                 matrix
                     .pointer_rows
                     .iter()
-                    .find(|row| row.profile == profile && row.kir_wire_version == version)
+                    .find(|row| row.profile == profile
+                        && row.kir_wire_version == version
+                        && row.operation == "restrict_pointer_access")
                     .unwrap()
                     .capability,
                 SimulationCapabilityDispositionV1::Owned { .. }
@@ -478,6 +484,18 @@ fn json_command_emits_the_same_stable_matrix() {
         value["pointer_rows"].as_array().unwrap().len(),
         POINTER_CAPABILITY_ROWS_V1
     );
+    assert_eq!(
+        value["pointer_rows"],
+        serde_json::to_value(semantic_capability_matrix_v1().pointer_rows,).unwrap()
+    );
+    assert!(
+        value["scalar_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["operation"] != "pointer_to_generic"
+                && row["operation"] != "slice_to_generic")
+    );
 }
 #[test]
 fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
@@ -486,9 +504,10 @@ fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
     matrix
         .top_level_rows
         .retain(|row| row.kir_wire_version != SimulationKirWireVersionV1::V18);
-    matrix
-        .pointer_rows
-        .retain(|row| row.kir_wire_version != SimulationKirWireVersionV1::V18);
+    matrix.pointer_rows.retain(|row| {
+        row.kir_wire_version != SimulationKirWireVersionV1::V18
+            && row.operation == "restrict_pointer_access"
+    });
     let rows: Vec<_> = matrix
         .top_level_rows
         .iter()
@@ -517,7 +536,7 @@ fn storage_rows_are_additive_and_do_not_change_old_profile_bytes() {
 fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
     let matrix = semantic_capability_matrix_v1();
     assert_eq!(matrix.top_level_rows.len(), 2_352);
-    assert_eq!(matrix.pointer_rows.len(), 48);
+    assert_eq!(matrix.pointer_rows.len(), 336);
     let mut rows = 0;
     let mut storage = 0;
     let mut added_bytes = 0;
@@ -559,11 +578,10 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
     }
     assert_eq!((rows, storage), (196, 4));
     let mut pointers = 0;
-    for row in matrix
-        .pointer_rows
-        .iter()
-        .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V18)
-    {
+    for row in matrix.pointer_rows.iter().filter(|row| {
+        row.kir_wire_version == SimulationKirWireVersionV1::V18
+            && row.operation == "restrict_pointer_access"
+    }) {
         assert_eq!(row.operation, "restrict_pointer_access");
         let previous = matrix
             .pointer_rows
@@ -584,9 +602,16 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
     }
     assert_eq!(pointers, 4);
     assert_eq!(added_bytes, 35_662); // Four storage rows each add 29 JSON bytes.
+    let exposure_bytes: usize = matrix
+        .pointer_rows
+        .iter()
+        .filter(|row| row.operation != "restrict_pointer_access")
+        .map(|row| serde_json::to_vec(row).unwrap().len() + 1)
+        .sum();
+    assert_eq!(exposure_bytes, 61_872);
     assert_eq!(
         SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
-        5_061_127 + added_bytes
+        5_061_127 + added_bytes + exposure_bytes
     );
     for (version, spelling) in [
         (SimulationKirWireVersionV1::V7, "v7"),
@@ -604,4 +629,76 @@ fn v18_adds_only_private_scalar_storage_and_preserves_remaining_refusals() {
     ] {
         assert_eq!(serde_json::to_value(version).unwrap(), spelling);
     }
+}
+
+#[test]
+fn generic_exposure_rows_are_typed_memory_owned_only_for_v18_and_never_scalar() {
+    use SimulationUnsupportedReasonCodeV1 as Reason;
+    use fe2o3_kir_sim::SimulationSemanticOwnerV1 as Owner;
+    let matrix = semantic_capability_matrix_v1();
+    let mut owned = 0;
+    let mut refused = 0;
+    for row in matrix
+        .pointer_rows
+        .iter()
+        .filter(|row| row.operation != "restrict_pointer_access")
+    {
+        assert!(matches!(
+            row.operation,
+            "pointer_to_generic" | "slice_to_generic"
+        ));
+        assert_eq!(row.from_access, row.to_access);
+        assert!(matches!(
+            row.from_access,
+            "read_only" | "write_only" | "read_write"
+        ));
+        if row.kir_wire_version == SimulationKirWireVersionV1::V18 {
+            assert_eq!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Owned {
+                    owner: Owner::TypedMemory,
+                    typed_rejections: &[
+                        Reason::UnsupportedAddressSpace,
+                        Reason::NonScalarMemory,
+                        Reason::UnsupportedScalarOperation,
+                    ],
+                }
+            );
+            owned += 1;
+        } else {
+            assert_eq!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Unsupported {
+                    reason: Reason::UnsupportedAddressSpace,
+                }
+            );
+            refused += 1;
+        }
+    }
+    assert_eq!((owned, refused), (24, 264));
+    assert!(
+        matrix
+            .scalar_rows
+            .iter()
+            .all(|row| !matches!(row.operation, "pointer_to_generic" | "slice_to_generic"))
+    );
+    let numeric_casts = matrix
+        .scalar_rows
+        .iter()
+        .filter(|row| row.family == fe2o3_kir_sim::SimulationScalarOperationFamilyV1::Cast)
+        .map(|row| row.operation)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        numeric_casts,
+        BTreeSet::from([
+            "truncate",
+            "zero_extend",
+            "sign_extend",
+            "float_extend",
+            "float_truncate",
+            "integer_to_float",
+            "float_to_integer",
+            "bitcast",
+        ])
+    );
 }

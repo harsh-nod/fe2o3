@@ -355,6 +355,7 @@ pub(super) fn execute_step(
             }
             if slot.is_multiple_of(2) {
                 let pointer = PointerValue {
+                    exposed_generic: slice.exposed_generic,
                     allocation: slice.allocation,
                     byte_offset: slice.byte_offset,
                     element: slice.element,

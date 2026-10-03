@@ -9,7 +9,14 @@ mod fixture;
 const FLOOR: usize = 97;
 
 fn with_input(value: u32, observe: impl FnOnce(AdmittedSimulationInputV1)) {
-    let bytes = fixture::bytes(&fixture::module());
+    with_module_input(&fixture::module(), value, observe);
+}
+fn with_module_input(
+    module: &fe2o3_kernel_ir::Module,
+    value: u32,
+    observe: impl FnOnce(AdmittedSimulationInputV1),
+) {
+    let bytes = fixture::bytes(module);
     let mut work = Work::new(fixture::BOUND);
     let mut budget = Budget::new(&mut work, fixture::BOUND);
     budget.reserve_storage(FLOOR).unwrap();
@@ -129,6 +136,138 @@ fn generic_capture_steps_and_inspects_dispatch_workgroup_wave_lane_and_memory() 
         assert_eq!(bytes, "0x30000000");
         assert_eq!(initialized, "0x0f");
     });
+}
+
+#[test]
+fn exposed_generic_diagnostic_capture_preserves_logical_and_concrete_identity() {
+    use fe2o3_kernel_ir::AddressSpace;
+    use fe2o3_kir_sim::SimulationDebugMemoryAccessV1;
+    for (private, concrete) in [(false, AddressSpace::Global), (true, AddressSpace::Private)] {
+        with_module_input(&fixture::generic_exposure_module(private), 37, |input| {
+            let mut backend = SimulatorBackendV1::new(input, DebugWaveWidthV1::Wave64).unwrap();
+            assert!(!backend.failed_execution);
+            assert_eq!(backend.module.identity().wire_version(), 18);
+            assert_eq!(
+                backend.session.transcript().completeness(),
+                DebugTranscriptCompletenessV1::Complete
+            );
+            assert!(backend.source_map_identity.is_none() && backend.diagnosis_input.is_none());
+            let records = backend.session.transcript().records();
+            let (index, allocation) = records
+                .iter()
+                .enumerate()
+                .find_map(|(index, record)| {
+                    if record.invocation.local[0] != 0 {
+                        return None;
+                    }
+                    let SimulationDebugRecordKindV1::Checkpoint {
+                        stack: SimulationDebugCollectionV1::Captured(frames),
+                        ..
+                    } = &record.kind
+                    else {
+                        return None;
+                    };
+                    frames.iter().find_map(|frame| {
+                        let SimulationDebugCollectionV1::Captured(values) = &frame.values else {
+                            return None;
+                        };
+                        values.iter().find_map(|binding| match &binding.observed {
+                            SimulationDebugValueV1::Pointer {
+                                allocation,
+                                address_space: AddressSpace::Generic,
+                                ..
+                            } if binding.value == ValueId(8) => Some((index, *allocation)),
+                            _ => None,
+                        })
+                    })
+                })
+                .expect("actual diagnostic ingress captures the exposed pointer");
+            for expected in [
+                SimulationDebugMemoryAccessV1::WriteCommitted,
+                SimulationDebugMemoryAccessV1::Read,
+            ] {
+                assert!(records.iter().any(|record| matches!(&record.kind,
+                    SimulationDebugRecordKindV1::Memory {
+                        allocation: actual, address_space, access, ..
+                    } if *actual == allocation && *address_space == concrete && *access == expected
+                )));
+            }
+            assert!(!records.iter().any(|record| matches!(
+                &record.kind,
+                SimulationDebugRecordKindV1::Memory {
+                    address_space: AddressSpace::Generic,
+                    ..
+                }
+            )));
+            assert!(records.iter().any(|record| matches!(&record.kind,
+                SimulationDebugRecordKindV1::Checkpoint {
+                    memory: SimulationDebugCollectionV1::Captured(memory), ..
+                } if memory.iter().any(|row| row.allocation == allocation
+                    && row.address_space == concrete)
+            )));
+            let last = records
+                .iter()
+                .rev()
+                .find(|record| {
+                    matches!(&record.kind, SimulationDebugRecordKindV1::Checkpoint { .. })
+                })
+                .unwrap();
+            let SimulationDebugRecordKindV1::Checkpoint {
+                memory: SimulationDebugCollectionV1::Captured(memory),
+                ..
+            } = &last.kind
+            else {
+                panic!("captured final memory")
+            };
+            assert_eq!(memory[0].bytes, fixture::output(37));
+            assert!(matches!(
+                backend.session.seek_record_index(index),
+                DebugNavigationV1::Stopped(_)
+            ));
+            let reply = backend.handle(DebugRequestV1::InspectValues {
+                schema: RequestSchemaV1::V1,
+                request_id: 1,
+                expected_revision: backend.revision,
+                scope: ExecutionScopeSelectorV1::Lane {
+                    workgroup: [0, 0, 0],
+                    wave: 0,
+                    lane: 0,
+                },
+                frame: None,
+                selector: ValueSelectorV1::All,
+                page: PageRequestV1 {
+                    cursor: None,
+                    limit: 64,
+                },
+            });
+            reply.validate(backend.protocol_limits).unwrap();
+            let DebugResponseV1::Ok { result, .. } = reply else {
+                panic!("values reply")
+            };
+            let DebugResultV1::Values { values, .. } = *result else {
+                panic!("values result")
+            };
+            let exposed = values
+                .iter()
+                .find(|value| {
+                    matches!(
+                        value.path.root,
+                        ValueRootV1::Ssa {
+                            value_ordinal: 8,
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            assert!(matches!(&exposed.availability,
+                ValueAvailabilityV1::Captured {
+                    value_type: DebugValueTypeV1::Pointer { address_space: AddressSpaceV1::Generic },
+                    value: CapturedValueV1::AllocationRelativePointer { allocation: observed, .. },
+                    provenance: ValueProvenanceV1::SimulatedObservation,
+                } if observed.ordinal == allocation
+            ));
+        });
+    }
 }
 
 #[test]

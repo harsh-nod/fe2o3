@@ -37,6 +37,7 @@ pub use physical_global_copy_v21::{
     PHYSICAL_GLOBAL_COPY_ADMISSION_WORK_V21, PhysicalGlobalCopySimulationAdmissionErrorV21,
     PhysicalGlobalCopySimulationStorageV21,
 };
+mod generic_exposure_v18;
 mod preflight;
 mod reduce;
 mod resident;

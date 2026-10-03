@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_096_789;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_158_661;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -22,7 +22,7 @@ pub const SCALAR_CAPABILITY_ROWS_V1: usize = SimulationCapabilityProfileV1::COUN
         + COMPARE_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len()
         + CAST_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len());
 pub const POINTER_CAPABILITY_ROWS_V1: usize =
-    SimulationCapabilityProfileV1::COUNT * SimulationKirWireVersionV1::COUNT;
+    SimulationCapabilityProfileV1::COUNT * SimulationKirWireVersionV1::COUNT * (1 + 2 * 3);
 
 const SCALAR_TYPES: [ScalarType; 16] = [
     ScalarType::Bool,
@@ -153,6 +153,7 @@ pub enum SimulationOperationSurfaceV1 {
     Unary = 3,
     Binary = 4,
     Compare = 5,
+    /// Numeric casts; pointer casts have separate typed-memory rows.
     Cast = 6,
     Select = 7,
     Call = 8,
@@ -503,6 +504,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
             });
         }
     }
+    append_generic_exposure_rows(&mut pointer_rows);
     debug_assert_eq!(top_level_rows.len(), TOP_LEVEL_CAPABILITY_ROWS_V1);
     debug_assert_eq!(scalar_rows.len(), SCALAR_CAPABILITY_ROWS_V1);
     debug_assert_eq!(pointer_rows.len(), POINTER_CAPABILITY_ROWS_V1);
@@ -515,6 +517,40 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
         top_level_rows,
         scalar_rows,
         pointer_rows,
+    }
+}
+
+fn append_generic_exposure_rows(rows: &mut Vec<SimulationPointerCapabilityRowV1>) {
+    use SimulationSemanticOwnerV1 as Owner;
+    use SimulationUnsupportedReasonCodeV1 as Reason;
+    for profile in SimulationCapabilityProfileV1::ALL {
+        for kir_wire_version in SimulationKirWireVersionV1::ALL {
+            for operation in ["pointer_to_generic", "slice_to_generic"] {
+                for access in ["read_only", "write_only", "read_write"] {
+                    rows.push(SimulationPointerCapabilityRowV1 {
+                        profile,
+                        kir_wire_version,
+                        operation,
+                        from_access: access,
+                        to_access: access,
+                        capability: if kir_wire_version == SimulationKirWireVersionV1::V18 {
+                            SimulationCapabilityDispositionV1::Owned {
+                                owner: Owner::TypedMemory,
+                                typed_rejections: &[
+                                    Reason::UnsupportedAddressSpace,
+                                    Reason::NonScalarMemory,
+                                    Reason::UnsupportedScalarOperation,
+                                ],
+                            }
+                        } else {
+                            SimulationCapabilityDispositionV1::Unsupported {
+                                reason: Reason::UnsupportedAddressSpace,
+                            }
+                        },
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -917,7 +953,8 @@ const fn scalar_owner(ty: ScalarType) -> SimulationSemanticOwnerV1 {
 
 const fn cast_owner(kind: CastKind) -> SimulationSemanticOwnerV1 {
     match kind {
-        // The new casts are not in CAST_OPERATIONS and supported_cast refuses them.
+        // Pointer casts never enter the scalar Cartesian product. Their versioned
+        // typed-memory rows are independent of the numeric supported_cast predicate.
         CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
             SimulationSemanticOwnerV1::TypedMemory
         }

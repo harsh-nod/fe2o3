@@ -60,6 +60,15 @@ pub(super) fn execute(
             )))
         }
         OperationKind::Cast { kind, value, to } => {
+            if matches!(kind, CastKind::PointerToGeneric | CastKind::SliceToGeneric) {
+                return one(generic_exposure_v18::expose(
+                    runtime_value(engine, values, *value, &site)?,
+                    *kind,
+                    to,
+                    engine.target,
+                )
+                .map_err(|kind| engine.at(site, kind))?);
+            }
             if *kind == CastKind::RestrictPointerAccess {
                 let RuntimeValue::Pointer(mut pointer) =
                     runtime_value(engine, values, *value, &site)?.clone()

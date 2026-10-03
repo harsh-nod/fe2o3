@@ -11,6 +11,7 @@ fn site(n: u32) -> CompactSite {
 fn chain() -> AddressChain {
     AddressChain {
         pointer: PointerValue {
+            exposed_generic: false,
             allocation: 7,
             byte_offset: 4,
             element: ScalarType::U32,
