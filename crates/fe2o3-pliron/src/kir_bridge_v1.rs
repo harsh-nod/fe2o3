@@ -3089,6 +3089,8 @@ const fn compare_from_pliron(predicate: ComparePredicateAttr) -> fe2o3_kernel_ir
 const fn cast_from_pliron(kind: CastKindAttr) -> CastKind {
     match kind {
         CastKindAttr::RestrictPointerAccess => CastKind::RestrictPointerAccess,
+        CastKindAttr::PointerToGeneric => CastKind::PointerToGeneric,
+        CastKindAttr::SliceToGeneric => CastKind::SliceToGeneric,
         CastKindAttr::Truncate => CastKind::Truncate,
         CastKindAttr::ZeroExtend => CastKind::ZeroExtend,
         CastKindAttr::SignExtend => CastKind::SignExtend,

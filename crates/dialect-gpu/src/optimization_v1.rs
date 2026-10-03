@@ -102,11 +102,13 @@ pub enum ComparePredicateAttr {
     GreaterThanOrEqual,
 }
 
-/// Target-neutral scalar cast semantics.
+/// Target-neutral scalar and explicit pointer cast semantics.
 #[pliron_attr(name = "gpu.cast_kind", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CastKindAttr {
     RestrictPointerAccess,
+    PointerToGeneric,
+    SliceToGeneric,
     Truncate,
     ZeroExtend,
     SignExtend,
@@ -420,7 +422,9 @@ fn valid_scalar_cast_v1(
         return false;
     };
     match kind {
-        CastKindAttr::RestrictPointerAccess => false,
+        CastKindAttr::RestrictPointerAccess
+        | CastKindAttr::PointerToGeneric
+        | CastKindAttr::SliceToGeneric => false,
         CastKindAttr::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKindAttr::ZeroExtend => {
             (from == ScalarCastTypeV1::Bool || (from.is_integer() && !from.is_signed_integer()))
@@ -789,23 +793,67 @@ impl Verify for CastOp {
         };
         let from = self.get_operand_value(ctx).get_type(ctx);
         let to = self.result(ctx).get_type(ctx);
-        let valid_pointer_restriction = if kind == CastKindAttr::RestrictPointerAccess {
+        let valid_pointer_cast = if matches!(
+            kind,
+            CastKindAttr::RestrictPointerAccess | CastKindAttr::PointerToGeneric
+        ) {
             match (
                 from.deref(ctx).downcast_ref::<PointerType>(),
                 to.deref(ctx).downcast_ref::<PointerType>(),
             ) {
                 (Some(from), Some(to)) => {
                     from.pointee() == to.pointee()
-                        && from.address_space() == to.address_space()
-                        && from.access() == AccessModeAttr::ReadWrite
-                        && to.access() == AccessModeAttr::ReadOnly
+                        && match kind {
+                            CastKindAttr::RestrictPointerAccess => {
+                                from.address_space() == to.address_space()
+                                    && from.access() == AccessModeAttr::ReadWrite
+                                    && to.access() == AccessModeAttr::ReadOnly
+                            }
+                            CastKindAttr::PointerToGeneric => {
+                                matches!(
+                                    from.address_space(),
+                                    AddressSpaceAttr::Global
+                                        | AddressSpaceAttr::Constant
+                                        | AddressSpaceAttr::Private
+                                        | AddressSpaceAttr::Workgroup
+                                ) && to.address_space() == AddressSpaceAttr::Generic
+                                    && from.access() == to.access()
+                                    && (from.address_space() != AddressSpaceAttr::Constant
+                                        || from.access() == AccessModeAttr::ReadOnly)
+                            }
+                            _ => false,
+                        }
                 }
                 _ => false,
             }
         } else {
             false
         };
-        if valid_pointer_restriction || valid_scalar_cast_v1(ctx, kind, from, to) {
+        let valid_slice_cast = if kind == CastKindAttr::SliceToGeneric {
+            match (
+                from.deref(ctx).downcast_ref::<SliceType>(),
+                to.deref(ctx).downcast_ref::<SliceType>(),
+            ) {
+                (Some(from), Some(to)) => {
+                    from.element() == to.element()
+                        && from.access() == to.access()
+                        && matches!(
+                            from.address_space(),
+                            AddressSpaceAttr::Global
+                                | AddressSpaceAttr::Constant
+                                | AddressSpaceAttr::Private
+                                | AddressSpaceAttr::Workgroup
+                        )
+                        && to.address_space() == AddressSpaceAttr::Generic
+                        && (from.address_space() != AddressSpaceAttr::Constant
+                            || from.access() == AccessModeAttr::ReadOnly)
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if valid_pointer_cast || valid_slice_cast || valid_scalar_cast_v1(ctx, kind, from, to) {
             Ok(())
         } else {
             verify_err!(
@@ -1731,6 +1779,8 @@ impl SideEffects for CastOp {
             !matches!(
                 kind,
                 CastKindAttr::RestrictPointerAccess
+                    | CastKindAttr::PointerToGeneric
+                    | CastKindAttr::SliceToGeneric
                     | CastKindAttr::Truncate
                     | CastKindAttr::ZeroExtend
                     | CastKindAttr::SignExtend
@@ -1959,7 +2009,9 @@ impl ConstFoldInterface for CastOp {
             CastKindAttr::Truncate | CastKindAttr::ZeroExtend | CastKindAttr::Bitcast => {
                 operand.value().zext(width)
             }
-            CastKindAttr::RestrictPointerAccess => return vec![None],
+            CastKindAttr::RestrictPointerAccess
+            | CastKindAttr::PointerToGeneric
+            | CastKindAttr::SliceToGeneric => return vec![None],
             _ => return vec![None],
         };
         let target_type =
