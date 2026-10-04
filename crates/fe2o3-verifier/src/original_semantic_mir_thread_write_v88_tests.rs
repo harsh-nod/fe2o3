@@ -4,12 +4,19 @@ use std::fmt::Write as _;
 
 const WRITE_EQUATIONS: &str = include_str!("original_semantic_mir_thread_write_v88_tests.vrs");
 
+#[derive(Clone, Copy)]
+enum WriteProofShape {
+    MovedValue,
+    NonzeroStatements,
+}
+
 fn write_fixture(
     types: &mut Vec<Type>,
     functions: &mut Vec<Function>,
     callables: &mut Vec<SemanticCallableDeclV1>,
     disjoint: bool,
     copied_index: bool,
+    shape: Option<WriteProofShape>,
 ) {
     assert!(!disjoint || !copied_index);
     indexed_fixture_kind(types, functions, callables, disjoint, None);
@@ -160,14 +167,17 @@ fn write_fixture(
             };
             arguments[1] = Operand::Copy(index.clone());
         }
-        arguments.push(Operand::Copy(
-            Place::new(
-                SemanticLocalIdV1::from_index(1),
-                vec![],
-                TypeId::from_index(0),
-            )
-            .unwrap(),
-        ));
+        let value = Place::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![],
+            TypeId::from_index(0),
+        )
+        .unwrap();
+        arguments.push(if matches!(shape, Some(WriteProofShape::MovedValue)) {
+            Operand::Move(value)
+        } else {
+            Operand::Copy(value)
+        });
         let call = SemanticDirectCallV1::new_callable(
             call.callee(),
             arguments,
@@ -181,7 +191,14 @@ fn write_fixture(
         blocks[write_at] = SemanticBasicBlockV1::new(
             blocks[write_at].identity(),
             old.source(),
-            vec![],
+            if matches!(shape, Some(WriteProofShape::NonzeroStatements)) {
+                vec![fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1::new(
+                    old.source(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticStatementKindV1::Nop,
+                )]
+            } else {
+                vec![]
+            },
             SemanticTerminatorV1::new(old.source(), Terminator::Call(call)),
         )
         .unwrap();
@@ -231,13 +248,33 @@ fn run_write_attempt(
     custody_fault: Option<bool>,
     examine: impl FnOnce(&str),
 ) -> (Result<()>, usize, usize, usize) {
+    run_write_shape_attempt(
+        work,
+        storage,
+        disjoint,
+        copied_index,
+        custody_fault,
+        None,
+        examine,
+    )
+}
+
+fn run_write_shape_attempt(
+    work: usize,
+    storage: usize,
+    disjoint: bool,
+    copied_index: bool,
+    custody_fault: Option<bool>,
+    shape: Option<WriteProofShape>,
+    examine: impl FnOnce(&str),
+) -> (Result<()>, usize, usize, usize) {
     let reached = std::cell::Cell::new(0);
     let result =
         super::super::super::super::super::invocations::tests::run_captured_callable_transform(
             work,
             storage,
             |types, functions, callables| {
-                write_fixture(types, functions, callables, disjoint, copied_index)
+                write_fixture(types, functions, callables, disjoint, copied_index, shape)
             },
             |owner, launch, budget| {
                 capture_element_with_access(
@@ -285,6 +322,12 @@ fn run_write_attempt(
                                             Resource::Accounting
                                         )))
                                     ));
+                                    assert!(matches!(
+                                        program.emit_thread_write_normal_proofs_v94(&mut writer),
+                                        Err(Error::Source(SourceError::Resource(
+                                            Resource::Accounting
+                                        )))
+                                    ));
                                     assert!(writer.text.is_empty());
                                 }
                                 assert_eq!(
@@ -302,6 +345,10 @@ fn run_write_attempt(
                                 ));
                                 assert!(matches!(
                                     program.emit_cut_frame_proofs_v93(out),
+                                    Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+                                ));
+                                assert!(matches!(
+                                    program.emit_thread_write_normal_proofs_v94(out),
                                     Err(Error::Source(SourceError::Resource(Resource::Accounting)))
                                 ));
                                 assert_eq!(
@@ -601,5 +648,90 @@ fn writing_cut_support_has_exact_full_model_work_and_storage_limits() {
             assert!(short.is_err());
             assert_eq!(after, floor);
         }
+    }
+}
+
+#[test]
+fn thread_write_normalization_uses_authentic_literals_without_new_step_premises() {
+    let laws = include_str!("original_semantic_mir_thread_write_normal_laws_v94.vrs");
+    assert_eq!(laws.matches("proof fn ").count(), 4);
+    assert_eq!(laws.matches("#[verifier::spinoff_prover]").count(), 1);
+    for required in [
+        "local != write.input, local != write.index",
+        "ordinary_memory_width_v30(write.recipe.width)",
+        "after.machine.valid ==> source.machine.valid",
+        "after.machine.memory == byte_store_v30(source.machine.memory,",
+        "else { after.machine.memory == source.machine.memory }",
+    ] {
+        assert!(laws.contains(required), "{required}");
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "Map::empty()"] {
+        assert!(!laws.contains(forbidden), "{forbidden}");
+    }
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(text.matches(laws).count(), 1);
+            let mut calls = 0;
+            for proof in text.split("proof fn invocation_paired_cut_").skip(1) {
+                let proof = proof.split("proof fn ").next().unwrap();
+                let Some((_, after)) = proof.split_once(" let normalized_write = ") else {
+                    continue;
+                };
+                let (literal, _) = after.split_once(";\n").unwrap();
+                assert!(text.contains(&format!(
+                    "let event = InvocationSourceByteEventV36::ThreadWrite({literal});"
+                )));
+                let (header, body) = proof.split_once("\n{\n").unwrap();
+                assert!(header.contains("_heap_v85(source:"));
+                assert!(!header.contains("normalized_write"));
+                assert!(!header.contains("local_normal_form"));
+                assert!(body.contains(
+                    " invocation_thread_write_local_normal_form_v93(source, normalized_write,"
+                ));
+                calls += 1;
+            }
+            assert_eq!(calls, 2);
+            assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn thread_write_normalization_shape_misses_keep_original_full_obligations() {
+    for shape in [
+        WriteProofShape::MovedValue,
+        WriteProofShape::NonzeroStatements,
+    ] {
+        run_write_shape_attempt(LIMIT, LIMIT, false, false, None, Some(shape), |text| {
+            assert!(!text.contains("proof fn invocation_thread_write_local_normal_"));
+            assert!(!text.contains(" let normalized_write = "));
+            assert!(text.contains(
+                "InvocationSourceByteEventV36::ThreadWrite(InvocationSourceThreadWriteV88"
+            ));
+            assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
+            for root in 0..2 {
+                let name = format!("proof fn invocation_paired_step_{root}_v36(");
+                let proof = text
+                    .split_once(&name)
+                    .unwrap()
+                    .1
+                    .split("proof fn ")
+                    .next()
+                    .unwrap();
+                let header = proof.split_once("\n{\n").unwrap().0;
+                for conclusion in [
+                    "paired_related_",
+                    "paired_observations_related_",
+                    ".halted ==",
+                    "paired_control_values_",
+                ] {
+                    assert!(header.contains(conclusion), "{conclusion}");
+                }
+            }
+        })
+        .0
+        .unwrap();
     }
 }

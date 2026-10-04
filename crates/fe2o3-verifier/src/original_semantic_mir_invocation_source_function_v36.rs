@@ -41,6 +41,9 @@ mod step_hints;
 #[path = "original_semantic_mir_cut_frame_generate_v93.rs"]
 mod cut_frames;
 
+const THREAD_WRITE_NORMAL_V94: &str =
+    include_str!("original_semantic_mir_thread_write_normal_laws_v94.vrs");
+
 pub(super) struct SourceEntryHintsV85 {
     pub(super) owner: u32,
     pub(super) locals: Range<usize>,
@@ -60,6 +63,24 @@ pub(super) struct SourceCutHintsV85 {
     pub(super) operands: usize,
     pub(super) call: Option<SourceCallHintsV85>,
     pub(super) frame_preserving: bool,
+    normalization: Option<thread_write::ThreadWriteCall>,
+}
+
+impl SourceCutHintsV85 {
+    pub(super) fn emit_write_normalization(
+        &self,
+        root: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        out.budget.reserve_storage(
+            size_of::<thread_write::ThreadWriteCall>() + size_of::<Result<()>>(),
+        )?;
+        out.budget.charge_work(1)?;
+        if let Some(call) = self.normalization {
+            call.emit_normalization(root, self.instance, out)?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct SourceStepHintsV85 {
@@ -117,6 +138,35 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
 }
 
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
+    pub(super) fn emit_thread_write_normal_proofs_v94(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.source_slots(out)?;
+        out.budget.reserve_storage(
+            4 * size_of::<usize>()
+                + 4 * size_of::<&()>()
+                + size_of::<Option<SourceStepHintsV85>>()
+                + size_of::<Result<Option<SourceStepHintsV85>>>()
+                + size_of::<std::slice::Iter<'_, SourceCutHintsV85>>()
+                + size_of::<Result<()>>(),
+        )?;
+        for root in 0..self.roots.len() {
+            out.budget.charge_work(1)?;
+            let Some(hints) = step_hints::derive(self, root, out)? else {
+                continue;
+            };
+            for hint in &hints.cuts {
+                out.budget.charge_work(1)?;
+                if hint.normalization.is_some() {
+                    write!(out, "{THREAD_WRITE_NORMAL_V94}").map_err(|_| out.error())?;
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn emit_cut_frame_proofs_v93(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         cut_frames::emit(self, out)
     }
