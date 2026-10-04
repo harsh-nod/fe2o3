@@ -109,7 +109,7 @@ fn write_owner(
     write_owner_count_v87(consume_bool, copied_value, receiver, 1)
 }
 
-fn write_owner_count_v87(
+pub(super) fn write_owner_count_v87(
     consume_bool: bool,
     copied_value: bool,
     receiver: usize,
