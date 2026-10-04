@@ -148,7 +148,7 @@ machine_helper_status=$?
 set -e
 if [[ ${machine_helper_status} -ne 1 \
   || "${machine_helper_failure}" != \
-    'compiler-execution systemd machine boundary failed: expected parent PID is missing' ]]; then
+    'FE2O3_MACHINE_ERROR stage="parent-boundary" cause="expected parent PID is missing"' ]]; then
   printf 'static systemd machine helper parent boundary changed\n' >&2
   exit 1
 fi
