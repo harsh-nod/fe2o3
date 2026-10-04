@@ -1,0 +1,122 @@
+{
+  "schema": "fe2o3-disabled-physical-v7-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-object-v1.inc",
+  "before": {
+    "bytes": 7971,
+    "sha256": "c0b584e8bfd0080bd1008e3a9be29568fd6b701298605a44be9588847208d784"
+  },
+  "after": {
+    "bytes": 8571,
+    "sha256": "e960ced851431d11bb972db3e9044f89980d2ed496e56a54681262e59da82648"
+  },
+  "changes": [
+    {
+      "beforeOffset": 2698,
+      "afterOffset": 2698,
+      "before": "    require (fixed_memory_locator (reinterpret_cast<const char *> (m_work.locator.data ()),\n                                   bytes,m_owner.m_identity.pid,address),\n             failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::object_locator, [&] { return fixed_memory_locator (reinterpret_cast<const char *> (m_work.locator.data ()),\n                                   bytes,m_owner.m_identity.pid,address); })"
+    },
+    {
+      "beforeOffset": 3244,
+      "afterOffset": 3262,
+      "before": "  require (address!=0 && (address&7)==0,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::runtime_root_address, [&] { return address!=0 && (address&7)==0; })"
+    },
+    {
+      "beforeOffset": 3646,
+      "afterOffset": 3702,
+      "before": "  read_u64 (cp.u64 (112),word); require (word==0,failure::checkpoint_changed)",
+      "after": "  read_u64 (cp.u64 (112),word); checkpoint_require (checkpoint_site::transport_write, [&] { return word==0; })"
+    },
+    {
+      "beforeOffset": 3725,
+      "afterOffset": 3814,
+      "before": "  read_u64 (cp.u64 (120),word); require (word==0,failure::checkpoint_changed)",
+      "after": "  read_u64 (cp.u64 (120),word); checkpoint_require (checkpoint_site::transport_read, [&] { return word==0; })"
+    },
+    {
+      "beforeOffset": 3804,
+      "afterOffset": 3925,
+      "before": "  read_u64 (cp.u64 (136),word); require (word==1,failure::checkpoint_changed)",
+      "after": "  read_u64 (cp.u64 (136),word); checkpoint_require (checkpoint_site::transport_signal, [&] { return word==1; })"
+    },
+    {
+      "beforeOffset": 3968,
+      "afterOffset": 4123,
+      "before": "    require (m_work.image_chunk[n]==(n==0 ? 1 : 0),failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::transport_ring, [&] { return m_work.image_chunk[n]==(n==0 ? 1 : 0); })"
+    },
+    {
+      "beforeOffset": 4138,
+      "afterOffset": 4325,
+      "before": "    require (m_work.kernarg_read[n]==m_candidate.bytes[480+n],failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::transport_kernarg, [&] { return m_work.kernarg_read[n]==m_candidate.bytes[480+n]; })"
+    },
+    {
+      "beforeOffset": 4447,
+      "afterOffset": 4669,
+      "before": "    std::uint64_t address=0; require (checked_sum (cp.u64 (160),at,address),failure::checkpoint_changed)",
+      "after": "    std::uint64_t address=0; checkpoint_require (checkpoint_site::transport_output_address, [&] { return checked_sum (cp.u64 (160),at,address); })"
+    },
+    {
+      "beforeOffset": 4844,
+      "afterOffset": 5108,
+      "before": "      require (m_work.image_chunk[n]==expected,failure::checkpoint_changed)",
+      "after": "      checkpoint_require (checkpoint_site::transport_output_bytes, [&] { return m_work.image_chunk[n]==expected; })"
+    },
+    {
+      "beforeOffset": 5074,
+      "afterOffset": 5378,
+      "before": "  require (m_owner.check_owner (current_identity ()) && m_origin_complete\n           && m_file_passes>=1 && m_checkpoint_passes==(recheck ? 1u : 0u)\n           && m_host==inferior_thread () && m_host->state!=THREAD_EXITED\n           && (!recheck || (m_infrun_origin && !m_infrun_step && !m_infrun_user_step))\n           && !m_host->executing () && !m_host->resumed (),\n           failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_entry, [&] { return m_owner.check_owner (current_identity ()) && m_origin_complete\n           && m_file_passes>=1 && m_checkpoint_passes==(recheck ? 1u : 0u)\n           && m_host==inferior_thread () && m_host->state!=THREAD_EXITED\n           && (!recheck || (m_infrun_origin && !m_infrun_step && !m_infrun_user_step))\n           && !m_host->executing () && !m_host->resumed (); })"
+    },
+    {
+      "beforeOffset": 5798,
+      "afterOffset": 6124,
+      "before": "  require (regcache_read_pc (cache)==m_checkpoint_pc\n           && regcache_cooked_read_unsigned (cache,AMD64_RDI_REGNUM,&argument)==REG_VALID\n           && argument!=0 && (argument&7)==0,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_pc_argument, [&] { return regcache_read_pc (cache)==m_checkpoint_pc\n           && regcache_cooked_read_unsigned (cache,AMD64_RDI_REGNUM,&argument)==REG_VALID\n           && argument!=0 && (argument&7)==0; })"
+    },
+    {
+      "beforeOffset": 6016,
+      "afterOffset": 6382,
+      "before": "  if (recheck) require (argument==m_owner.m_checkpoint.record_address,failure::checkpoint_changed)",
+      "after": "  if (recheck) checkpoint_require (checkpoint_site::checkpoint_argument_recheck, [&] { return argument==m_owner.m_checkpoint.record_address; })"
+    },
+    {
+      "beforeOffset": 6365,
+      "afterOffset": 6776,
+      "before": "  require (cp.valid (m_owner.m_identity.pid),failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_codec, [&] { return cp.valid (m_owner.m_identity.pid); })"
+    },
+    {
+      "beforeOffset": 6485,
+      "afterOffset": 6930,
+      "before": "  require (apply_bias (0,m_object_bias,base) && apply_bias (1984,m_object_bias,descriptor)\n           && apply_bias (6144,m_object_bias,entry) && base==cp.u64 (56)\n           && descriptor==cp.u64 (72) && entry==cp.u64 (80),failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_relocation, [&] { return apply_bias (0,m_object_bias,base) && apply_bias (1984,m_object_bias,descriptor)\n           && apply_bias (6144,m_object_bias,entry) && base==cp.u64 (56)\n           && descriptor==cp.u64 (72) && entry==cp.u64 (80); })"
+    },
+    {
+      "beforeOffset": 7153,
+      "afterOffset": 7637,
+      "before": "  require (m_work.checkpoint_read==m_candidate.bytes\n           && regcache_read_pc (cache)==m_checkpoint_pc\n           && read_start_ticks ()==m_start_ticks\n           && m_owner.check_owner (current_identity ()),failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_repeat, [&] { return m_work.checkpoint_read==m_candidate.bytes\n           && regcache_read_pc (cache)==m_checkpoint_pc\n           && read_start_ticks ()==m_start_ticks\n           && m_owner.check_owner (current_identity ()); })"
+    },
+    {
+      "beforeOffset": 7433,
+      "afterOffset": 7952,
+      "before": "  require (m_callback_pc!=0 && m_root_read.breakpoint==m_callback_pc\n           && m_callback_object==m_owner.m_origin_callback_object,\n           failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::checkpoint_callback_root, [&] { return m_callback_pc!=0 && m_root_read.breakpoint==m_callback_pc\n           && m_callback_object==m_owner.m_origin_callback_object; })"
+    },
+    {
+      "beforeOffset": 7627,
+      "afterOffset": 8176,
+      "before": "    require (same (m_owner.m_checkpoint,m_candidate)\n             && m_owner.recheck_checkpoint_root (current_identity (),cp.u64 (216),m_root_read),\n             failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::checkpoint_root_recheck, [&] { return same (m_owner.m_checkpoint,m_candidate)\n             && m_owner.recheck_checkpoint_root (current_identity (),cp.u64 (216),m_root_read); })"
+    },
+    {
+      "beforeOffset": 7830,
+      "afterOffset": 8406,
+      "before": "    require (m_owner.bind_checkpoint_root (current_identity (),cp.u64 (216),m_root_read),\n             failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::checkpoint_root_bind, [&] { return m_owner.bind_checkpoint_root (current_identity (),cp.u64 (216),m_root_read); })"
+    }
+  ]
+}
