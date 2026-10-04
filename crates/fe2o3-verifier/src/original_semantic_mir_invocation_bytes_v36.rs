@@ -156,12 +156,12 @@ spec fn invocation_pointer_views_related_v40(
             (Some(a), Some(b)) => {
                 let offset = target.byte_offset - source.byte_offset;
                 b.lower == a.lower + offset && b.upper == a.upper + offset
-                    && (forall|i: int| 0 <= i < a.guards.len() ==>
-                        exists|j: int| 0 <= j < b.guards.len()
+                    && (forall|i: int| #![trigger a.guards[i]] 0 <= i < a.guards.len() ==>
+                        exists|j: int| #![trigger b.guards[j]] 0 <= j < b.guards.len()
                             && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
                                 source_memory, target_memory))
-                    && (forall|j: int| 0 <= j < b.guards.len() ==>
-                        exists|i: int| 0 <= i < a.guards.len()
+                    && (forall|j: int| #![trigger b.guards[j]] 0 <= j < b.guards.len() ==>
+                        exists|i: int| #![trigger a.guards[i]] 0 <= i < a.guards.len()
                             && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
                                 source_memory, target_memory))
             },
@@ -447,10 +447,10 @@ mod tests {
     fn original_mir_classified_views_keep_both_nested_obligation_sets_and_event_heaps() {
         let text = INVOCATION_BYTES_V36;
         for required in [
-            "forall|i: int| 0 <= i < a.guards.len() ==>",
-            "exists|j: int| 0 <= j < b.guards.len()",
-            "forall|j: int| 0 <= j < b.guards.len() ==>",
-            "exists|i: int| 0 <= i < a.guards.len()",
+            "forall|i: int| #![trigger a.guards[i]] 0 <= i < a.guards.len() ==>",
+            "exists|j: int| #![trigger b.guards[j]] 0 <= j < b.guards.len()",
+            "forall|j: int| #![trigger b.guards[j]] 0 <= j < b.guards.len() ==>",
+            "exists|i: int| #![trigger a.guards[i]] 0 <= i < a.guards.len()",
             "byte_tag_guard_current_v38(source_memory, source)",
             "byte_tag_guard_current_v38(target_memory, target)",
             "invocation_pointer_related_v36(source_pointer, target_pointer, map, source.memory, target.memory)",
@@ -464,6 +464,47 @@ mod tests {
         assert!(laws.contains("invocation_zero_width_keeps_stale_guard_refusal_v40"));
         assert!(!laws.contains("assume("));
         assert!(!laws.contains("external_body"));
+    }
+
+    #[test]
+    fn original_mir_guard_quantifier_triggers_preserve_both_matching_directions() {
+        let start = INVOCATION_BYTES_V36
+            .find("spec fn invocation_pointer_views_related_v40(")
+            .unwrap();
+        let relation = INVOCATION_BYTES_V36[start..]
+            .split_once("\nspec fn invocation_external_bytes_related_v38(")
+            .unwrap()
+            .0
+            .trim_end();
+        for trigger in ["#![trigger a.guards[i]] ", "#![trigger b.guards[j]] "] {
+            assert_eq!(relation.matches(trigger).count(), 2);
+        }
+        let normalized = relation
+            .replace("#![trigger a.guards[i]] ", "")
+            .replace("#![trigger b.guards[j]] ", "");
+        let original = r#"spec fn invocation_pointer_views_related_v40(
+    source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
+) -> bool {
+    byte_pointer_view_shape_v38(source) && byte_pointer_view_shape_v38(target)
+        && match (source.view, target.view) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                let offset = target.byte_offset - source.byte_offset;
+                b.lower == a.lower + offset && b.upper == a.upper + offset
+                    && (forall|i: int| 0 <= i < a.guards.len() ==>
+                        exists|j: int| 0 <= j < b.guards.len()
+                            && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
+                                source_memory, target_memory))
+                    && (forall|j: int| 0 <= j < b.guards.len() ==>
+                        exists|i: int| 0 <= i < a.guards.len()
+                            && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
+                                source_memory, target_memory))
+            },
+            _ => false,
+        }
+}"#;
+        assert_eq!(normalized, original);
     }
 
     #[test]
