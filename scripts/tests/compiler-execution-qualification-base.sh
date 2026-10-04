@@ -30,8 +30,12 @@ set -e
 [[ ${status} -eq 2 && "${usage}" == usage:* ]] || fail 'builder argument gate changed'
 
 python3 -I -B - "${package_lock}" "${builder}" <<'PY'
+import os
 import re
+import stat
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -79,6 +83,40 @@ builder = Path(sys.argv[2]).read_text()
 seeds = re.search(r"readonly package_roots=\(\n(.*?)\n\)", builder, re.S)
 if seeds is None or seeds.group(1).split() != sorted(required):
     raise SystemExit("builder root package set differs from the source contract")
+
+# Execute the real account-generation block without package downloads or mounts.
+start = "printf 'root:x:0:0:root:/root:/bin/bash\\n'"
+end = 'chmod 0400 "${root}/etc/shadow" "${root}/etc/gshadow"'
+if builder.count(start) != 1 or builder.count(end) != 1:
+    raise SystemExit("builder account-generation block is not unique")
+body = builder[builder.index(start):builder.index(end) + len(end)]
+expected = {
+    "passwd": (0o644, b"root:x:0:0:root:/root:/bin/bash\n"),
+    "group": (0o644, b"root:x:0:\n"),
+    "shadow": (0o400, b"root:!*:19700:0:99999:7:::\n"),
+    "gshadow": (0o400, b"root:!::\n"),
+    "nsswitch.conf": (0o444, b"passwd: files\ngroup: files\nshadow: files\nhosts: files dns\n"),
+    "hostname": (0o444, b"fe2o3-qualification\n"),
+    "machine-id": (0o444, b""),
+    "fstab": (0o444, b""),
+}
+with tempfile.TemporaryDirectory(prefix="fe2o3-base-accounts-") as temporary:
+    root = Path(temporary)
+    (root / "etc").mkdir()
+    subprocess.run(["bash", "-euo", "pipefail", "-c", "umask 077\nroot=$1\n" + body,
+                    "account-fixture", str(root)], check=True, timeout=10,
+                   env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    if {entry.name for entry in (root / "etc").iterdir()} != set(expected):
+        raise SystemExit("generated account inventory changed")
+    for name, (mode, content) in expected.items():
+        entry = root / "etc" / name
+        metadata = entry.lstat()
+        if (not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != mode
+                or (metadata.st_uid, metadata.st_gid) != (os.geteuid(), os.getegid())
+                or metadata.st_nlink != 1 or entry.read_bytes() != content
+                or os.listxattr(entry, follow_symlinks=False)):
+            raise SystemExit(f"generated account metadata/content changed: {name}")
 PY
 
 python3 -I -B "${audit_tools}" --self-test
@@ -210,6 +248,38 @@ verify_bundle() {
   grep -Fqx -- 'Xattrs are not stored' <<<"${summary}" || fail 'image stores xattrs'
   grep -Fqx -- 'Filesystem is not exportable via NFS' <<<"${summary}" ||
     fail 'image export policy changed'
+
+  python3 -I -B - "${image}" <<'PY'
+import subprocess
+import sys
+
+image = sys.argv[1]
+expected = {
+    "etc/passwd": ("-rw-r--r--", b"root:x:0:0:root:/root:/bin/bash\n"),
+    "etc/group": ("-rw-r--r--", b"root:x:0:\n"),
+    "etc/shadow": ("-r--------", b"root:!*:19700:0:99999:7:::\n"),
+    "etc/gshadow": ("-r--------", b"root:!::\n"),
+}
+listing = subprocess.check_output(["unsquashfs", "-lln", image, *expected], timeout=10).decode("ascii")
+seen = set()
+for line in listing.splitlines():
+    fields = line.split()
+    if fields and fields[0].startswith("d"):
+        continue
+    if len(fields) != 6 or not fields[-1].startswith("squashfs-root/"):
+        raise SystemExit("account image listing is noncanonical")
+    path = fields[-1].removeprefix("squashfs-root/")
+    if path not in expected or path in seen:
+        raise SystemExit("account image inventory changed")
+    mode, content = expected[path]
+    if fields[0] != mode or fields[1] != "0/0" or fields[2] != str(len(content)):
+        raise SystemExit(f"account image metadata changed: {path}")
+    if subprocess.check_output(["unsquashfs", "-cat", image, path], timeout=10) != content:
+        raise SystemExit(f"account image content changed: {path}")
+    seen.add(path)
+if seen != set(expected):
+    raise SystemExit("account image inventory is incomplete")
+PY
 
   cmp -s "${info}" \
     <(unsquashfs -cat "${image}" usr/share/fe2o3/qualification-base/BASE-INFO 2>/dev/null) ||
