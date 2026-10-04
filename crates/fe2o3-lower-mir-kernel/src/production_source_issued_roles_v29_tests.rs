@@ -229,6 +229,7 @@ fn check_issued_role_positive_v18(
         rows.retained_storage(budget)?,
         rows.sources.capacity() * std::mem::size_of::<PendingSourceIssuedSiteV29>()
             + rows.issuers.capacity() * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
+            + rows.lengths.capacity() * std::mem::size_of::<PendingSourceLengthV76>()
             + rows.accesses.capacity() * std::mem::size_of::<PendingSourceIssuedAccessV29>()
     );
     if used {
@@ -305,6 +306,8 @@ fn issued_pointer_original_issuers_and_accesses_grow_independently() {
                         rows.sources.capacity() * std::mem::size_of::<PendingSourceIssuedSiteV29>()
                             + rows.issuers.capacity()
                                 * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
+                            + rows.lengths.capacity()
+                                * std::mem::size_of::<PendingSourceLengthV76>()
                             + rows.accesses.capacity()
                                 * std::mem::size_of::<PendingSourceIssuedAccessV29>()
                     );
@@ -486,14 +489,19 @@ pub(in super::super) fn copied_issued_rows_v18(
             .map_err(immutable_memory_error_v29)?,
         issuers: emission_vec_v1(rows.issuers.len() + 1, budget)
             .map_err(immutable_memory_error_v29)?,
+        lengths: emission_vec_v1(rows.lengths.len() + 1, budget)
+            .map_err(immutable_memory_error_v29)?,
         accesses: emission_vec_v1(rows.accesses.len() + 1, budget)
             .map_err(immutable_memory_error_v29)?,
         selected: copied_selected_rows_v30(&rows.selected, budget)
             .map_err(immutable_memory_error_v29)?,
     };
-    budget.charge_work(rows.sources.len() + rows.issuers.len() + rows.accesses.len())?;
+    budget.charge_work(
+        rows.sources.len() + rows.issuers.len() + rows.lengths.len() + rows.accesses.len(),
+    )?;
     copy.sources.extend_from_slice(&rows.sources);
     copy.issuers.extend_from_slice(&rows.issuers);
+    copy.lengths.extend_from_slice(&rows.lengths);
     copy.accesses.extend_from_slice(&rows.accesses);
     Ok(copy)
 }
