@@ -365,9 +365,24 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
                     "invocation_paired_native_inputs_{root}_v38(arguments, external, execution)"
                 )));
             }
-            assert!(out.text.contains(&format!(
-                "{{ invocation_paired_source_ready_{root}_v38(arguments, external, execution); }}"
+            let initial_proof = out.text.split(&format!(
+                "proof fn invocation_paired_initial_{root}_v36("
+            )).nth(1).unwrap().split("spec fn").next().unwrap();
+            assert!(initial_proof.contains(&format!(
+                "invocation_paired_source_ready_{root}_v38(arguments, external, execution);"
             )));
+            assert!(initial_proof.contains(&format!(
+                "let frames = byte_root_frame_with_execution_v37({}, execution);",
+                paired.roots[root].owner
+            )));
+            for side in ["source", "target"] {
+                assert!(initial_proof.contains(&format!(
+                    "invocation_native_initial_memory_invariants_v77({side}_memory, arguments, frames);"
+                )));
+            }
+            assert!(initial_proof.contains(
+                "invocation_native_initial_heaps_related_v77(external, arguments);"
+            ));
         }
         Ok(())
     })

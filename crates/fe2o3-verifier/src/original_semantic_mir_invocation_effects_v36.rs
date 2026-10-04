@@ -4,6 +4,7 @@
 
 pub(super) const INVOCATION_EFFECTS_V36: &str = concat!(
     include_str!("original_semantic_mir_native_provenance_v39.vrs"),
+    include_str!("original_semantic_mir_native_initial_heaps_v77.vrs"),
     include_str!("original_semantic_mir_observed_effects_v39.vrs"),
     r#"
 spec fn invocation_external_effect_v36(effect: MemoryOperationEffectV30) -> bool {
