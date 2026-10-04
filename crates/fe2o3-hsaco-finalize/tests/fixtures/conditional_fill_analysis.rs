@@ -13,6 +13,43 @@ use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 #[test]
 #[ignore = "requires current native Worker V3 executable and exact build identities, no GPU"]
 fn genuine_conditional_handoff_reaches_finalizer_and_authenticated_fill_model() {
+    let _ = checked_genuine_fill_finalization();
+}
+
+#[allow(
+    dead_code,
+    reason = "used by the cargo publication-audit integration test"
+)]
+pub(crate) fn published_genuine_conditional_fill_fixture() -> PublishedWorkerV3Fixture {
+    let (directory, attempt, finalized) = checked_genuine_fill_finalization();
+    let producer = producer();
+    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&producer, finalized).unwrap();
+    let persisted = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+        &directory.0,
+        &producer,
+        prepared,
+    )
+    .unwrap();
+    let closure = persisted
+        .finalized_evidence()
+        .binding_expectation()
+        .compiler_closure();
+    let published =
+        publish_recovered_protected_worker_v3_hsaco_v1(&directory.0, &producer, closure, persisted)
+            .unwrap();
+    PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    }
+}
+
+fn checked_genuine_fill_finalization() -> (
+    TestDirectory,
+    fe2o3_artifact_transaction::BuildAttempt,
+    fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+) {
     let worker_path = PathBuf::from(std::env::var_os("FE2O3_TEST_REAL_WORKER").unwrap());
     let worker_build_identity = std::env::var("FE2O3_TEST_REAL_WORKER_BUILD_ID").unwrap();
     let llvm_build_identity: &'static str = Box::leak(
@@ -193,4 +230,5 @@ fn genuine_conditional_handoff_reaches_finalizer_and_authenticated_fill_model() 
         execution.identity(),
         machine.kernel().binding()
     );
+    (directory, attempt, finalized)
 }

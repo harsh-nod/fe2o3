@@ -34,6 +34,26 @@ fn genuine_fill_checks_both_complete_programs_without_granting_authority() {
     assert!(!checked.grants_runtime_authority());
 }
 
+#[test]
+fn genuine_conditional_import_retains_complete_v5_correspondence() {
+    let (handoff, inputs) = genuine_inputs();
+    let exact = handoff
+        .capsule()
+        .receipts()
+        .mir_to_kir_correspondence()
+        .canonical_preimage();
+    assert_eq!(&exact[..8], b"F2M2K5\0\0");
+    assert_eq!(inputs.exact_correspondence_bytes(), exact);
+    assert_ne!(inputs.correspondence().canonical_bytes(), exact);
+    let decoded =
+        fe2o3_lower_mir_kernel::InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(exact)
+            .unwrap();
+    assert_eq!(
+        inputs.correspondence().canonical_bytes(),
+        decoded.nested_v4().canonical_bytes()
+    );
+}
+
 fn module() -> Module {
     let mut module = Module::new("fill-profile-test");
     let mut kernel = Kernel::new(

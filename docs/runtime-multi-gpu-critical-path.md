@@ -11,8 +11,10 @@ multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
 have scoped hardware qualification. Do not add more routing wrappers or expand
 opcode coverage before clearing application admission.
 
-1. Retain the genuine conditional fill compiler owners, exact finalizer lineage
-   and authenticated analyzer/model association in the host verification request.
+1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
+   lineage and authenticated analyzer/model association in the host verification
+   request. The native current-publication audit passes, including substitution
+   and publication-replacement controls; this is not launch authority.
 2. Implement a distinct pending conditional artifact and protected closed-fill
    verifier/refinement path. Preserve unconditional admission; never expose the
    pending state through existing unconditional executable/load APIs.
@@ -144,9 +146,16 @@ now retains the actual analyzer execution with the exact inspected fill model.
 An unchanged genuine compiler handoff passes the actual Worker bootstrap/replay,
 finalizer and authenticated analysis. Its production 272-byte kernarg layout is
 accepted with full-storage bounds, while the model reads exactly 16 bytes.
-This is not a reusable host source-to-machine refinement or compiler-origin
-attestation. Bind the complete compiler owners to the host request and implement
-the protected conditional provider and invocation transition next. Only then
+The [host association checkpoint](evidence/dev-host-fill-association-2026-10-03/README.md)
+now joins those owners to the exact current-publication request, canonical compiler
+descriptor, semantic kernel identity and finalized payload. The actual native
+Worker-to-host audit passes; synthetic carriage is not compiler-origin authority.
+It also fixes V5 correspondence wrapper erasure in both compiler import paths and
+checks the retained function roster against the bound KIR. Implement the protected
+conditional provider and consuming invocation transition next. The proof producer
+must generate its semantic relation from retained source/KIR expressions and keep
+the actual protected proof execution; a fixed machine theorem with attached hashes
+does not establish that relation. Only then
 qualify admitted fill, tracked upload, native XGMI and readback on two GPUs in
 both directions.
 

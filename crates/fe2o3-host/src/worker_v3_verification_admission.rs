@@ -46,6 +46,11 @@ const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
 const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2: &[u8] =
     b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v2\0";
 
+mod conditional_fill;
+pub use conditional_fill::{
+    CheckedWorkerV3ConditionalFillAssociationV1, WorkerV3ConditionalFillAssociationErrorV1,
+};
+
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;
 /// Maximum exact proof artifact retained by one Worker V3 refinement receipt.
@@ -4488,7 +4493,7 @@ fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
             "Kernel IR",
         ),
         (
-            inputs.correspondence().canonical_bytes()
+            inputs.exact_correspondence_bytes()
                 == receipts.mir_to_kir_correspondence().canonical_preimage(),
             "MIR-to-KIR correspondence",
         ),
@@ -4523,6 +4528,13 @@ fn validate_decision_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
         WorkerV3TargetLineageEvidenceV1::Validated(lineage) => lineage,
         WorkerV3TargetLineageEvidenceV1::Synthetic => return Ok(()),
     };
+    validate_request_target_lineage(request, lineage)
+}
+
+fn validate_request_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    lineage: &ValidatedCompilerTargetLineageV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
     let capsule = request.handoff.capsule();
     let receipts = capsule.receipts();
     let module = request.handoff.module_handoff().module_identity();

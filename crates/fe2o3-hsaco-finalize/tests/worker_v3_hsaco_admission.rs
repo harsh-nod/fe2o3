@@ -118,6 +118,8 @@ use sha2::{Digest, Sha256};
 mod compiler_proof_inputs_v3;
 #[path = "fixtures/conditional_fill_analysis.rs"]
 mod conditional_fill_analysis;
+#[allow(unused_imports)]
+pub(crate) use conditional_fill_analysis::published_genuine_conditional_fill_fixture;
 #[path = "fixtures/worker_v3_hsaco_test_support.rs"]
 mod hsaco_fixture;
 #[path = "../../../tests/support/production_semantic_debug_fixture_v1.rs"]
@@ -1569,7 +1571,10 @@ fn worker_path() -> &'static Path {
 
 fn pinned(directory: &TestDirectory, llvm_build_identity: &str) -> PinnedWorkerV1 {
     let private_worker = directory.0.join("worker");
-    fs::copy(worker_path(), &private_worker).unwrap();
+    let fixture = std::env::var_os("FE2O3_TEST_HSACO_WORKER_FIXTURE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| worker_path().to_owned());
+    fs::copy(fixture, &private_worker).unwrap();
     let bytes = fs::read(&private_worker).unwrap();
     let measurement = WorkerMeasurementV1::new(
         ContentIdentityV1::calculate(&bytes),

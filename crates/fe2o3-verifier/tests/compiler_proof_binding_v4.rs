@@ -28,6 +28,7 @@ mod guarded_v9_proof_inputs;
 use compiler_proof_inputs_v3::{
     CanonicalCompilerProofInputsV3, canonical_compiler_proof_inputs_v4,
     canonical_compiler_proof_inputs_v4_with_induction,
+    canonical_compiler_proof_inputs_with_v5_correspondence,
 };
 
 struct Receipts {
@@ -447,6 +448,14 @@ fn exact_current_inputs_reimport_the_signed_verus_receipt() {
 
     assert_eq!(validated.receipt_identity(), proof_binding.identity());
     assert_eq!(
+        validated.exact_correspondence_bytes(),
+        receipts.correspondence.canonical_preimage()
+    );
+    assert_eq!(
+        validated.exact_correspondence_bytes(),
+        validated.correspondence().canonical_bytes()
+    );
+    assert_eq!(
         validated.association().verus_execution_evidence(),
         evidence.canonical_bytes()
     );
@@ -478,6 +487,73 @@ fn exact_current_inputs_reimport_the_signed_verus_receipt() {
     assert!(!validated.authenticates_compiler_origin());
     assert!(!validated.establishes_llvm_or_machine_refinement());
     assert!(!validated.grants_runtime_authority());
+}
+
+#[test]
+fn exact_v5_function_roster_survives_unconditional_import() {
+    let receipts = receipts_from(canonical_compiler_proof_inputs_with_v5_correspondence(0));
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    let validated = validate(&binding, &receipts).unwrap();
+    let original = receipts.correspondence.canonical_preimage();
+    assert_eq!(&original[..8], b"F2M2K5\0\0");
+    assert_eq!(validated.exact_correspondence_bytes(), original);
+    assert_ne!(validated.correspondence().canonical_bytes(), original);
+    let decoded =
+        fe2o3_lower_mir_kernel::InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(original)
+            .unwrap();
+    assert_eq!(
+        validated.correspondence().canonical_bytes(),
+        decoded.nested_v4().canonical_bytes()
+    );
+    assert!(!validated.grants_runtime_authority());
+}
+
+#[test]
+fn validly_encoded_v5_function_substitutions_reject_against_bound_kir() {
+    use fe2o3_lower_mir_kernel::{
+        InertCanonicalMirToKirCorrespondenceEvidenceV5, ProductionCorrespondenceEvidenceErrorV5,
+    };
+    for change_ordinal in [false, true] {
+        let mut receipts = receipts_from(canonical_compiler_proof_inputs_with_v5_correspondence(0));
+        let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+        let nested_len = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
+        let record = 28 + nested_len;
+        if change_ordinal {
+            bytes[record + 8..record + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        } else {
+            // A same-length name remains canonical but no longer names its KIR function.
+            bytes[record + 20] ^= 1;
+        }
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&bytes).unwrap();
+        replace_correspondence(&mut receipts, bytes);
+        let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+        let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+        assert!(matches!(
+            validate(&binding, &receipts),
+            Err(CompilerProofInputValidationErrorV4::Stage(
+                CompilerProofInputValidationErrorV3::CorrespondenceV5Decode(
+                    ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster
+                )
+            ))
+        ));
+    }
+}
+
+#[test]
+fn truncated_v5_correspondence_rejects_before_import() {
+    let mut receipts = receipts_from(canonical_compiler_proof_inputs_with_v5_correspondence(0));
+    let mut bytes = receipts.correspondence.canonical_preimage().to_vec();
+    bytes.pop().unwrap();
+    replace_correspondence(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::CorrespondenceV5Decode(_)
+        ))
+    ));
 }
 
 #[test]

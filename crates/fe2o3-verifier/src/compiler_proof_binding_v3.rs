@@ -93,7 +93,7 @@ pub struct ValidatedCompilerProofInputsV4 {
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
     kernel_ir: ValidatedCompilerKernelIrV1,
-    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    correspondence: RetainedCorrespondenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
@@ -236,9 +236,14 @@ impl ValidatedCompilerProofInputsV4 {
         &self.kernel_ir
     }
 
-    /// Returns the independently decoded exact MIR-to-KIR correspondence.
+    /// Returns the V4 correspondence, nested inside V5 when that is the input schema.
     pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
-        &self.correspondence
+        self.correspondence.nested()
+    }
+
+    /// Returns the complete original V4/V5 receipt preimage, without wrapper erasure.
+    pub fn exact_correspondence_bytes(&self) -> &[u8] {
+        self.correspondence.canonical_bytes()
     }
 
     /// Returns the independently decoded exact formal-memory admission.
@@ -534,7 +539,11 @@ impl ValidatedConditionalCompilerProofInputsV1 {
         &self.stages.kernel_ir
     }
     pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
-        &self.stages.correspondence
+        self.stages.correspondence.nested()
+    }
+    /// Returns the complete original V4/V5 receipt preimage, without wrapper erasure.
+    pub fn exact_correspondence_bytes(&self) -> &[u8] {
+        self.stages.correspondence.canonical_bytes()
     }
     pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         &self.stages.formal_memory
@@ -743,11 +752,33 @@ fn decode_and_cross_check_stages_v3(
 }
 
 #[derive(Debug)]
+enum RetainedCorrespondenceV4 {
+    V4(InertCanonicalMirToKirCorrespondenceEvidenceV4),
+    V5(InertCanonicalMirToKirCorrespondenceEvidenceV5),
+}
+
+impl RetainedCorrespondenceV4 {
+    const fn nested(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
+        match self {
+            Self::V4(value) => value,
+            Self::V5(value) => value.nested_v4(),
+        }
+    }
+
+    fn canonical_bytes(&self) -> &[u8] {
+        match self {
+            Self::V4(value) => value.canonical_bytes(),
+            Self::V5(value) => value.canonical_bytes(),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DecodedCompilerProofStagesV4 {
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
     kernel_ir: ValidatedCompilerKernelIrV1,
-    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    correspondence: RetainedCorrespondenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
 }
@@ -768,14 +799,18 @@ fn decode_and_cross_check_stages_v4(
         InertProductionMiddleEndEvidenceV5::decode(middle_end.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::MiddleEndDecode)?;
     let correspondence_bytes = mir_to_kir_correspondence.canonical_preimage();
-    let decoded_correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
-        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
-            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?
-            .into_nested_v4()
+    let correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
+        RetainedCorrespondenceV4::V5(
+            InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
+                .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?,
+        )
     } else {
-        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
-            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?
+        RetainedCorrespondenceV4::V4(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
+                .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?,
+        )
     };
+    let decoded_correspondence = correspondence.nested();
     let decoded_formal_memory =
         InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(formal_memory.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::FormalMemoryV4Decode)?;
@@ -802,6 +837,11 @@ fn decode_and_cross_check_stages_v4(
         }
     };
 
+    if let RetainedCorrespondenceV4::V5(value) = &correspondence {
+        value
+            .validate_against_module(&kernel_module)
+            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?;
+    }
     let semantic_identity = decoded_semantic_mir.semantic_sha256();
     for (actual, field) in [
         (
@@ -837,13 +877,13 @@ fn decode_and_cross_check_stages_v4(
     let induction_anchors = validate_lossless_correspondence_v4(
         &decoded_semantic_mir,
         &kernel_module,
-        &decoded_correspondence,
+        decoded_correspondence,
     )?;
     Ok(DecodedCompilerProofStagesV4 {
         semantic_mir: decoded_semantic_mir,
         middle_end: decoded_middle_end,
         kernel_ir: decoded_kernel_ir,
-        correspondence: decoded_correspondence,
+        correspondence,
         formal_memory: decoded_formal_memory,
         induction_anchors: induction_anchors.into_boxed_slice(),
     })

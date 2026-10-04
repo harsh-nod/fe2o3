@@ -67,6 +67,9 @@ use sha2::{Digest as _, Sha256};
 #[path = "fixtures/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
 
+#[path = "fixtures/conditional_fill_host.rs"]
+mod conditional_fill_host;
+
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
 const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];

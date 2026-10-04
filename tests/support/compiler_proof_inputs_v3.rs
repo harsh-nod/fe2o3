@@ -13,8 +13,8 @@ use fe2o3_kernel_ir::{
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    ProductionCheckedU32AddCaptureRequestV1, ProductionFormalMemoryOwnerV1,
-    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, ProductionCheckedU32AddCaptureRequestV1,
+    ProductionFormalMemoryOwnerV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
 };
 use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -99,6 +99,30 @@ pub(crate) fn canonical_compiler_proof_inputs_v3(seed: u8) -> CanonicalCompilerP
 )]
 pub(crate) fn canonical_compiler_proof_inputs_v4(seed: u8) -> CanonicalCompilerProofInputsV3 {
     canonical_compiler_proof_inputs(seed, semantic_owner(seed), true)
+}
+
+#[allow(dead_code, reason = "shared support also serves older receipt tests")]
+pub(crate) fn canonical_compiler_proof_inputs_with_v5_correspondence(
+    seed: u8,
+) -> CanonicalCompilerProofInputsV3 {
+    let owner = ProductionSemanticKirOwnerV1::try_lower(
+        semantic_owner(seed),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let report = analyze_semantic_u32_induction_no_overflow_v1(
+        owner.semantic().semantic(),
+        SemanticFunctionIdV1::from_index(0),
+    )
+    .unwrap();
+    let correspondence =
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&owner, &report)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
+    let (mut inputs, _) = canonical_compiler_proof_inputs_from_owner(seed, owner, true);
+    inputs.correspondence = correspondence;
+    inputs
 }
 
 #[allow(
