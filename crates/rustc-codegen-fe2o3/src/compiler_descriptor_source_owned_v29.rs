@@ -2,6 +2,7 @@
 //! These rows remain inert until the lowerer captures/replays the full source ABI.
 use super::*;
 use crate::production_pipeline::source_owned_v29::{Budget, Error, Resource, paid_vec};
+use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
 use fe2o3_kernel_descriptor::{AliasSemantics, PhysicalAbiComponentKind, SourceTypeDescriptorV3};
 use fe2o3_lower_mir_kernel::{
     ProductionKernelArgumentAbiArgumentV18 as Argument, ProductionKernelArgumentAbiKindV18 as Kind,
