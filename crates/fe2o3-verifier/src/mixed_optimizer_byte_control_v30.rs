@@ -199,14 +199,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     model.emit_trap_terminal(block, "done", "observations", out)?;
     emit!(
         out,
-        ";\n if done.values.len() != {definitions} || (done.pc != {block} && !trapped) || !byte_state_memory_well_formed_v30(done) || !"
-    );
-    model
-        .interpretation
-        .emit_state_predicate("done.memory", "done.values", None, out)?;
-    emit!(
-        out,
-        " {{ byte_block_refused_v58(done, observations) }} else {{\n"
+        ";\n if (done.pc != {block} && !trapped) || !byte_control_inputs_{namespace}_v99(done) {{ byte_block_refused_v58(done, observations) }} else {{\n"
     );
     emit!(
         out,

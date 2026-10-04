@@ -468,6 +468,14 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             out,
         )?;
         emit!(out, " }}\n");
+        emit!(
+            out,
+            "spec fn byte_control_inputs_{namespace}_v99(done: MemoryStateV30) -> bool {{ done.values.len() == {} && byte_state_memory_well_formed_v30(done) && ",
+            self.inventory.definitions().len()
+        );
+        self.interpretation
+            .emit_state_predicate("done.memory", "done.values", None, out)?;
+        emit!(out, " }}\n");
         for (offset, plan) in self.operations.iter().enumerate() {
             out.budget.charge_work(1)?;
             if let ByteOperationV30::Scalar(scalar) = plan

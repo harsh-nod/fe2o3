@@ -231,7 +231,7 @@ fn byte_view_actual_dispatch_refuses_supplied_contract_registries() {
             3
         );
         assert_eq!(
-            text.matches("!byte_native_view_inputs_v38(done.memory, done.values)")
+            text.matches("&& byte_native_view_inputs_v38(done.memory, done.values)")
                 .count(),
             1
         );
@@ -357,7 +357,8 @@ fn byte_view_classified_context_uses_one_closed_registry_at_every_actual_entranc
                     .count(),
                 3
             );
-            assert_eq!(text.matches("!(byte_target_view_contracts_match_73_v38(done.memory, true) || byte_target_view_contracts_match_73_v38(done.memory, false))").count(), 1);
+            assert_eq!(text.matches("&& (byte_target_view_contracts_match_73_v38(done.memory, true) || byte_target_view_contracts_match_73_v38(done.memory, false))").count(), 1);
+            assert_eq!(text.matches("!byte_control_inputs_38_v99(done)").count(), 1);
             assert!(!text.contains("byte_native_view_inputs_v38(s.memory"));
             assert!(!text.contains("byte_native_view_inputs_v38(done.memory"));
             assert!(text.contains("MemoryTagEncodingV38::PointerNullNiche"));

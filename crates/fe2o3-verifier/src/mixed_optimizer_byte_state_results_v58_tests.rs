@@ -103,7 +103,8 @@ fn shared_byte_state_results_keep_each_model_guard_dispatch_and_observation() {
                         row.operations.start.to_string()
                     };
                     assert!(source.contains(&format!("if s.values.len() != {definitions} || s.pc != {block} {{ byte_block_refused_v58(s, Seq::empty()) }} else {{")));
-                    assert!(source.contains(&format!("if done.values.len() != {definitions} || (done.pc != {block} && !trapped) || !byte_state_memory_well_formed_v30(done) || !")));
+                    assert!(source.contains(&format!("spec fn byte_control_inputs_{namespace}_v99(done: MemoryStateV30) -> bool {{ done.values.len() == {definitions} && byte_state_memory_well_formed_v30(done) && byte_native_view_inputs_v38(done.memory, done.values) }}")));
+                    assert!(source.contains(&format!("if (done.pc != {block} && !trapped) || !byte_control_inputs_{namespace}_v99(done) {{ byte_block_refused_v58(done, observations) }} else {{")));
                     assert!(source.contains(&format!(
                         "if s.pc == {block} {{ byte_micro_begin_result_v58(s, {first}) }} else"
                     )));
