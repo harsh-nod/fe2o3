@@ -652,3 +652,61 @@ fn original_logical_enum_payloads_participate_in_ordinary_lifetime_end_after_loc
         runtime.contains("proof fn invocation_source_enum_clear_drops_only_its_own_provenance_v49")
     );
 }
+
+#[test]
+fn original_enum_copy_trigger_covers_variant_and_field_without_changing_domains() {
+    let runtime = include_str!("original_semantic_mir_source_enum_values_v47.vrs");
+    let copyable = runtime
+        .split_once("spec fn invocation_source_enum_type_copyable_v47(source_type: int) -> bool {")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let trigger =
+        "        #![trigger invocation_source_enum_field_type_v47(source_type, variant, field)]\n";
+    assert_eq!(runtime.matches(trigger).count(), 1);
+    assert_eq!(
+        copyable.replace(trigger, ""),
+        r#"
+    forall|variant: int, field: int|
+        match invocation_source_enum_field_count_v47(source_type, variant) {
+            Some(count) => 0 <= field < count ==>
+                match invocation_source_enum_field_type_v47(source_type, variant, field) {
+                    Some(ty) => invocation_source_enum_field_copyable_v47(ty),
+                    None => false,
+                },
+            None => true,
+        }"#
+    );
+}
+
+#[test]
+fn original_enum_copy_refusal_laws_are_complete_model_proof_obligations() {
+    let runtime = include_str!("original_semantic_mir_source_enum_values_v47.vrs");
+    let complete = super::super::SOURCE_BYTES_V36;
+    assert!(complete.contains(runtime));
+    for name in [
+        "invocation_source_enum_noncopy_field_refuses_copy_v72",
+        "invocation_source_enum_missing_field_refuses_copy_v72",
+    ] {
+        let signature = format!("proof fn {name}(");
+        assert_eq!(complete.matches(&signature).count(), 1);
+        let law = runtime
+            .split_once(&signature)
+            .unwrap()
+            .1
+            .split_once("{}")
+            .unwrap()
+            .0;
+        assert!(law.contains("0 <= field < count,"));
+        assert!(law.contains(
+            "invocation_source_enum_field_count_v47(source_type, variant) == Some(count)"
+        ));
+        assert!(law.contains("invocation_source_enum_field_type_v47(source_type, variant, field)"));
+        assert!(law.contains("ensures !invocation_source_enum_type_copyable_v47(source_type),"));
+        assert!(!law.contains("admit"));
+        assert!(!law.contains("assume"));
+        assert!(!law.contains("external_body"));
+    }
+}

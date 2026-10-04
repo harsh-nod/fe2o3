@@ -127,6 +127,7 @@ spec fn invocation_source_enum_field_copyable_v47(ty: InvocationSourceEnumFieldT
 
 spec fn invocation_source_enum_type_copyable_v47(source_type: int) -> bool {
     forall|variant: int, field: int|
+        #![trigger invocation_source_enum_field_type_v47(source_type, variant, field)]
         match invocation_source_enum_field_count_v47(source_type, variant) {
             Some(count) => 0 <= field < count ==>
                 match invocation_source_enum_field_type_v47(source_type, variant, field) {
@@ -415,3 +416,23 @@ spec fn invocation_source_enum_construct_v47(
         }
     }
 }
+
+proof fn invocation_source_enum_noncopy_field_refuses_copy_v72(
+    source_type: int, variant: int, field: int, count: int,
+    ty: InvocationSourceEnumFieldTypeV47,
+)
+    requires invocation_source_enum_field_count_v47(source_type, variant) == Some(count),
+        0 <= field < count,
+        invocation_source_enum_field_type_v47(source_type, variant, field) == Some(ty),
+        !invocation_source_enum_field_copyable_v47(ty),
+    ensures !invocation_source_enum_type_copyable_v47(source_type),
+{}
+
+proof fn invocation_source_enum_missing_field_refuses_copy_v72(
+    source_type: int, variant: int, field: int, count: int,
+)
+    requires invocation_source_enum_field_count_v47(source_type, variant) == Some(count),
+        0 <= field < count,
+        invocation_source_enum_field_type_v47(source_type, variant, field).is_none(),
+    ensures !invocation_source_enum_type_copyable_v47(source_type),
+{}
