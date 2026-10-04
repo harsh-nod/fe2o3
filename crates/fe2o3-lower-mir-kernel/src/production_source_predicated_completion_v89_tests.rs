@@ -264,6 +264,32 @@ fn predicated_completion_v89_scalar_transport_requires_exact_intrinsic_write_sha
     };
     let input = operation(before);
     let output = operation(after);
+    for (row, values) in [(&input, before), (&output, after)] {
+        let mut visited = Vec::new();
+        row.kind.visit_operands(|value| visited.push(value));
+        assert_eq!(visited, [values[0], values[2], values[1]]);
+        let rhs = optimized_scalar_store_rhs_operand_v90(&row.kind).unwrap();
+        assert_eq!(rhs, 2);
+        assert_eq!(visited[rhs as usize], values[1]);
+        assert_ne!(visited[1], values[1]);
+        let ordinary = OperationKind::Store {
+            pointer: values[0],
+            value: values[1],
+            access,
+        };
+        visited.clear();
+        ordinary.visit_operands(|value| visited.push(value));
+        let rhs = optimized_scalar_store_rhs_operand_v90(&ordinary).unwrap();
+        assert_eq!(rhs, 1);
+        assert_eq!(visited[rhs as usize], values[1]);
+        assert!(
+            optimized_scalar_store_rhs_operand_v90(&OperationKind::Load {
+                pointer: values[0],
+                access
+            })
+            .is_none()
+        );
+    }
     assert!(optimized_guarded_scalar_shape_v89(
         &input, &output, true, before, after
     ));
