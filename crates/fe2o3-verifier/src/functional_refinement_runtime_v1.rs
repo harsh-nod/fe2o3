@@ -142,32 +142,36 @@ impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
 
 impl Error for FunctionalRefinementRuntimeErrorV1 {}
 
+const MAX_BACKEND_DIAGNOSTIC_BYTES: usize = 2048;
+
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
-    #[cfg(test)]
-    {
-        // Preserve the production error contract while exposing a bounded,
-        // escaped controller refusal for actual protected-runtime test failures.
-        let diagnostic = error.to_string();
-        let bytes = diagnostic.as_bytes();
-        eprintln!(
-            "retained runtime test diagnostic: {:?}{}",
-            String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]),
-            if bytes.len() > 2048 {
-                " (truncated)"
-            } else {
-                ""
-            },
-        );
+    let mut detail = format!(
+        "retained generated-proof runtime failed: {:?}: \"",
+        error.kind()
+    );
+    let cause_start = detail.len();
+    let mut truncated = false;
+    // Bound both scanning and escaped output without copying the full backend cause.
+    for character in error.detail().chars() {
+        let escaped = character.escape_default();
+        if detail.len() - cause_start + escaped.clone().count() > MAX_BACKEND_DIAGNOSTIC_BYTES {
+            truncated = true;
+            break;
+        }
+        detail.extend(escaped);
     }
-    FunctionalRefinementRuntimeErrorV1 {
-        detail: format!(
-            "retained generated-proof runtime failed: {:?}",
-            error.kind()
-        ),
+    detail.push('"');
+    if truncated {
+        detail.push_str(" (truncated)");
     }
+    FunctionalRefinementRuntimeErrorV1 { detail }
 }
+
+#[cfg(test)]
+#[path = "functional_refinement_runtime_v1_diagnostic_tests.rs"]
+mod diagnostic_tests;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {

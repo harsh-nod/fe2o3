@@ -101,6 +101,10 @@ impl RetainedFunctionalRefinementRuntimeErrorV1 {
     pub const fn kind(&self) -> RetainedFunctionalRefinementRuntimeErrorKindV1 {
         self.kind
     }
+
+    pub(crate) fn detail(&self) -> &str {
+        &self.detail
+    }
 }
 
 impl fmt::Display for RetainedFunctionalRefinementRuntimeErrorV1 {
