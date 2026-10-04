@@ -4958,3 +4958,39 @@ mod bf16_tile_source_promotion_v1;
 
 #[path = "production_pipeline/retained_materialization_phase_v1.rs"]
 mod retained_materialization_phase_v1;
+
+/// Private nominal formal stage. Actual obligations and sealed nominal source
+/// remain unsplit with their original projection phase; transaction bindings
+/// are the same moved values. The enclosing retained materialization phase
+/// keeps its distinct original source account alive after this entire stage.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16FormalMemoryCompilationV1 {
+    admitted: crate::production_ranked_projection_v1::PrivateBf16FormalMemoryV1,
+    bindings: AuthenticatedProductionBindings,
+}
+
+impl RankedVerifiedProductionCompilation {
+    #[allow(dead_code)]
+    fn admit_private_bf16_formal_memory_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16FormalMemoryCompilationV1, ProductionPipelineError> {
+        let Self { ranked, bindings } = self;
+        let admitted = ranked
+            .into_private_bf16_formal_memory_v1(requested_return)
+            .map_err(ProductionPipelineError::RankedVerification)?;
+        Ok(PrivateBf16FormalMemoryCompilationV1 { admitted, bindings })
+    }
+}
+
+impl PrivateBf16FormalMemoryCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_formal_memory_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.admitted
+            .revalidate_private_bf16_formal_memory_v1(requested_return)
+            .map_err(ProductionPipelineError::RankedVerification)
+    }
+}

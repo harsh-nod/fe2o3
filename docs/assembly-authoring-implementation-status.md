@@ -11,6 +11,71 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 owning formal stage and native checkpoint diagnosis — 2026-10-04
+
+The private compilation path now retains the actual formal memory analysis
+together with its intact nominal source owner, original projection phase and
+authenticated compilation bindings. Construction performs the first actual
+analysis, discharges the selected ranked guards, independently recomputes the
+complete analysis and compares it before retaining the first result. Later
+replay rechecks the same source, requested Return and complete retained analysis.
+No detached report, replacement account or legacy connected owner is created.
+
+Fresh Identity and swapped-input frontend sessions in **both debug and release**
+constructed this production stage, rejected the opposite Return mapping, then
+successfully replayed the correct mapping. They retained the raw Incomplete
+analysis and all eight original guard reasons, three allocations, nine accesses,
+one bounds obligation, two alias obligations and no conflicts. Source-level
+guard discharge does not authenticate runtime addresses or waive the remaining
+bounds and alias checks.
+
+The actual formal-owner header was 3,720 bytes and the temporary observation
+header 48 bytes on the original projection account. The observation was consumed
+before its refund; the stage was dropped before the enclosing original
+materialization account postflight. Tests cover exact/one-short header budgets,
+foreign accounts and insufficient floors, prior sticky denials, changed reasons
+and obligations, typed error propagation, and real Program early-refusal cleanup.
+Inherited formal-engine allocations, full equality and formatting remain outside
+the selected fixed-state accounting claim.
+
+The exact ten-source implementation passed 3,933 compiler library tests
+(230 ignored), 73 extractor tests and two API tests in each build mode, plus
+2,080 lowerer tests in each mode and the release product build. Ten parent
+controls and four genuine frontend processes qualified the private owning
+continuation. Their historical preparation is only input custody; their current
+binaries, source, observations and process results are separately bound.
+Qualification source census: `fbf9cc8128792f955f97133cfef144926c01adac1e2c098dc982bc74da19821e`.
+Geometry/target binding, V12-aware optimization, LLVM emission and ordinary
+compilation remain separate work.
+
+The new checkpoint-diagnostic native attempt on MI350 **failed** before a valid
+capture. Its retained diagnostic reported `checkpoint_changed(11)`,
+`commit-site=0`, `checkpoint-site=11` after 14 commands and 73 records.
+Only 8,192 of 8,404 stdout bytes were retained; the missing 212-byte prefix is
+not reconstructed. The zero-byte controller JSON caused the outer framing
+refusal; it is not evidence of an oversized frame.
+
+Inner and outer cleanup records joined, the owned cgroup was absent, and a
+separate point check found the four named owner/client/controller/inferior PIDs
+absent. A separate post-run whole-GDB/provider check matched the pre-run source,
+object, binary and provider content. The failed command itself has no successful
+outer postflight. No physical capture, GPU-dispatch success, global isolation,
+rollback or automatic retry is claimed; this attempt and its lease remain consumed.
+
+Frozen GDB source identifies a scalar-host presentation mismatch: condition
+processing writes the host's active lane mask of **1** before presentation, but
+the private breakpoint predicate required **0**. An independently reviewed
+one-byte candidate corrects only that presentation comparison. Eight source
+controls and 300 mocked C++ checks in each of strict and UBSan builds passed.
+This proves a source-contract correction, not which individual operand was
+observed false in the compound runtime predicate, nor successful native capture.
+A fresh private build, layout/runtime checks and separately qualified execution
+remain necessary.
+
+No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+
 ## Private BF16 ranked guard discharge — 2026-10-04
 
 The intact private owner now discharges the eight selected structural guarded-read

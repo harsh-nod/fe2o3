@@ -1300,3 +1300,223 @@ mod ranked_formal_observation {
         }
     }
 }
+
+/// Private formal continuation: actual rows/source first, original phase last.
+/// Neither the owner nor its account can be split out or replaced.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16FormalMemoryV1 {
+    owner: fe2o3_lower_mir_kernel::ProductionPrivateBf16FormalMemoryOwnerV1,
+    verification: AuthenticatedRankedVerificationRosterV1,
+}
+
+impl PrivateBf16AttachedRankedV1 {
+    fn into_private_bf16_formal_memory_v1(
+        mut self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16FormalMemoryV1, E> {
+        self.verification.phase.require_clean_v1()?;
+        // Keep the original account stationary, declared before moved sources
+        // and results so every error/unwind destroys those values first.
+        let mut verification = self.verification;
+        let attached = self.owner;
+        let roots = &verification.roots;
+        let result = verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata("private formal owner requires one actual root"));
+            };
+            let available = sum(
+                std::mem::size_of::<PrivateBf16AttachedRankedV1>(),
+                fe2o3_lower_mir_kernel::ProductionPrivateBf16FormalMemoryOwnerV1::retained_storage_v1(),
+            )?;
+            if std::mem::size_of::<PrivateBf16FormalMemoryV1>() > available {
+                return Err(resource(Resource::Accounting));
+            }
+            attached.into_private_bf16_formal_memory_with_budget_v1(
+                root.semantic_root, requested_return, budget,
+            ).map_err(E::FormalMemory)
+        });
+        // A swallowed inner denial cannot escape as an accepted owning stage.
+        verification.phase.require_clean_v1()?;
+        let owner = result?;
+        Ok(PrivateBf16FormalMemoryV1 {
+            owner,
+            verification,
+        })
+    }
+}
+
+impl ProductionRankedSemanticProgramV1 {
+    /// Closed consuming continuation selected only by the private retained
+    /// pipeline stage. All roster, module, nominal and formal gates still run.
+    #[allow(dead_code)]
+    pub(crate) fn into_private_bf16_formal_memory_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16FormalMemoryV1, E> {
+        self.into_verified_roster_receipt()?
+            .into_private_bf16_module_verified_receipt_v1()?
+            .into_private_bf16_attached_ranked_v1()?
+            .into_private_bf16_formal_memory_v1(requested_return)
+    }
+}
+
+impl PrivateBf16FormalMemoryV1 {
+    /// Fresh nominal translation, analysis and guard proof use the SAME phase.
+    #[allow(dead_code)]
+    pub(crate) fn revalidate_private_bf16_formal_memory_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), E> {
+        self.verification.phase.require_clean_v1()?;
+        let owner = &self.owner;
+        let roots = &self.verification.roots;
+        let result = self.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata(
+                    "private formal replay changed actual roots",
+                ));
+            };
+            if owner.root_count() != 1 {
+                return Err(E::RosterMetadata(
+                    "private formal replay changed actual source",
+                ));
+            }
+            owner
+                .verify_private_bf16_formal_memory_with_budget_v1(
+                    root.semantic_root,
+                    requested_return,
+                    budget,
+                )
+                .map_err(E::FormalMemory)
+        });
+        self.verification.phase.require_clean_v1()?;
+        result
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod private_formal_owner_error_tests {
+    use super::*;
+
+    #[test]
+    fn private_formal_owner_preserves_typed_formal_error_source() {
+        use std::error::Error as _;
+        let error = E::FormalMemory(
+            fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::KernelCount { actual: 0 },
+        );
+        assert!(error.to_string().contains("private nominal formal memory"));
+        assert!(error.source().is_some());
+        assert!(matches!(
+            error,
+            E::FormalMemory(
+                fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::KernelCount { actual: 0 }
+            )
+        ));
+    }
+}
+
+#[cfg(test)]
+mod formal_owner_observation {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as WorkIdentity;
+
+    // Non-Copy and confined to the surviving owner's single live phase loan.
+    struct Observation {
+        ledger: WorkIdentity,
+        entry_work: usize,
+        protected: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+
+    impl Observation {
+        fn emit(self, requested: [u8; 4]) {
+            eprintln!(
+                "fe2o3-bf16-private-formal-owner-v1 retained=true raw_analysis=incomplete discharged_reasons=8 allocations=3 accesses=9 bounds=1 aliases=2 conflicts=0 permutation={} work={} storage={} peak={} owner_storage={} observation_storage={} same_account=true source_join=true fresh_full_replay=true exact_obligations=true intact_owner=true stage_retained=true wrong_return_refused=true cleanup_pending=true formal_admission=false normal_admission=false launch_authenticated=false",
+                if requested == [0, 1, 2, 3] { "identity" } else { "swap01" },
+                self.work, self.storage, self.peak,
+                fe2o3_lower_mir_kernel::ProductionPrivateBf16FormalMemoryOwnerV1::retained_storage_v1(),
+                std::mem::size_of::<Self>(),
+            );
+        }
+    }
+
+    impl PrivateBf16FormalMemoryV1 {
+        /// Read-only observation immediately after the actual production-stage
+        /// replay. It neither reruns a frontend nor reconstructs an analysis.
+        pub(crate) fn observe_private_bf16_formal_owner_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), E> {
+            self.verification.phase.require_clean_v1()?;
+            let owner = &self.owner;
+            let roots = &self.verification.roots;
+            self.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                let header = std::mem::size_of::<Observation>();
+                let protected = budget.storage().checked_add(header)
+                    .ok_or_else(|| resource(Resource::Arithmetic))?;
+                budget.reserve_storage(header).map_err(resource)?;
+                let mut row = Observation {
+                    ledger: budget.work_ledger_identity_v1(),
+                    entry_work: budget.work(), protected,
+                    work: 0, storage: 0, peak: 0,
+                };
+                let reasons = owner.ranked_discharged_reasons();
+                let report = owner.obligations();
+                budget.charge_work(
+                    64usize.checked_add(reasons.len().checked_mul(8)
+                        .ok_or_else(|| resource(Resource::Arithmetic))?)
+                        .ok_or_else(|| resource(Resource::Arithmetic))?,
+                ).map_err(resource)?;
+                if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3])
+                    || roots.len() != 1 || owner.root_count() != 1
+                    || owner.raw_analysis_is_complete()
+                    || reasons.len() != 8
+                    || report.allocations().len() != 3
+                    || report.accesses().len() != 9
+                    || report.bounds_requirements().len() != 1
+                    || report.runtime_alias_requirements().len() != 2
+                    || !report.inter_invocation_conflicts().is_empty()
+                    || reasons.iter().any(|reason| !matches!(reason,
+                        fe2o3_kernel_ir::FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }))
+                    || owner.grants_artifact_or_launch_authority()
+                {
+                    return Err(E::RosterMetadata("actual retained formal owner rows differ"));
+                }
+                for (ordinal, reason) in reasons.iter().enumerate() {
+                    eprintln!("fe2o3-bf16-private-formal-owner-reason-v1 ordinal={} value={:?}",
+                        ordinal, reason);
+                }
+                budget.check_prior_denials_v1().map_err(resource)?;
+                if budget.work_ledger_identity_v1() != row.ledger
+                    || budget.storage() != row.protected
+                    || budget.work() < row.entry_work
+                    || budget.peak_storage() < budget.storage()
+                {
+                    return Err(resource(Resource::Accounting));
+                }
+                row.work = budget.work();
+                row.storage = budget.storage();
+                row.peak = budget.peak_storage();
+                // Consuming emit destroys this paid record before exact refund.
+                row.emit(requested);
+                budget.release_storage(header).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                Ok(())
+            })?;
+            self.verification.phase.require_clean_v1()?;
+            Ok(())
+        }
+    }
+}

@@ -2057,6 +2057,71 @@ mod legacy_scope_tests {
         }
     }
 
+    #[test]
+    fn private_formal_consuming_entry_early_refusal_releases_original_phase_once() {
+        use crate::production_ranked_projection_v1::conditional_retention_observation_v1::{
+            Event, Outcome, observe,
+        };
+        for substitute_identity in [false, true] {
+            let (result, observation) = observe(|| {
+                let mut program = actual_backend_two_private_initializer_roots_v1();
+                if substitute_identity {
+                    program.roots[1].kernel_binding[0] ^= 1;
+                } else {
+                    program.roots[1].semantic_root = program.roots[0].semantic_root;
+                }
+                program.into_private_bf16_formal_memory_v1([0, 1, 2, 3])
+            });
+            let expected = if substitute_identity {
+                "substituted ranked root identity metadata"
+            } else {
+                "a reordered, duplicate, or substituted semantic root"
+            };
+            assert!(
+                matches!(result, Err(ProductionRankedVerificationErrorV1::RosterMetadata(reason))
+                if reason == expected)
+            );
+            // Observe the real error path's accounting, not a synthetic owner.
+            // This does not measure source/root destructor order: those owners
+            // expose no liveness handle to this crate.
+            let [
+                Event::PhaseRetained(initial),
+                Event::PhaseFinished {
+                    before: checked_before,
+                    after: checked_after,
+                    outcome: Outcome::Accepted,
+                },
+                Event::PhaseDropped {
+                    before,
+                    after,
+                    poisoned: false,
+                },
+            ] = observation.events.as_slice()
+            else {
+                panic!(
+                    "unexpected private formal consuming refusal events: {:?}",
+                    observation.events
+                );
+            };
+            assert!(initial.storage > 0);
+            // The new prior-denial gate pays exactly its original one-unit
+            // debit before the unchanged metadata refusal. No new account,
+            // storage credit, hidden denial, or extra/drop event is permitted.
+            assert_eq!(checked_before, initial);
+            assert_eq!(checked_after.work, initial.work.checked_add(1).unwrap());
+            assert_eq!(checked_after.storage, initial.storage);
+            assert_eq!(checked_after.peak_storage, initial.peak_storage);
+            assert_eq!(checked_after.failed_work, initial.failed_work);
+            assert_eq!(checked_after.failed_storage, initial.failed_storage);
+            assert_eq!(before, checked_after);
+            assert_eq!(after.storage, 0);
+            assert_eq!(after.work, before.work);
+            assert_eq!(after.peak_storage, before.peak_storage);
+            assert_eq!(after.failed_work, before.failed_work);
+            assert_eq!(after.failed_storage, before.failed_storage);
+        }
+    }
+
     include!("private_array_checked_output_v1_tests.rs");
     include!("private_array_initializer_v1_tests.rs");
     include!("private_array_read_source_v1_tests.rs");

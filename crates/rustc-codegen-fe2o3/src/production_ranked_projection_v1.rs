@@ -1198,6 +1198,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    FormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     ErasedSource(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
@@ -1236,6 +1237,9 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
                 write!(formatter, "ranked roster induction custody failed: {error}")
             }
             Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
+            Self::FormalMemory(error) => {
+                write!(formatter, "private nominal formal memory failed: {error}")
+            }
             Self::ErasedSource(error) => write!(formatter, "erased source custody failed: {error}"),
             Self::MiddleEndEvidence(error) => error.fmt(formatter),
             Self::SemanticContract(error) => {
@@ -1268,6 +1272,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
+            Self::FormalMemory(error) => Some(error),
             Self::ErasedSource(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
@@ -3261,6 +3266,7 @@ mod bf16_nominal_owned_projection_v1;
 pub(crate) use bf16_nominal_owned_projection_v1::project_private_nominal_materialized_v1;
 #[path = "production_ranked_projection_v1/bf16_nominal_module_receipt_v1.rs"]
 mod bf16_nominal_module_receipt_v1;
+pub(crate) use bf16_nominal_module_receipt_v1::PrivateBf16FormalMemoryV1;
 
 pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,

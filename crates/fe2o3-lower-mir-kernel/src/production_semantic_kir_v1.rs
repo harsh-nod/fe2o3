@@ -30744,6 +30744,59 @@ mod resource_tests {
         assert_eq!(budget.peak_storage(), 7 + scratch);
     }
 
+    #[test]
+    fn private_formal_retained_analysis_refuses_changed_reasons_and_obligations() {
+        use super::bf16_ranked_module_receipt_v1::require_private_bf16_formal_analysis_match_for_test_v1 as require_same;
+        let fixture = generated_matrix_tail_fixture(2);
+        let fresh = ranked_formal_fixture_attempt_v1(&fixture).unwrap();
+        assert!(require_same(&fresh, &fresh).is_ok());
+        for mutation in 0..4 {
+            let mut changed = fresh.clone(); // inert comparison control, never source authority
+            let fe2o3_kernel_ir::FormalMemoryObligationAnalysis::Incomplete { reasons, .. } =
+                &mut changed
+            else {
+                panic!("actual graph fixture must retain pending guards")
+            };
+            match mutation {
+                0 => {
+                    reasons.pop();
+                }
+                1 => {
+                    reasons.push(reasons[0].clone());
+                }
+                2 => {
+                    reasons[0] = FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                        location: FunctionOperationLocation::new(BlockId(999), 11),
+                    };
+                }
+                3 => {
+                    reasons.push(FormalMemoryIncompleteReason::LaunchExtentUnknown);
+                }
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                require_same(&fresh, &changed),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+            ));
+        }
+        // The report itself, not only the reason list, must rejoin exactly.
+        let changed = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+            &fixture.module,
+            &fixture.module.kernels[0].id,
+            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [65, 1, 1],
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert_ne!(fresh.obligations(), changed.obligations());
+        assert!(matches!(
+            require_same(&fresh, &changed),
+            Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+        ));
+    }
+
     struct UnsupportedIndexCorrelationFixtureV1 {
         module: Module,
         correspondence: SemanticKirCorrespondenceV1,
