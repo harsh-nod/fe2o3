@@ -8,6 +8,8 @@ use std::process::{self, ExitCode};
 use std::thread;
 use std::time::Duration;
 
+mod auditor_syscall_probe;
+
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
@@ -39,6 +41,7 @@ struct FixtureControls {
     substitute_commitment: bool,
     public_ack_without_reacquire: bool,
     seccomp_escape_marker: Option<OsString>,
+    seccomp_auditor_probe: bool,
     exec_replacement_images: Option<(OsString, OsString)>,
     premature_close_ack: bool,
     extra_ack_byte: bool,
@@ -87,6 +90,7 @@ impl FixtureControls {
                     );
                     index += 2;
                 }
+                "--fe2o3-test-seccomp-auditor-probe" => controls.seccomp_auditor_probe = true,
                 "--fe2o3-test-exec-replacement-probe" => {
                     let static_image = arguments
                         .get(index + 1)
@@ -542,6 +546,10 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
         .as_ref()
         .map(|(static_image, dynamic_image)| exec_replacement_probe(static_image, dynamic_image))
         .transpose()?;
+    let auditor_operations = controls
+        .seccomp_auditor_probe
+        .then(auditor_syscall_probe::run)
+        .transpose()?;
 
     if controls.premature_close_ack {
         drop(ack_file);
@@ -577,6 +585,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             "envelope_identity": hex(&envelope_identity.sha256()),
             "process_creation": process_creation,
             "exec_replacement": exec_replacement,
+            "auditor_operations": auditor_operations,
             "read_only": true,
         }),
         _envelope: Some(envelope_file),

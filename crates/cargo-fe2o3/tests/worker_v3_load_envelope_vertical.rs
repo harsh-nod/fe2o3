@@ -117,10 +117,14 @@ fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
     static FIXTURES: OnceLock<StaticV3ApplicationFixtures> = OnceLock::new();
     FIXTURES.get_or_init(|| {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let target = std::env::temp_dir().join(format!(
-            "cargo-fe2o3-v3-static-host-consumer-{}",
-            std::process::id()
-        ));
+        let target = std::env::var_os("FE2O3_V3_STATIC_FIXTURE_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "cargo-fe2o3-v3-static-host-consumer-{}",
+                    std::process::id()
+                ))
+            });
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut static_rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
         if !static_rustflags.is_empty() {
@@ -1672,6 +1676,34 @@ fn strict_v3_public_ack_does_not_claim_child_currentness_authority() {
     let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
     assert_eq!(report["handoff"]["acknowledged"], true);
     assert_eq!(report["handoff"]["child_reacquired_currentness"], false);
+}
+
+#[test]
+fn strict_v3_seccomp_admits_only_required_auditor_operations() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("seccomp-auditor-report.json");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-seccomp-auditor-probe")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["acknowledged"], true);
+    assert_eq!(
+        report["handoff"]["auditor_operations"],
+        serde_json::json!({
+            "credentials": "inspected",
+            "filesystem": "inspected",
+            "sealed_image": "verified",
+            "credential_changes": "EPERM",
+            "other_memfd_flags": "EPERM",
+            "new_sockets": "EPERM",
+        })
+    );
 }
 
 #[test]

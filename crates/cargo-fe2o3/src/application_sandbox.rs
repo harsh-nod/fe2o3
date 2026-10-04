@@ -16,6 +16,7 @@ const BPF_JUMP_EQUAL: u16 = 0x15;
 const BPF_RETURN: u16 = 0x06;
 const SECCOMP_DATA_NUMBER_OFFSET: u32 = 0;
 const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
+const SECCOMP_DATA_ARGUMENTS_OFFSET: u32 = 16;
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_USER_NOTIF: u32 = 0x7fc0_0000;
@@ -213,7 +214,7 @@ impl Drop for ApplicationSandboxGuard {
 
 pub(crate) fn no_fork_application_filter() -> Vec<libc::sock_filter> {
     let allowed = allowed_application_syscalls();
-    let mut filter = Vec::with_capacity(9 + allowed.len() * 2);
+    let mut filter = Vec::with_capacity(24 + allowed.len() * 2);
     filter.push(statement(BPF_LOAD_WORD_ABSOLUTE, SECCOMP_DATA_ARCH_OFFSET));
     filter.push(jump(BPF_JUMP_EQUAL, AUDIT_ARCH_X86_64, 1, 0));
     filter.push(statement(BPF_RETURN, SECCOMP_RET_KILL_PROCESS));
@@ -224,6 +225,28 @@ pub(crate) fn no_fork_application_filter() -> Vec<libc::sock_filter> {
     for syscall in [libc::SYS_execve, libc::SYS_execveat] {
         filter.push(jump(BPF_JUMP_EQUAL, syscall as u32, 0, 1));
         filter.push(statement(BPF_RETURN, SECCOMP_RET_USER_NOTIF));
+    }
+    // These arguments are kernel u32 values; upper register bits cannot change their meaning.
+    for (syscall, argument, value) in [
+        (libc::SYS_setfsuid, 0, u32::MAX),
+        (libc::SYS_setfsgid, 0, u32::MAX),
+        (
+            libc::SYS_memfd_create,
+            1,
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        ),
+    ] {
+        filter.push(jump(BPF_JUMP_EQUAL, syscall as u32, 0, 4));
+        filter.push(statement(
+            BPF_LOAD_WORD_ABSOLUTE,
+            SECCOMP_DATA_ARGUMENTS_OFFSET + argument * 8,
+        ));
+        filter.push(jump(BPF_JUMP_EQUAL, value, 0, 1));
+        filter.push(statement(BPF_RETURN, SECCOMP_RET_ALLOW));
+        filter.push(statement(
+            BPF_RETURN,
+            SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        ));
     }
     for syscall in allowed {
         filter.push(jump(BPF_JUMP_EQUAL, *syscall as u32, 0, 1));
@@ -669,6 +692,8 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
         libc::SYS_close,
         libc::SYS_lseek,
         libc::SYS_fstat,
+        libc::SYS_fstatfs,
+        libc::SYS_fgetxattr,
         libc::SYS_newfstatat,
         libc::SYS_statx,
         libc::SYS_access,
@@ -736,6 +761,9 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
         libc::SYS_geteuid,
         libc::SYS_getgid,
         libc::SYS_getegid,
+        libc::SYS_getresuid,
+        libc::SYS_getresgid,
+        libc::SYS_capget,
         libc::SYS_getrusage,
         libc::SYS_wait4,
         libc::SYS_uname,
@@ -756,6 +784,90 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
+
+    fn application_filter_decision(number: libc::c_long, args: [u64; 6]) -> u32 {
+        let mut words = [0_u32; 16];
+        words[0] = number as u32;
+        words[1] = AUDIT_ARCH_X86_64;
+        for (index, value) in args.into_iter().enumerate() {
+            words[4 + index * 2] = value as u32;
+            words[5 + index * 2] = (value >> 32) as u32;
+        }
+        let filter = no_fork_application_filter();
+        let (mut pc, mut accumulator) = (0, 0);
+        for _ in 0..filter.len() {
+            let instruction = filter[pc];
+            pc += 1;
+            match instruction.code {
+                BPF_LOAD_WORD_ABSOLUTE => accumulator = words[instruction.k as usize / 4],
+                BPF_JUMP_EQUAL => {
+                    pc += usize::from(if accumulator == instruction.k {
+                        instruction.jt
+                    } else {
+                        instruction.jf
+                    });
+                }
+                BPF_RETURN => return instruction.k,
+                code => panic!("unsupported test BPF opcode {code}"),
+            }
+        }
+        panic!("application filter did not terminate")
+    }
+
+    #[test]
+    fn auditor_argument_rules_preserve_exact_filter_decisions() {
+        let denied = SECCOMP_RET_ERRNO | libc::EPERM as u32;
+        for syscall in [libc::SYS_setfsuid, libc::SYS_setfsgid] {
+            for query in [u64::from(u32::MAX), u64::MAX] {
+                assert_eq!(
+                    application_filter_decision(syscall, [query, 0, 0, 0, 0, 0]),
+                    SECCOMP_RET_ALLOW
+                );
+            }
+            for change in [0, 1000, (1_u64 << 32) | 1000] {
+                assert_eq!(
+                    application_filter_decision(syscall, [change, 0, 0, 0, 0, 0]),
+                    denied
+                );
+            }
+        }
+        for flags in [0_u64, 1, 2, 3, 7, 11, 19, (1_u64 << 32) | 3, u64::MAX] {
+            assert_eq!(
+                application_filter_decision(libc::SYS_memfd_create, [0, flags, 0, 0, 0, 0]),
+                if flags as u32 == 3 {
+                    SECCOMP_RET_ALLOW
+                } else {
+                    denied
+                }
+            );
+        }
+        for &syscall in allowed_application_syscalls() {
+            assert_eq!(
+                application_filter_decision(syscall, [0; 6]),
+                SECCOMP_RET_ALLOW
+            );
+        }
+        for syscall in [libc::SYS_execve, libc::SYS_execveat] {
+            assert_eq!(
+                application_filter_decision(syscall, [0; 6]),
+                SECCOMP_RET_USER_NOTIF
+            );
+        }
+        for syscall in [
+            libc::SYS_clone,
+            libc::SYS_clone3,
+            libc::SYS_socket,
+            libc::SYS_socketpair,
+            libc::SYS_unshare,
+            libc::SYS_setns,
+            libc::SYS_setuid,
+            libc::SYS_setgid,
+            libc::SYS_capset,
+            -1,
+        ] {
+            assert_eq!(application_filter_decision(syscall, [0; 6]), denied);
+        }
+    }
 
     #[test]
     fn process_creation_and_exec_replacement_are_not_allowlisted() {
