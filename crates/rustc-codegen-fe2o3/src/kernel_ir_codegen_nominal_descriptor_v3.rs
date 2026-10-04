@@ -739,6 +739,7 @@ impl InertCompilerModuleTextV1 {
             Some(DescriptorSourceIdentity::V3(_)) => Some(3),
             Some(DescriptorSourceIdentity::V5(_)) => Some(5),
             Some(DescriptorSourceIdentity::Mixed53(_)) => Some(53),
+            Some(DescriptorSourceIdentity::Mixed89(_)) => Some(89),
         }
     }
 }
