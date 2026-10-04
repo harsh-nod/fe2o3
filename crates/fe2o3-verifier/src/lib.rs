@@ -46,7 +46,9 @@ mod conditional_contract_request_v2;
 mod conditional_ranked_formulas_v1;
 mod mixed_native_correspondence_v60;
 mod mixed_optimizer_refinement_v26;
+mod mixed_target_selection_family;
 mod mixed_target_selection_v53;
+mod mixed_target_selection_v89;
 pub use mixed_optimizer_refinement_v26::{
     AggregateMemoryCfgObligationV30, AggregateMemoryCfgSubjectV30,
     ExecutedMixedComposedRefinementV29, ExecutedMixedOptimizerBlockSimulationV26,
@@ -239,6 +241,7 @@ pub use mir_pliron_verus_execution_evidence_v1::{
 };
 pub use mixed_native_correspondence_v60::*;
 pub use mixed_target_selection_v53::*;
+pub use mixed_target_selection_v89::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
