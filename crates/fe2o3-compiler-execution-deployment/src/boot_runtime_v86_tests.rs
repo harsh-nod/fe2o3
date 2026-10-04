@@ -4,6 +4,89 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
+const STAGING_NAME: &str = ".compiler-execution-qualification-v1-0123456789abcdef0123456789abcdef";
+
+fn staged_fixture(parent: &Path) -> (PathBuf, File, (u32, u32)) {
+    let stage = parent.join(STAGING_NAME);
+    fs::create_dir(&stage).unwrap();
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
+    for child in STAGING_CHILDREN_V86 {
+        fs::create_dir(stage.join(child)).unwrap();
+        fs::set_permissions(stage.join(child), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let root_path = stage.join("root");
+    fs::create_dir(root_path.join("run")).unwrap();
+    fs::create_dir(root_path.join(RUNTIME_DIRECTORY_V86)).unwrap();
+    fs::set_permissions(
+        root_path.join(RUNTIME_DIRECTORY_V86),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = File::open(root_path).unwrap();
+    let stat = fstat(&root).unwrap();
+    (stage, root, (stat.st_uid, stat.st_gid))
+}
+
+#[test]
+fn machine_runtime_alias_capture_binds_only_exact_owned_staging_and_empty_target() {
+    for mutant in 0..7 {
+        let scratch = tempfile::tempdir().unwrap();
+        let (stage, root, owner) = staged_fixture(scratch.path());
+        MachineRuntimeSourceV86::capture(&root, STAGING_NAME, owner).unwrap();
+        match mutant {
+            0 => fs::set_permissions(&stage, fs::Permissions::from_mode(0o755)).unwrap(),
+            1 => fs::write(stage.join("run/foreign"), b"x").unwrap(),
+            2 => fs::set_permissions(stage.join("run"), fs::Permissions::from_mode(0o755)).unwrap(),
+            3 => {
+                fs::remove_dir(stage.join("run")).unwrap();
+                std::os::unix::fs::symlink("evidence", stage.join("run")).unwrap();
+            }
+            4 => fs::create_dir(stage.join("unexpected")).unwrap(),
+            5 => fs::remove_dir(stage.join("state")).unwrap(),
+            6 => rustix::fs::fsetxattr(
+                File::open(stage.join("run")).unwrap(),
+                "user.unexpected",
+                b"x",
+                rustix::fs::XattrFlags::CREATE,
+            )
+            .unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(
+            MachineRuntimeSourceV86::capture(&root, STAGING_NAME, owner).is_err(),
+            "mutant {mutant}"
+        );
+    }
+}
+
+#[test]
+fn machine_runtime_bind_source_refuses_alias_syntax_and_other_transactions() {
+    let identity = QualificationMachineIdentityV1::from_staging_name(STAGING_NAME).unwrap();
+    let valid = PathBuf::from("/qualification")
+        .join(STAGING_NAME)
+        .join("run");
+    checked_bind_source(&valid, &identity).unwrap();
+    for invalid in [
+        valid.strip_prefix("/").unwrap().to_path_buf(),
+        valid.join(".."),
+        valid.with_file_name("root"),
+        PathBuf::from("/qualification:other")
+            .join(STAGING_NAME)
+            .join("run"),
+        PathBuf::from("/qualification\nother")
+            .join(STAGING_NAME)
+            .join("run"),
+        PathBuf::from("/qualification")
+            .join(".compiler-execution-qualification-v1-0123456789abcdef0123456789abcde0")
+            .join("run"),
+    ] {
+        assert!(
+            checked_bind_source(&invalid, &identity).is_err(),
+            "{invalid:?}"
+        );
+    }
+}
+
 fn fixture() -> (tempfile::TempDir, File, (u32, u32)) {
     let scratch = tempfile::tempdir().unwrap();
     fs::create_dir(scratch.path().join("run")).unwrap();
@@ -166,24 +249,41 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     };
     attach_tmpfs(scratch.path());
     mounts.0.push(scratch.path().to_owned());
-    let run = scratch.path().join("run");
+    let (stage_path, root, owner) = staged_fixture(scratch.path());
+    let base = File::open(stage_path.join("base")).unwrap();
+    let run = stage_path.join("root/run");
     let runtime = run.join("fe2o3");
-    fs::create_dir(&run).unwrap();
-    fs::create_dir(&runtime).unwrap();
-    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
-    let root = File::open(scratch.path()).unwrap();
-    let retained = MachineRuntimeDirectoryV86::open(&root, (0, 0)).unwrap();
-    let inherited = inherit_exec_descriptor(&retained.directory, 12).unwrap();
-    retained.revalidate(&root, (0, 0)).unwrap();
-    let identity = QualificationMachineIdentityV1::from_staging_name(
-        ".compiler-execution-qualification-v1-0123456789abcdef0123456789abcdef",
-    )
-    .unwrap();
-    let base_number = inherited.as_raw_fd() + 1;
-    let root_number = inherited.as_raw_fd() + 2;
-    let plan =
-        pinned_systemd_nspawn_plan_v1(base_number, root_number, inherited.as_raw_fd(), &identity)
-            .unwrap();
+    let source = MachineRuntimeSourceV86::capture(&root, STAGING_NAME, owner).unwrap();
+    let target_before = source.target_snapshot;
+    let retained = MachineRuntimeDirectoryV86::open(&root, owner).unwrap();
+    let outer_namespace = File::open("/proc/thread-self/ns/mnt").unwrap();
+    let enter = || {
+        rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS).unwrap();
+        mount_change(
+            "/",
+            MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+        )
+        .unwrap();
+    };
+    use std::os::fd::AsFd as _;
+    let restore = |namespace: &File| {
+        rustix::thread::move_into_link_name_space(
+            namespace.as_fd(),
+            Some(rustix::thread::LinkNameSpaceType::Mount),
+        )
+        .unwrap();
+    };
+    enter();
+    let helper_namespace = File::open("/proc/thread-self/ns/mnt").unwrap();
+    assert_ne!(
+        fstat(&helper_namespace).unwrap().st_ino,
+        fstat(&outer_namespace).unwrap().st_ino
+    );
+    let alias = source.attach(&base, &root, owner).unwrap();
+    let alias_path = alias.path().to_owned();
+    alias.revalidate().unwrap();
+    let identity = QualificationMachineIdentityV1::from_staging_name(STAGING_NAME).unwrap();
+    let plan = pinned_systemd_nspawn_plan_v1(10, 11, &alias_path, &identity).unwrap();
     let bind_option = plan
         .arguments()
         .iter()
@@ -195,7 +295,9 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
         .strip_suffix(":/run/fe2o3:norbind,noidmap")
         .unwrap();
 
-    // Match nspawn's ordering: mount_all(/run tmpfs), then mount_custom(bind).
+    // Match both boundaries: the helper alias is attached before nspawn's NEWNS;
+    // mount_all(/run tmpfs) then precedes mount_custom(bind) in the latter.
+    enter();
     attach_tmpfs(&run);
     mounts.0.push(run.clone());
     assert_eq!(
@@ -210,7 +312,15 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     );
     fs::remove_dir(&negative).unwrap();
     fs::create_dir(&runtime).unwrap();
-    assert!(MachineRuntimeDirectoryV86::open(&root, (0, 0)).is_err()); // NO_XDEV remains closed.
+    let current_root = absolute_directory(&stage_path.join("root")).unwrap();
+    assert!(MachineRuntimeDirectoryV86::open(&current_root, owner).is_err()); // NO_XDEV remains closed.
+    assert_eq!(
+        mount_bind(
+            format!("/proc/self/fd/{}", retained.directory.as_raw_fd()),
+            &runtime
+        ),
+        Err(rustix::io::Errno::INVAL),
+    );
     mount_bind(source, &runtime).unwrap();
     mounts.0.push(runtime.clone());
     let bound = File::open(&runtime).unwrap();
@@ -225,13 +335,13 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     .unwrap();
     bind(
         &listener,
-        &SocketAddrUnix::new(runtime.join(socket_name)).unwrap(),
+        // The canonical staging name exceeds sockaddr_un's short path budget.
+        &SocketAddrUnix::new(format!("/proc/self/fd/{}/{socket_name}", bound.as_raw_fd())).unwrap(),
     )
     .unwrap();
     let through_bound = fs::metadata(runtime.join(socket_name)).unwrap();
-    let through_retained = File::open(format!("/proc/self/fd/{}", inherited.as_raw_fd())).unwrap();
     let retained_socket = openat2(
-        &through_retained,
+        &retained.directory,
         socket_name,
         OFlags::PATH | OFlags::CLOEXEC,
         Mode::empty(),
@@ -247,18 +357,36 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
         (through_bound.dev(), through_bound.ino()),
         (same.st_dev, same.st_ino)
     );
-    drop((retained_socket, through_retained, listener, bound));
+    drop((retained_socket, listener, bound, current_root));
     unmount(&runtime, UnmountFlags::empty()).unwrap();
     mounts.0.pop();
     unmount(&run, UnmountFlags::empty()).unwrap();
     mounts.0.pop();
+    unmount(&alias_path, UnmountFlags::empty()).unwrap();
+    unmount(scratch.path(), UnmountFlags::empty()).unwrap();
+    restore(&helper_namespace);
+    drop(alias);
+    unmount(&alias_path, UnmountFlags::empty()).unwrap();
+    unmount(scratch.path(), UnmountFlags::empty()).unwrap();
+    restore(&outer_namespace);
+    let unchanged_target = absolute_directory(&alias_path).unwrap();
+    assert_eq!(exact_snapshot(&unchanged_target).unwrap(), target_before);
+    super::super::super::verify_directory_children(&unchanged_target, &[], "parent alias target")
+        .unwrap();
     let parent_visible = fs::metadata(runtime.join(socket_name)).unwrap();
     assert_eq!(
         (parent_visible.dev(), parent_visible.ino()),
         (same.st_dev, same.st_ino)
     );
     fs::remove_file(runtime.join(socket_name)).unwrap();
-    drop((inherited, retained, root));
+    drop((
+        unchanged_target,
+        retained,
+        root,
+        base,
+        helper_namespace,
+        outer_namespace,
+    ));
     unmount(scratch.path(), UnmountFlags::empty()).unwrap();
     mounts.0.pop();
     assert!(mounts.0.is_empty());

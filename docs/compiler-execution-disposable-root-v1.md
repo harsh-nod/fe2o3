@@ -248,14 +248,19 @@ The machine helper also retains the preflight-created `run/fe2o3` directory
 before invoking nspawn. It opens that exact child beneath the composed root
 with no symlink, magic-link, or mount crossing, requires an empty root-owned
 mode-`0755` directory without attributes, and rechecks its full snapshot and
-named identity before exec. Its distinct inherited descriptor supplies the
-fixed `/run/fe2o3` bind source with `norbind,noidmap`. This is necessary because
-systemd 255 mounts its private `/run` tmpfs before custom binds; a `+` source
-inside the original `/run` is then hidden. The source descriptor keeps the
-same socket/report directory visible to the original qualification root.
+named identity before exec. In a further child-private mount namespace it
+reopens and revalidates the exact base, composed root and existing empty `0700`
+staging `run` target, then binds the retained runtime directory there. The
+absolute attached alias supplies only the fixed `/run/fe2o3` destination with
+`norbind,noidmap`. This survives nspawn's own namespace copy and its `/run`
+tmpfs overmount: a `+` source inside the original `/run` becomes hidden, while
+a raw descriptor to a previous namespace cannot serve as a bind source.
+The alias keeps the same socket/report directory visible to the original
+qualification root; its parent's staging `run` remains empty and unmounted.
 Pinned nspawn closes inherited non-socket-activation descriptors before it
-executes the container payload. The target path, socket metadata admission,
-transaction checks, and shutdown/cleanup policy are unchanged.
+executes the container payload. Exact child shutdown/reaping tears down the
+helper-only namespace and alias, including on failure. The target path,
+socket metadata admission and transaction checks are unchanged.
 
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
