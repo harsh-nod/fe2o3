@@ -496,6 +496,7 @@ fn clone_execution_cfg_binding_v29(
     execution_cfg_charge_node_v29(nodes, budget)?;
     Ok(match binding {
         SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceEnumTag(_)
         | SemanticValueBindingV1::SourceInactive(_)
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::DynamicLds { .. }

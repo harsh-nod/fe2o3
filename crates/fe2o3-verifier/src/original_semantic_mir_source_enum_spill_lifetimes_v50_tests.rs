@@ -265,3 +265,88 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
         );
     }
 }
+
+#[test]
+fn original_enum_spill_cannot_keep_a_reference_current_across_referent_restart() {
+    let reached = std::cell::Cell::new(false);
+    let result = super::super::super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| {
+            lifetime_fixture(types, functions, EndPayload::DeadEnum);
+            let helper = functions.last_mut().unwrap();
+            let old = &helper.blocks()[3];
+            let word = helper.locals()[8].ty();
+            let mut statements: Vec<_> = old.statements().iter().filter(|statement| {
+                !matches!(statement.kind(), SemanticStatementKindV1::StorageDead(local) if local.index() == 9)
+            }).cloned().collect();
+            let restart_write = statements.iter().rposition(|statement| {
+                matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment) if assignment.destination().local().index() == 8)
+            }).unwrap();
+            statements.insert(
+                restart_write + 1,
+                SemanticStatementV1::new(
+                    old.source(),
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(8), vec![], word)
+                            .unwrap(),
+                        SemanticRvalueV1::new(
+                            word,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(9),
+                                    vec![
+                                        SemanticProjectionV1::new(
+                                            SemanticProjectionKindV1::Dereference,
+                                            word,
+                                        )
+                                        .unwrap(),
+                                    ],
+                                    word,
+                                )
+                                .unwrap(),
+                            )),
+                        ),
+                    )),
+                ),
+            );
+            let mut blocks = helper.blocks().to_vec();
+            blocks[3] = SemanticBasicBlockV1::new(
+                old.identity(),
+                old.source(),
+                statements,
+                old.terminator().clone(),
+            )
+            .unwrap();
+            *helper = SemanticFunctionDeclV1::new(
+                helper.identity(),
+                helper.role(),
+                helper.item_definition_identity(),
+                helper.monomorphization_identity(),
+                helper.generic_type_arguments_identity(),
+                helper.const_generic_arguments_identity(),
+                helper.source(),
+                helper.abi().clone(),
+                helper.locals().to_vec(),
+                helper.entry(),
+                blocks,
+            )
+            .unwrap();
+        },
+        |_plan, _out| {
+            reached.set(true);
+            Ok(())
+        },
+    );
+    let error = result
+        .0
+        .expect_err("a saved original loan cannot revive with the reused source local");
+    assert!(
+        !reached.get(),
+        "invalid original lifetime must fail before publication"
+    );
+    assert!(
+        format!("{error:?}").contains("source reference referent is dead or replaced"),
+        "wrong source lifetime refusal: {error:?}"
+    );
+}

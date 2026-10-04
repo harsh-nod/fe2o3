@@ -1075,7 +1075,9 @@ fn execution_binding_contains_paid_v29(
     budget.charge_work(4)?;
     let mut found = false;
     match binding {
-        SemanticValueBindingV1::SourceReference(_) | SemanticValueBindingV1::SourceInactive(_) => {
+        SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceEnumTag(_)
+        | SemanticValueBindingV1::SourceInactive(_) => {
             found = true;
         }
         SemanticValueBindingV1::Aggregate(fields) => {
@@ -1227,6 +1229,19 @@ fn check_execution_archive_v29(
                     ..
                 },
             ) if matches!(*pointer.pointee, Type::StorageObject(_)) => false,
+            (
+                SemanticValueBindingV1::SourceEnumTag(left),
+                SemanticValueBindingV1::SourceEnumTag(right),
+            ) => {
+                budget.charge_work(7)?;
+                left.owner == right.owner
+                    && left.source == right.source
+                    && left.ssa == right.ssa
+                    && left.root == right.root
+                    && left.node == right.node
+                    && left.tag.id == right.tag.id
+                    && invocation_equal_types_v1(&left.tag.ty, &right.tag.ty, budget)?
+            }
             (
                 SemanticValueBindingV1::SourceInactive(left),
                 SemanticValueBindingV1::SourceInactive(right),

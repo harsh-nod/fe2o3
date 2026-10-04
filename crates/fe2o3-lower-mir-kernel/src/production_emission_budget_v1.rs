@@ -612,6 +612,21 @@ fn emission_clone_binding_inner_v1(
     use SemanticValueBindingV1 as Binding;
     budget.charge_work(1)?;
     Ok(match binding {
+        Binding::SourceEnumTag(binding) => {
+            budget.charge_work(6)?;
+            budget.reserve_storage(std::mem::size_of::<SemanticSourceEnumTagBindingV55>())?;
+            Binding::SourceEnumTag(SemanticSourceEnumTagBindingV55 {
+                owner: binding.owner,
+                source: binding.source,
+                ssa: binding.ssa,
+                root: binding.root,
+                node: binding.node,
+                tag: ValueDef::new(
+                    binding.tag.id,
+                    emission_binding_clone_type_v1(&binding.tag.ty, budget)?,
+                ),
+            })
+        }
         Binding::SourceInactive(inactive) => {
             budget.charge_work(7)?;
             budget.reserve_storage(std::mem::size_of::<SemanticSourceInactiveBindingV29>())?;

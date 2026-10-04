@@ -41,6 +41,7 @@ fn refused() -> Error {
 
 fn field_type_matches(
     types: &[super::super::super::Type],
+    layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
     ty: TypeId,
     kind: EnumFieldV47,
     physical: &PhysicalType,
@@ -64,6 +65,28 @@ fn field_type_matches(
             let Some(pointee) = types.get(source.pointee().index() as usize) else {
                 return false;
             };
+            // Source/loan custody is supplied by the original endpoint or
+            // checked compiler spill. This query checks only scalar geometry.
+            let storage_scalar;
+            let actual_pointee = match actual.pointee.as_ref() {
+                PhysicalType::StorageObject(schema) => {
+                    let Some(layout) = layouts.get(schema.0 as usize) else {
+                        return false;
+                    };
+                    let fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(value) = layout.kind else {
+                        return false;
+                    };
+                    if actual.address_space != AddressSpace::Private
+                        || pointee.layout().size_bytes() != Some(layout.size)
+                        || pointee.layout().alignment_bytes() != u64::from(layout.alignment)
+                    {
+                        return false;
+                    }
+                    storage_scalar = PhysicalType::Scalar(value);
+                    &storage_scalar
+                }
+                other => other,
+            };
             actual.access
                 == if mutable {
                     AccessMode::ReadWrite
@@ -77,7 +100,7 @@ fn field_type_matches(
                 && aggregate_bindings::scalar_matches(
                     scalar,
                     pointee.rust_type_kind(),
-                    &actual.pointee,
+                    actual_pointee,
                     width,
                 )
         }
@@ -233,11 +256,18 @@ impl PairedInvocations<'_, '_, '_> {
                     let Some(actual) = child.physical_type(out.budget)? else {
                         return Err(refused());
                     };
-                    out.budget.charge_work(4)?;
+                    out.budget.charge_work(8)?;
                     if child.carrier_shape(out.budget)? != Carrier::Value
                         || !physical.contains(&definition)
                         || inventory.definitions().get(definition).map(|row| row.ty) != Some(actual)
-                        || !field_type_matches(semantic.types(), ty, kind, actual, self.width)
+                        || !field_type_matches(
+                            semantic.types(),
+                            &inventory.owner().module().storage_layouts,
+                            ty,
+                            kind,
+                            actual,
+                            self.width,
+                        )
                     {
                         return Err(refused());
                     }
@@ -282,11 +312,18 @@ impl PairedInvocations<'_, '_, '_> {
                         EnumFieldV47::Scalar(scalar) => u64::from(scalar.width() / 8),
                         EnumFieldV47::Reference { .. } => 8,
                     };
-                    out.budget.charge_work(6)?;
+                    out.budget.charge_work(10)?;
                     if spill.origin.source_type != source_type
                         || spill.origin.field_type != ty
                         || !physical.contains(&spill.definition)
-                        || !field_type_matches(semantic.types(), ty, kind, element, self.width)
+                        || !field_type_matches(
+                            semantic.types(),
+                            &inventory.owner().module().storage_layouts,
+                            ty,
+                            kind,
+                            element,
+                            self.width,
+                        )
                         || bytes == 0
                         || *alignment == 0
                     {

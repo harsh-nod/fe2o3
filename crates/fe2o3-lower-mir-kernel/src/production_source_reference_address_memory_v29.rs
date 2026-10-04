@@ -407,6 +407,24 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                     next_failure += 1;
                 }
                 let access = SourceAddressMemoryV29::access(accesses, block.id, gap, budget)?;
+                if let Some(reference) = self
+                    .graph
+                    .compiler_reference_use_v55(block.id, gap, operation, budget)?
+                {
+                    let register = self
+                        .use_register(
+                            block.id,
+                            Some(gap),
+                            None,
+                            1,
+                            reference.value,
+                            &mut used_aliases,
+                            budget,
+                        )?
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    check(current[register], budget)?;
+                    check(current[self.object(reference.custody.slot)?], budget)?;
+                }
                 if let Some(access) = access {
                     let pointer = if let Some(tag) = source_address_tag_access_v43(operation)? {
                         tag.pointer
@@ -962,7 +980,7 @@ fn check_source_address_currentness_transport_v29(
     // Zero-footprint Projects still check both the base alias and its live
     // object. Their complete actual graph census must own both check rows.
     let capacity = source_address_currentness_check_count_v34(
-        accesses.len(),
+        argument_sum_v1(&[accesses.len(), graph.compiler_references.len()])?,
         graph.projections.len(),
         failures.len(),
     )?;
@@ -1033,7 +1051,10 @@ struct SourceAddressMemoryV29<'kir> {
     origins: Vec<SourceAddressOriginV29>,
     projections: Vec<(usize, SourceStaticObjectTransferV29)>,
     locations: Vec<origin_worklist_v1::OriginStateV1<Option<SourceStaticObjectLocationV29>>>,
+    compiler_references: Vec<SourceCompilerEnumReferenceUseV55>,
 }
+
+include!("production_compiler_enum_reference_uses_v55.rs");
 
 // This owner contains solved object-origin equations, not checked array
 // geometry. Only the source-index census consumes its outstanding ranges.
@@ -1445,7 +1466,34 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
             origins,
             projections: Vec::new(),
             locations: Vec::new(),
+            compiler_references: match compiler {
+                Some(checked) => checked.reference_uses(budget)?,
+                None => Vec::new(),
+            },
         };
+        for reference in &graph.compiler_references {
+            budget.charge_work(6)?;
+            let slot = slots
+                .get(reference.custody.slot)
+                .ok_or_else(source_enum_tag_error_v55)?;
+            let backing = match (reference.custody.backing, slot.representation) {
+                (
+                    SourceCompilerEnumReferenceBackingV55::Scalar,
+                    ScopedSlotRepresentationV29::ScalarArray(_),
+                ) => true,
+                (
+                    SourceCompilerEnumReferenceBackingV55::Object(expected),
+                    ScopedSlotRepresentationV29::Object { schema, .. },
+                ) => expected == schema,
+                _ => false,
+            };
+            if !backing
+                || slot.instance != reference.custody.loan.origin_instance
+                || slot.origin.semantic_type != reference.custody.loan.origin_type
+            {
+                return Err(source_enum_tag_error_v55());
+            }
+        }
         graph.projections = source_static_object_projections_v29(&graph, layouts, budget)?;
         graph.validate_coordinates(slots, accesses, &[], budget)?;
         for (index, (_, ty)) in graph.index.values.iter().enumerate() {
@@ -2243,6 +2291,8 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
             budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
             for (position, operation) in block.operations.iter().enumerate() {
                 let access = Self::access(accesses, block.id, position, budget)?;
+                let compiler_reference =
+                    self.compiler_reference_use_v55(block.id, position, operation, budget)?;
                 let mut ordinal = 0;
                 operation.kind.try_visit_operands(|value| {
                     budget.charge_work(1)?;
@@ -2286,9 +2336,10 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                         | OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. }) => {
                             component == 0
                                 || (component == 1
-                                    && self
-                                        .access_pointer_cell(access, operation, budget)?
-                                        .is_some())
+                                    && (compiler_reference.is_some_and(|row| row.value == value)
+                                        || self
+                                            .access_pointer_cell(access, operation, budget)?
+                                            .is_some()))
                         }
                         _ => false,
                     };

@@ -728,6 +728,7 @@ enum SemanticValueBindingV1 {
     MovedExecution,
     SourceReference(SemanticSourceReferenceBindingV29),
     SourceInactive(SemanticSourceInactiveBindingV29),
+    SourceEnumTag(SemanticSourceEnumTagBindingV55),
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
         discriminant: ValueId,
@@ -859,6 +860,7 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
         SemanticValueBindingV1::MovedExecution => "moved execution value",
         SemanticValueBindingV1::SourceReference(_) => "checked source reference",
         SemanticValueBindingV1::SourceInactive(_) => "inactive source transport",
+        SemanticValueBindingV1::SourceEnumTag(_) => "checked source enum tag transport",
         SemanticValueBindingV1::Aggregate(_) => "aggregate",
         SemanticValueBindingV1::Enum {
             variant: Some(_), ..
@@ -909,6 +911,7 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         | SemanticValueBindingV1::MovedExecution
         | SemanticValueBindingV1::SourceReference(_)
         | SemanticValueBindingV1::SourceInactive(_)
+        | SemanticValueBindingV1::SourceEnumTag(_)
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
@@ -937,6 +940,7 @@ impl SemanticValueBindingV1 {
             }
             Self::MovedExecution => Err("moved execution value cannot be observed"),
             Self::SourceInactive(_) => Err("inactive source transport cannot be observed"),
+            Self::SourceEnumTag(_) => Err("source enum tag requires its checked original owner"),
             Self::SourceReference(_) => {
                 Err("source reference requires its checked owner and projection")
             }
@@ -1050,6 +1054,9 @@ impl SemanticValueBindingV1 {
             }
             Self::SourceInactive(_) => {
                 return Err(V::invalid("inactive source transport cannot be observed"));
+            }
+            Self::SourceEnumTag(_) => {
+                return Err(V::invalid("source enum tag requires checked CFG transport"));
             }
             Self::SourceReference(_) => {
                 return Err(V::invalid(

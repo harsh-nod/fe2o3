@@ -1,4 +1,5 @@
 include!("production_source_reference_owned_types_v29.rs");
+include!("production_source_enum_tag_transport_v55.rs");
 
 // Plain source anchors retain the original root's authenticated direct-owner
 // representation. In particular, a DisjointSlice is one Slice, not its fields.
@@ -682,6 +683,11 @@ fn source_reference_values_v29(
                 }
             }
             Ok(())
+        }
+        SemanticValueBindingV1::SourceEnumTag(binding) => {
+            validate_source_enum_tag_v55(plan, binding, budget)?;
+            let ty = execution_cfg_clone_type_v29(&binding.tag.ty, budget)?;
+            source_reference_owned_push_v29(plan, output, ValueDef::new(binding.tag.id, ty), budget)
         }
         SemanticValueBindingV1::SourceInactive(binding) => {
             source_reference_validate_inactive_v29(plan, binding, nodes, budget)?;

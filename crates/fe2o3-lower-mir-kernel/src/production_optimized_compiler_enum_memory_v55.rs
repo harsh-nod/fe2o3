@@ -121,7 +121,7 @@ fn optimized_compiler_enum_memory_v55(
         }
         let ScopedCompilerEnumRoleV55::Store {
             site,
-            source: None,
+            source,
             value,
         } = row.record.role
         else {
@@ -173,7 +173,7 @@ fn optimized_compiler_enum_memory_v55(
                 pointer: actual[0],
                 role: ScopedCompilerEnumRoleV55::Store {
                     site,
-                    source: None,
+                    source,
                     value: actual[1],
                 },
                 ..row.record

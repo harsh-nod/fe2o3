@@ -11,6 +11,7 @@ enum SemanticPromotedTransportV1 {
     Semantic(SemanticPromotedBindingV1),
     DirectParameter { parameter_local: u32 },
     Execution,
+    SourceEnumTag,
 }
 
 #[derive(Clone, Copy)]
@@ -888,7 +889,10 @@ impl SemanticPromotedBindingV1 {
 
 impl SemanticPromotedTransportV1 {
     const fn uses_structural_enum_transport(self) -> bool {
-        matches!(self, Self::Semantic(SemanticPromotedBindingV1::Ordinary))
+        matches!(
+            self,
+            Self::Semantic(SemanticPromotedBindingV1::Ordinary) | Self::SourceEnumTag
+        )
     }
 
     fn transport_types(
@@ -921,7 +925,7 @@ impl SemanticPromotedTransportV1 {
                     representation,
                 },
             ),
-            Self::Execution => Err(execution_cfg_error_v29()),
+            Self::Execution | Self::SourceEnumTag => Err(execution_cfg_error_v29()),
             Self::DirectParameter { parameter_local } => direct_parameters
                 .get(&parameter_local)
                 .cloned()
@@ -953,7 +957,7 @@ impl SemanticPromotedTransportV1 {
         visitor.node()?;
         match self {
             Self::Semantic(semantic) => semantic.visit_transport_values(binding, visitor),
-            Self::Execution => Err(V::invalid(
+            Self::Execution | Self::SourceEnumTag => Err(V::invalid(
                 "execution transport requires its captured CFG state",
             )),
             Self::DirectParameter { .. } => match (binding, expected) {
@@ -1006,7 +1010,7 @@ impl SemanticPromotedTransportV1 {
                     representation,
                 },
             ),
-            Self::Execution => Err(execution_cfg_error_v29()),
+            Self::Execution | Self::SourceEnumTag => Err(execution_cfg_error_v29()),
             Self::DirectParameter { .. }
                 if values.len() == 1 && expected.len() == 1 && values[0].ty == expected[0] =>
             {
