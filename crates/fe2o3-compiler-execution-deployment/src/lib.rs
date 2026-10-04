@@ -884,7 +884,16 @@ fn require_no_xattrs(
     role: &'static str,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let mut attributes = [0_u8; 1];
-    match flistxattr(file, &mut attributes) {
+    let observed = match flistxattr(file, &mut attributes) {
+        Err(rustix::io::Errno::RANGE) => {
+            // OverlayFS filters private backing names only after filling the caller's buffer.
+            // Linux XATTR_LIST_MAX bounds this fallback; only an empty visible list is admitted.
+            let mut complete = [0_u8; 65_536];
+            flistxattr(file, &mut complete)
+        }
+        result => result,
+    };
+    match observed {
         Ok(0) => Ok(()),
         Ok(_) | Err(rustix::io::Errno::RANGE) => Err(invalid(
             DeploymentVerificationErrorKindV1::ForbiddenAttributes,
@@ -1696,6 +1705,74 @@ mod tests {
             fixture.verify(generation.sha256()).unwrap_err().kind(),
             DeploymentVerificationErrorKindV1::ForbiddenAttributes
         );
+    }
+
+    #[test]
+    fn no_xattr_gate_accepts_empty_files_and_directories_without_metadata_changes() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("file");
+        fs::write(&path, b"fixture").unwrap();
+        for path in [scratch.path(), path.as_path()] {
+            let file = File::open(path).unwrap();
+            let before = snapshot(&fstat(&file).unwrap());
+            require_no_xattrs(&file, "empty xattr fixture").unwrap();
+            assert_eq!(snapshot(&fstat(&file).unwrap()), before);
+        }
+    }
+
+    #[test]
+    fn no_xattr_gate_rejects_empty_valued_long_and_multiple_visible_names() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("file");
+        fs::write(&path, b"fixture").unwrap();
+        for path in [scratch.path(), path.as_path()] {
+            let file = File::open(path).unwrap();
+            let names = ["user.empty".to_owned(), format!("user.{}", "x".repeat(250))];
+            for name in &names {
+                rustix::fs::fsetxattr(&file, name.as_str(), b"", XattrFlags::CREATE).unwrap();
+                let before = snapshot(&fstat(&file).unwrap());
+                assert_eq!(
+                    require_no_xattrs(&file, "visible xattr fixture")
+                        .unwrap_err()
+                        .kind(),
+                    DeploymentVerificationErrorKindV1::ForbiddenAttributes
+                );
+                assert_eq!(snapshot(&fstat(&file).unwrap()), before);
+            }
+            let mut complete = [0u8; 65_536];
+            assert_eq!(
+                flistxattr(&file, &mut complete).unwrap(),
+                names.iter().map(|name| name.len() + 1).sum::<usize>()
+            );
+            for name in &names {
+                rustix::fs::fremovexattr(&file, name.as_str()).unwrap();
+            }
+            require_no_xattrs(&file, "cleared xattr fixture").unwrap();
+        }
+    }
+
+    #[test]
+    fn no_xattr_gate_propagates_descriptor_query_errors() {
+        let scratch = tempfile::tempdir().unwrap();
+        let descriptor = openat(
+            rustix::fs::CWD,
+            scratch.path(),
+            OFlags::PATH | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        let before = snapshot(&fstat(&descriptor).unwrap());
+        assert_eq!(
+            flistxattr(&descriptor, &mut [0u8; 1]),
+            Err(rustix::io::Errno::BADF)
+        );
+        assert_eq!(
+            require_no_xattrs(&descriptor, "path-only descriptor")
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::Io
+        );
+        assert_eq!(snapshot(&fstat(&descriptor).unwrap()), before);
     }
 
     #[test]

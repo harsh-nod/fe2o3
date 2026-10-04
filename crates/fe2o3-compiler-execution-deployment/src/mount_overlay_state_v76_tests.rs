@@ -231,6 +231,34 @@ fn qualification_overlay_state_preserves_exact_modes_work_custody_and_copyup_mar
         1
     );
     assert_eq!(marker[0], b'y');
+    let mut short = [0u8; 1];
+    assert_eq!(flistxattr(&root, &mut short), Err(rustix::io::Errno::RANGE));
+    let mut complete = [0u8; 65_536];
+    assert_eq!(flistxattr(&root, &mut complete).unwrap(), 0);
+    crate::require_no_xattrs(&root, "actual copied-up composed root").unwrap();
+    validate_directory_mode(&root, Some((0, 0)), 0o755, "actual composed root").unwrap();
+    for name in [
+        "user.unexpected",
+        "trusted.unexpected",
+        "trusted.overlay.unexpected",
+    ] {
+        rustix::fs::fsetxattr(&root, name, b"", rustix::fs::XattrFlags::CREATE).unwrap();
+        assert!(flistxattr(&root, &mut complete).unwrap() > 0);
+        assert_eq!(
+            crate::require_no_xattrs(&root, "visible composed-root attribute")
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+        assert_eq!(
+            validate_directory_mode(&root, Some((0, 0)), 0o755, "actual composed root")
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+        rustix::fs::fremovexattr(&root, name).unwrap();
+        crate::require_no_xattrs(&root, "cleared composed-root attribute").unwrap();
+    }
     assert!(
         validate_directory_mode(
             &upper,
