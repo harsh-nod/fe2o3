@@ -288,15 +288,13 @@ fn pending_guarded_v87_callback_error_and_unwind_drop_captures_before_refund() {
                 |pending, budget| {
                     let floor = budget.storage();
                     let capture = Dropped(&drops);
+                    let owner = pending.owner;
                     let result = pending.with_pending_global_accesses_v87(
-                        pending.owner,
+                        owner,
                         budget,
                         move |view, budget| {
                             let _capture = capture;
-                            assert!(
-                                view.operation(pending.owner, coordinate(1, 4), budget)?
-                                    .is_some()
-                            );
+                            assert!(view.operation(owner, coordinate(1, 4), budget)?.is_some());
                             budget.reserve_storage(17)?;
                             if panic {
                                 panic!("guarded callback sentinel");
