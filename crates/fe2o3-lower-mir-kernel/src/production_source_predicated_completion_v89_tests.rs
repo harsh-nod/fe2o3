@@ -31,19 +31,18 @@ fn run_predicated_completion_v89(
                 extents: [64, 1, 1],
             }];
             if mode == 1 {
-                assert!(
-                    source
-                        .conditional_mixed_fixedpoint_output_v29(
-                            ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
-                            &launches,
-                            FormalIndexWidth::Bits64,
-                            budget,
-                        )
-                        .is_err()
-                );
+                let error = source
+                    .conditional_mixed_fixedpoint_output_v29(
+                        ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
+                        &launches,
+                        FormalIndexWidth::Bits64,
+                        budget,
+                    )
+                    .err()
+                    .expect("legacy CFG family must refuse the guarded Store");
                 assert_eq!(budget.storage(), floor);
                 reached.set(true);
-                return Ok(());
+                return Err(error);
             }
             let handoff = source.conditional_predicated_fixedpoint_output_v89(
                 ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
@@ -195,9 +194,10 @@ fn predicated_completion_v89_admits_original_calls_and_emits_distinct_no_edge_co
 #[test]
 fn predicated_completion_v89_preserves_legacy_cfg_refusal() {
     let reached = std::cell::Cell::new(false);
-    run_predicated_completion_v89(2, 0, 1, LIMIT, LIMIT, &reached)
+    let error = run_predicated_completion_v89(2, 0, 1, LIMIT, LIMIT, &reached)
         .0
-        .unwrap();
+        .unwrap_err();
+    assert!(format!("{error:?}").contains("mixed source conditional family is incomplete"));
     assert!(reached.get());
 }
 
@@ -242,5 +242,90 @@ fn predicated_completion_v89_whole_source_handoff_and_codec_exact_and_one_short(
                 .0
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn predicated_completion_v89_scalar_transport_requires_exact_intrinsic_write_shape() {
+    use fe2o3_kernel_ir::{Operation, ValueDef};
+    let before = [ValueId(1), ValueId(2), ValueId(3)];
+    let after = [ValueId(4), ValueId(5), ValueId(6)];
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    let operation = |values: [ValueId; 3]| {
+        Operation::new(
+            Vec::new(),
+            OperationKind::GuardedStore {
+                pointer: values[0],
+                value: values[1],
+                predicate: values[2],
+                access,
+            },
+        )
+    };
+    let input = operation(before);
+    let output = operation(after);
+    assert!(optimized_guarded_scalar_shape_v89(
+        &input, &output, true, before, after
+    ));
+    assert!(!optimized_guarded_scalar_shape_v89(
+        &input, &output, false, before, after
+    ));
+    for which in 0..2 {
+        for operand in 0..3 {
+            let mut values = if which == 0 { before } else { after };
+            values[operand] = ValueId(91);
+            let changed = operation(values);
+            assert!(!optimized_guarded_scalar_shape_v89(
+                if which == 0 { &changed } else { &input },
+                if which == 1 { &changed } else { &output },
+                true,
+                before,
+                after,
+            ));
+        }
+        for mutation in 0..5 {
+            let mut changed = if which == 0 {
+                input.clone()
+            } else {
+                output.clone()
+            };
+            match mutation {
+                0 => changed.results.push(ValueDef::new(ValueId(90), Type::BOOL)),
+                1 => {
+                    let OperationKind::GuardedStore { access, .. } = &mut changed.kind else {
+                        unreachable!()
+                    };
+                    access.volatile = true;
+                }
+                2 => {
+                    let OperationKind::GuardedStore { access, .. } = &mut changed.kind else {
+                        unreachable!()
+                    };
+                    access.alignment = 8;
+                }
+                3 => {
+                    let OperationKind::GuardedStore { access, .. } = &mut changed.kind else {
+                        unreachable!()
+                    };
+                    access.address_space = AddressSpace::Private;
+                }
+                4 => {
+                    let values = if which == 0 { before } else { after };
+                    changed.kind = OperationKind::Store {
+                        pointer: values[0],
+                        value: values[1],
+                        access,
+                    };
+                }
+                _ => unreachable!(),
+            }
+            assert!(!optimized_guarded_scalar_shape_v89(
+                if which == 0 { &changed } else { &input },
+                if which == 1 { &changed } else { &output },
+                true,
+                before,
+                after,
+            ));
+        }
     }
 }
