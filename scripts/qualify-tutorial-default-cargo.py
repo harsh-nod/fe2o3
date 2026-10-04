@@ -211,7 +211,8 @@ def write_report(output, report):
 
 
 def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout, max_log_bytes,
-               *, runner=run_command, environment=None, production=False):
+               *, runner=run_command, environment=None, production=False, capture_graphs=False,
+               isolate_negative_outputs=False):
     environment = dict(os.environ if environment is None else environment)
     validator, census, manifest, manifest_sha, invocations = load_inputs(root, manifest_path)
     production_module = load_module("tutorial_production_census_v91",
@@ -247,6 +248,12 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
     }
     write_report(output, report)
     for ordinal, case in enumerate(report["cases"]):
+        if isolate_negative_outputs and case["expectedNegative"]:
+            isolated = output / f"{ordinal:04d}-negative-target"
+            isolated.mkdir(mode=0o700)
+            position = case["arguments"].index("--target-dir") + 1
+            case["arguments"][position] = str(isolated)
+            case["negativeArtifactDirectoryV92"] = isolated.name
         try:
             before = census.input_snapshot(validator, root, manifest, manifest_sha, case["fixture"])
             case["sourceBefore"] = before
@@ -264,6 +271,11 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
                     child_environment, expected = production_module.prepare(root, case["fixture"],
                         cargo_fe2o3, child_environment, output, ordinal)
                     case["productionExpected"] = expected
+                    if capture_graphs:
+                        directory = output / f"{ordinal:04d}-graphs-v92"
+                        directory.mkdir(mode=0o700)
+                        child_environment["FE2O3_TUTORIAL_GRAPH_CAPTURE_V92"] = str(directory.resolve())
+                        case["capturedGraphsV92"] = directory.name
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     case.update(status="production-input-refused", productionError=str(error))
                     write_report(output, report)

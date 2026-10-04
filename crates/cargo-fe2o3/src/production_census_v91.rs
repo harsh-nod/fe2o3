@@ -302,6 +302,7 @@ pub(crate) fn snapshot(
         authority: false,
     };
     value.validate()?;
+    crate::production_graph_capture_v92::capture_if_requested(input.forwarded, graphs[3], &mut budget)?;
     Ok(value)
 }
 

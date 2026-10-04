@@ -66,6 +66,15 @@ fn load_admitted_kir_v18(
     request: &Path,
     budget: &mut Budget<'_>,
 ) -> Result<(crate::AdmittedSimulationInputV1, SimulationViewStorageV18), Failure> {
+    load_admitted_kir_v18_for_target(kir, request, budget, SimulationTargetV1::amdgpu_64())
+}
+
+fn load_admitted_kir_v18_for_target(
+    kir: &Path,
+    request: &Path,
+    budget: &mut Budget<'_>,
+    target: SimulationTargetV1,
+) -> Result<(crate::AdmittedSimulationInputV1, SimulationViewStorageV18), Failure> {
     // File capture has its existing separate bounded allocator/IO contract.
     let kir = secure_read(
         kir,
@@ -84,7 +93,7 @@ fn load_admitted_kir_v18(
         .checked_add(request.capacity())
         .and_then(|bytes| bytes.checked_add(2 * size_of::<Vec<u8>>()))
         .ok_or_else(|| resource_failure(Resource::Arithmetic))?;
-    load_bytes(&kir, &request, payload, budget)
+    load_bytes_for_target(&kir, &request, payload, budget, target)
 }
 
 fn load_bytes(
@@ -92,6 +101,22 @@ fn load_bytes(
     request: &[u8],
     input_payload: usize,
     budget: &mut Budget<'_>,
+) -> Result<(crate::AdmittedSimulationInputV1, SimulationViewStorageV18), Failure> {
+    load_bytes_for_target(
+        kir,
+        request,
+        input_payload,
+        budget,
+        SimulationTargetV1::amdgpu_64(),
+    )
+}
+
+fn load_bytes_for_target(
+    kir: &[u8],
+    request: &[u8],
+    input_payload: usize,
+    budget: &mut Budget<'_>,
+    target: SimulationTargetV1,
 ) -> Result<(crate::AdmittedSimulationInputV1, SimulationViewStorageV18), Failure> {
     let floor = budget.storage();
     budget
@@ -142,16 +167,8 @@ fn load_bytes(
             }
             // Request parsing and execution retain their existing separate bounds.
             // The receipt covers the CPU view, not a combined request/RSS claim.
-            let input = finish_admitted_input(
-                module,
-                limits,
-                request,
-                None,
-                SimulationTargetV1::amdgpu_64(),
-                None,
-                None,
-            )
-            .map_err(ScopedFailure)?;
+            let input = finish_admitted_input(module, limits, request, None, target, None, None)
+                .map_err(ScopedFailure)?;
             drop(canonical);
             budget.release_storage(owner_storage.retained_storage())?;
             Ok((input, storage))
@@ -160,9 +177,18 @@ fn load_bytes(
 }
 
 pub(super) fn run(kir: &Path, request: &Path, policy: RunPolicy) -> Result<(), Failure> {
+    run_for_target(kir, request, policy, SimulationTargetV1::amdgpu_64())
+}
+
+pub(super) fn run_for_target(
+    kir: &Path,
+    request: &Path,
+    policy: RunPolicy,
+    target: SimulationTargetV1,
+) -> Result<(), Failure> {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MAX_WORK);
     let mut budget = Budget::new(&mut work, MAX_STORAGE);
-    run_with_budget(kir, request, policy, &mut budget)
+    run_with_budget_for_target(kir, request, policy, &mut budget, target)
 }
 
 fn run_with_budget(
@@ -171,11 +197,27 @@ fn run_with_budget(
     policy: RunPolicy,
     budget: &mut Budget<'_>,
 ) -> Result<(), Failure> {
+    run_with_budget_for_target(
+        kir,
+        request,
+        policy,
+        budget,
+        SimulationTargetV1::amdgpu_64(),
+    )
+}
+
+fn run_with_budget_for_target(
+    kir: &Path,
+    request: &Path,
+    policy: RunPolicy,
+    budget: &mut Budget<'_>,
+    target: SimulationTargetV1,
+) -> Result<(), Failure> {
     let floor = budget.storage();
     budget
         .with_prepaid_scope(floor, 0, 0, 0, |budget| {
-            let (input, storage) =
-                load_admitted_kir_v18(kir, request, budget).map_err(ScopedFailure)?;
+            let (input, storage) = load_admitted_kir_v18_for_target(kir, request, budget, target)
+                .map_err(ScopedFailure)?;
             budget.reserve_storage(storage.retained_storage())?;
             // The consumed input, output and any execution state drop before the
             // original ledger's scope restores storage, including error and unwind.

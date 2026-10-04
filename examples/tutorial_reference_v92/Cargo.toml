@@ -1,0 +1,27 @@
+[package]
+name = "fe2o3-tutorial-reference-v92"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+rustix = { version = "1.1", features = ["fs"] }
+fe2o3-fill = { path = "../fill" }
+fe2o3-scalar-gemm-v1 = { path = "../scalar_gemm_v1" }
+fe2o3-wave64-collectives-v1 = { path = "../wave64_collectives_v1" }
+fe2o3-moe-top2-v1 = { path = "../moe_top2_v1" }
+fe2o3-workgroup-sync-v1 = { path = "../workgroup_sync_v1" }
+fe2o3-gemm-autoresearch-v1 = { path = "../gemm_autoresearch_v1" }
+fe2o3-tiled-gemm-general-v1 = { path = "../tiled_gemm_general_v1" }
+fe2o3-flash-attention-general-v1 = { path = "../flash_attention_general_v1" }
+fe2o3-row-softmax-general-v1 = { path = "../row_softmax_general_v1" }
+fe2o3-moe-grouped-expert-general-v1 = { path = "../moe_grouped_expert_general_v1" }
+fe2o3-gfx950-advanced-attention = { path = "../gfx950_advanced_attention" }
+fe2o3-gfx950-advanced-systems = { path = "../gfx950_advanced_systems" }
+fe2o3-gfx950-gpt-oss-decode = { path = "../gfx950_gpt_oss_decode" }
+fe2o3-gfx950-low-precision = { path = "../gfx950_low_precision" }
