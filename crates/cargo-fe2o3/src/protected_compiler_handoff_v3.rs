@@ -76,6 +76,18 @@ impl ParentRustcInvocationCustody {
         self.invocation.descriptor()
     }
 
+    pub(crate) fn try_clone_for_compiler_proof(
+        &self,
+    ) -> Result<std::fs::File, ParentRustcInvocationCustodyError> {
+        self.revalidate()?;
+        let original = self
+            .capability
+            .try_clone_for_transfer()
+            .map_err(ParentRustcInvocationCustodyError::Capability)?;
+        self.revalidate()?;
+        Ok(original)
+    }
+
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
         false
     }

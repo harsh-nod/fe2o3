@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn session_cancellation_is_terminal_and_does_not_revoke_other_sessions() {
+    let first = Arc::new(AtomicBool::new(false));
+    let second = Arc::new(AtomicBool::new(false));
+    let owner = CompilerProofSessionCancellationV1 {
+        cancelled: first.clone(),
+    };
+    owner.cancel();
+    owner.cancel();
+    assert!(first.load(Ordering::Acquire));
+    assert!(!second.load(Ordering::Acquire));
+    drop(owner);
+    let other = CompilerProofSessionCancellationV1 {
+        cancelled: second.clone(),
+    };
+    drop(other);
+    assert!(second.load(Ordering::Acquire));
+}
+
+#[test]
+fn unwinding_cancels_before_scoped_worker_join() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&cancelled);
+    let result = std::panic::catch_unwind(|| {
+        std::thread::scope(|scope| {
+            let _guard = CompilerProofSessionCancellationV1 { cancelled };
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !observed.load(Ordering::Acquire) && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(observed.load(Ordering::Acquire));
+            });
+            panic!("test connection failure");
+        });
+    });
+    assert!(result.is_err());
+    assert!(observed.load(Ordering::Acquire));
+}
+
+#[test]
 fn broker_owners_support_scoped_worker_threads() {
     fn send_sync<T: Send + Sync>() {}
     send_sync::<CompilerProofBrokerV1>();

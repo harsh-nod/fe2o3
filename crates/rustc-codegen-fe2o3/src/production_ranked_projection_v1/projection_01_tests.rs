@@ -872,6 +872,7 @@
                 elements,
             )],
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+            None,
         )
         .unwrap()
     }

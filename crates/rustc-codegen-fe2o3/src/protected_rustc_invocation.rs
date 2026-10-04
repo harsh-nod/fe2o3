@@ -4,9 +4,10 @@ use std::env;
 use std::fmt;
 use std::fs::{self, File, Metadata};
 use std::io::Read as _;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use fe2o3_build_authority::CompilerClosureV2;
@@ -18,6 +19,9 @@ use fe2o3_process_identity::{
     ProtectedRustcProcessValidationErrorV1, validate_protected_rustc_process_observation_v1,
 };
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
+use fe2o3_verifier::{
+    FunctionalRefinementVerusRuntimeLeaseV1, PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+};
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
@@ -29,9 +33,42 @@ const RUNNING_RUSTC_PATH: &str = "/proc/self/exe";
 /// One retained V3 descriptor that exactly matched this rustc process.
 pub(crate) struct AdmittedProtectedRustcInvocationV1 {
     capability: RustcInvocationCapabilityV1,
+    proof_runtime: CompilerProofRuntimeCustody,
+}
+
+enum CompilerProofRuntimeCustody {
+    Brokered(FunctionalRefinementVerusRuntimeLeaseV1),
+    #[cfg(test)]
+    ObservationOnly,
+}
+
+impl CompilerProofRuntimeCustody {
+    fn revalidate(&self) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        match self {
+            Self::Brokered(runtime) => runtime
+                .revalidate()
+                .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string())),
+            #[cfg(test)]
+            Self::ObservationOnly => Ok(()),
+        }
+    }
 }
 
 impl AdmittedProtectedRustcInvocationV1 {
+    pub(crate) fn proof_runtime(
+        &self,
+    ) -> Result<&FunctionalRefinementVerusRuntimeLeaseV1, ProtectedRustcInvocationErrorV1> {
+        match &self.proof_runtime {
+            CompilerProofRuntimeCustody::Brokered(runtime) => Ok(runtime),
+            #[cfg(test)]
+            CompilerProofRuntimeCustody::ObservationOnly => {
+                Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                    "observation-only test custody cannot execute proofs".to_owned(),
+                ))
+            }
+        }
+    }
+
     /// Borrows the exact canonical descriptor retained by the sealed invocation image.
     pub(crate) fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
         self.capability.descriptor()
@@ -72,8 +109,10 @@ impl AdmittedProtectedRustcInvocationV1 {
         observation: RustcProcessObservationV1,
     ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
         validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()?;
         Ok(FinishedProtectedRustcInvocationV3 {
             capability: self.capability,
+            proof_runtime: self.proof_runtime,
         })
     }
 }
@@ -82,6 +121,7 @@ impl AdmittedProtectedRustcInvocationV1 {
 /// remeasurement. It is private compiler authority, not a serializable receipt.
 pub(crate) struct FinishedProtectedRustcInvocationV3 {
     capability: RustcInvocationCapabilityV1,
+    proof_runtime: CompilerProofRuntimeCustody,
 }
 
 impl FinishedProtectedRustcInvocationV3 {
@@ -97,7 +137,8 @@ impl FinishedProtectedRustcInvocationV3 {
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
         let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
-        validate_retained_capability(&self.capability, observation)
+        validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()
     }
 
     #[cfg(test)]
@@ -115,6 +156,7 @@ impl FinishedProtectedRustcInvocationV3 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ProtectedRustcInvocationErrorV1 {
     Capability(String),
+    ProofRuntime(String),
     UnexpectedProtectedSignals {
         descriptor_present: bool,
         compiler_closure_marker_present: bool,
@@ -149,6 +191,10 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
 impl fmt::Display for ProtectedRustcInvocationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProofRuntime(detail) => write!(
+                formatter,
+                "protected compiler proof runtime is unavailable: {detail}"
+            ),
             Self::Capability(detail) => write!(
                 formatter,
                 "cannot admit canonical fd {RUSTC_INVOCATION_CHILD_FD_V1} as a sealed V3 capability: {detail}"
@@ -250,26 +296,52 @@ fn admit_protected_v3_at(
     }
     let capability = retain_inherited_capability_at(child_fd)?;
     let observation = RustcProcessObservationV1::capture(capability.descriptor())?;
-    validate_capability(capability, observation).map(Some)
+    validate_retained_capability(&capability, observation)?;
+    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
+        PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+    )
+    .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string()))?;
+    // SAFETY: the protected release admits the broker; its consumed original exec permit
+    // authorizes wrapper-only preparation and delegation to this original rustc child.
+    // This private boundary owns that inherited invocation, validates the actual process,
+    // and exclusively consumes the proof FDs from that chain, not reconstructed inputs.
+    let runtime = unsafe {
+        fe2o3_verifier::admit_inherited_compiler_proof_runtime_v1(
+            capability.descriptor(),
+            runtime,
+            Instant::now() + Duration::from_secs(30),
+        )
+    }
+    .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string()))?;
+    Ok(Some(AdmittedProtectedRustcInvocationV1 {
+        capability,
+        proof_runtime: CompilerProofRuntimeCustody::Brokered(runtime),
+    }))
 }
 
 fn retain_inherited_capability_at(
     child_fd: RawFd,
 ) -> Result<RustcInvocationCapabilityV1, ProtectedRustcInvocationErrorV1> {
-    let admission = RustcInvocationCapabilityV1::from_inherited_at(child_fd);
-    // A successful admission retains a private close-on-exec duplicate. Always close the
-    // canonical inherited slot so rejected descriptor versions cannot remain for a fallback.
-    // SAFETY: close accepts any integer descriptor and reports EBADF for an absent slot.
-    let close_result = unsafe { libc::close(child_fd) };
-
-    match admission {
-        Ok(capability) if close_result == 0 => Ok(capability),
-        Ok(_) => Err(ProtectedRustcInvocationErrorV1::Capability(format!(
-            "cannot close consumed inherited descriptor {child_fd}: {}",
-            std::io::Error::last_os_error()
-        ))),
-        Err(detail) => Err(ProtectedRustcInvocationErrorV1::Capability(detail)),
+    // SAFETY: F_GETFD accepts an integer descriptor and reports absence through errno.
+    let flags = unsafe { libc::fcntl(child_fd, libc::F_GETFD) };
+    if child_fd < 3 || flags != 0 {
+        // An already admitted CLOEXEC slot may still belong to a live owner. Do not close it.
+        return Err(ProtectedRustcInvocationErrorV1::Capability(format!(
+            "descriptor {child_fd} is absent or is not an original inherited invocation"
+        )));
     }
+    // SAFETY: this private admission exclusively consumes the original wrapper-inherited slot.
+    // Keep the original number: the issuer observes it through the original rustc pidfd.
+    let original = unsafe { File::from_raw_fd(child_fd) };
+    // SAFETY: F_SETFD changes only this owned descriptor's exec-inheritance flag.
+    if unsafe { libc::fcntl(original.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(ProtectedRustcInvocationErrorV1::Capability(format!(
+            "cannot make inherited invocation descriptor close-on-exec: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    RustcInvocationCapabilityV1::from_file(original)
+        .map_err(ProtectedRustcInvocationErrorV1::Capability)
 }
 
 struct RustcProcessObservationV1 {
@@ -339,12 +411,16 @@ impl RustcProcessObservationV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_capability(
     capability: RustcInvocationCapabilityV1,
     observation: RustcProcessObservationV1,
 ) -> Result<AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1> {
     validate_retained_capability(&capability, observation)?;
-    Ok(AdmittedProtectedRustcInvocationV1 { capability })
+    Ok(AdmittedProtectedRustcInvocationV1 {
+        capability,
+        proof_runtime: CompilerProofRuntimeCustody::ObservationOnly,
+    })
 }
 
 fn validate_retained_capability(

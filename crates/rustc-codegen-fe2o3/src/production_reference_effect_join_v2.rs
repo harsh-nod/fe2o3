@@ -37,8 +37,6 @@ use crate::reference_effect_v1::{
 const ROOT_NAME_V2: &str = "semantic_safety_module";
 const LOCAL_PROOF_TIMEOUT_SECONDS_V2: u32 = 60;
 const WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2: u32 = 120;
-const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
-    "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RankedGpuWriteV2 {
@@ -133,16 +131,8 @@ struct PreparedReferenceOutputV2 {
 impl CompilerOwnedReferenceEffectRequestV2 {
     pub(crate) fn prove_and_compile(
         self,
+        runtime: &fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1,
     ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionReferenceEffectJoinErrorV2> {
-        let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
-            RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-        )
-        .map_err(|error| {
-            ProductionReferenceEffectJoinErrorV2::ProofRuntimeUnavailable {
-                root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-                detail: error.to_string(),
-            }
-        })?;
         let mut imported_proofs = Vec::with_capacity(self.requests.len());
         let mut bindings = Vec::with_capacity(self.requests.len());
         let mut signers = Vec::with_capacity(self.requests.len());
@@ -150,7 +140,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         for request in &self.requests {
             let (binding, imported, _single_receipt_policy) =
                 fe2o3_verifier::execute_and_import_ranked_functional_refinement_locally_v2(
-                    &runtime,
+                    runtime,
                     &self.kernel,
                     request.block,
                     request.operation,

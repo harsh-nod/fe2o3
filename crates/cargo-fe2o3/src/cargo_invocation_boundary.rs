@@ -62,6 +62,13 @@ mod platform {
     }
 
     impl ProcessIdentityV1 {
+        pub(crate) const fn pid(self) -> u32 {
+            self.pid
+        }
+        pub(crate) const fn start_time_ticks(self) -> u64 {
+            self.start_time_ticks
+        }
+
         pub(crate) fn observe(pid: u32) -> Result<Self, String> {
             let observation = process_observation(pid)?;
             Ok(Self {
@@ -127,6 +134,21 @@ mod platform {
         }
 
         pub(crate) fn consume(&self, process: ProcessIdentityV1) -> Result<(), String> {
+            self.take_valid_permit(process).map(drop)
+        }
+
+        pub(crate) fn consume_original(&self, process: ProcessIdentityV1) -> Result<File, String> {
+            let permit = self.take_valid_permit(process)?;
+            process.require_current()?;
+            permit.process.ok_or_else(|| {
+                "Cargo proof delegation requires the original exec-permit pidfd".to_owned()
+            })
+        }
+
+        fn take_valid_permit(
+            &self,
+            process: ProcessIdentityV1,
+        ) -> Result<InvocationPermitV1, String> {
             let permit = self
                 .state
                 .lock()
@@ -146,7 +168,7 @@ mod platform {
             {
                 return Err("authorized Cargo wrapper process is no longer live".to_owned());
             }
-            Ok(())
+            Ok(permit)
         }
 
         fn revoke_pid(&self, pid: u32) {
@@ -933,6 +955,36 @@ mod platform {
             assert!(registry.consume(other).is_err());
             registry.consume(first).unwrap();
             assert!(registry.consume(first).is_err());
+        }
+
+        #[test]
+        fn proof_authorization_consumes_the_original_pidfd_once() {
+            use std::os::fd::AsRawFd;
+            let registry = InvocationAuthorizationRegistryV1::new();
+            let current = ProcessIdentityV1::observe(std::process::id()).unwrap();
+            let original = open_process_pidfd(current.pid()).unwrap();
+            let original_fd = original.as_raw_fd();
+            registry
+                .authorize_with_process_fd(current, Some(original))
+                .unwrap();
+            let retained = registry.consume_original(current).unwrap();
+            assert_eq!(retained.as_raw_fd(), original_fd);
+            assert!(pidfd_is_live(&retained));
+            assert!(registry.consume_original(current).is_err());
+        }
+
+        #[test]
+        fn proof_authorization_rejects_synthetic_permit_without_reopening_pid() {
+            let registry = InvocationAuthorizationRegistryV1::new();
+            let current = ProcessIdentityV1::observe(std::process::id()).unwrap();
+            registry.authorize_test_process(current).unwrap();
+            assert!(
+                registry
+                    .consume_original(current)
+                    .unwrap_err()
+                    .contains("original exec-permit pidfd")
+            );
+            assert!(registry.consume(current).is_err());
         }
 
         #[test]

@@ -196,19 +196,42 @@ fn present_v3_is_retained_once_and_exposes_only_the_full_closure() {
     install_inherited(&source, TEST_CHILD_FD);
 
     let retained = retain_inherited_capability_at(TEST_CHILD_FD).unwrap();
-    assert_eq!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+    assert_eq!(
+        unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) },
+        libc::FD_CLOEXEC
+    );
     assert!(matches!(
         retain_inherited_capability_at(TEST_CHILD_FD),
         Err(ProtectedRustcInvocationErrorV1::Capability(_))
     ));
+    retained.revalidate().unwrap();
+    let inherited = std::fs::metadata(format!("/proc/self/fd/{TEST_CHILD_FD}")).unwrap();
+    assert_eq!(inherited.ino(), source.metadata().unwrap().ino());
+    assert_eq!(inherited.dev(), source.metadata().unwrap().dev());
     let admitted = validate_capability(retained, observation(&expected)).unwrap();
     assert_eq!(admitted.compiler_closure().unwrap(), baseline_closure());
+    let finished = admitted
+        .finish_for_publication_with_observation(observation(&expected))
+        .unwrap();
+    finished
+        .revalidate_for_publication_with_observation(observation(&expected))
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) },
+        libc::FD_CLOEXEC
+    );
+    drop(finished);
+    assert_eq!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
 }
 
 #[test]
 fn final_publication_transition_is_move_only_and_retains_exact_v3() {
     let expected = baseline_descriptor();
     let admitted = validate(expected.clone(), observation(&expected)).unwrap();
+    assert!(matches!(
+        admitted.proof_runtime(),
+        Err(ProtectedRustcInvocationErrorV1::ProofRuntime(_))
+    ));
     let finished = admitted
         .finish_for_publication_with_observation(observation(&expected))
         .unwrap();

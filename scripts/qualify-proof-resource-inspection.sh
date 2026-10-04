@@ -211,7 +211,7 @@ case "${1:-}" in
       --argjson bytes "$(stat -c %s /usr/libexec/fe2o3/fe2o3-llvm-link-worker)" \
       '{candidate_output_max_bytes:1048576,format:"fe2o3-production-build-config-v1",
         limits:{stderr_bytes:65536,stdout_bytes:4194304,timeout_ms:60000},
-        link_options:[{name:"code-object-version",value:"5"},{name:"opt-level",value:"2"},
+        link_options:[{name:"code-object-version",value:"6"},{name:"opt-level",value:"2"},
           {name:"strip-debug",value:"false"},{name:"verify-each",value:"true"}],providers:[],
         units:[{crate_name:"fe2o3_conditional_custodian_application",source:"src/lib.rs",working_directory:$cwd}],
         worker:{byte_len:$bytes,llvm_build_identity:"7.2.4",path:"/usr/libexec/fe2o3/fe2o3-llvm-link-worker",

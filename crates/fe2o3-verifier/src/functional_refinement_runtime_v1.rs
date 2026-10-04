@@ -12,6 +12,10 @@ use crate::retained_functional_refinement_runtime_v1::{
     RetainedGeneratedVerusRuntimeBackendV1, open_retained_generated_verus_runtime_v1,
 };
 
+/// Fixed production runtime selected by the protected compiler and its Cargo proof executor.
+pub const PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
+    "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
+
 /// Private execution profiles selected by the verifier-owned proof boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GeneratedVerusExecutionProfileV1 {

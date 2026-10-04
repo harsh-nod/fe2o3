@@ -84,9 +84,9 @@ pub use compiler_proof_binding_v3::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use compiler_proof_broker_v1::{
     COMPILER_PROOF_BROKER_CHILD_FD_V1, COMPILER_PROOF_ENDPOINT_CHILD_FD_V1,
-    CompilerProofBootstrapV1, CompilerProofBrokerV1, PendingCompilerProofDelegationV1,
-    PendingCompilerProofServerV1, SpawnedCompilerProofDelegationV1,
-    admit_inherited_compiler_proof_runtime_v1,
+    CompilerProofBootstrapV1, CompilerProofBrokerV1, CompilerProofSessionCancellationV1,
+    PendingCompilerProofDelegationV1, PendingCompilerProofServerV1,
+    SpawnedCompilerProofDelegationV1, admit_inherited_compiler_proof_runtime_v1,
 };
 pub use gfx942_local_checked_u32_add_v1::*;
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
@@ -155,7 +155,7 @@ pub use functional_refinement_receipt_v2::{
 };
 pub use functional_refinement_runtime_v1::{
     FunctionalRefinementRuntimeErrorV1, FunctionalRefinementVerusRuntimeIdentityV1,
-    FunctionalRefinementVerusRuntimeLeaseV1,
+    FunctionalRefinementVerusRuntimeLeaseV1, PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
 };
 pub use generated_verus_proof_input_v3::{
     CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3,

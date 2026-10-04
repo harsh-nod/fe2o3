@@ -352,7 +352,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         build_observation,
         managed_attempt,
         managed_rustc_args,
-        compiler_capabilities,
+        mut compiler_capabilities,
         rustc_working_directory,
     ) = match invocation {
         RustcInvocationV2::Compile(compile) => {
@@ -470,11 +470,18 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 )?)
             };
             let mut release_guard = managed.as_ref().map(ManagedAttemptRevocationGuard::arm);
+            if let Some(managed) = managed.as_ref()
+                && !managed.is_managed_recovery()
+                && capability_binding.requires_compiler_closure_v2()
+                && let Err(primary) = compiler_capabilities.prepare_compiler_proof(managed.attempt)
+            {
+                return Err(pre_spawn_failure(release_guard.as_mut(), primary));
+            }
             let source_isa_observer = match (managed.as_ref(), source_isa_binding) {
                 (Some(managed), Some((config, unit))) => compiler_capabilities
                     .release_invocation_with_source_isa_observer(config, unit, managed.attempt)
                     .map(Some),
-                _ => Ok(None),
+                _ => compiler_capabilities.release_invocation().map(|()| None),
             };
             let source_isa_observer = match source_isa_observer {
                 Ok(observer) => observer,
@@ -689,8 +696,24 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         } else {
             None
         };
-        let mut child = match command.spawn() {
-            Ok(child) => child,
+        let pending_proof = compiler_capabilities
+            .as_mut()
+            .and_then(|capabilities| capabilities.compiler_proof.take());
+        if compiler_execution_boundary.is_some() != pending_proof.is_some()
+            || (pending_proof.is_some() && parent_rustc_invocation_custody.is_none())
+        {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "protected rustc proof, execution boundary, and original invocation custody disagree".to_owned(),
+            ));
+        }
+        let spawn = match pending_proof {
+            Some(proof) => command
+                .spawn_with_compiler_proof(proof)
+                .map(|(child, proof)| (child, Some(proof))),
+            None => command.spawn().map(|child| (child, None)),
+        };
+        let (mut child, spawned_proof) = match spawn {
+            Ok(spawned) => spawned,
             Err(error) => {
                 return Ok((Err(error), parent_rustc_invocation_custody, None));
             }
@@ -708,6 +731,26 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 let retained_child = RetainedCompilerExecutionChildV1::capture(&child)
                     .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)
                     .map_err(|error| cleanup_failure(&mut child, error))?;
+                if let Some(proof) = spawned_proof {
+                    let delegated = (|| {
+                        let parent = parent_rustc_invocation_custody.as_ref().ok_or_else(|| {
+                            "compiler proof has no original invocation custody".to_owned()
+                        })?;
+                        let invocation = parent
+                            .try_clone_for_compiler_proof()
+                            .map_err(|error| error.to_string())?;
+                        proof
+                            .delegate(invocation, Instant::now() + Duration::from_secs(30))
+                            .map_err(|error| error.to_string())
+                    })();
+                    delegated.map_err(|primary| {
+                        BindingWrapperError::CompilerExecutionBoundary {
+                            stage: "compiler proof delegation",
+                            primary,
+                            cleanup: terminate_spawned_rustc(&mut child),
+                        }
+                    })?;
+                }
                 let mut custody = boundary
                     .finish(&retained_child)
                     .map_err(|error| cleanup_failure(&mut child, error))?;
@@ -1406,6 +1449,7 @@ struct CompilerCapabilities {
     compiler_execution_profile:
         Option<fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
+    compiler_proof: Option<fe2o3_verifier::PendingCompilerProofDelegationV1>,
     output_dir: PathBuf,
 }
 
@@ -1456,7 +1500,7 @@ impl CompilerCapabilities {
         let mut transferred = receive_validated_compiler_capabilities(binding)?;
         let invocation_authority = release_or_retain_invocation_authority(
             transferred.invocation_authority.take(),
-            false,
+            binding.requires_compiler_closure_v2(),
             capability_broker::BrokeredInvocationAuthorityV1::release,
         )?;
         Ok(Self::from_transferred(
@@ -1495,6 +1539,7 @@ impl CompilerCapabilities {
             compiler_closure: transferred.compiler_closure,
             compiler_execution_profile: transferred.compiler_execution_profile,
             invocation_authority,
+            compiler_proof: None,
             output_dir,
         }
     }
@@ -1507,6 +1552,34 @@ impl CompilerCapabilities {
                 "capability broker omitted or already consumed invocation authority".to_owned(),
             )
         })
+    }
+
+    fn prepare_compiler_proof(&mut self, attempt: BuildAttempt) -> Result<(), BindingWrapperError> {
+        if self.compiler_proof.is_some() {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "compiler proof already prepared".to_owned(),
+            ));
+        }
+        let authority = self.invocation_authority.as_mut().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "compiler proof has no retained invocation authority".to_owned(),
+            )
+        })?;
+        self.compiler_proof = Some(
+            authority
+                .prepare_compiler_proof(attempt)
+                .map_err(BindingWrapperError::CapabilityBroker)?,
+        );
+        Ok(())
+    }
+
+    fn release_invocation(&mut self) -> Result<(), BindingWrapperError> {
+        if let Some(authority) = self.invocation_authority.take() {
+            authority
+                .release()
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+        }
+        Ok(())
     }
 
     fn release_invocation_with_source_isa_observer(

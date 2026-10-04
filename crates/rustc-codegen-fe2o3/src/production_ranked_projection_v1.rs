@@ -1319,18 +1319,22 @@ fn authenticate_ranked_root_v5(
     lowering: &ProductionRankedKernelLoweringInputV1,
     ranked_ir: &str,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+    runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
     let middle_end_evidence =
         fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
+        let runtime = runtime.ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
+            "functional proof requires retained compiler proof runtime custody",
+        ))?;
         if !lowering
             .ownership_report()
             .conditional_coverage()
             .is_empty()
         {
             let verified = crate::production_mir_pliron_verus_join_v1::authenticate_conditional_output_per_compilation_v1(
-                lowering, &middle_end_evidence,
+                lowering, &middle_end_evidence, runtime,
             ).map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
             Some(AuthenticatedFunctionalVerificationV1::Conditional(
                 Box::new(verified),
@@ -1357,6 +1361,7 @@ fn authenticate_ranked_root_v5(
                 semantics.semantic_contract_report(),
                 &parallel_contract,
                 parallel_report,
+                runtime,
             )
             .map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
             Some(AuthenticatedFunctionalVerificationV1::Total(Box::new(
@@ -1625,6 +1630,7 @@ impl ProductionRankedSemanticProgramV1 {
 
     pub(crate) fn into_verified_roster_receipt(
         self,
+        runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
     ) -> Result<
         ProductionRankedSemanticProjectionRosterReceiptV1,
         ProductionRankedVerificationErrorV1,
@@ -1672,6 +1678,7 @@ impl ProductionRankedSemanticProgramV1 {
                 &lowering,
                 &ranked_ir,
                 semantic_u32_induction,
+                runtime,
             )?;
             verified_roots.push(ProductionRankedVerifiedRootCandidateV1 {
                 logical_name,
@@ -2886,6 +2893,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_ssa_owner
         .verify_replay()
@@ -2946,6 +2954,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             &input.logical_name,
             &input.source_launch,
             root_references,
+            runtime,
         )?;
         if root.kernel_binding != input.kernel_binding {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3054,6 +3063,7 @@ fn project_and_verify_ranked_root_v1(
     logical_name: &str,
     source_launch: &LaunchContract,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let semantic_u32_induction =
         fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
@@ -3469,7 +3479,13 @@ fn project_and_verify_ranked_root_v1(
             &reference_writes,
             reserved_reference_values,
         )
-        .and_then(|request| request.prove_and_compile())
+        .and_then(|request| {
+            let runtime = runtime.ok_or_else(|| crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2::ProofRuntimeUnavailable {
+                root: fe2o3_verifier::PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+                detail: "functional proof requires retained compiler proof runtime custody".to_owned(),
+            })?;
+            request.prove_and_compile(runtime)
+        })
         .map_err(|error| ProductionRankedProjectionErrorV1::ReferenceEffectJoin(Box::new(error)))?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
@@ -37118,6 +37134,7 @@ mod tests {
             owner,
             &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+            None,
         )
         .unwrap();
 

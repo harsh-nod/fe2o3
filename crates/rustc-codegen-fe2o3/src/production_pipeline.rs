@@ -351,7 +351,9 @@ enum ProductionCompilerCustody {
         compiler_execution: Box<AdmittedProtectedCompilerExecutionV1>,
         attempt: BuildAttempt,
     },
-    ExtractionOnly,
+    ExtractionOnly {
+        proof_runtime: Option<Box<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+    },
 }
 
 impl ProductionCompilerCustody {
@@ -368,18 +370,54 @@ impl ProductionCompilerCustody {
     }
 
     const fn extraction_only() -> Self {
-        Self::ExtractionOnly
+        Self::ExtractionOnly {
+            proof_runtime: None,
+        }
     }
 
     fn retained_protected_binding_count(&self) -> usize {
         match self {
             Self::ProtectedV3 { .. } => 2,
-            Self::ExtractionOnly => 0,
+            Self::ExtractionOnly { .. } => 0,
         }
     }
 
     fn is_extraction_only(&self) -> bool {
-        matches!(self, Self::ExtractionOnly)
+        matches!(self, Self::ExtractionOnly { .. })
+    }
+
+    fn prepare_proof_runtime(&mut self, required: bool) -> Result<(), ProductionPipelineError> {
+        if let Self::ExtractionOnly { proof_runtime } = self
+            && required
+            && proof_runtime.is_none()
+        {
+            *proof_runtime = Some(Box::new(
+                fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
+                    fe2o3_verifier::PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+                )
+                .map_err(|error| {
+                    ProductionPipelineError::ProtectedRustcInvocation(
+                        ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string()),
+                    )
+                })?,
+            ));
+        }
+        Ok(())
+    }
+
+    fn proof_runtime(
+        &self,
+    ) -> Result<
+        Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
+        ProductionPipelineError,
+    > {
+        match self {
+            Self::ProtectedV3 { invocation, .. } => invocation
+                .proof_runtime()
+                .map(Some)
+                .map_err(ProductionPipelineError::ProtectedRustcInvocation),
+            Self::ExtractionOnly { proof_runtime } => Ok(proof_runtime.as_deref()),
+        }
     }
 
     fn into_publication_custody(
@@ -395,7 +433,7 @@ impl ProductionCompilerCustody {
                 invocation,
                 compiler_execution,
             }),
-            Self::ExtractionOnly => Err(ProductionPipelineError::ExtractionCannotPublish),
+            Self::ExtractionOnly { .. } => Err(ProductionPipelineError::ExtractionCannotPublish),
         }
     }
 }
@@ -3478,7 +3516,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
         let SsaSemanticMirStage {
             semantic_ssa,
-            bindings,
+            mut bindings,
         } = self.stage;
         crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
             &bindings.typed_descriptor_roots,
@@ -3503,11 +3541,16 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
                 )
             })
             .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
+        bindings
+            .transaction
+            .compiler_custody
+            .prepare_proof_runtime(!bindings.reference_effect_bindings.as_slice().is_empty())?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_ssa,
                 &ranked_roots,
                 &bindings.reference_effect_bindings,
+                bindings.transaction.compiler_custody.proof_runtime()?,
             )
             .map_err(ProductionPipelineError::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilation { ranked, bindings })
@@ -3520,7 +3563,7 @@ impl RankedVerifiedProductionCompilation {
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
         let roster_receipt = ranked
-            .into_verified_roster_receipt()
+            .into_verified_roster_receipt(bindings.transaction.compiler_custody.proof_runtime()?)
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(!roster_receipt.grants_artifact_or_launch_authority());
         debug_assert!(roster_receipt.verify_equivalence().is_ok());
@@ -3795,7 +3838,7 @@ mod tests {
 
         let pipeline = include_str!("production_pipeline.rs");
         let roster = pipeline
-            .find(".into_verified_roster_receipt()")
+            .find(".into_verified_roster_receipt(")
             .expect("ranked roster verification transition");
         let module = pipeline[roster..]
             .find(".into_module_verified_receipt()")
@@ -3815,7 +3858,7 @@ mod tests {
     fn ranked_roster_receipt_reaches_complete_module_kir_authority() {
         let pipeline = include_str!("production_pipeline.rs");
         let roster = pipeline
-            .find(".into_verified_roster_receipt()")
+            .find(".into_verified_roster_receipt(")
             .expect("ranked roster receipt transition");
         let module = pipeline[roster..]
             .find(".into_module_verified_receipt()")

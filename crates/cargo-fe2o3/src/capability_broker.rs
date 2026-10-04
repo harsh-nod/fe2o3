@@ -48,6 +48,10 @@ mod platform {
         BuildSession,
     };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
+    use fe2o3_verifier::{
+        CompilerProofBrokerV1, PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+        PendingCompilerProofDelegationV1,
+    };
     use rustix::net::{
         RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
         SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
@@ -127,6 +131,79 @@ mod platform {
     const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
     const BROKERED_INVOCATION_REQUEST_MAGIC_V2: &[u8; 8] = b"F2BRKIV2";
     const BROKERED_SOURCE_ISA_PREPARED_V1: &[u8; 16] = b"F2SI-PREPARED-V1";
+    const PROOF_PREPARE_MAGIC: &[u8; 8] = b"F3CPRPV1";
+    const PROOF_PREPARE_BYTES: usize = 192;
+    const PROOF_RESPONSE_MAGIC: &[u8; 8] = b"F3CPRSV1";
+    const PROOF_RESPONSE_BYTES: usize = 72;
+    const PROOF_PREPARE_DOMAIN: &[u8] = b"FE2O3/COMPILER-PROOF/PREPARE/V1\0";
+    const PROOF_RESPONSE_DOMAIN: &[u8] = b"FE2O3/COMPILER-PROOF/PREPARED/V1\0";
+
+    struct ProofPreparationRequest {
+        attempt: BuildAttempt,
+        challenge: [u8; 32],
+        authentication: [u8; 32],
+    }
+
+    impl ProofPreparationRequest {
+        fn encode(&self, secret: &[u8; 32]) -> [u8; PROOF_PREPARE_BYTES] {
+            let mut bytes = [0; PROOF_PREPARE_BYTES];
+            let attempt = self.attempt.to_env_value();
+            bytes[..8].copy_from_slice(PROOF_PREPARE_MAGIC);
+            bytes[8..40].copy_from_slice(&self.challenge);
+            bytes[40..42].copy_from_slice(&(attempt.len() as u16).to_le_bytes());
+            bytes[42..42 + attempt.len()].copy_from_slice(attempt.as_bytes());
+            let auth = keyed_digest(PROOF_PREPARE_DOMAIN, secret, &[&bytes[..160]]);
+            bytes[160..].copy_from_slice(&auth);
+            bytes
+        }
+
+        fn decode(bytes: &[u8; PROOF_PREPARE_BYTES]) -> io::Result<Self> {
+            let length = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
+            if &bytes[..8] != PROOF_PREPARE_MAGIC
+                || !(1..=118).contains(&length)
+                || bytes[42 + length..160].iter().any(|byte| *byte != 0)
+                || bytes[8..40] == [0; 32]
+            {
+                return Err(io::Error::other("noncanonical compiler-proof preparation"));
+            }
+            let attempt = std::str::from_utf8(&bytes[42..42 + length]).map_err(io::Error::other)?;
+            let attempt = BuildAttempt::from_env_value(attempt).map_err(io::Error::other)?;
+            Ok(Self {
+                attempt,
+                challenge: bytes[8..40].try_into().unwrap(),
+                authentication: bytes[160..].try_into().unwrap(),
+            })
+        }
+
+        fn require_authenticated(
+            &self,
+            secret: &[u8; 32],
+            session: BuildSession,
+        ) -> io::Result<()> {
+            if self.attempt.session() == BuildSession::DIRECT
+                || self.attempt.session() != session
+                || self.encode(secret)[160..] != self.authentication
+            {
+                return Err(io::Error::other(
+                    "compiler-proof preparation is not authenticated to this build session",
+                ));
+            }
+            Ok(())
+        }
+
+        fn response(&self, secret: &[u8; 32], session: [u8; 32]) -> [u8; PROOF_RESPONSE_BYTES] {
+            let mut bytes = [0; PROOF_RESPONSE_BYTES];
+            bytes[..8].copy_from_slice(PROOF_RESPONSE_MAGIC);
+            bytes[8..40].copy_from_slice(&session);
+            let auth = keyed_digest(
+                PROOF_RESPONSE_DOMAIN,
+                secret,
+                &[&self.encode(secret), &bytes[..40]],
+            );
+            bytes[40..].copy_from_slice(&auth);
+            bytes
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
@@ -143,10 +220,10 @@ mod platform {
         invocation_lifetime: BROKER_INVOCATION_LIFETIME,
     };
 
-    #[derive(Clone, Copy)]
     struct BrokerCompilerCapabilities<'profile> {
         closure: Option<fe2o3_build_authority::CompilerClosureV2>,
         execution_profile: Option<&'profile CompilerExecutionClientProfileCapabilityV1>,
+        proof: Option<Arc<CompilerProofBrokerV1>>,
     }
 
     #[derive(Clone)]
@@ -415,17 +492,26 @@ mod platform {
             Self {
                 closure: None,
                 execution_profile: None,
+                proof: None,
             }
         }
 
-        const fn protected(
-            closure: fe2o3_build_authority::CompilerClosureV2,
-            execution_profile: &'profile CompilerExecutionClientProfileCapabilityV1,
-        ) -> Self {
-            Self {
+        fn protected(
+            release: &'profile crate::authority_release::ProtectedReleaseAdmission,
+        ) -> Result<Self, String> {
+            let closure = release.compiler_closure();
+            let execution_profile = release.compiler_execution_profile_capability();
+            execution_profile.revalidate()?;
+            let proof = CompilerProofBrokerV1::open(
+                closure,
+                PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+            )
+            .map_err(|error| format!("cannot open protected compiler proof executor: {error}"))?;
+            Ok(Self {
                 closure: Some(closure),
                 execution_profile: Some(execution_profile),
-            }
+                proof: Some(Arc::new(proof)),
+            })
         }
     }
 
@@ -833,6 +919,7 @@ mod platform {
         authentication_available: Condvar,
         max_concurrent_authentications: usize,
         max_active_connections: usize,
+        compiler_proof: Option<Arc<CompilerProofBrokerV1>>,
     }
 
     impl BrokerShutdown {
@@ -844,6 +931,7 @@ mod platform {
                 max_concurrent_authentications: max_active_connections
                     .min(MAX_CONCURRENT_AUTHENTICATIONS),
                 max_active_connections,
+                compiler_proof: None,
             }
         }
 
@@ -933,6 +1021,9 @@ mod platform {
         }
 
         fn begin(&self) {
+            if let Some(proof) = &self.compiler_proof {
+                proof.stop();
+            }
             let mut state = self.state();
             state.stopping = true;
             for active in state.active.values() {
@@ -1023,8 +1114,7 @@ mod platform {
         pub(crate) fn start_protected(
             session: BuildSession,
             binding: CapabilityBindingV3,
-            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-            compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            release: &crate::authority_release::ProtectedReleaseAdmission,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -1032,7 +1122,7 @@ mod platform {
             Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
+                BrokerCompilerCapabilities::protected(release)?,
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -1046,8 +1136,7 @@ mod platform {
         pub(crate) fn start_protected_with_source_isa_observer(
             session: BuildSession,
             binding: CapabilityBindingV3,
-            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-            compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            release: &crate::authority_release::ProtectedReleaseAdmission,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -1056,7 +1145,7 @@ mod platform {
             Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
+                BrokerCompilerCapabilities::protected(release)?,
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -1106,6 +1195,7 @@ mod platform {
             }
             if binding.requires_compiler_closure_v2() != compiler.closure.is_some()
                 || compiler.closure.is_some() != compiler.execution_profile.is_some()
+                || compiler.closure.is_some() != compiler.proof.is_some()
             {
                 return Err(
                     "capability binding and protected compiler capability presence differ"
@@ -1176,7 +1266,9 @@ mod platform {
                 peer: executable,
             }
             .encode();
-            let shutdown = Arc::new(BrokerShutdown::new(limits.max_active_connections));
+            let mut shutdown = BrokerShutdown::new(limits.max_active_connections);
+            shutdown.compiler_proof = compiler.proof.clone();
+            let shutdown = Arc::new(shutdown);
             let invocation_authorization = InvocationAuthorizationRegistryV1::new();
             let worker_invocation_authorization = invocation_authorization.clone();
             let worker_shutdown = Arc::clone(&shutdown);
@@ -1196,6 +1288,7 @@ mod platform {
                         artifact,
                         compiler_closure,
                         compiler_execution_profile,
+                        compiler_proof: compiler.proof,
                         source_isa_observer,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
@@ -1266,6 +1359,14 @@ mod platform {
 
     pub(crate) struct BrokeredInvocationAuthorityV1 {
         stream: UnixStream,
+        proof: Option<ProofPreparationContext>,
+    }
+
+    struct ProofPreparationContext {
+        session: BuildSession,
+        closure: fe2o3_build_authority::CompilerClosureV2,
+        peer: BrokerPeerIdentityV2,
+        secret: [u8; 32],
     }
 
     pub(crate) struct SourceIsaObservationSinkV1 {
@@ -1276,14 +1377,100 @@ mod platform {
     }
 
     impl BrokeredInvocationAuthorityV1 {
-        fn from_authenticated_stream(stream: UnixStream) -> Result<Self, String> {
+        fn from_authenticated_stream(
+            stream: UnixStream,
+            proof: Option<ProofPreparationContext>,
+        ) -> Result<Self, String> {
             let normalized = rustix::io::fcntl_dupfd_cloexec(&stream, RECEIVED_DESCRIPTOR_FLOOR)
                 .map_err(|error| {
                     format!("failed to retain authenticated invocation capability: {error}")
                 })?;
             Ok(Self {
                 stream: UnixStream::from(normalized),
+                proof,
             })
+        }
+
+        pub(crate) fn prepare_compiler_proof(
+            &mut self,
+            attempt: BuildAttempt,
+        ) -> Result<PendingCompilerProofDelegationV1, String> {
+            let context = self.proof.take().ok_or_else(|| {
+                "compiler proof preparation is unavailable or already consumed".to_owned()
+            })?;
+            let result = (|| -> io::Result<_> {
+                if attempt.session() != context.session || attempt.session() == BuildSession::DIRECT
+                {
+                    return Err(io::Error::other(
+                        "compiler proof attempt is outside authenticated session",
+                    ));
+                }
+                context
+                    .peer
+                    .authenticate(&self.stream)
+                    .map_err(io::Error::other)?;
+                let deadline = BrokerDeadline::new(Instant::now(), BROKER_CLIENT_RESPONSE_TIMEOUT);
+                let request = ProofPreparationRequest {
+                    attempt,
+                    challenge: random_bytes()?,
+                    authentication: [0; 32],
+                };
+                let mut stream = &self.stream;
+                stream.set_write_timeout(Some(deadline.remaining()?))?;
+                stream.write_all(&request.encode(&context.secret))?;
+                stream.set_read_timeout(Some(deadline.remaining()?))?;
+                let mut response = [0; PROOF_RESPONSE_BYTES];
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+                let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+                let message = recvmsg(
+                    stream,
+                    &mut [IoSliceMut::new(&mut response)],
+                    &mut ancillary,
+                    RecvFlags::CMSG_CLOEXEC,
+                )?;
+                let mut descriptors = Vec::new();
+                let mut rights_messages = 0;
+                let mut unexpected = false;
+                for item in ancillary.drain() {
+                    match item {
+                        RecvAncillaryMessage::ScmRights(rights) => {
+                            rights_messages += 1;
+                            descriptors.extend(rights);
+                        }
+                        _ => unexpected = true,
+                    }
+                }
+                let session: [u8; 32] = response[8..40].try_into().unwrap();
+                if message.bytes != PROOF_RESPONSE_BYTES
+                    || !(message.flags - ReturnFlags::CMSG_CLOEXEC).is_empty()
+                    || unexpected
+                    || rights_messages != 1
+                    || descriptors.len() != 2
+                    || session == [0; 32]
+                    || response != request.response(&context.secret, session)
+                {
+                    return Err(io::Error::other(
+                        "malformed authenticated compiler-proof preparation response",
+                    ));
+                }
+                context
+                    .peer
+                    .authenticate(stream)
+                    .map_err(io::Error::other)?;
+                deadline.require_remaining()?;
+                let descriptors: [OwnedFd; 2] = descriptors
+                    .try_into()
+                    .map_err(|_| io::Error::other("compiler-proof descriptor roster"))?;
+                PendingCompilerProofDelegationV1::from_authenticated_transfer(
+                    session,
+                    descriptors,
+                    &context.closure,
+                )
+            })();
+            if result.is_err() {
+                let _ = self.stream.shutdown(Shutdown::Both);
+            }
+            result.map_err(|error| format!("compiler proof preparation failed: {error}"))
         }
 
         pub(crate) fn release(self) -> Result<(), String> {
@@ -1459,8 +1646,17 @@ mod platform {
             }
         }
         let mut capabilities = decode_received_descriptors(descriptors, binding)?;
+        let proof = capabilities
+            .compiler_closure
+            .as_ref()
+            .map(|closure| ProofPreparationContext {
+                session,
+                closure: closure.closure(),
+                peer: route.peer,
+                secret: route.secret,
+            });
         capabilities.invocation_authority = Some(
-            BrokeredInvocationAuthorityV1::from_authenticated_stream(stream)?,
+            BrokeredInvocationAuthorityV1::from_authenticated_stream(stream, proof)?,
         );
         Ok(capabilities)
     }
@@ -1554,6 +1750,7 @@ mod platform {
         artifact: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
+        compiler_proof: Option<Arc<CompilerProofBrokerV1>>,
         source_isa_observer: Option<BrokerSourceIsaObserverV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
@@ -1614,9 +1811,18 @@ mod platform {
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
-            self.invocation_authorization
-                .consume(client)
-                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            let original_wrapper = if self.compiler_proof.is_some() {
+                Some(
+                    self.invocation_authorization
+                        .consume_original(client)
+                        .map_err(io::Error::other)?,
+                )
+            } else {
+                self.invocation_authorization
+                    .consume(client)
+                    .map_err(io::Error::other)?;
+                None
+            };
             deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
             deadline.read_exact(stream, &mut request)?;
@@ -1668,13 +1874,14 @@ mod platform {
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown
                 .send_response(stream, &response, &descriptors, deadline)?;
-            self.serve_invocation_authority(stream, client)
+            self.serve_invocation_authority(stream, client, original_wrapper)
         }
 
         fn serve_invocation_authority(
             &self,
             stream: &UnixStream,
             client: ProcessIdentityV1,
+            original_wrapper: Option<File>,
         ) -> io::Result<()> {
             let liveness = InvocationLiveness {
                 client,
@@ -1683,11 +1890,93 @@ mod platform {
                 lifetime: self.invocation_lifetime,
             };
             let request = read_invocation_request(liveness, stream)?;
+            let BrokerInvocationRequest::PrepareProof(preparation) = request else {
+                return self.serve_invocation_request(stream, liveness, request, None);
+            };
+            preparation.require_authenticated(&self.secret, self.session)?;
+            if self
+                .executable
+                .authenticate_client(stream)
+                .map_err(io::Error::other)?
+                != client
+            {
+                return Err(io::Error::other("compiler-proof wrapper identity changed"));
+            }
+            let credentials = rustix::net::sockopt::socket_peercred(stream)?;
+            let broker = self
+                .compiler_proof
+                .as_ref()
+                .ok_or_else(|| io::Error::other("compiler proof is unavailable for this broker"))?;
+            let original_wrapper = original_wrapper.ok_or_else(|| {
+                io::Error::other("compiler proof requires the original wrapper exec permit")
+            })?;
+            let deadline = Instant::now() + self.invocation_frame_timeout;
+            let (server, bootstrap) = broker
+                .prepare(
+                    original_wrapper.into(),
+                    (
+                        client.pid(),
+                        credentials.uid.as_raw(),
+                        credentials.gid.as_raw(),
+                    ),
+                    client.start_time_ticks(),
+                    preparation.attempt,
+                    deadline,
+                )
+                .map_err(io::Error::other)?;
+            let response = preparation.response(&self.secret, bootstrap.session());
+            let descriptors = bootstrap.into_descriptors();
+            self.shutdown.send_response(
+                stream,
+                &response,
+                &[descriptors[0].as_fd(), descriptors[1].as_fd()],
+                BrokerDeadline::new(Instant::now(), self.invocation_frame_timeout),
+            )?;
+            drop(descriptors);
+
+            thread::scope(|scope| {
+                // Cancel before the scoped join on both errors and unwinding.
+                let cancellation = server.cancellation();
+                let worker = thread::Builder::new().spawn_scoped(scope, move || {
+                    server.serve(liveness.started_at + liveness.lifetime)
+                })?;
+                let result = read_invocation_request(liveness, stream).and_then(|request| {
+                    self.serve_invocation_request(
+                        stream,
+                        liveness,
+                        request,
+                        Some(preparation.attempt),
+                    )
+                });
+                if result.is_err() {
+                    cancellation.cancel();
+                }
+                // EOF or compiler exit ends the proof channel normally. Proof failures are
+                // delivered to the compiler, which must revalidate before publication.
+                let _ = worker
+                    .join()
+                    .map_err(|_| io::Error::other("compiler proof worker panicked"))?;
+                result
+            })
+        }
+
+        fn serve_invocation_request(
+            &self,
+            stream: &UnixStream,
+            liveness: InvocationLiveness,
+            request: BrokerInvocationRequest,
+            proof_attempt: Option<BuildAttempt>,
+        ) -> io::Result<()> {
             if let BrokerInvocationRequest::V2(request) = request {
+                if proof_attempt.is_some_and(|attempt| attempt != request.attempt()) {
+                    return Err(io::Error::other(
+                        "source/ISA attempt differs from compiler proof",
+                    ));
+                }
                 return self.receive_source_isa_observation(stream, liveness, request);
             }
             let BrokerInvocationRequest::V1(request) = request else {
-                unreachable!("V2 observer request returned above")
+                return Err(io::Error::other("duplicate compiler proof preparation"));
             };
             let claim = match request {
                 BrokeredInvocationCapabilityRequestV1::Release => {
@@ -1696,7 +1985,8 @@ mod platform {
                     return Ok(());
                 }
                 BrokeredInvocationCapabilityRequestV1::Prepare(claim)
-                    if claim.attempt().session() == self.session =>
+                    if claim.attempt().session() == self.session
+                        && proof_attempt.is_none_or(|attempt| attempt == claim.attempt()) =>
                 {
                     claim
                 }
@@ -1878,6 +2168,7 @@ mod platform {
     enum BrokerInvocationRequest {
         V1(BrokeredInvocationCapabilityRequestV1),
         V2(BrokeredInvocationCapabilityRequestV2),
+        PrepareProof(ProofPreparationRequest),
     }
 
     fn read_invocation_request(
@@ -1886,6 +2177,13 @@ mod platform {
     ) -> io::Result<BrokerInvocationRequest> {
         let mut magic = [0; 8];
         liveness.read_frame(stream, &mut magic)?;
+        if &magic == PROOF_PREPARE_MAGIC {
+            let mut encoded = [0; PROOF_PREPARE_BYTES];
+            encoded[..8].copy_from_slice(&magic);
+            liveness.read_frame(stream, &mut encoded[8..])?;
+            return ProofPreparationRequest::decode(&encoded)
+                .map(BrokerInvocationRequest::PrepareProof);
+        }
         if &magic == BROKERED_INVOCATION_REQUEST_MAGIC_V1 {
             let mut encoded = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
             encoded[..magic.len()].copy_from_slice(&magic);
@@ -2381,12 +2679,91 @@ mod platform {
                 read_request(&expected.encode()).unwrap(),
                 BrokerInvocationRequest::V2(actual) if actual == expected
             ));
+            let proof = proof_request();
+            assert!(matches!(
+                read_request(&proof.encode(&[0x51; 32])).unwrap(),
+                BrokerInvocationRequest::PrepareProof(actual) if actual.attempt == proof.attempt
+            ));
+        }
+
+        fn proof_request() -> ProofPreparationRequest {
+            ProofPreparationRequest {
+                attempt: attempt(3, [0x31; 16], [0x32; 32]),
+                challenge: [0x50; 32],
+                authentication: [0; 32],
+            }
+        }
+
+        #[test]
+        fn proof_preparation_authenticates_exact_attempt_session_and_challenge() {
+            let secret = [0x51; 32];
+            let session = BuildSession::from_bytes([0x31; 16]);
+            let encoded = proof_request().encode(&secret);
+            let decoded = ProofPreparationRequest::decode(&encoded).unwrap();
+            decoded.require_authenticated(&secret, session).unwrap();
+            assert!(decoded.require_authenticated(&[0x52; 32], session).is_err());
+            assert!(
+                decoded
+                    .require_authenticated(&secret, BuildSession::DIRECT)
+                    .is_err()
+            );
+            for offset in 8..PROOF_PREPARE_BYTES {
+                let mut changed = encoded;
+                changed[offset] ^= 1;
+                assert!(
+                    ProofPreparationRequest::decode(&changed)
+                        .and_then(|request| request.require_authenticated(&secret, session))
+                        .is_err(),
+                    "altered proof preparation accepted at byte {offset}"
+                );
+            }
+            let mut direct = proof_request();
+            direct.attempt = attempt(3, [0; 16], [0; 32]);
+            let decoded = ProofPreparationRequest::decode(&direct.encode(&secret)).unwrap();
+            assert!(
+                decoded
+                    .require_authenticated(&secret, BuildSession::DIRECT)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn proof_preparation_accepts_maximum_generation_without_overflow() {
+            let mut request = proof_request();
+            request.attempt = attempt(u64::MAX, [0x31; 16], [0x32; 32]);
+            let decoded = ProofPreparationRequest::decode(&request.encode(&[0x51; 32])).unwrap();
+            assert_eq!(decoded.attempt, request.attempt);
+        }
+
+        #[test]
+        fn proof_preparation_rejects_zero_challenge_and_noncanonical_padding() {
+            let mut request = proof_request();
+            request.challenge = [0; 32];
+            assert!(ProofPreparationRequest::decode(&request.encode(&[0x51; 32])).is_err());
+            let mut encoded = proof_request().encode(&[0x51; 32]);
+            encoded[159] = 1;
+            assert!(ProofPreparationRequest::decode(&encoded).is_err());
+        }
+
+        #[test]
+        fn proof_response_binds_original_request_and_new_session() {
+            let secret = [0x51; 32];
+            let mut request = proof_request();
+            let expected = request.response(&secret, [0x53; 32]);
+            assert_ne!(expected, request.response(&secret, [0x54; 32]));
+            assert_ne!(expected, request.response(&[0x52; 32], [0x53; 32]));
+            request.challenge[0] ^= 1;
+            assert_ne!(expected, request.response(&secret, [0x53; 32]));
+            request.challenge[0] ^= 1;
+            request.attempt = attempt(4, [0x31; 16], [0x32; 32]);
+            assert_ne!(expected, request.response(&secret, [0x53; 32]));
         }
 
         #[test]
         fn invocation_request_dispatch_rejects_unknown_and_every_truncated_width() {
             assert!(read_request(b"UNKNOWN!").is_err());
             let requests = [
+                proof_request().encode(&[0x51; 32]).to_vec(),
                 BrokeredInvocationCapabilityRequestV1::Release
                     .encode()
                     .to_vec(),
@@ -2415,7 +2792,13 @@ mod platform {
             let (result_sender, result_receiver) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
                 result_sender
-                    .send(BrokeredInvocationAuthorityV1 { stream: client }.release())
+                    .send(
+                        BrokeredInvocationAuthorityV1 {
+                            stream: client,
+                            proof: None,
+                        }
+                        .release(),
+                    )
                     .unwrap();
             });
             let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
@@ -2447,9 +2830,12 @@ mod platform {
                     }
                 });
                 assert!(
-                    BrokeredInvocationAuthorityV1 { stream: client }
-                        .release()
-                        .is_err()
+                    BrokeredInvocationAuthorityV1 {
+                        stream: client,
+                        proof: None
+                    }
+                    .release()
+                    .is_err()
                 );
                 worker.join().unwrap();
             }
@@ -2575,8 +2961,11 @@ mod platform {
                         request,
                     )
                 });
-                let result = BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer(config, unit, request_attempt);
+                let result = BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    proof: None,
+                }
+                .release_with_source_isa_observer(config, unit, request_attempt);
                 let server_result = worker.join().unwrap();
                 assert_eq!(result.is_ok(), server_result.is_ok());
                 result
@@ -2588,9 +2977,12 @@ mod platform {
             let (client, mut server) = UnixStream::pair().unwrap();
             let (result_sender, result_receiver) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
-                let result = BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
-                    .map(drop);
+                let result = BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    proof: None,
+                }
+                .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
+                .map(drop);
                 result_sender.send(result).unwrap();
             });
             let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
@@ -2629,9 +3021,12 @@ mod platform {
                 server.write_all(&[0xa5; 16]).unwrap();
             });
             assert!(
-                BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
-                    .is_err()
+                BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    proof: None
+                }
+                .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
+                .is_err()
             );
             worker.join().unwrap();
 
@@ -3056,8 +3451,7 @@ mod unsupported {
         pub(crate) fn start_protected(
             _session: BuildSession,
             _binding: CapabilityBindingV3,
-            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-            _compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            _release: &crate::authority_release::ProtectedReleaseAdmission,
             _backend: &PinnedCodegenBackend,
             _artifact: &PinnedDirectory,
             _pinned_cargo_image: &PinnedExecutable,
@@ -3068,8 +3462,7 @@ mod unsupported {
         pub(crate) fn start_protected_with_source_isa_observer(
             _session: BuildSession,
             _binding: CapabilityBindingV3,
-            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
-            _compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            _release: &crate::authority_release::ProtectedReleaseAdmission,
             _backend: &PinnedCodegenBackend,
             _artifact: &PinnedDirectory,
             _pinned_cargo_image: &PinnedExecutable,

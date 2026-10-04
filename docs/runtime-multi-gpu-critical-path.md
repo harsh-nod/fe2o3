@@ -15,13 +15,13 @@ locked Cargo queries duplicated `--frozen`, and `run` sent its host binary targe
 to AMDGPU instead of compiling the device library. This is progress through
 startup and compilation, not successful application admission.
 
-The immediate blocker is compiler-time proof placement. Cargo descendants inherit
-the mandatory exec-notification seccomp filter, but the local generated-proof
-controller requires no inherited filters. Its proof-child receipt also requires
-exactly one verifier-installed filter. Keep both contracts: route compiler-time
-proof execution through an independently admitted unfiltered controller, retaining
-the exact generated source, original compiler subject and execution/result custody.
-Do not weaken preflight, remove Cargo exec observation or import a captured proof.
+The compiler-time proof placement blocker is now resolved in the genuine installed
+campaign. Cargo descendants retain the mandatory exec-notification filter, while
+the independently admitted broker executes generated proofs under the existing
+verifier profile. The [integration checkpoint](evidence/dev-compiler-proof-integration-2026-10-04/README.md)
+passes real proof-backed lowering, compiler issuer acquisition/publication and
+Worker finalization, then fails in ordinary host-library compilation because its
+typed kernel has no binding. This is not successful application admission.
 
 The original-compiler custody prerequisite is now implemented: the selected
 wrapper captures the child immediately after spawn, transfers from its retained
@@ -38,26 +38,34 @@ terminal client failure shuts down the endpoint and cancels/reaps the proof tree
 Private descriptors fit the protected launcher's minimum file limit. Local proof
 execution and its strict seccomp contracts are unchanged.
 
-This transport is not yet wired into Cargo or the compiler. Next, retain the
-original Cargo exec-permit pidfd, add one authenticated proof-preparation prefix
-without changing the initial four-descriptor response, and delegate the exact
-sealed invocation after the consuming spawn. Serve proof work concurrently with
-the existing source/ISA observer. Retain one brokered runtime in protected compiler
-custody and borrow it through both existing proof joins. Qualify the genuine
-installed application campaign through real proof and receipt publication before
-claiming this blocker resolved. Do not reuse the post-publication custodian or
-import a captured proof.
+Cargo and the compiler now use this transport. One authenticated preparation
+consumes the original Cargo exec-permit owner without changing the initial four-FD
+response. The original selected rustc child receives the exact sealed invocation;
+proof work runs alongside the source/ISA observer. Protected compiler custody
+retains one brokered runtime through both proof joins and publication. The original
+canonical invocation FD199 remains owned through issuer observation; closing it
+early caused the genuine campaign's first publication failure. The harness now
+requests V6, matching the production handoff, without relaxing version checks.
+All 420 Cargo, 524 compiler and 188 verifier tests pass, with 16 total ignores.
+Production-shaped negative prefix/second-request sequencing tests remain additional
+coverage work; the genuine campaign qualifies the positive composed path only.
 
-After that, propagate the original committed device-library binding to the exact
+Next, propagate the original committed device-library binding to the exact
 matching host library through a retained, authenticated host projection. The host
 phase currently disables wrappers, and independently deriving host Cargo metadata
-does not reproduce the device binding. Then qualify FD195/current-record audit and
+does not reproduce the device binding. The genuine V6 rerun confirms the typed
+host kernel rejects at this missing-binding boundary. Retain the committed envelope
+lease and original invocation, not a new random build session or a lock-holding
+current token across host Cargo. Match only the exact ordinary host library;
+main, dependency, build-script and test units must not receive its binding.
+Then qualify FD195/current-record audit and
 retained conditional proof in the ordinary application before two-GPU fill and
 bidirectional PUBLIC XGMI. General performance work, wider opcode coverage and
 additional GPU counts remain deferred. WSL SSH still times out, but a read-only
 Windows OpenSSH check now reaches MI300X. Use that route for hardware qualification
 after application admission; no new hardware correctness or performance result
-is claimed.
+is claimed. This checkpoint performed no MI300X action; its isolated deployment
+and all four campaign cgroups were removed.
 
 ## Implemented Foundations
 
@@ -110,9 +118,10 @@ The existing Worker already links LLVM/LLD statically; only its seven external
 base DSOs need canonical loader placement. No analyzer rebuild or new runtime
 wrapper is required for this gate. This does not qualify production package
 activation, authenticated manager registration, genuine compiler receipt/currentness
-admission or GPU execution. The genuine campaign above advances service startup
-but still fails before receipt publication. Clear its compiler-time proof and
-host-binding blockers, followed immediately by two-GPU fill/XGMI.
+admission or GPU execution. The genuine campaign above now passes compiler receipt
+publication and Worker finalization, but fails in host compilation. Clear the
+original device-to-host binding blocker, followed by application admission and
+two-GPU fill/XGMI.
 
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already

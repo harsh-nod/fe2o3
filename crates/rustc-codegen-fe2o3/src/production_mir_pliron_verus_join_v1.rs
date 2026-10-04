@@ -15,8 +15,6 @@ use fe2o3_verifier::{
     execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
 };
 
-const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
-    "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 const PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1: u32 = 120;
 
 #[derive(Debug)]
@@ -36,18 +34,10 @@ impl AuthenticatedConditionalOutputVerificationV1 {
 pub(crate) fn authenticate_conditional_output_per_compilation_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
 ) -> Result<AuthenticatedConditionalOutputVerificationV1, ProductionMirPlironVerusJoinErrorV1> {
-    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
-        RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-    )
-    .map_err(
-        |error| ProductionMirPlironVerusJoinErrorV1::RuntimeUnavailable {
-            root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-            detail: error.to_string(),
-        },
-    )?;
     let (execution, policy) = fe2o3_verifier::execute_conditional_output_per_compilation_v1(
-        &runtime,
+        runtime,
         ranked,
         evidence,
         PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1,
@@ -85,19 +75,11 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
     structural_report: ProductionMirPlironSemanticContractReportV1,
     parallel_contract: &ParallelReferenceContractV1,
     parallel_report: ProductionParallelReferenceContractReportV1,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
 ) -> Result<AuthenticatedMirPlironPerCompilationVerificationV1, ProductionMirPlironVerusJoinErrorV1>
 {
-    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
-        RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-    )
-    .map_err(
-        |error| ProductionMirPlironVerusJoinErrorV1::RuntimeUnavailable {
-            root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-            detail: error.to_string(),
-        },
-    )?;
     let (execution, policy) = execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
-        &runtime,
+        runtime,
         ranked,
         evidence,
         contract,
@@ -115,7 +97,6 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
 
 #[derive(Debug)]
 pub(crate) enum ProductionMirPlironVerusJoinErrorV1 {
-    RuntimeUnavailable { root: &'static str, detail: String },
     Verification(ProductionMirPlironPerCompilationVerusErrorV1),
     ConditionalVerification(fe2o3_verifier::ProductionConditionalOutputVerusErrorV1),
 }
@@ -123,10 +104,6 @@ pub(crate) enum ProductionMirPlironVerusJoinErrorV1 {
 impl fmt::Display for ProductionMirPlironVerusJoinErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RuntimeUnavailable { root, detail } => write!(
-                formatter,
-                "per-compilation MIR/PLIRON proof runtime is unavailable at {root}: {detail}",
-            ),
             Self::Verification(error) => error.fmt(formatter),
             Self::ConditionalVerification(error) => error.fmt(formatter),
         }
@@ -136,7 +113,6 @@ impl fmt::Display for ProductionMirPlironVerusJoinErrorV1 {
 impl Error for ProductionMirPlironVerusJoinErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::RuntimeUnavailable { .. } => None,
             Self::Verification(error) => Some(error),
             Self::ConditionalVerification(error) => Some(error),
         }

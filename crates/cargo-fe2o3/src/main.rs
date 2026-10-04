@@ -1637,8 +1637,7 @@ fn run_cargo_with_backend_inner(
                 capability_broker::CapabilityBroker::start_protected_with_source_isa_observer(
                     context.build_session,
                     binding,
-                    compiler_closure,
-                    protected_release.compiler_execution_profile_capability(),
+                    protected_release,
                     &context.pinned_backend,
                     artifact_dir,
                     &context.pinned_cargo,
@@ -1648,8 +1647,7 @@ fn run_cargo_with_backend_inner(
             None => capability_broker::CapabilityBroker::start_protected(
                 context.build_session,
                 binding,
-                compiler_closure,
-                protected_release.compiler_execution_profile_capability(),
+                protected_release,
                 &context.pinned_backend,
                 artifact_dir,
                 &context.pinned_cargo,

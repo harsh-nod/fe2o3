@@ -198,6 +198,7 @@ impl CompilerProofBrokerV1 {
                 session,
                 attempt,
                 deadline,
+                cancelled: Arc::new(AtomicBool::new(false)),
             },
             CompilerProofBootstrapV1 {
                 session,
@@ -417,10 +418,38 @@ pub struct PendingCompilerProofServerV1 {
     session: [u8; 32],
     attempt: BuildAttempt,
     deadline: Instant,
+    cancelled: Arc<AtomicBool>,
+}
+
+/// Revocation only. Dropping this owner cancels the associated session and any running proof.
+pub struct CompilerProofSessionCancellationV1 {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CompilerProofSessionCancellationV1 {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for CompilerProofSessionCancellationV1 {
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 impl PendingCompilerProofServerV1 {
+    pub fn cancellation(&self) -> CompilerProofSessionCancellationV1 {
+        CompilerProofSessionCancellationV1 {
+            cancelled: Arc::clone(&self.cancelled),
+        }
+    }
+
     fn revalidate(&self) -> Result<()> {
+        require(
+            !self.cancelled.load(Ordering::Acquire),
+            "compiler-proof session cancelled",
+        )?;
         self.inner.revalidate()?;
         self.wrapper.revalidate()?;
         self.endpoint.revalidate()
