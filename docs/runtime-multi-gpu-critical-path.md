@@ -77,9 +77,17 @@ that result with the marker declaration before service use. The positive fixture
 now uses the actual macro-generated ABI/contract; a same-name/same-binding synthetic
 profile rejects without consuming the inherited endpoint. Generic request
 preparation and the existing exhaustive error enums remain unchanged.
-The fixed custodian can reuse this non-generic derivation, but must still validate
-the complete transferred compiler closure and authenticate the original application
-occurrence. Do not reacquire the application's held publication lock in that service.
+Complete immutable compiler-closure checking is now factored out of ordinary
+admission. `check_worker_v3_compiler_closure_v1` canonical-decodes the V2 envelope,
+replays the finalizer and selects the exact descriptor from borrowed envelope and
+HSACO bytes, without filesystem access or publication-lock acquisition. The checked
+closure can independently derive the fill subject from an original executed proof
+without a marker or caller-supplied contract. Application requests now expose their
+original V2 evidence borrow while the same current token is held. Copied evidence
+does not acquire the original runtime evidence view's provenance or currentness.
+The fixed custodian can reuse these checks, but still needs authenticated original
+application occurrence, a fresh session and retained remote proof ownership. Do not
+reacquire the application's held publication lock in that service.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
@@ -108,6 +116,16 @@ adds independent reconstruction of the exact explicit host ABI and launch contra
 The ABI receipt's domain-separated identity must match the original target lineage;
 a raw descriptor content hash is not that receipt identity. A copied contract digest
 is canonical equivalence data, not original ABI provenance or launch authority.
+The [compiler-closure checkpoint](evidence/dev-compiler-closure-check-2026-10-04/README.md)
+shares immutable validation with ordinary admission and independently reconstructs
+the same fill subject. It is not a custodian deployment or cross-process owner.
+The next registration path must authenticate the original application before its
+descriptor ACK, on a dedicated proof endpoint rather than FD195. Cargo reads that
+ACK pipe until EOF: root-side inspection must close any duplicated ACK writer
+before allowing acknowledgment, while retaining the original pidfd and other
+occurrence evidence. Keeping the ACK writer alive for proof custody would deadlock
+startup. App-lifetime proof custody must not occupy the compiler issuer's bounded
+worker slots, and process exit alone cannot prove GPU settlement.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
