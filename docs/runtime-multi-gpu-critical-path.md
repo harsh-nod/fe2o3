@@ -37,6 +37,13 @@ opcode coverage before clearing application admission.
    unconditional executable/load APIs.
 4. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
    and publication currentness before creating private invocation authority.
+   The native spatial/storage prerequisite is now implemented as a tightening
+   constraint on the existing fixed packet. Preparation checks the actual patched
+   272-byte kernarg and original retained code/coherent-host output allocations;
+   submission requires that same prepared owner and first dispatch generation. This is not
+   the consuming join with pending compiler/proof custody or launch authority.
+   Device-local fill output remains excluded from this first conditional profile
+   until its retained allocation identity includes the memory-session association.
 5. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
    -> PUBLIC XGMI -> full guarded readback in both directions, including N=65
    with G=128. A second write-only fill does not prove consumption of peer input.
@@ -79,6 +86,9 @@ treating copied signed records as original evidence custody.
 The [pending-admission checkpoint](evidence/dev-pending-fill-admission-2026-10-04/README.md)
 adds the concrete one-use service transaction under retained publication currentness.
 It remains distinct from production deployment approval and invocation authority.
+The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
+checks exact machine shape, patched arguments and original native owner/session
+association. Its one-generation constraint is not the pending-proof admission join.
 The [production-deployment checkpoint](evidence/dev-production-deployment-admission-2026-10-04/README.md)
 adds independently pinned configuration, namespace/path continuity and a concrete
 production auditor factory. Its 21 isolated cases use actual root-owned fixed paths
