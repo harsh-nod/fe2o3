@@ -183,9 +183,10 @@ spawn/sandbox supervision and protected service isolation, neither of which foll
 from the process snapshot alone. Then deploy the fixed keyless custodian, join its
 original proof to native invocation premises, and run the selected two-GPU pipeline.
 
-The reviewed registration design reuses the supervisor/root registry without
-another listener. Implement the following as one coherent application profile;
-these are not yet implemented registration/deployment or remote proof ownership.
+The registration design reuses the supervisor/root registry without another
+listener. The root registry and observation handshake are now implemented as
+described below. Production Cargo/supervisor/host activation and remote proof
+ownership are still required before ordinary application admission.
 
 1. Completed prerequisite: the inert canonical application binding is exactly 840 bytes
    containing the full compiler supervisor handoff, exact four-slot occurrence,
@@ -211,7 +212,8 @@ these are not yet implemented registration/deployment or remote proof ownership.
    Cargo and production session dispatch deliberately remain unchanged until the
    registration/readiness gate below is integrated. This prerequisite is not
    authenticated root registration, application readiness, or GPU launch authority.
-3. Root `RegisterApplication` uses the existing two-right compiler registration
+3. Implemented [root application registry](evidence/dev-root-application-registry-2026-10-04/README.md):
+   root `RegisterApplication` uses the existing two-right compiler registration
    transport and marks its preparation AppExpected. `AttachApplication` references
    that exact unexpired preparation and transfers only proof peer and Cargo pidfd.
    Duplicate the original app token from the prepared observer's retained client,
@@ -219,10 +221,20 @@ these are not yet implemented registration/deployment or remote proof ownership.
    Install a separately bounded app entry, including separate containment custody,
    before replying Installed. Missing/duplicate attachment and attach-after-bind
    reject. Compiler eviction or issuer exit cannot retire the app entry.
-4. Installed returns a root-created observation-readiness reader. Root retains its
-   writer; supervisor waits on it after issuer launch/bind/readiness, outside the
-   shared registry mutex, before publishing Cargo readiness. Host exchanges a fresh
-   root challenge and exact app Ready after local admission and before Cargo ACK.
+4. Implemented root gate and shared bounded handshake codec: Installed returns a
+   root-created observation-readiness reader. Root retains its writer and waits for
+   authenticated app Hello, exact observation, matching Accept, and issuer binding.
+   It writes/closes the independent gate before sending Ready, so an app that ACKs
+   and unloads immediately cannot race gate publication. The separate application
+   table retains no compiler peer and permits only one initial observation per
+   registry iteration. Registered observation-only EOF retires without signaling
+   a still-live app; startup failure contains the original app before release.
+   Still required: supervisor must await the gate after issuer readiness, outside
+   the registry mutex, before publishing dedicated application readiness to Cargo.
+   Seal compiler registration and gate together in one private application route;
+   do not accept independently supplied gates. A gate failure must also clean up
+   the bound issuer, not rely solely on root's application containment.
+   Host must perform the handshake after local admission and before Cargo ACK.
    Authenticate socket creator, reverse addresses and distinct per-message sender
    credentials against original pidfds. Commit observation before either readiness
    response. The new readiness pipe is not Cargo's ACK pipe: temporary ACK writer
