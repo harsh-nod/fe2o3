@@ -169,7 +169,7 @@ fn byte_value_type_indexed_source_keeps_full_census_and_exact_budgets() {
             32
         );
     }
-    assert!(!source.contains("let value = values["));
+    assert!(!checks.contains("let value = values["));
     let exact = indexed_value_type_census_v96(measured.1, measured.2);
     assert_eq!(exact.0.unwrap(), source);
     assert_eq!((exact.1, exact.2), (measured.1, measured.2));
