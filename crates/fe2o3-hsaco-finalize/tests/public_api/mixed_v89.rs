@@ -264,3 +264,51 @@ fn mixed_v89_finalization_requires_exact_work_and_complete_scratch() {
     );
     assert_eq!(raw.bytes, original);
 }
+
+#[test]
+fn mixed_v89_paid_ready_inspection_preserves_exact_resources_and_rejects_legacy() {
+    use fe2o3_hsaco_finalize::{
+        MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89 as STORAGE,
+        MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89 as WORK,
+        check_finalized_nominal_hsaco_on_budget_v89 as check,
+    };
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    let run = |bytes: &[u8], work_limit, storage_limit| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(19).unwrap();
+        let result = check(bytes, &mut budget);
+        assert_eq!(budget.storage(), 19);
+        (result, budget.work(), budget.peak_storage())
+    };
+    for target in ["gfx942:xnack-", "gfx950:xnack-"] {
+        let source = wire(target, 2);
+        let raw = fixture(&source, target, 2, true, 1, &[]);
+        let finalized =
+            finalize_unfinalized_nominal_hsaco_v89(&raw.bytes, &source, SCRATCH, &mut free)
+                .unwrap();
+        let bytes = finalized.as_bytes();
+        let original = bytes.to_vec();
+        let (result, work, storage) = run(bytes, WORK, STORAGE);
+        result.unwrap();
+        assert!(work > 0 && storage > 19);
+        run(bytes, work, storage).0.unwrap();
+        assert!(run(bytes, work - 1, storage).0.is_err());
+        assert!(run(bytes, work, storage - 1).0.is_err());
+        assert!(run(&raw.bytes, WORK, STORAGE).0.is_err());
+        assert_eq!(bytes, original);
+        let legacy_source = super::nominal_v5::wire(target, 2);
+        let legacy_raw = super::nominal_v5::fixture(&legacy_source, target, 2, true, 1, &[]);
+        let legacy = fe2o3_hsaco_finalize::finalize_unfinalized_nominal_hsaco_v5(
+            &legacy_raw.bytes,
+            &legacy_source,
+            fe2o3_hsaco_finalize::NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V5,
+            &mut free,
+        )
+        .unwrap();
+        assert!(run(legacy.as_bytes(), WORK, STORAGE).0.is_err());
+    }
+}

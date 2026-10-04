@@ -230,11 +230,11 @@ pub fn ready_source_isa_observation_frame_v1(
 }
 
 /// Preserves the exact finalized subject while reporting the unimplemented V18
-/// source/ISA projection. The V7/V8 replay is not a decoder for typed V50 lineage.
-pub(crate) fn finalized_mixed_source_isa_observation_frame_v53(
+/// source/ISA projection. The V7/V8 replay is not a decoder for typed V90 lineage.
+pub(crate) fn finalized_mixed_source_isa_observation_frame_v89(
     config: [u8; 32],
     unit: [u8; 32],
-    finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV53,
+    finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
 ) -> Result<SourceIsaObservationFrameV1, SourceIsaObservationFrameErrorV1> {
     let context = SourceIsaObservationContextV1::new(
         config,

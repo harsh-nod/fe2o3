@@ -85,7 +85,8 @@ pub use mixed_worker_resources_v53::{
 };
 pub use mixed_worker_resources_v89::{
     MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89, MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
-    MixedWorkerFinalizationBudgetErrorV89, derive_unfinalized_nominal_hsaco_on_budget_v89,
+    MixedWorkerFinalizationBudgetErrorV89, check_finalized_nominal_hsaco_on_budget_v89,
+    derive_unfinalized_nominal_hsaco_on_budget_v89,
     finalize_protected_worker_nominal_hsaco_on_budget_v89,
 };
 mod nominal_descriptor_physical;

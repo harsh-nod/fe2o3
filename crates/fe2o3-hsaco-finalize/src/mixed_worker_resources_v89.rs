@@ -16,6 +16,19 @@ mixed_worker_resources_family!(
     derive_unfinalized_nominal_hsaco_on_budget_v89
 );
 
+/// Checks a finalized V89 artifact on a finite ledger without copying its bytes.
+/// This is structural recovery validation, not proof or execution authority.
+pub fn check_finalized_nominal_hsaco_on_budget_v89(
+    bytes: &[u8],
+    budget: &mut Budget<'_>,
+) -> Result<(), MixedWorkerFinalizationBudgetErrorV89> {
+    scope(budget, |scratch, work| {
+        crate::inspect_finalized_nominal_hsaco_v89(bytes, scratch, &mut |n| work(n))
+            .map(|_| ())
+            .map_err(Failure::Artifact)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
