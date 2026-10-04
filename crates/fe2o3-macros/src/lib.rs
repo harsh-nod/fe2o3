@@ -4731,6 +4731,9 @@ fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
 }
 
 #[cfg(test)]
+mod runtime_adapter_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         DeviceFfiOptions, GeneralTypedArgumentKindV1, GeneralTypedScalarV1, KernelMode,
