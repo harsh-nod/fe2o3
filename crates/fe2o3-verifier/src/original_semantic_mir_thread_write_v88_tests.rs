@@ -167,13 +167,14 @@ fn write_fixture(
             };
             arguments[1] = Operand::Copy(index.clone());
         }
+        let moved_value = matches!(shape, Some(WriteProofShape::MovedValue));
         let value = Place::new(
-            SemanticLocalIdV1::from_index(1),
+            SemanticLocalIdV1::from_index(if moved_value { 14 } else { 1 }),
             vec![],
             TypeId::from_index(0),
         )
         .unwrap();
-        arguments.push(if matches!(shape, Some(WriteProofShape::MovedValue)) {
+        arguments.push(if moved_value {
             Operand::Move(value)
         } else {
             Operand::Copy(value)
@@ -188,6 +189,54 @@ fn write_fixture(
             SemanticUnwindActionV1::Unreachable,
         )
         .unwrap();
+        if moved_value {
+            // The resumed scalar body still uses argument1. Move a dedicated
+            // temporary instead, initialized before the zero-statement cut.
+            assert_eq!(locals[14].ty(), TypeId::from_index(0));
+            assert_eq!(locals[14].role(), SemanticLocalRoleV1::Temporary);
+            let predecessor = &blocks[write_at - 1];
+            let Terminator::Call(previous) = predecessor.terminator().kind() else {
+                panic!("original witness call");
+            };
+            assert_eq!(
+                previous.destination().unwrap().edge().target().index() as usize,
+                write_at
+            );
+            let mut statements = predecessor.statements().to_vec();
+            statements.push(fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1::new(
+                old.source(),
+                fe2o3_mir_model::semantic_mir_v1::SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        Place::new(
+                            SemanticLocalIdV1::from_index(14),
+                            vec![],
+                            TypeId::from_index(0),
+                        )
+                        .unwrap(),
+                        SemanticRvalueV1::new(
+                            TypeId::from_index(0),
+                            fe2o3_mir_model::semantic_mir_v1::SemanticRvalueKindV1::Use(
+                                Operand::Copy(
+                                    Place::new(
+                                        SemanticLocalIdV1::from_index(1),
+                                        vec![],
+                                        TypeId::from_index(0),
+                                    )
+                                    .unwrap(),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ));
+            blocks[write_at - 1] = SemanticBasicBlockV1::new(
+                predecessor.identity(),
+                old.source(),
+                statements,
+                predecessor.terminator().clone(),
+            )
+            .unwrap();
+        }
         blocks[write_at] = SemanticBasicBlockV1::new(
             blocks[write_at].identity(),
             old.source(),
