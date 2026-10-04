@@ -343,7 +343,41 @@ fn checked_write_suffix_rejects_changed_operands_types_effects_and_ssa() {
 
 #[test]
 fn checked_write_suffix_precharges_exact_work_and_borrows_storage() {
+    type Inputs = (ValueId, ValueId, Option<ValueId>, ValueId, ScalarType);
+    type Output = [ValueId; 7];
+    type Frame<'a> = (
+        Inputs,
+        Output,
+        &'a [Operation],
+        [&'a Operation; 8],
+        [&'a ValueDef; 7],
+        [ValueId; 11],
+        [usize; 4],
+        Result<Output, ProductionSemanticKirErrorV1>,
+        Result<(), ProductionSemanticKirErrorV1>,
+        Option<u32>,
+    );
+    assert_eq!(size_of::<CheckedWriteInputsV85>(), size_of::<Inputs>());
+    assert_eq!(size_of::<CheckedWriteTailV85>(), size_of::<Output>());
+    let header = size_of::<Frame<'_>>() + std::mem::align_of::<Frame<'_>>();
+    assert_eq!(checked_write_tail_headers_v85().unwrap(), header);
     let (inputs, rows) = write_tail(true, ScalarType::U32);
+    for storage in [header, header - 1] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(128);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage);
+        let reserved = budget.reserve_storage(header);
+        if storage == header {
+            reserved.unwrap();
+            check_checked_write_tail_v85(inputs, &rows, &mut budget).unwrap();
+            assert_eq!(budget.storage(), header);
+            budget.release_storage(header).unwrap();
+        } else {
+            assert!(reserved.is_err());
+            assert_eq!(budget.work(), 0);
+            assert!(budget.reserve_storage(0).is_err());
+        }
+        assert_eq!(budget.storage(), 0);
+    }
     for limit in [128, 127] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = ArgumentBudgetV1::new(&mut work, 0);
