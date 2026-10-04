@@ -1,6 +1,6 @@
 {
-  "head": "3126d2790ac8ee0c05d72b07ab56f816c7e0b6a3",
-  "tree": "b0b0e858aa9ee1e680f06a2dc8baf4fa3f8db374",
+  "head": "5631b1d4f8b7314a53067483bf4b136a15e4e266",
+  "tree": "a5ce7267dada95cb16a4b391299a0d109f4c6a6b",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
@@ -155,6 +155,10 @@
     "original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_denials",
     "original_issued_descriptor_store_recipe_checks_both_unchanged_endpoints",
     "original_issued_ordered_only_and_mixed_users_have_exact_transaction_boundaries",
+    "original_thread_write_copied_recipe_cannot_change_source_facts",
+    "original_thread_write_rejects_consistent_physical_tail_with_wrong_source_inputs",
+    "original_thread_write_replays_receiver_witness_value_and_bool_result",
+    "original_thread_write_transaction_has_exact_resource_boundaries",
     "payload_census_rejects_result_rhs_role_prefix_type_and_occurrence_substitution",
     "pending_global_access_headers_have_an_independent_exact_and_one_short_equation",
     "pending_global_accesses_authenticate_exact_correspondence_before_new_debits",
@@ -855,6 +859,22 @@
       "name": "original_issued_ordered_only_and_mixed_users_have_exact_transaction_boundaries"
     },
     {
+      "name": "original_thread_write_copied_recipe_cannot_change_source_facts",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "original_thread_write_rejects_consistent_physical_tail_with_wrong_source_inputs",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "original_thread_write_replays_receiver_witness_value_and_bool_result",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "original_thread_write_transaction_has_exact_resource_boundaries",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
       "name": "payload_census_rejects_result_rhs_role_prefix_type_and_occurrence_substitution"
     },
@@ -1234,12 +1254,12 @@
       "sha256": "40eb4f2ccac845def30fa4bae20ae51335f843360908cca66101d0724aec4c4e"
     },
     {
-      "path": "crates/fe2o3-kernel-ir/src/formal_memory_obligations/canonical_guarded_stores_v24.rs",
-      "sha256": "70c1d304aec2f00b0f7c11766ae401e38fa4786e22ce2355df87e5f486eba8ce"
-    },
-    {
       "path": "crates/fe2o3-kernel-ir/src/formal_memory_obligations/canonical_guarded_stores_v24_tests.rs",
       "sha256": "64ef3abe9bfc66a360ce84c6201b01007d058e54a5adac8b7e63b596017df911"
+    },
+    {
+      "path": "crates/fe2o3-kernel-ir/src/formal_memory_obligations/canonical_guarded_stores_v24.rs",
+      "sha256": "70c1d304aec2f00b0f7c11766ae401e38fa4786e22ce2355df87e5f486eba8ce"
     },
     {
       "path": "crates/fe2o3-kernel-ir/src/formal_memory_obligations/canonical_predicated_slice_domains_v85_tests.rs",
@@ -1254,12 +1274,12 @@
       "sha256": "bf59741ccb6c5b9d5859c104284985f50b49313094c951f650bc4d17d39ee1cd"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85.rs",
-      "sha256": "760233081f90c1e1396b61108f5203769b08aacb04fc4785d084257a9bd1a857"
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85_tests.rs",
+      "sha256": "e6b8c4a2c10cae75906e5017250a95b3dd5c887233580c6451ef5b4691514894"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85_tests.rs",
-      "sha256": "5cd57223ba0acf6455fbe424cec16df70ed73d2096997252db9dbae4cef32558"
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85.rs",
+      "sha256": "94b76be3b77833b61932df024afd8f0413726694b0bfd5daccca18a2ebbe543e"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_descriptor_roles_v18.rs",
@@ -1282,12 +1302,12 @@
       "sha256": "bae088526823a8a59171a56965621a83838bf167ec99b8707654f196544fc815"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_v18.rs",
-      "sha256": "c1d8d525f259e61c96ab3f9c4f698347ec2086e103c4d27f3bcf3432af1a0100"
-    },
-    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_v18_tests.rs",
       "sha256": "fb46473dffef8633b5cbbb7ba37016a21efd500954cffade9542f664755a1afa"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_v18.rs",
+      "sha256": "c1d8d525f259e61c96ab3f9c4f698347ec2086e103c4d27f3bcf3432af1a0100"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_commands_v18_tests.rs",
@@ -1310,12 +1330,12 @@
       "sha256": "6cbf609e19ddf6adf60799a89d57a39e36c5638c97910d061dfc8f792019ca95"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84.rs",
-      "sha256": "7dfbd21943c4d5f23f3dcfa29a877bdb38c520180046df68e099b16707288abf"
-    },
-    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84_tests.rs",
       "sha256": "3cf5632b6164cf653c89d6e1e31fe83ee23ec9af94d76cf4638faef427e4f280"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84.rs",
+      "sha256": "7dfbd21943c4d5f23f3dcfa29a877bdb38c520180046df68e099b16707288abf"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs",
@@ -1334,12 +1354,12 @@
       "sha256": "cedb2e6c9f47b6917c5f6f09b97ae022b2af594d90ef50fda485a457ecf7092f"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_join_v30.rs",
-      "sha256": "c7543fe84926f28c6eee07d9a642f6c857ac4b5af50475fadb267a9978f515b0"
-    },
-    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_join_v30_tests.rs",
       "sha256": "0b207ff1318455a829acbc3a9ccbff8f9f26e53ae2f5a7e9db6e16a19ff41d2e"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_join_v30.rs",
+      "sha256": "c7543fe84926f28c6eee07d9a642f6c857ac4b5af50475fadb267a9978f515b0"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_width_commands_v30_tests.rs",
@@ -1350,24 +1370,59 @@
       "sha256": "0d9fcea77d422f9fc8cc2a4b891fe56a5bab7edfaf722237663dc9b0ce18d187"
     },
     {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
+      "sha256": "050af561b30e0e31df7f7036776d6e9aa5d73d98f7468bfe1943388411321681"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_accesses_v29.rs",
+      "sha256": "1ef1250c424ec73436ef6004954f6158590713b1895b7b75604d0770957ed02d"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
+      "sha256": "e789802f443e702ba218eed69379a814c8929ae093edc63a16450e4f22a32e6a"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_v29_tests.rs",
       "sha256": "5f2ca22698830f7527b2b948d4307e8d398ea79a3cc423758f4808b062bc891c"
     },
     {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_role_replay_v18.rs",
+      "sha256": "ce67f3c6b1df36b48abff10eb76a0d565ea11ded9d322adcdeeff32b537d4635"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "sha256": "41222acd7ab4bac746bc684a90f88b067ef4c2951a43c0a184daad5da52fdf85"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29.rs",
+      "sha256": "beb5e2a981b3c2068c113e2a508be66d483df5b5993dc922fc9802a24f32084d"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_reference_address_relation_v29.rs",
-      "sha256": "ac12f674adc9d6994ae2977141c7d65d1905ec0aa8d63b129b829a19f57c4606"
+      "sha256": "34b745e88866c922946744678a134cabbba5091799007285161106ab162ed5fb"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
       "sha256": "00d41f4bbd8eb211a807e08f0c6753a8b95ad56e4ef95f37f243e7576ad38093"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs",
+      "sha256": "726a3fb6704ef74925cd33844ad97c1b3e0d9587860fa8dbba745902d48b1a03"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86.rs",
+      "sha256": "4d6efd4f7abac090986486f733570af3a64cfa72d6c7145084bfd2bc92f96cc3"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_replay_v86.rs",
+      "sha256": "3a666a929495a75b58bb3f0ef38997eb5d2ec4007e1b602680a8a005f78c28bd"
     }
   ],
   "union": {
-    "typed_guard": 153,
-    "prior_payload": 87,
-    "suffix": 3,
-    "duplicate_rows_removed": 2,
-    "distinct": 241
+    "prior_joint": 241,
+    "original_thread_write": 4,
+    "duplicate_rows_removed": 0,
+    "distinct": 245
   },
   "scope": "Joint lowerer regression only. Typed explicit-predicate endpoints still refuse V26 completion; checked-write suffix validates emitted physical equations, not original source authority. No proof or activation credit."
 }
