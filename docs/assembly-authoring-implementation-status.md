@@ -11,6 +11,54 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 checked optimizer and scalar debugger startup — 2026-10-04
+
+The private owning compilation path now invokes the actual checked V12
+optimizer on its target-bound module and retains the checked output with the
+original formal/source owner. Replay checks the actual optimizer input/output
+and complete transition history, then rechecks the fresh occurrence relation.
+No legacy connected owner or replacement projection account is introduced.
+
+Fresh Identity and swapped-input frontend sessions in **debug and release**
+completed this continuation. Both input modules had three functions, 324
+operations and 8,668 canonical bytes; their actual checked outputs retained
+three functions with 259 operations and 7,120 bytes. Opposite Return mappings
+were rejected before correct replay. All eight original formal reasons remain
+retained: their source analysis is still Incomplete. Checked optimization and
+original-source guard discharge do not establish optimized-output formal safety.
+
+The retained optimizer accounting was 806,130 bytes and its temporary
+observation header 160 bytes on the original projection account. Actual
+retained storage was 910,702,485 bytes with a 962,461,661-byte phase peak.
+The separate enclosing materialization account returned to its original
+post-materialization state. These selected logical reservations do not bound
+the whole optimizer/formal engine, allocator, report formatting or process RSS.
+
+The six-source continuation passed eight focused controls, 12 parent controls,
+**3,946 compiler library tests** (232 ignored), 73 extractor tests and two API
+tests in each build mode, **2,082 lowerer tests** in each mode, the release
+product build and four separately supervised genuine frontend processes.
+Existing target-feature warnings remain recorded. Qualified whole-source census:
+`8bb093a517f63df993d7f960e262e40260581db9fa5f9758a0d489dbd1e78cb3`.
+
+The fresh scalar debugger now also passed five supervised benign controls and
+a no-inferior startup with its rebuilt ELF and exact provider. The startup
+collected two MI commands and 14 records, with 193 observed files and no
+inferior or object files. Its owned service exited cleanly; the recorded
+cleanup and a later bounded audit found the six attempt-specific cgroups
+absent. The history replay passed 14 controls. These are scoped startup and
+cleanup observations, not host-wide quiescence, physical register capture or
+a successful kernel dispatch. The startup lease is historical and cannot
+authorize a later native attempt.
+
+Next are fresh optimized-output safety admission and matrix-helper
+context/convergence support before native LLVM lowering. Debugger controller
+binding, its current-runtime checks and a separately authorized fresh native
+attempt remain pending. Ordinary compilation, LLVM/artifact/launch admission,
+debugger capture and publication remain disabled on these private paths.
+No milestone or tutorial is completed here; accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 target binding and scalar debugger rebuild — 2026-10-04
 
 The private owning compilation path now derives launch geometry from the actual
