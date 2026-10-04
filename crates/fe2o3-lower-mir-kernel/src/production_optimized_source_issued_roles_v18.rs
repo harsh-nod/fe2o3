@@ -307,6 +307,19 @@ fn install_optimized_issued_roles_v18(
     roles: &mut [DescriptorSourceRoleRowV18],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
+    install_optimized_issued_roles_profile_v90::<false>(
+        original, optimized, root, leaves, roles, budget,
+    )
+}
+
+fn install_optimized_issued_roles_profile_v90<const PREDICATED_WRITES: bool>(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    root: usize,
+    leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
+    roles: &mut [DescriptorSourceRoleRowV18],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
     optimized.check_exact_original_v18(original, budget)?;
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let floor = budget.storage();
@@ -318,7 +331,7 @@ fn install_optimized_issued_roles_v18(
             let floor = budget.storage();
             original.source.retain_construction(|| {
                 budget.reserve_storage(issued_output_headers_v18()?)?;
-                install_optimized_issued_roles_inner_v18(
+                install_optimized_issued_roles_inner_v18::<PREDICATED_WRITES>(
                     original, optimized, root, leaves, roles, budget,
                 )?;
                 budget
@@ -331,7 +344,7 @@ fn install_optimized_issued_roles_v18(
     original.retain_query(budget.release_storage(retained).map_err(Into::into))
 }
 
-fn install_optimized_issued_roles_inner_v18(
+fn install_optimized_issued_roles_inner_v18<const PREDICATED_WRITES: bool>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     root: usize,
@@ -341,8 +354,9 @@ fn install_optimized_issued_roles_inner_v18(
 ) -> SourceOwnedResultV18<()> {
     use fe2o3_kernel_ir::CanonicalKirUseCoordinateV1 as Usage;
     optimized.replay_selected_transport_v30(root, budget)?;
-    let Some(rows) =
-        scoped_raw_admission_v29::checked_issued_source_rows_v18(original, root, budget)?
+    let Some(rows) = scoped_raw_admission_v29::checked_issued_cfg_rows_profile_v90::<
+        PREDICATED_WRITES,
+    >(original, root, budget)?
     else {
         return Ok(());
     };

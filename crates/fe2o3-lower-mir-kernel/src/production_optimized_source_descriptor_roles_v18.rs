@@ -370,6 +370,26 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_descriptor_source_roles_profile_v90::<false, T, E>(
+            optimized, root, recipe, index, budget, consume,
+        )
+    }
+
+    fn with_descriptor_source_roles_profile_v90<'work, const PREDICATED_WRITES: bool, T, E>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        recipe: Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+        index: Option<&OriginalEntryIndexV20<'_, '_>>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(
+            &CheckedDescriptorSourceRolesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
         let consume = SourceCallbackCustodyV29::new(consume);
         // Exact subject/custody precedes scope entry and its new storage/work.
         optimized.check_exact_original_v18(self, budget)?;
@@ -421,7 +441,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                                     source_owned_finish_preflight_v26::<T, E>(budget)?,
                                 ])?;
                                 budget.reserve_storage(headers)?;
-                                let rows = build_descriptor_source_roles_v18(
+                                let rows = build_descriptor_source_roles_v18::<PREDICATED_WRITES>(
                                     self, optimized, root, leaves, index, budget,
                                 )?;
                                 let retained = budget
@@ -563,7 +583,7 @@ fn install_descriptor_role_v18(
     Ok(())
 }
 
-fn build_descriptor_source_roles_v18(
+fn build_descriptor_source_roles_v18<const PREDICATED_WRITES: bool>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     root: usize,
@@ -587,7 +607,9 @@ fn build_descriptor_source_roles_v18(
             global: None,
         });
     }
-    install_optimized_issued_roles_v18(original, optimized, root, leaves, &mut rows, budget)?;
+    install_optimized_issued_roles_profile_v90::<PREDICATED_WRITES>(
+        original, optimized, root, leaves, &mut rows, budget,
+    )?;
     let physical = original.source.root(root, budget)?.1;
     let input = original.inventory.functions().get(physical).ok_or(
         ProductionSourceOwnedViewErrorV18::Binding("descriptor original root is absent"),

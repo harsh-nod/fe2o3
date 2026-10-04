@@ -202,6 +202,41 @@ fn predicated_completion_v89_preserves_legacy_cfg_refusal() {
 }
 
 #[test]
+fn predicated_completion_v90_cfg_seed_requires_independent_checked_write_rows() {
+    use slice_view_v1::PREDICATED_SEED_FAULT_V90;
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PREDICATED_SEED_FAULT_V90.set(None);
+        }
+    }
+    for mode in [1, 2, 3] {
+        let reset = Reset;
+        PREDICATED_SEED_FAULT_V90.set(Some((mode, 0)));
+        let reached = std::cell::Cell::new(false);
+        let error = run_predicated_completion_v89(2, 0, 0, LIMIT, LIMIT, &reached)
+            .0
+            .unwrap_err();
+        let (_, observed) = PREDICATED_SEED_FAULT_V90.get().unwrap();
+        assert!(observed > 0, "fault must reach the actual seed: {error:?}");
+        assert!(
+            !reached.get(),
+            "seed alone cannot publish completed write facts"
+        );
+        if mode == 2 {
+            assert!(format!("{error:?}").contains("predicated source/native predicate differs"));
+        }
+        if mode == 3 {
+            assert!(
+                format!("{error:?}")
+                    .contains("checked write requires its explicit-predicate consumer")
+            );
+        }
+        drop(reset);
+    }
+}
+
+#[test]
 fn predicated_completion_v89_refuses_foreign_ledger_without_refunding_retained_output() {
     let reached = std::cell::Cell::new(false);
     assert!(

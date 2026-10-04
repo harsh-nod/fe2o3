@@ -39,6 +39,17 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
     root: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Option<&'a PendingSourceIssuedRolesV29>> {
+    checked_issued_cfg_rows_profile_v90::<false>(original, root, budget)
+}
+
+// The predicated consumer first projects ordinary CFG issuers, then separately
+// authenticates every checked write through V88. This query replays all rows;
+// it does not turn a write recipe into a CFG role or a completed memory fact.
+pub(super) fn checked_issued_cfg_rows_profile_v90<'a, const PREDICATED_WRITES: bool>(
+    original: &'a ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<Option<&'a PendingSourceIssuedRolesV29>> {
     original.query(budget)?;
     original.retain_query((|| {
         let owner = original.source.root_row(root)?;
@@ -53,7 +64,7 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
                 .source
                 .missing("selected reference access requires its conditional V30 consumer");
         }
-        if !pending.issued.writes.is_empty() {
+        if !PREDICATED_WRITES && !pending.issued.writes.is_empty() {
             return original
                 .source
                 .missing("checked write requires its explicit-predicate consumer");
