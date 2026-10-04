@@ -116,7 +116,7 @@ fn write_owner_count_v87(
     count: u32,
 ) -> ProductionSemanticSsaOwnerV1 {
     assert!(receiver < 2);
-    assert!(count > 0);
+    assert!((1..=252).contains(&count));
     let base = owner_with_shape_uncaptured(1, 0);
     let mut types = base.source_semantic().types()[..8].to_vec();
     types[BOOL.index() as usize] = declaration(
@@ -170,7 +170,7 @@ fn write_owner_count_v87(
     let mut blocks = vec![block(0, statements, call(1, vec![], 4, WITNESS, 1))];
     for ordinal in 1..=count {
         blocks.push(block(
-            ordinal,
+            u8::try_from(ordinal).unwrap(),
             if ordinal == 1 {
                 vec![]
             } else {
@@ -206,7 +206,7 @@ fn write_owner_count_v87(
     }
     if consume_bool {
         blocks.push(block(
-            count + 1,
+            u8::try_from(count + 1).unwrap(),
             vec![],
             SemanticTerminatorKindV1::SwitchInt {
                 discriminant: SemanticOperandV1::Copy(place(5, BOOL)),
@@ -221,13 +221,13 @@ fn write_owner_count_v87(
             },
         ));
         blocks.push(block(
-            count + 2,
+            u8::try_from(count + 2).unwrap(),
             vec![],
             SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, count + 3)),
         ));
     }
     blocks.push(block(
-        if consume_bool { count + 3 } else { count + 1 },
+        u8::try_from(if consume_bool { count + 3 } else { count + 1 }).unwrap(),
         vec![assign(
             0,
             UNIT,
