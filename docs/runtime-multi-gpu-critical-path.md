@@ -68,6 +68,14 @@ custodian and a private move-only remote owner binding the exact artifact,
 obligation, original process occurrence and fresh session challenge. Keep FD195
 exclusive to compiler-currentness auditing. Custody must outlive both selected
 devices' invocation settlement; receipt serialization alone is insufficient.
+The inert canonical fill subject is now implemented after exact host association
+and retained by successful pending admission. It commits original compiler/proof
+roots but is neither occurrence identity nor a remote owner. Before service use,
+independently derive the closed fill's host contract from original checked
+descriptor and semantic/KIR inputs. The current unsafe marker profile declaration
+is not sufficient for a fixed service that cannot monomorphize application markers.
+Use a genuinely generated marker as the positive fixture, not the audit-only marker.
+Keep this closed-profile restriction out of generic request preparation.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
@@ -86,6 +94,11 @@ treating copied signed records as original evidence custody.
 The [pending-admission checkpoint](evidence/dev-pending-fill-admission-2026-10-04/README.md)
 adds the concrete one-use service transaction under retained publication currentness.
 It remains distinct from production deployment approval and invocation authority.
+The [inert-subject checkpoint](evidence/dev-conditional-fill-subject-2026-10-04/README.md)
+adds fixed canonical matching data without replacing any original owner or changing
+validation order. Its fresh six-case protected campaign remains test-key-backed;
+independent contract derivation and authenticated cross-process custody are still
+required before this identity can participate in service admission.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
