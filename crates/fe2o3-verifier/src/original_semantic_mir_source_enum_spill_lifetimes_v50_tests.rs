@@ -80,6 +80,19 @@ fn lifetime_fixture(
         2,
         "retain exact original discriminant and return cast"
     );
+    let mut none_statements = vec![none.clone()];
+    if mode == EndPayload::MoveField {
+        let discriminant = joined.remove(0);
+        assert!(
+            matches!(discriminant.kind(), SemanticStatementKindV1::Assign(assignment)
+            if assignment.destination().local().index() == 5
+                && matches!(assignment.value().kind(), SemanticRvalueKindV1::Discriminant(place)
+                    if place.local().index() == 4))
+        );
+        // The niche tag depends on the payload; snapshot it before moving that payload.
+        some_statements.insert(1, discriminant.clone());
+        none_statements.push(discriminant);
+    }
     if mode == EndPayload::OverwriteNone {
         joined.push(none.clone());
     }
@@ -137,7 +150,7 @@ fn lifetime_fixture(
         ),
         block(
             SemanticBlockIdentityV1::from_sha256([244; 32]),
-            vec![none],
+            none_statements,
             SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
         ),
         block(
@@ -290,6 +303,54 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
             "all genuine lifetime cuts and paired effects must be generated"
         );
     }
+}
+
+#[test]
+fn original_enum_spill_rejects_niche_discriminant_after_payload_move() {
+    let error = super::super::super::super::super::invocations::tests::try_source_ssa_transform(
+        |types, functions| {
+            lifetime_fixture(types, functions, EndPayload::MoveField);
+            let helper = functions.last_mut().unwrap();
+            let discriminant = helper.blocks()[1].statements()[1].clone();
+            let old = &helper.blocks()[3];
+            let mut statements = old.statements().to_vec();
+            statements.insert(0, discriminant);
+            let mut blocks = helper.blocks().to_vec();
+            blocks[3] = SemanticBasicBlockV1::new(
+                old.identity(),
+                old.source(),
+                statements,
+                old.terminator().clone(),
+            )
+            .unwrap();
+            *helper = SemanticFunctionDeclV1::new(
+                helper.identity(),
+                helper.role(),
+                helper.item_definition_identity(),
+                helper.monomorphization_identity(),
+                helper.generic_type_arguments_identity(),
+                helper.const_generic_arguments_identity(),
+                helper.source(),
+                helper.abi().clone(),
+                helper.locals().to_vec(),
+                helper.entry(),
+                blocks,
+            )
+            .unwrap();
+        },
+    )
+    .err()
+    .expect("a saved scalar discriminant cannot authorize another tag read after payload move");
+    assert_eq!(
+        error,
+        fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+            function: SemanticFunctionIdV1::from_index(2),
+            block: 3,
+            statement: Some(0),
+            local: 4,
+            violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+        }
+    );
 }
 
 #[test]

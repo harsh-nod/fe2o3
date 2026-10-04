@@ -538,113 +538,126 @@ fn original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads() {
             let inactive = invalid == 1;
             let unguarded = invalid == 2;
             let reached = std::cell::Cell::new(false);
+            let transform =
+                |types: &mut Vec<SemanticTypeDeclV1>,
+                 functions: &mut Vec<SemanticFunctionDeclV1>| {
+                    let enumeration = call_fixture(types, functions, moved);
+                    for root in 0..functions.len() - 1 {
+                        let old = &functions[root];
+                        let word = old.locals()[3].ty();
+                        let variant = u32::try_from(root).unwrap();
+                        let field = SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(4),
+                            vec![
+                                SemanticProjectionV1::new(
+                                    SemanticProjectionKindV1::Downcast(if inactive {
+                                        1 - variant
+                                    } else {
+                                        variant
+                                    }),
+                                    enumeration,
+                                )
+                                .unwrap(),
+                                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word)
+                                    .unwrap(),
+                            ],
+                            word,
+                        )
+                        .unwrap();
+                        let selected = if unguarded {
+                            2
+                        } else if inactive {
+                            3
+                        } else {
+                            0
+                        };
+                        let mut blocks = old.blocks().to_vec();
+                        let block = &blocks[selected];
+                        let statements = if unguarded {
+                            block.statements().to_vec()
+                        } else if inactive {
+                            let mut statements = block.statements().to_vec();
+                            let SemanticStatementKindV1::Assign(original) = statements[0].kind()
+                            else {
+                                panic!("original payload read");
+                            };
+                            statements[0] = SemanticStatementV1::new(
+                                block.source(),
+                                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                                    original.destination().clone(),
+                                    SemanticRvalueV1::new(
+                                        word,
+                                        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(field)),
+                                    ),
+                                )),
+                            );
+                            statements
+                        } else {
+                            let mut statements = block.statements().to_vec();
+                            assert_eq!(statements.len(), 1);
+                            statements.push(SemanticStatementV1::new(
+                                block.source(),
+                                SemanticStatementKindV1::Deinitialize(field),
+                            ));
+                            statements
+                        };
+                        blocks[selected] = SemanticBasicBlockV1::new(
+                            block.identity(),
+                            block.source(),
+                            statements,
+                            if unguarded {
+                                SemanticTerminatorV1::new(
+                                    block.source(),
+                                    SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                                        SemanticEdgeRoleV1::Goto,
+                                        SemanticBlockIdV1::from_index(3),
+                                    )),
+                                )
+                            } else {
+                                block.terminator().clone()
+                            },
+                        )
+                        .unwrap();
+                        functions[root] = SemanticFunctionDeclV1::new(
+                            old.identity(),
+                            old.role(),
+                            old.item_definition_identity(),
+                            old.monomorphization_identity(),
+                            old.generic_type_arguments_identity(),
+                            old.const_generic_arguments_identity(),
+                            old.source(),
+                            old.abi().clone(),
+                            old.locals().to_vec(),
+                            old.entry(),
+                            blocks,
+                        )
+                        .unwrap()
+                        .with_kernel_entry(old.kernel_entry().unwrap().clone());
+                    }
+                };
+            if invalid == 0 {
+                let error = super::super::super::super::super::invocations::tests::try_source_ssa_transform(transform)
+                    .err()
+                    .expect("passing a partially deinitialized enum must fail at SSA admission");
+                assert_eq!(
+                    error,
+                    fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                        function: SemanticFunctionIdV1::from_index(0),
+                        block: 0,
+                        statement: None,
+                        local: 4,
+                        violation:
+                            fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                    }
+                );
+                assert!(!reached.get());
+                continue;
+            }
             let result =
                 super::super::super::super::super::invocations::tests::run_source_transform(
                     LIMIT,
                     LIMIT,
-                    |types, functions| {
-                        let enumeration = call_fixture(types, functions, moved);
-                        for root in 0..functions.len() - 1 {
-                            let old = &functions[root];
-                            let word = old.locals()[3].ty();
-                            let variant = u32::try_from(root).unwrap();
-                            let field = SemanticPlaceV1::new(
-                                SemanticLocalIdV1::from_index(4),
-                                vec![
-                                    SemanticProjectionV1::new(
-                                        SemanticProjectionKindV1::Downcast(if inactive {
-                                            1 - variant
-                                        } else {
-                                            variant
-                                        }),
-                                        enumeration,
-                                    )
-                                    .unwrap(),
-                                    SemanticProjectionV1::new(
-                                        SemanticProjectionKindV1::Field(0),
-                                        word,
-                                    )
-                                    .unwrap(),
-                                ],
-                                word,
-                            )
-                            .unwrap();
-                            let selected = if unguarded {
-                                2
-                            } else if inactive {
-                                3
-                            } else {
-                                0
-                            };
-                            let mut blocks = old.blocks().to_vec();
-                            let block = &blocks[selected];
-                            let statements = if unguarded {
-                                block.statements().to_vec()
-                            } else if inactive {
-                                let mut statements = block.statements().to_vec();
-                                let SemanticStatementKindV1::Assign(original) =
-                                    statements[0].kind()
-                                else {
-                                    panic!("original payload read");
-                                };
-                                statements[0] = SemanticStatementV1::new(
-                                    block.source(),
-                                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                                        original.destination().clone(),
-                                        SemanticRvalueV1::new(
-                                            word,
-                                            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(
-                                                field,
-                                            )),
-                                        ),
-                                    )),
-                                );
-                                statements
-                            } else {
-                                let mut statements = block.statements().to_vec();
-                                assert_eq!(statements.len(), 1);
-                                statements.push(SemanticStatementV1::new(
-                                    block.source(),
-                                    SemanticStatementKindV1::Deinitialize(field),
-                                ));
-                                statements
-                            };
-                            blocks[selected] = SemanticBasicBlockV1::new(
-                                block.identity(),
-                                block.source(),
-                                statements,
-                                if unguarded {
-                                    SemanticTerminatorV1::new(
-                                        block.source(),
-                                        SemanticTerminatorKindV1::Goto(
-                                            SemanticControlFlowEdgeV1::new(
-                                                SemanticEdgeRoleV1::Goto,
-                                                SemanticBlockIdV1::from_index(3),
-                                            ),
-                                        ),
-                                    )
-                                } else {
-                                    block.terminator().clone()
-                                },
-                            )
-                            .unwrap();
-                            functions[root] = SemanticFunctionDeclV1::new(
-                                old.identity(),
-                                old.role(),
-                                old.item_definition_identity(),
-                                old.monomorphization_identity(),
-                                old.generic_type_arguments_identity(),
-                                old.const_generic_arguments_identity(),
-                                old.source(),
-                                old.abi().clone(),
-                                old.locals().to_vec(),
-                                old.entry(),
-                                blocks,
-                            )
-                            .unwrap()
-                            .with_kernel_entry(old.kernel_entry().unwrap().clone());
-                        }
-                    },
+                    transform,
                     |_, _| {
                         reached.set(true);
                         Ok(())
@@ -658,11 +671,7 @@ fn original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads() {
                 continue;
             }
             let error = result.0.unwrap_err();
-            let expected = if inactive {
-                "source enum payload differs from its original guarded value"
-            } else {
-                "source reference reads an uninitialized partial holder"
-            };
+            let expected = "source enum payload differs from its original guarded value";
             assert!(format!("{error:?}").contains(expected), "{error:?}");
             assert!(!reached.get(), "invalid source must not reach the callback");
         }
