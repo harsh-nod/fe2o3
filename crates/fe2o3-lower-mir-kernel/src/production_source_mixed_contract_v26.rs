@@ -2,6 +2,7 @@
 // Encoded bytes are descriptive and never replace that owner or its proof.
 mod mixed_source_contract_v26 {
     use super::*;
+    use ProductionSourceOwnedViewErrorV18::Binding;
     use fe2o3_kernel_ir::{
         CanonicalKirDefinitionCoordinateV1 as SliceDefinition,
         CanonicalKirOperationCoordinateV1 as SliceOperation,
@@ -169,7 +170,26 @@ mod mixed_source_contract_v26 {
     ) -> ProductionSourceOwnedViewErrorV18 {
         match error {
             wire::MixedContractErrorV26::Resource(error) => error.into(),
-            wire::MixedContractErrorV26::Invalid(_) => mismatch(),
+            wire::MixedContractErrorV26::Invalid(detail) => Binding(detail),
+        }
+    }
+    #[cfg(test)]
+    mod diagnostic_tests {
+        use super::*;
+
+        #[test]
+        fn mixed_contract_diagnostic_preserves_wire_reason_and_resource_kind() {
+            let detail = "mixed complete occurrence census";
+            assert!(matches!(
+                codec_error(wire::MixedContractErrorV26::Invalid(detail)),
+                Binding(actual) if actual == detail
+            ));
+            assert!(matches!(
+                codec_error(wire::MixedContractErrorV26::Resource(
+                    ArgumentResourceV1::Arithmetic
+                )),
+                ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Arithmetic)
+            ));
         }
     }
     fn ordinal(value: usize) -> SourceOwnedResultV18<u32> {
@@ -262,7 +282,7 @@ mod mixed_source_contract_v26 {
             || generated.alias() != expected.alias()
             || generated.component_count() != expected.physical_components().len()
         {
-            return Err(mismatch());
+            return Err(Binding("mixed source contract argument descriptor differs"));
         }
         for (index, (kind, offset, size, alignment)) in expected.physical_components().enumerate() {
             budget.charge_work(8)?;
@@ -272,7 +292,7 @@ mod mixed_source_contract_v26 {
             if (actual.kind, actual.offset, actual.size, actual.alignment)
                 != (kind, offset, size, alignment)
             {
-                return Err(mismatch());
+                return Err(Binding("mixed source contract physical component differs"));
             }
         }
         Ok(())
@@ -306,7 +326,7 @@ mod mixed_source_contract_v26 {
             .get(formation.operation as usize)
             .is_none()
         {
-            return Err(mismatch());
+            return Err(Binding("mixed source contract address formation is absent"));
         }
         let guarded_formation =
             matches!(path, Path::TrueEdge { target, .. } if target == formation_block.id);
@@ -342,7 +362,7 @@ mod mixed_source_contract_v26 {
                 Type::Scalar(ScalarType::U16) => 16,
                 Type::Scalar(ScalarType::U32) => 32,
                 Type::Scalar(ScalarType::U64 | ScalarType::Index) => 64,
-                _ => return Err(mismatch()),
+                _ => return Err(Binding("mixed source contract index type is unsupported")),
             };
             wire::MixedIndexEnvelopeV26::UnsignedWidth { bits }
         };
@@ -353,7 +373,7 @@ mod mixed_source_contract_v26 {
         let address_space = match memory.address_space {
             AddressSpace::Global => wire::MixedMemorySpaceV26::Global,
             AddressSpace::Generic => wire::MixedMemorySpaceV26::Generic,
-            _ => return Err(mismatch()),
+            _ => return Err(Binding("mixed source contract memory space differs")),
         };
         Ok(MixedOccurrenceV26 {
             argument,
@@ -453,19 +473,21 @@ mod mixed_source_contract_v26 {
                     ])?)?;
                     if function.id == original_function.id {
                         if selected.replace((index, function)).is_some() {
-                            return Err(mismatch());
+                            return Err(Binding("mixed source contract function is ambiguous"));
                         }
                     }
                 }
                 let (function_index, function) = selected.ok_or_else(mismatch)?;
                 let launch = *parts.launches.get(original_root).ok_or_else(mismatch)?;
                 let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
-                    return Err(mismatch());
+                    return Err(Binding("mixed source contract launch extent is not exact"));
                 };
                 let width = match parts.width {
                     fe2o3_kernel_ir::FormalIndexWidth::Bits32 => 32,
                     fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 64,
-                    fe2o3_kernel_ir::FormalIndexWidth::Unknown => return Err(mismatch()),
+                    fe2o3_kernel_ir::FormalIndexWidth::Unknown => {
+                        return Err(Binding("mixed source contract index width is unknown"));
+                    }
                 };
                 let kernel = table
                     .kernel(descriptor_kernel, &mut |n| budget.charge_work(n))
@@ -502,7 +524,9 @@ mod mixed_source_contract_v26 {
                     || kernel.abi_layout().kernarg_segment_alignment()
                         != root.kernarg_alignment_bytes
                 {
-                    return Err(mismatch());
+                    return Err(Binding(
+                        "mixed source contract kernel launch or ABI differs",
+                    ));
                 }
                 let mut selected =
                     source_reference_emission_vec_v29(wire::MAX_MIXED_ARGUMENTS_V26, budget)
@@ -511,7 +535,7 @@ mod mixed_source_contract_v26 {
                     budget.charge_work(3)?;
                     if premise.root() == original_root {
                         if selected.len() == wire::MAX_MIXED_ARGUMENTS_V26 {
-                            return Err(mismatch());
+                            return Err(Binding("mixed source contract argument limit exceeded"));
                         }
                         selected.push(premise);
                     }
@@ -543,7 +567,9 @@ mod mixed_source_contract_v26 {
                                 )?,
                                 Some(ProductionKernelByValueAbiV29::Ignored(_))
                             ) {
-                                return Err(mismatch());
+                                return Err(Binding(
+                                    "mixed source contract by-value argument is not ignored",
+                                ));
                             }
                             continue;
                         }
@@ -569,7 +595,9 @@ mod mixed_source_contract_v26 {
                             argument: physical_parameter,
                         } = premise.parameter()
                         else {
-                            return Err(mismatch());
+                            return Err(Binding(
+                                "mixed source contract premise is not a function argument",
+                            ));
                         };
                         if owner.0 as usize != function_index
                             || premise.launch() != launch
@@ -582,7 +610,7 @@ mod mixed_source_contract_v26 {
                             )
                             || generated.component_count() != 2
                         {
-                            return Err(mismatch());
+                            return Err(Binding("mixed source contract slice premise differs"));
                         }
                         let pointer = generated
                             .component(0, &mut |n| budget.charge_work(n))
@@ -593,7 +621,7 @@ mod mixed_source_contract_v26 {
                         if pointer.kind != wire::PhysicalAbiComponentKind::GlobalPointer
                             || length.kind != wire::PhysicalAbiComponentKind::SliceLengthU64
                         {
-                            return Err(mismatch());
+                            return Err(Binding("mixed source contract slice components differ"));
                         }
                         let counts = premise.access_counts();
                         budget.charge_work(256)?;
@@ -621,7 +649,7 @@ mod mixed_source_contract_v26 {
                     ) {
                         // Even an unused slice needs an explicit completed
                         // source/native zero-count premise, not absence.
-                        return Err(mismatch());
+                        return Err(Binding("mixed source contract slice premise is absent"));
                     }
                     generated_field = generated_field
                         .checked_add(1)
@@ -634,7 +662,7 @@ mod mixed_source_contract_v26 {
                         .map_err(descriptor_error)?
                         .is_some()
                 {
-                    return Err(mismatch());
+                    return Err(Binding("mixed source contract argument census differs"));
                 }
                 let mut occurrences =
                     source_reference_emission_vec_v29(wire::MAX_MIXED_OCCURRENCES_V26, budget)
@@ -649,7 +677,7 @@ mod mixed_source_contract_v26 {
                         continue;
                     }
                     if occurrences.len() == wire::MAX_MIXED_OCCURRENCES_V26 {
-                        return Err(mismatch());
+                        return Err(Binding("mixed source contract occurrence limit exceeded"));
                     }
                     budget.charge_work(wire::MAX_MIXED_ARGUMENTS_V26)?;
                     let argument = arguments
