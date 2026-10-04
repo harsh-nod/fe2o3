@@ -477,6 +477,28 @@ spec fn invocation_source_borrow_enabled_v36(
             byte_load_v30(source.machine.memory, pointer, width, little_endian)), bits)
 }
 
+spec fn invocation_source_slice_borrow_step_v77(
+    source: InvocationSourceByteStateV36, destination: int, local: int,
+    metadata_bits: int, width: int, alignment: int, bits: int, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if 0 <= local < source.machine.values.len() && width > 0
+        && invocation_source_pointer_carrier_v36(source.machine.values[local], metadata_bits) {
+        match source.machine.values[local] {
+            MemoryValueV30::Slice(slice) => {
+                if byte_range_aligned_v30(source.machine.memory, slice.pointer, slice.length * width, alignment)
+                    && slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8)
+                    && forall|index: int| 0 <= index < slice.length ==>
+                        #[trigger] invocation_source_borrow_enabled_v36(source,
+                            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+                            width, alignment, bits, little_endian) {
+                    invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice))
+                } else { invocation_source_byte_refused_v36(source) }
+            }
+            _ => invocation_source_byte_refused_v36(source),
+        }
+    } else { invocation_source_byte_refused_v36(source) }
+}
+
 spec fn invocation_source_pointer_step_v36(
     source: InvocationSourceByteStateV36, event: InvocationSourcePointerEventV36,
     root: int, instance: int, little_endian: bool,
@@ -513,24 +535,9 @@ spec fn invocation_source_pointer_step_v36(
                 }
             } else { invocation_source_byte_refused_v36(evaluated.source) }
         }
-        InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } => {
-            if 0 <= local < source.machine.values.len() && width > 0
-                && invocation_source_pointer_carrier_v36(source.machine.values[local], metadata_bits) {
-                match source.machine.values[local] {
-                    MemoryValueV30::Slice(slice) => {
-                        if byte_range_aligned_v30(source.machine.memory, slice.pointer, slice.length * width, alignment)
-                            && slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8)
-                            && forall|index: int| 0 <= index < slice.length ==>
-                                #[trigger] invocation_source_borrow_enabled_v36(source,
-                                    MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
-                                    width, alignment, bits, little_endian) {
-                            invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice))
-                        } else { invocation_source_byte_refused_v36(source) }
-                    }
-                    _ => invocation_source_byte_refused_v36(source),
-                }
-            } else { invocation_source_byte_refused_v36(source) }
-        }
+        InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } =>
+            invocation_source_slice_borrow_step_v77(source, destination, local,
+                metadata_bits, width, alignment, bits, little_endian),
         InvocationSourcePointerEventV36::IndexBorrow { destination, local, index, index_bits, metadata_bits, width, alignment, bits } => {
             if 0 <= local < source.machine.values.len() && 0 <= index < source.machine.values.len()
                 && width > 0 && invocation_source_pointer_carrier_v36(source.machine.values[local], metadata_bits)
@@ -554,6 +561,31 @@ spec fn invocation_source_pointer_step_v36(
     } }
 }
 
+proof fn invocation_source_slice_invalid_element_breaks_all_v77(
+    source: InvocationSourceByteStateV36, slice: MemorySliceV30,
+    width: int, alignment: int, bits: int, index: int, little_endian: bool,
+)
+    requires 0 <= index < slice.length,
+        !invocation_source_borrow_enabled_v36(source,
+            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+            width, alignment, bits, little_endian),
+    ensures !(forall|element: int| 0 <= element < slice.length ==>
+        #[trigger] invocation_source_borrow_enabled_v36(source,
+            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + element * width, ..slice.pointer },
+            width, alignment, bits, little_endian)),
+{
+    hide(invocation_source_borrow_enabled_v36);
+    if forall|element: int| 0 <= element < slice.length ==>
+        #[trigger] invocation_source_borrow_enabled_v36(source,
+            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + element * width, ..slice.pointer },
+            width, alignment, bits, little_endian) {
+        assert(invocation_source_borrow_enabled_v36(source,
+            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+            width, alignment, bits, little_endian));
+    }
+}
+
+#[verifier::spinoff_prover]
 proof fn invocation_source_slice_borrow_invalid_element_refuses_v74(
     source: InvocationSourceByteStateV36, slice: MemorySliceV30,
     destination: int, local: int, metadata_bits: int, width: int, alignment: int, bits: int,
@@ -569,7 +601,35 @@ proof fn invocation_source_slice_borrow_invalid_element_refuses_v74(
         InvocationSourcePointerEventV36::SliceBorrow {
             destination, local, metadata_bits, width, alignment, bits },
         root, instance, little_endian).machine.valid,
-{}
+{
+    // The negative element fact is sufficient; do not expand unrelated event
+    // evaluators or the memory/typing predicates behind that fact.
+    hide(invocation_source_borrow_enabled_v36);
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_pointer_carrier_v36);
+    hide(byte_range_aligned_v30);
+    hide(memory_value_modulus_v30);
+    hide(invocation_source_byte_put_local_v36);
+    hide(invocation_source_operand_evaluate_v36);
+    hide(invocation_source_byte_address_v36);
+    hide(invocation_source_typed_borrow_v51);
+    hide(invocation_source_carrier_evaluate_v36);
+    hide(invocation_source_byte_value_typed_v36);
+    invocation_source_slice_invalid_element_breaks_all_v77(source, slice,
+        width, alignment, bits, index, little_endian);
+    assert(invocation_source_slice_borrow_step_v77(source, destination, local,
+        metadata_bits, width, alignment, bits, little_endian)
+        == invocation_source_byte_refused_v36(source)) by {
+        reveal(invocation_source_slice_borrow_step_v77);
+    }
+    reveal(invocation_source_pointer_step_v36);
+    assert(invocation_source_pointer_step_v36(source,
+        InvocationSourcePointerEventV36::SliceBorrow {
+            destination, local, metadata_bits, width, alignment, bits },
+        root, instance, little_endian) == invocation_source_byte_refused_v36(source));
+    reveal(invocation_source_byte_refused_v36);
+    reveal(invocation_source_refused_v36);
+}
 
 proof fn invocation_source_slice_borrow_valid_elements_preserve_carrier_v74(
     source: InvocationSourceByteStateV36, slice: MemorySliceV30,
@@ -592,7 +652,9 @@ proof fn invocation_source_slice_borrow_valid_elements_preserve_carrier_v74(
             destination, local, metadata_bits, width, alignment, bits },
         root, instance, little_endian)
         == invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice)),
-{}
+{
+    reveal(invocation_source_slice_borrow_step_v77);
+}
 "#;
 
 #[cfg(test)]

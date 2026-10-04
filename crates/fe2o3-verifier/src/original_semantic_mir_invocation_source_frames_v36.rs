@@ -667,6 +667,17 @@ spec fn invocation_source_value_escapes_frame_v36(
     }
 }
 
+proof fn invocation_source_pointer_value_escapes_frame_v77(
+    pointer: MemoryPointerV30, frame: MemoryDynamicFrameV30,
+)
+    requires byte_allocation_in_frame_v30(pointer.allocation, frame),
+    ensures invocation_source_value_escapes_frame_v36(MemoryValueV30::Pointer(pointer), frame),
+{
+    hide(byte_allocation_in_frame_v30);
+    reveal(invocation_source_value_escapes_frame_v36);
+}
+
+#[verifier::spinoff_prover]
 proof fn invocation_source_enum_return_cannot_hide_a_callee_pointer_v50(
     value: InvocationSourceEnumV47, field: int, pointer: MemoryPointerV30,
     frame: MemoryDynamicFrameV30,
@@ -678,7 +689,17 @@ proof fn invocation_source_enum_return_cannot_hide_a_callee_pointer_v50(
     ensures
         invocation_source_snapshot_escapes_frame_v42(InvocationSourceValueV42::Enum(value), frame),
 {
+    hide(invocation_source_value_escapes_frame_v36);
+    hide(invocation_source_descriptor_snapshot_escapes_frame_v53);
+    hide(byte_allocation_in_frame_v30);
+    reveal(invocation_source_snapshot_escapes_frame_v42);
+    assert(invocation_source_snapshot_escapes_frame_v42(InvocationSourceValueV42::Enum(value), frame)
+        == (exists|field: int| value.fields.contains_key(field)
+            && invocation_source_value_escapes_frame_v36(value.fields[field], frame))) by (compute_only);
+    invocation_source_pointer_value_escapes_frame_v77(pointer, frame);
     assert(invocation_source_value_escapes_frame_v36(value.fields[field], frame));
+    assert(exists|index: int| value.fields.contains_key(index)
+        && invocation_source_value_escapes_frame_v36(value.fields[index], frame));
 }
 
 // Initialized pointer fragments retain nominal provenance even when they do
