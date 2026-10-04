@@ -1,0 +1,1282 @@
+{
+  "head": "aaf5daeaf432588e3d1b0523e8799b1e61c40906",
+  "tree": "a7fc1ec7ceab13561e6326580ab969f7cdfd6f64",
+  "package": "fe2o3-verifier",
+  "filters": [
+    "aggregate_and_descriptor_operand_effects_require_exact_evaluated_state_and_value",
+    "byte_function_consumes_all_operations_and_preserves_exact_global_observations",
+    "byte_function_copy_observation_preserves_ordered_snapshot_and_overlap_contract",
+    "byte_function_derivation_has_independent_function_local_resource_oracle",
+    "byte_function_edges_read_immutable_preedge_values_in_operand_order",
+    "byte_function_emission_retains_resolver_and_budget_custody",
+    "byte_function_foreign_owner_and_unknown_index_width_refuse_before_text",
+    "byte_function_full_emission_has_independent_work_and_exact_capacity_boundary",
+    "byte_function_funded_foreign_ledger_poison_is_retained_after_original_restore",
+    "byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_frames",
+    "byte_function_incomplete_physical_copy_closure_is_not_silently_admitted",
+    "byte_function_integer_switch_reuses_exact_signed_constant_bits",
+    "byte_function_physical_analysis_rejects_equal_bytes_from_a_foreign_inventory",
+    "byte_function_private_generic_cast_preserves_tag_without_allocating_or_ending_lifetime",
+    "byte_function_typed_pointer_copy_has_exact_and_one_short_resources",
+    "byte_function_typed_pointer_storage_uses_layout_width_not_index_width",
+    "byte_function_unknown_external_initialization_keeps_complete_dynamic_guards",
+    "byte_function_unused_and_unreachable_unsupported_operations_refuse_before_text",
+    "byte_function_volatile_and_pointer_payloads_refuse_before_text",
+    "descriptor_float_index_complete_route_has_exact_and_one_short_resources",
+    "descriptor_float_indices_keep_exact_presence_and_foreign_owner_refusals",
+    "descriptor_float_indices_preserve_original_native_element_and_some_pointer_types",
+    "descriptor_helper_snapshots_keep_version_frame_and_post_pop_install_obligations",
+    "descriptor_indexed_complete_source_route_has_exact_and_one_short_resources",
+    "descriptor_indexed_option_uses_real_intrinsic_some_edge_and_complete_source_pair",
+    "descriptor_indexed_presence_refuses_discriminant_reinterpretation_absent_field_and_foreign_owner",
+    "finite_domain_compatibility_program_has_exact_and_one_short_resources",
+    "finite_domain_compatibility_program_retains_equations_and_private_parent_import",
+    "finite_domain_compatibility_source_keeps_all_fifteen_finite_maps",
+    "generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped",
+    "generated_indexed_patterns_use_spec_aware_match_syntax",
+    "generated_warning_cleanup_removes_only_nine_finite_tautologies",
+    "generated_warning_equations_have_exact_and_one_short_resources",
+    "generated_warning_equations_keep_all_domains_and_reference_only_deprecations",
+    "guarded_byte_store_does_not_discharge_pointer_formation_or_prior_value_evaluation",
+    "guarded_byte_store_equations_keep_real_operations_and_all_refusal_cases",
+    "guarded_byte_store_keeps_exact_short_and_sticky_owner_accounts",
+    "guarded_byte_store_refuses_unmodeled_spaces_volatile_and_unknown_index_width",
+    "guarded_byte_store_rejects_wrong_predicate_payload_permissions_results_and_operand_order",
+    "guarded_byte_store_retains_exact_conditional_effect_and_conservative_physical_fact",
+    "original_addressable_structural_borrow_consumer_has_exact_resource_boundaries",
+    "original_addressable_structural_borrows_and_reborrows_reach_complete_paired_consumer",
+    "original_compiler_spill_queries_have_exact_work_and_sticky_one_short_refusal",
+    "original_complete_source_model_includes_operand_effect_acceptance_and_refusal_equations",
+    "original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_bodies",
+    "original_complete_source_model_length_equations_have_exact_and_one_short_resources",
+    "original_complete_source_model_retains_explicit_guard_slice_and_return_witnesses",
+    "original_copy_window_triggers_preserve_exact_padding_and_relocation_domains",
+    "original_descriptor_class_and_loan_queries_retain_exact_one_short_failures",
+    "original_descriptor_helper_queries_reject_non_argument_return_and_scalar_destinations",
+    "original_descriptor_helpers_have_exact_complete_work_and_peak_boundaries",
+    "original_descriptor_helpers_preserve_shared_copy_mutable_move_and_returned_reborrow",
+    "original_descriptor_loan_complete_route_has_exact_and_one_short_resources",
+    "original_descriptor_loan_runtime_keeps_nominal_version_frame_and_move_boundaries",
+    "original_descriptor_loans_preserve_slice_identity_through_copy_move_reborrow_and_length",
+    "original_descriptor_loans_refuse_wrong_occurrences_and_equal_layout_nonnominal_types",
+    "original_enum_call_operand_classification_rejects_wrong_local_type_and_projection",
+    "original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads",
+    "original_enum_calls_refuse_stale_discriminants_and_post_guard_reassignment",
+    "original_enum_construction_refusal_laws_are_complete_model_proof_obligations",
+    "original_enum_construction_triggers_preserve_recipes_evaluation_and_refusals",
+    "original_enum_copy_refusal_laws_are_complete_model_proof_obligations",
+    "original_enum_copy_trigger_covers_variant_and_field_without_changing_domains",
+    "original_enum_internal_call_emission_has_exact_and_one_short_resources",
+    "original_enum_internal_calls_snapshot_copy_move_and_return_before_cleanup",
+    "original_enum_snapshots_preserve_source_completeness_and_pointer_escape_guards",
+    "original_logical_enum_event_headers_have_an_independent_fixed_envelope",
+    "original_logical_enum_payloads_participate_in_ordinary_lifetime_end_after_local_clear",
+    "original_logical_enum_runtime_keeps_tag_definedness_move_order_and_escape_census",
+    "original_logical_enums_derive_from_promoted_original_locals_without_object_backing",
+    "original_mir_aggregate_calls_and_returns_keep_complete_exclusive_snapshots",
+    "original_mir_aggregate_callsite_backedge_keeps_component_contracts_across_frame_reuse",
+    "original_mir_aggregate_component_demands_have_exact_and_one_short_resources",
+    "original_mir_aggregate_component_demands_keep_success_payload_after_assert_flag_move",
+    "original_mir_aggregate_component_demands_latch_undercut_after_credit_restoration",
+    "original_mir_aggregate_component_demands_reach_fixed_point_across_backedges",
+    "original_mir_aggregate_component_demands_reject_funded_foreign_ledger_before_debit",
+    "original_mir_aggregate_component_queries_require_exact_function_block_local_and_leaf",
+    "original_mir_aggregate_cuts_preserve_partial_move_payload_across_join_and_backedge",
+    "original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_complete_snapshots",
+    "original_mir_aggregate_partial_initialization_keeps_the_mixed_memory_cut_relation",
+    "original_mir_assert_executes_both_polarities_and_failure_only_ordered_moves",
+    "original_mir_byte_lifetime_witness_checks_memory_even_without_live_ssa_values",
+    "original_mir_byte_program_consumes_every_active_instance_and_ordered_call_argument",
+    "original_mir_byte_program_exact_and_one_short_resource_replay",
+    "original_mir_byte_program_executes_genuine_scalar_storage_between_current_state_operations",
+    "original_mir_byte_program_retains_exact_before_after_statement_observations",
+    "original_mir_byte_relation_translates_stored_provenance_not_literal_private_ids",
+    "original_mir_byte_return_headers_have_independent_field_envelope",
+    "original_mir_byte_return_prelude_keeps_complete_escape_census_and_source_only_lifetime",
+    "original_mir_byte_return_slice_guard_keeps_exact_metadata_width",
+    "original_mir_byte_returns_have_exact_and_one_short_resources",
+    "original_mir_byte_returns_refuse_absent_root_or_instance_before_text",
+    "original_mir_byte_returns_use_exact_instance_locals_call_destinations_and_owners",
+    "original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_state",
+    "original_mir_classified_views_keep_both_nested_obligation_sets_and_event_heaps",
+    "original_mir_classified_views_use_exact_registries_and_owner_derived_pairs",
+    "original_mir_effect_observations_retain_read_then_write_intermediate_source_states",
+    "original_mir_effect_projection_exhaustively_matches_the_shared_effect_enum",
+    "original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snapshots",
+    "original_mir_execution_domain_preserves_original_required_and_maximum_workgroup_contract",
+    "original_mir_external_heap_relation_ignores_epoch_numbers_but_translates_pointer_cells",
+    "original_mir_frame_end_trigger_preserves_complete_escape_check",
+    "original_mir_guard_quantifier_triggers_preserve_both_matching_directions",
+    "original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards",
+    "original_mir_native_live_generation_domain_covers_unsigned_runtime_generations",
+    "original_mir_native_provenance_census_rejects_private_payloads_not_only_live_keys",
+    "original_mir_paired_consumer_exact_and_one_short_complete_resource_replay",
+    "original_mir_paired_consumer_keeps_complete_cuts_call_arguments_and_suspended_callers",
+    "original_mir_paired_consumer_preserves_independent_source_validity_and_physical_lifetime",
+    "original_mir_paired_consumer_rejects_unknown_width_before_any_emission",
+    "original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatcher",
+    "original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracle",
+    "original_mir_paired_initial_and_trace_share_explicit_execution_coordinates",
+    "original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_parameters",
+    "original_mir_paired_root_abi_refuses_ignored_unit_without_source_ownership",
+    "original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_conclusions",
+    "original_mir_paired_source_readiness_is_an_independent_native_input_obligation",
+    "original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation",
+    "original_mir_pointer_body_has_exact_and_one_short_cumulative_resources",
+    "original_mir_pointer_events_consume_genuine_private_borrow_copy_move_and_load",
+    "original_mir_pointer_extractor_refuses_changed_types_mutability_and_stored_carriers",
+    "original_mir_pointer_probe_and_header_oracles_are_independent",
+    "original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event",
+    "original_mir_production_classified_context_keeps_exact_and_one_short_resources",
+    "original_mir_production_installs_one_checked_registry_pair_for_every_root",
+    "original_mir_root_census_keeps_helpers_distinct_and_requires_every_kernel_entry",
+    "original_mir_slice_operand_metadata_uses_unsigned_archived_scalar_pair",
+    "original_mir_stable_reference_currentness_requires_version_frame_and_exact_borrow_site",
+    "original_mir_standalone_byte_initial_reuses_native_provenance_without_readiness_assumptions",
+    "original_mir_statement_refusal_does_not_reclassify_resource_or_owner_errors",
+    "original_mir_statement_refusal_keeps_original_coordinates_kind_type_and_reason",
+    "original_mir_step_constructor_laws_retain_generic_domains_and_no_axioms",
+    "original_mir_step_copied_hints_cannot_emit_on_foreign_or_refunded_accounts",
+    "original_mir_step_hint_donor_root_and_call_coordinate_substitutions_refuse",
+    "original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_obligations",
+    "original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coordinates",
+    "original_mir_storage_dead_checks_all_initialized_pointer_fragments_before_deallocation",
+    "original_mir_typed_call_operands_keep_exact_archived_order_and_local_identity",
+    "original_mir_typed_operand_emission_keeps_pointer_slice_and_unit_tags_distinct",
+    "original_mir_typed_operand_extraction_has_exact_and_one_short_resources",
+    "original_mir_typed_operands_refuse_wrong_terminators_and_missing_arguments",
+    "original_mir_typed_switch_operand_uses_original_control_discriminant",
+    "original_mir_use_diagnostics_distinguish_projected_carriers_and_all_constant_kinds",
+    "original_mir_witness_issue_and_conversion_do_not_create_pointer_provenance",
+    "original_mir_witness_transfer_classifier_leaves_real_ordinary_scalar_uses_unchanged",
+    "original_mir_witness_transfer_event_has_explicit_pure_effect_and_law_obligations",
+    "original_mir_witness_transfers_preserve_full_nominal_loan_and_consume_before_write",
+    "original_mutable_descriptor_loans_move_and_reborrow_without_shared_copy_authority",
+    "original_promoted_enum_complete_join_has_exact_and_one_short_resource_boundaries",
+    "original_promoted_enum_joins_bind_original_tags_and_compiler_spills_on_both_roots",
+    "original_slice_borrow_refusal_and_carrier_laws_are_complete_model_obligations",
+    "original_slice_borrow_trigger_preserves_exact_formation_and_refusal",
+    "original_source_typed_tail_forwards_genuine_same_value_branch_stores",
+    "original_source_typed_tail_full_generation_is_deterministic_and_exactly_budgeted",
+    "original_source_typed_tail_preserves_exact_cut_entry_and_shared_middle_state",
+    "original_source_typed_tail_rejects_the_prefix_owner_as_the_licm_output",
+    "original_thread_write_captures_nominal_receiver_witness_value_and_bool",
+    "original_thread_write_has_exact_and_one_short_capture_accounts",
+    "original_thread_write_partitions_every_authentic_cut_without_heap_conservation",
+    "original_thread_write_retains_owner_floor_ledger_and_sticky_refusal",
+    "original_typed_memory_schema_queries_retain_owner_and_ledger_custody",
+    "scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit",
+    "source_conservation_declines_unmodeled_control_without_changing_source_execution",
+    "source_conservation_header_allowance_and_shared_law_domains_are_explicit",
+    "source_conservation_rejects_foreign_ledger_and_refunded_owner_before_debit",
+    "source_conservation_uses_real_statement_counts_for_every_active_instance",
+    "source_effect_projection_reuses_independent_evaluation_and_refuses_bad_observations",
+    "source_effects_keep_operand_reads_after_ordered_statement_effects",
+    "source_step_hints_copy_authentic_coordinates_with_exact_and_one_short_accounts",
+    "source_step_hints_decline_unsupported_shape_without_removing_generic_obligation",
+    "source_step_hints_reject_foreign_or_refunded_accounts_before_debit_and_keep_denial",
+    "thread_write_normalization_shape_misses_keep_original_full_obligations",
+    "thread_write_normalization_uses_authentic_literals_without_new_step_premises",
+    "thread_write_witness_ownership_keeps_disjoint_moves_and_plain_copies_distinct",
+    "typed_array_invalid_element_law_is_in_complete_source_model",
+    "typed_array_trigger_preserves_stride_bounds_and_recursive_validity",
+    "typed_borrow_finite_reference_cases_require_defined_fields_and_current_storage_not_padding",
+    "typed_borrow_runtime_validates_fields_without_reading_padding_or_creating_backing",
+    "writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains",
+    "writing_cut_support_has_exact_full_model_work_and_storage_limits"
+  ],
+  "rows": [
+    {
+      "name": "aggregate_and_descriptor_operand_effects_require_exact_evaluated_state_and_value",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_effects_v36.rs"
+    },
+    {
+      "name": "byte_function_consumes_all_operations_and_preserves_exact_global_observations",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_copy_observation_preserves_ordered_snapshot_and_overlap_contract",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_derivation_has_independent_function_local_resource_oracle",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_edges_read_immutable_preedge_values_in_operand_order",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_emission_retains_resolver_and_budget_custody",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_foreign_owner_and_unknown_index_width_refuse_before_text",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_full_emission_has_independent_work_and_exact_capacity_boundary",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_funded_foreign_ledger_poison_is_retained_after_original_restore",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_frames",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_incomplete_physical_copy_closure_is_not_silently_admitted",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_private_byte_obligations_v38_tests.rs"
+    },
+    {
+      "name": "byte_function_integer_switch_reuses_exact_signed_constant_bits",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_physical_analysis_rejects_equal_bytes_from_a_foreign_inventory",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_private_byte_obligations_v38_tests.rs"
+    },
+    {
+      "name": "byte_function_private_generic_cast_preserves_tag_without_allocating_or_ending_lifetime",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_typed_pointer_copy_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_typed_pointer_storage_uses_layout_width_not_index_width",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_unknown_external_initialization_keeps_complete_dynamic_guards",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_private_byte_obligations_v38_tests.rs"
+    },
+    {
+      "name": "byte_function_unused_and_unreachable_unsupported_operations_refuse_before_text",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "byte_function_volatile_and_pointer_payloads_refuse_before_text",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs"
+    },
+    {
+      "name": "descriptor_float_index_complete_route_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "descriptor_float_indices_keep_exact_presence_and_foreign_owner_refusals",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "descriptor_float_indices_preserve_original_native_element_and_some_pointer_types",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "descriptor_helper_snapshots_keep_version_frame_and_post_pop_install_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_helpers_v53_tests.rs"
+    },
+    {
+      "name": "descriptor_indexed_complete_source_route_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "descriptor_indexed_option_uses_real_intrinsic_some_edge_and_complete_source_pair",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "descriptor_indexed_presence_refuses_discriminant_reinterpretation_absent_field_and_foreign_owner",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs"
+    },
+    {
+      "name": "finite_domain_compatibility_program_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_compatibility_v62_tests.rs"
+    },
+    {
+      "name": "finite_domain_compatibility_program_retains_equations_and_private_parent_import",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_compatibility_v62_tests.rs"
+    },
+    {
+      "name": "finite_domain_compatibility_source_keeps_all_fifteen_finite_maps",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_compatibility_v62_tests.rs"
+    },
+    {
+      "name": "generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_warning_cleanup_v65_tests.rs"
+    },
+    {
+      "name": "generated_indexed_patterns_use_spec_aware_match_syntax",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_compatibility_v62_tests.rs"
+    },
+    {
+      "name": "generated_warning_cleanup_removes_only_nine_finite_tautologies",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_warning_cleanup_v65_tests.rs"
+    },
+    {
+      "name": "generated_warning_equations_have_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_warning_cleanup_v65_tests.rs"
+    },
+    {
+      "name": "generated_warning_equations_keep_all_domains_and_reference_only_deprecations",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_warning_cleanup_v65_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_does_not_discharge_pointer_formation_or_prior_value_evaluation",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_equations_keep_real_operations_and_all_refusal_cases",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_keeps_exact_short_and_sticky_owner_accounts",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_refuses_unmodeled_spaces_volatile_and_unknown_index_width",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_rejects_wrong_predicate_payload_permissions_results_and_operand_order",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "guarded_byte_store_retains_exact_conditional_effect_and_conservative_physical_fact",
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs"
+    },
+    {
+      "name": "original_addressable_structural_borrow_consumer_has_exact_resource_boundaries",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "original_addressable_structural_borrows_and_reborrows_reach_complete_paired_consumer",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "original_compiler_spill_queries_have_exact_work_and_sticky_one_short_refusal",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_complete_source_model_includes_operand_effect_acceptance_and_refusal_equations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs"
+    },
+    {
+      "name": "original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_bodies",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs"
+    },
+    {
+      "name": "original_complete_source_model_length_equations_have_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs"
+    },
+    {
+      "name": "original_complete_source_model_retains_explicit_guard_slice_and_return_witnesses",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs"
+    },
+    {
+      "name": "original_copy_window_triggers_preserve_exact_padding_and_relocation_domains",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_descriptor_class_and_loan_queries_retain_exact_one_short_failures",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_descriptor_helper_queries_reject_non_argument_return_and_scalar_destinations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_helpers_v53_tests.rs"
+    },
+    {
+      "name": "original_descriptor_helpers_have_exact_complete_work_and_peak_boundaries",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_helpers_v53_tests.rs"
+    },
+    {
+      "name": "original_descriptor_helpers_preserve_shared_copy_mutable_move_and_returned_reborrow",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_helpers_v53_tests.rs"
+    },
+    {
+      "name": "original_descriptor_loan_complete_route_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_descriptor_loan_runtime_keeps_nominal_version_frame_and_move_boundaries",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_descriptor_loans_preserve_slice_identity_through_copy_move_reborrow_and_length",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_descriptor_loans_refuse_wrong_occurrences_and_equal_layout_nonnominal_types",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_enum_call_operand_classification_rejects_wrong_local_type_and_projection",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_enum_calls_refuse_stale_discriminants_and_post_guard_reassignment",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_enum_construction_refusal_laws_are_complete_model_proof_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_enum_construction_triggers_preserve_recipes_evaluation_and_refusals",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_enum_copy_refusal_laws_are_complete_model_proof_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_enum_copy_trigger_covers_variant_and_field_without_changing_domains",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_enum_internal_call_emission_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_enum_internal_calls_snapshot_copy_move_and_return_before_cleanup",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_enum_snapshots_preserve_source_completeness_and_pointer_escape_guards",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs"
+    },
+    {
+      "name": "original_logical_enum_event_headers_have_an_independent_fixed_envelope",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_logical_enum_payloads_participate_in_ordinary_lifetime_end_after_local_clear",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_logical_enum_runtime_keeps_tag_definedness_move_order_and_escape_census",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_logical_enums_derive_from_promoted_original_locals_without_object_backing",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_calls_and_returns_keep_complete_exclusive_snapshots",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_callsite_backedge_keeps_component_contracts_across_frame_reuse",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_demands_have_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_demands_keep_success_payload_after_assert_flag_move",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_demands_latch_undercut_after_credit_restoration",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_demands_reach_fixed_point_across_backedges",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_demands_reject_funded_foreign_ledger_before_debit",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_component_queries_require_exact_function_block_local_and_leaf",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_cuts_preserve_partial_move_payload_across_join_and_backedge",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_complete_snapshots",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_aggregate_partial_initialization_keeps_the_mixed_memory_cut_relation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_assert_executes_both_polarities_and_failure_only_ordered_moves",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_assert_control_v40_tests.rs"
+    },
+    {
+      "name": "original_mir_byte_lifetime_witness_checks_memory_even_without_live_ssa_values",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_program_consumes_every_active_instance_and_ordered_call_argument",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_program_exact_and_one_short_resource_replay",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_program_executes_genuine_scalar_storage_between_current_state_operations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_program_retains_exact_before_after_statement_observations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_relation_translates_stored_provenance_not_literal_private_ids",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_return_headers_have_independent_field_envelope",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_return_prelude_keeps_complete_escape_census_and_source_only_lifetime",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_return_slice_guard_keeps_exact_metadata_width",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_returns_have_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_returns_refuse_absent_root_or_instance_before_text",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_returns_use_exact_instance_locals_call_destinations_and_owners",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs"
+    },
+    {
+      "name": "original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_state",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_classified_views_keep_both_nested_obligation_sets_and_event_heaps",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_classified_views_use_exact_registries_and_owner_derived_pairs",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_effect_observations_retain_read_then_write_intermediate_source_states",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_effect_projection_exhaustively_matches_the_shared_effect_enum",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snapshots",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_execution_domain_preserves_original_required_and_maximum_workgroup_contract",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_external_heap_relation_ignores_epoch_numbers_but_translates_pointer_cells",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_frame_end_trigger_preserves_complete_escape_check",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_guard_quantifier_triggers_preserve_both_matching_directions",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs"
+    },
+    {
+      "name": "original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_native_live_generation_domain_covers_unsigned_runtime_generations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_native_provenance_census_rejects_private_payloads_not_only_live_keys",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_consumer_exact_and_one_short_complete_resource_replay",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_consumer_keeps_complete_cuts_call_arguments_and_suspended_callers",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_consumer_preserves_independent_source_validity_and_physical_lifetime",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_consumer_rejects_unknown_width_before_any_emission",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatcher",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracle",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_initial_and_trace_share_explicit_execution_coordinates",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_parameters",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_root_abi_refuses_ignored_unit_without_source_ownership",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_conclusions",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_source_readiness_is_an_independent_native_input_obligation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_pointer_body_has_exact_and_one_short_cumulative_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_pointer_events_consume_genuine_private_borrow_copy_move_and_load",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_pointer_extractor_refuses_changed_types_mutability_and_stored_carriers",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_pointer_probe_and_header_oracles_are_independent",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_production_classified_context_keeps_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_classified_production_v40_tests.rs"
+    },
+    {
+      "name": "original_mir_production_installs_one_checked_registry_pair_for_every_root",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_classified_production_v40_tests.rs"
+    },
+    {
+      "name": "original_mir_root_census_keeps_helpers_distinct_and_requires_every_kernel_entry",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs"
+    },
+    {
+      "name": "original_mir_slice_operand_metadata_uses_unsigned_archived_scalar_pair",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_stable_reference_currentness_requires_version_frame_and_exact_borrow_site",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_standalone_byte_initial_reuses_native_provenance_without_readiness_assumptions",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs"
+    },
+    {
+      "name": "original_mir_statement_refusal_does_not_reclassify_resource_or_owner_errors",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_statement_refusal_keeps_original_coordinates_kind_type_and_reason",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_step_constructor_laws_retain_generic_domains_and_no_axioms",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs"
+    },
+    {
+      "name": "original_mir_step_copied_hints_cannot_emit_on_foreign_or_refunded_accounts",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs"
+    },
+    {
+      "name": "original_mir_step_hint_donor_root_and_call_coordinate_substitutions_refuse",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs"
+    },
+    {
+      "name": "original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs"
+    },
+    {
+      "name": "original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coordinates",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs"
+    },
+    {
+      "name": "original_mir_storage_dead_checks_all_initialized_pointer_fragments_before_deallocation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_typed_call_operands_keep_exact_archived_order_and_local_identity",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_typed_operand_emission_keeps_pointer_slice_and_unit_tags_distinct",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_typed_operand_extraction_has_exact_and_one_short_resources",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_typed_operands_refuse_wrong_terminators_and_missing_arguments",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_typed_switch_operand_uses_original_control_discriminant",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_use_diagnostics_distinguish_projected_carriers_and_all_constant_kinds",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_witness_issue_and_conversion_do_not_create_pointer_provenance",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_witness_transfer_classifier_leaves_real_ordinary_scalar_uses_unchanged",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_witness_transfer_event_has_explicit_pure_effect_and_law_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mir_witness_transfers_preserve_full_nominal_loan_and_consume_before_write",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs"
+    },
+    {
+      "name": "original_mutable_descriptor_loans_move_and_reborrow_without_shared_copy_authority",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs"
+    },
+    {
+      "name": "original_promoted_enum_complete_join_has_exact_and_one_short_resource_boundaries",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_promoted_enum_joins_bind_original_tags_and_compiler_spills_on_both_roots",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs"
+    },
+    {
+      "name": "original_slice_borrow_refusal_and_carrier_laws_are_complete_model_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_slice_borrow_trigger_preserves_exact_formation_and_refusal",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs"
+    },
+    {
+      "name": "original_source_typed_tail_forwards_genuine_same_value_branch_stores",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_typed_tail_v49_tests.rs"
+    },
+    {
+      "name": "original_source_typed_tail_full_generation_is_deterministic_and_exactly_budgeted",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_typed_tail_v49_tests.rs"
+    },
+    {
+      "name": "original_source_typed_tail_preserves_exact_cut_entry_and_shared_middle_state",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_typed_tail_v49_tests.rs"
+    },
+    {
+      "name": "original_source_typed_tail_rejects_the_prefix_owner_as_the_licm_output",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_typed_tail_v49_tests.rs"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+      "name": "original_thread_write_captures_nominal_receiver_witness_value_and_bool"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+      "name": "original_thread_write_has_exact_and_one_short_capture_accounts"
+    },
+    {
+      "name": "original_thread_write_partitions_every_authentic_cut_without_heap_conservation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+      "name": "original_thread_write_retains_owner_floor_ledger_and_sticky_refusal"
+    },
+    {
+      "name": "original_typed_memory_schema_queries_retain_owner_and_ledger_custody",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    },
+    {
+      "name": "source_conservation_declines_unmodeled_control_without_changing_source_execution",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs"
+    },
+    {
+      "name": "source_conservation_header_allowance_and_shared_law_domains_are_explicit",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs"
+    },
+    {
+      "name": "source_conservation_rejects_foreign_ledger_and_refunded_owner_before_debit",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs"
+    },
+    {
+      "name": "source_conservation_uses_real_statement_counts_for_every_active_instance",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs"
+    },
+    {
+      "name": "source_effect_projection_reuses_independent_evaluation_and_refuses_bad_observations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_effects_v36.rs"
+    },
+    {
+      "name": "source_effects_keep_operand_reads_after_ordered_statement_effects",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_effects_v36.rs"
+    },
+    {
+      "name": "source_step_hints_copy_authentic_coordinates_with_exact_and_one_short_accounts",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs"
+    },
+    {
+      "name": "source_step_hints_decline_unsupported_shape_without_removing_generic_obligation",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs"
+    },
+    {
+      "name": "source_step_hints_reject_foreign_or_refunded_accounts_before_debit_and_keep_denial",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs"
+    },
+    {
+      "name": "thread_write_normalization_shape_misses_keep_original_full_obligations",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    },
+    {
+      "name": "thread_write_normalization_uses_authentic_literals_without_new_step_premises",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_thread_write_v88.rs",
+      "name": "thread_write_witness_ownership_keeps_disjoint_moves_and_plain_copies_distinct"
+    },
+    {
+      "name": "typed_array_invalid_element_law_is_in_complete_source_model",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "typed_array_trigger_preserves_stride_bounds_and_recursive_validity",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "typed_borrow_finite_reference_cases_require_defined_fields_and_current_storage_not_padding",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "typed_borrow_runtime_validates_fields_without_reading_padding_or_creating_backing",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs"
+    },
+    {
+      "name": "writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    },
+    {
+      "name": "writing_cut_support_has_exact_full_model_work_and_storage_limits",
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs"
+    }
+  ],
+  "ignored_not_selected": [
+    "actual_original_mixed_composition_executes_without_protected_custody",
+    "protected_complete_original_source_model_preserves_signed_length_boundaries",
+    "protected_registered_reference_coverage_rejects_missing_extra_and_out_of_domain_writes",
+    "protected_original_thread_write_preserves_logical_extent_value_and_bool",
+    "protected_guarded_byte_store_preserves_cfg_write_and_false_refusal_equations"
+  ],
+  "runtime_deferred": [
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_reference_consumer_v69_tests.rs",
+      "name": "protected_registered_reference_coverage_rejects_missing_extra_and_out_of_domain_writes",
+      "classification": "Ignored protected complete V36 shared-model plus nine coverage equations. Not the nonempty CPU/source consumer; fixed V3 runtime, 120 seconds, 16 KiB.",
+      "full_name": "mixed_optimizer_refinement_v26::semantics::original_scalar_v30::invocation_body::reference_consumer::tests::protected_registered_reference_coverage_rejects_missing_extra_and_out_of_domain_writes"
+    },
+    {
+      "path": "crates/rustc-codegen-fe2o3/src/production_rustc_driver_mixed_execution_v50_tests.rs",
+      "name": "actual_original_mixed_composition_executes_without_protected_custody",
+      "full_name": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::execution_v50_tests::actual_original_mixed_composition_executes_without_protected_custody",
+      "classification": "Retained genuine no-reference V50 composition across both targets with ExtractionOnly refusal; unchanged runtime/body."
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+      "name": "protected_complete_original_source_model_preserves_signed_length_boundaries",
+      "full_name": "mixed_optimizer_refinement_v26::semantics::original_scalar_v30::invocation_body::classified_tests::length_boundary_tests::protected_complete_original_source_model_preserves_signed_length_boundaries",
+      "classification": "Retained complete shared source model. Current integration owns later trigger/equation corrections; this packet does not overwrite them."
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+      "name": "protected_original_thread_write_preserves_logical_extent_value_and_bool",
+      "classification": "Genuine complete Thread/Index1D models for three witness-ownership variants, fixed V3/120s/16KiB per attempt. Not selected in this ordinary lane."
+    }
+  ],
+  "dedup": {
+    "retained_filters": 146,
+    "added_filters": 4,
+    "distinct": 150
+  },
+  "source_pins": [
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26.rs",
+      "sha256": "bef44ec42277d4faa48aa993cb0defb47bd54bd6cfa53773a51e40f30e8c0ff1"
+    },
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs",
+      "sha256": "47432fd63824c095f0b14d4428637073b690a649b00bdd7c82f694ad913e4396"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26.rs",
+      "sha256": "0e301cd5ea00bfe9ac4ad0ac5c581b4d00d550195600d7e19846779b760d868a"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26_tests.rs",
+      "sha256": "28927a6a6c1ce46b6341affa725f068ec1d24fe4a6f060e2cee695ca210db6fa"
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26.rs",
+      "sha256": "d1818daedcf85f2f5ab5b3a461a429ffc867dbc4086a8c9738d2cdf9befab78a"
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26_tests.rs",
+      "sha256": "51530a83bdb9f6250307167991bb873da6740566c17e0f2dfb696bf2e7a6a09c"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
+      "sha256": "9243116e8b4c598ad0ef694e48de4b0871615697794bfd724dac165d211c8899"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_checks_v30_tests.rs",
+      "sha256": "a510c7789086fa0e35b5a17dca1a79321a2fb326dfaa5000bc5b404dbbe8de1c"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_completion_v30.rs",
+      "sha256": "ab4c2555264ab2d52ec8055747cc856e21a7c261621e9ce03bd5d25bd8b257e1"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
+      "sha256": "050af561b30e0e31df7f7036776d6e9aa5d73d98f7468bfe1943388411321681"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_role_replay_v18.rs",
+      "sha256": "ce67f3c6b1df36b48abff10eb76a0d565ea11ded9d322adcdeeff32b537d4635"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29.rs",
+      "sha256": "beb5e2a981b3c2068c113e2a508be66d483df5b5993dc922fc9802a24f32084d"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "sha256": "41222acd7ab4bac746bc684a90f88b067ef4c2951a43c0a184daad5da52fdf85"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_calls_v76.rs",
+      "sha256": "d525d4a39af1ffa83c991c7379a7f193315ecd5468d4ce8b074ad8e892c5cd02"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "sha256": "ff615eb9414fc5869938f5e1345abc6c11c0115866888da3197027d26ffd2f01"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_replay_v76.rs",
+      "sha256": "4bb75db879d5846c3d0e2b60ad43e5a1aed0eddbb1db2532479ea748683a816d"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26.rs",
+      "sha256": "519cd3a2dc05b2c5524a001113cefa97ba6fd31d872bac97ec7629a01d8d5329"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_control_v30.rs",
+      "sha256": "a456becc4eb5c7db8082435ae2e9c310c3d0df42f60abfc094e97f59dc0b0cad"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30.rs",
+      "sha256": "f9edd5b31d28778f9266354c8e91b5938e85b29a02a269cc1eca6ca34a99dd9b"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_byte_function_v30_tests.rs",
+      "sha256": "9bfb04802e3e33ac8f283d6b4cadbc1171034222dc9c9d3a63fee3b507dafe15"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_external_byte_operations_v30.rs",
+      "sha256": "6a9607e4b1852ba7c0d928db3a424380b39aeeff92d4603df6a0b8af981efd66"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.rs",
+      "sha256": "8fe879f9f8e2c7100d7a9bbfde8d534ef46c91193a809da980931eefc543cf8a"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_guarded_store_v90_tests.vrs",
+      "sha256": "e3bdc4efa1affc650b037ebdfb40191715e63897c6bd7e62c9365acc04ae5f93"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_private_byte_obligations_v38.rs",
+      "sha256": "ca276491d274d2dde8c81f01f0cfc8bf6c3c3c75e1692f618c1e0036cbb22621"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_private_byte_obligations_v38_tests.rs",
+      "sha256": "a4e83d113f4f1b97ee9f557eaa8aba4154a14aece2a00d56bd7efb7f3a53a830"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_compatibility_v62_tests.rs",
+      "sha256": "9241f1c447bd008a73be7b735361f75355c20bec9746bbced01504308ce8f8fd"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_optimizer_verus_warning_cleanup_v65_tests.rs",
+      "sha256": "c908ab8db2099103b4761edd1c9814ab5dea2366798628a27c60d8e169b5021b"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_target_selection_v53_tests.rs",
+      "sha256": "7931a7e7058e7380f7a116a638eb8c68031340f5e27a766bf0b3de60cb82d897"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_aggregate_bindings_v42_tests.rs",
+      "sha256": "402a2a8e86c52c8e54d90b0510458edbbe9a6b5c31b143e86cdd73f239be84d8"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_classified_production_v40_tests.rs",
+      "sha256": "36d85086b736ff70a9e15fe0c49059f39a975b6b0a03dd72b15d1a3e4c78c18c"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_classified_view_laws_v40.vrs",
+      "sha256": "d56412de0fd7e89bb4eb6096630d3c7ae6872b362cbee9fddbb7a03552154348"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_cut_frame_generate_v93.rs",
+      "sha256": "6539d2932efbbcbdd43807db18eb0df104427f3ff0cb5c05b54b728022f83a66"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_cut_frame_laws_v93.vrs",
+      "sha256": "1c590886971c197416bdc2801f9538e8e471a12d77de3ba140e0e0f16f693ba6"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_dispatch_v48_tests.rs",
+      "sha256": "5cedcdb19a4d634dcabbe207a3b04868c235683ce439ffe996adc18635312529"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_effects_v68_tests.vrs",
+      "sha256": "b69f767a72a1c04ccd7b7e18da34fb77bc55078841e34f1f803412fdc1921b4c"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_helpers_v53_tests.rs",
+      "sha256": "17b0062705c813a8473932f0cabf800e743962b0bd8b7099633dd3312a16a0d5"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_indices_v52_tests.rs",
+      "sha256": "9bc419558e844aa26f3dbc88772b2ca21041887b8226bc1d267d599bab09c1a1"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_descriptor_loans_v51_tests.rs",
+      "sha256": "09f7ad948fce3d2b1efcbf465b1b22cc75a64420aaa30a7b46dea0330454ad3b"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_body_v34.rs",
+      "sha256": "2723815d3f259278c6b8ff5923207c34becb7c651cd64345b548fcf2109e2cf6"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_bytes_v36.rs",
+      "sha256": "16fd6b56042a29fa384d3eda7572c23b2c19bad8f9101e7883d21f7a529b4d06"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_effects_v36.rs",
+      "sha256": "52d1d63bf054660fe3f205714bb75483b01702aa36e0e356a98a0a40b6c07082"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_generate_v36.rs",
+      "sha256": "b86286bd9a669ef4d3ca2e55d758ad9e004b77f65cb801cd0cf4b05d9f8041a3"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36.rs",
+      "sha256": "541c903a339d594b6ee40a481d238cca82029a7c6c75bf36a49274330fef52f2"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs",
+      "sha256": "4466e5c1aaf28dede0b4bbf4ae46373186c9a56e5f768c886ed12621bf73d24f"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_slots_v36.rs",
+      "sha256": "dabf015005f68630daac68ee9f7a94473df0a3e5811b1aab2a969051f29f0a40"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36.rs",
+      "sha256": "36e1902b33d666981eb2ce859fa489d51ff221e1f1f33a88cf48747c773faa7f"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs",
+      "sha256": "b614fc94dbbec6bd059b47a7b4c76fe22f8fbad910b00c65fa05991393e27118"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_enter_v36.rs",
+      "sha256": "557a6b2edb4ab470c6d1fee819793a9a7259dde80be1c95a38a1512cac4d38e8"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_frames_v36.rs",
+      "sha256": "0fcef98c250235fcc43528c7f65125458d6c8cbb2e3e197f1f95ada4c5162c3b"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs",
+      "sha256": "060344f11b08b51b1390f7d2fe3cdb555ebc566c7786012c65569f4a109a8770"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36.rs",
+      "sha256": "812579ae25951358f06861abcb0886ece7da1a64c48ed3f593cb9fb4ef95d1b2"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs",
+      "sha256": "5f717b101157ef00ce81812ae3b51441d8a6f6ab445961105b9d5bca037afbf5"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_generate_v85.rs",
+      "sha256": "81c71da612c18c4ff748ade1f46be74e445631d70624537582702360974a61f4"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs",
+      "sha256": "a245c133241f1ac9787deca8bb3959af4107601ec745c8e8b25376bd3ded0fdb"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocations_v32_tests.rs",
+      "sha256": "36ec0a61082599d4474df6edd9fa55478a40e3b6679270e7ed6abdbd7a597dcc"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+      "sha256": "c76669f9bc9da158407661b94f6c1b3a9060da3ce23b0171815686aeb07e7041"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.vrs",
+      "sha256": "69d62249fbfa11dbb1a200feaac508da435f7affe29f6966c97df8127cdfbbe4"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_native_initial_heaps_v77.vrs",
+      "sha256": "ed19ea49ed25640a6e0e0455b53c9424aadc9abd5a6dd53a866ed9254eaee25f"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_native_provenance_v39.vrs",
+      "sha256": "a77583804ece6bb7046886bdacb07d950dd3a4856ecf5582b5c608aa5469ecf5"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39.vrs",
+      "sha256": "675d4178ab7520017f212040643cf95ff63139f104c140d1482e30a7c739f1bd"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "sha256": "70ce7ac0139848ae87632e7f31f28c3038b44b5183173a37279237a58fdcce84"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_scalar_store_laws_v92.vrs",
+      "sha256": "0d3a2df3e8573a95943e16e66ba1868ffa31858b1dec6813a3f796030f9bbcb1"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_assert_control_v40.rs",
+      "sha256": "37434b4f1ac4a58867d5d50270e5611040d9f36f99c1463f165351cb711b66fa"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_assert_control_v40_tests.rs",
+      "sha256": "ec70f294a41cd3f8ec4dd69a0fe30910479eb7a95f2dff9632fece29af4a5c04"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_generate_v81.rs",
+      "sha256": "800f329dbd18a566f83c31fb9efba6b584c02d55b433a80b6bad53550b26081e"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81.rs",
+      "sha256": "fdb38dafd2e9a5f10a9f5a0717290448110acb4a290278db93da620a3e3a4af7"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs",
+      "sha256": "b814c2596eee318a03ef1573708085b8b8941016ccdf9cc9707cdd00b8547a2e"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_constructor_laws_v81.vrs",
+      "sha256": "d9d2ab9ac697428680008ddf507f5be4c6cb7e91e94bd542f42f2a00e4bad024"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_descriptor_calls_v51.rs",
+      "sha256": "befa5319d81ef9946dc3e5ae6566f0105c26309238d49568c0743f748bf209ff"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enter_laws_v85.vrs",
+      "sha256": "006da92b38b545471a4845ee3aee6a62b37e80a2e038a5ebf28bb22867c6a18f"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_calls_v50_tests.rs",
+      "sha256": "7f90badd1b743f4f1d3df4bcad742c17b7816bb4b593c545cb59ffcd8bd88f86"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enum_events_v47_tests.rs",
+      "sha256": "0e78d5a3f1f7c5ce6cea380a6d48400dbd0ea9a7fb8f4ebf11b66e79f9518b2e"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85.rs",
+      "sha256": "d01b898ee7dac1810692ecc62089187c7a10a9a50d99ead0c4e16594bda43bf7"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs",
+      "sha256": "6176973c372b1c28e75eaf5e97686f0b5bf264c991e6882b19e4d2da7091137c"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_thread_write_v88.rs",
+      "sha256": "e19f3c0b91ec5789b0f80de178fd57be0d17723e9e5831376cfdbace53fb6ca3"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_thread_write_v88.vrs",
+      "sha256": "7ad9691fb83a92821ba4a709b94b0a39c591f1d0fd450e0bc72ad90a832c3f39"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_typed_borrows_v51_tests.rs",
+      "sha256": "1056aa1a5e85d3cd984c157c65880890aa917b2de9fbdd461a90143ff41714a1"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_normal_laws_v94.vrs",
+      "sha256": "a9c714bf28ed3374670540ec6a1f5ac078930bebc877c1b58cb967b73dfd01f7"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+      "sha256": "146c4bcdbd2f8ef0b003cb45aae98765a81915fc7f097df1d0a3382f75091edf"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.vrs",
+      "sha256": "cfaf2a9e6e3751545b3b6c3304b7ca12a0cb31e17372c9d6e41d0a16196d16c8"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_typed_tail_v49_tests.rs",
+      "sha256": "bfdcd7f9c517227a7935e6c33b8d4609556904b38ed88a627a110e9f9a48d9aa"
+    },
+    {
+      "path": "crates/rustc-codegen-fe2o3/src/production_rustc_driver_source_reference_execution_v69_tests.rs",
+      "sha256": "b985a359c34d354f572c5185435aed27de2e82c27062f7b50a0b1b1bb6334469"
+    }
+  ],
+  "scope": "174 distinct ordinary tests: all150 retained, six guarded-store additions and18 existing byte-function/physical resource and custody regressions. Same174 direct artifact replay is not348 distinct tests. Neither protected parent selected; no production or formal qualification."
+}
