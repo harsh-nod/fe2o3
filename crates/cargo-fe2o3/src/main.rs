@@ -2742,29 +2742,31 @@ fn run_application_with_handoff(
         application_timeouts,
         compiler_service,
     )?;
-    let mut process = process_execution::spawn(child.as_command_mut())
+    let process = process_execution::spawn(child.as_command_mut())
         .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
+    let spawned_ack = match pending_ack.after_spawn(&process) {
+        Ok(spawned_ack) => spawned_ack,
+        Err(failure) => {
+            let (error, cleanup) = failure.into_parts();
+            drop(handoff);
+            return terminate_application_with_error(process, cleanup, error);
+        }
+    };
     let compiler_execution_readiness = match compiler_execution_boundary {
         Some(boundary) => match boundary.finish(process.id()) {
             Ok(readiness) => Some(readiness),
             Err(error) => {
-                let mut primary = error.to_string();
-                let cleanup = match pending_ack.into_cleanup_after_spawn(&process) {
-                    Ok(cleanup) => cleanup,
-                    Err(failure) => {
-                        let (cleanup_error, cleanup) = failure.into_parts();
-                        primary.push_str("; application sandbox cleanup admission failed: ");
-                        primary.push_str(&cleanup_error);
-                        cleanup
-                    }
-                };
                 drop(handoff);
-                return terminate_application_with_error(process, cleanup, primary);
+                return terminate_application_with_error(
+                    process,
+                    spawned_ack.into_cleanup(),
+                    error.to_string(),
+                );
             }
         },
         None => None,
     };
-    let active_handoff = match pending_ack.await_after_spawn(&mut process) {
+    let active_handoff = match spawned_ack.await_ack(&process) {
         Ok(active_handoff) => active_handoff,
         Err(failure) => {
             let (error, cleanup) = failure.into_parts();

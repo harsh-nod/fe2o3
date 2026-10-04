@@ -130,6 +130,18 @@ impl PendingApplicationSandbox {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_reported_admission(result: Result<u32, String>) -> Self {
+        let (ready_send, ready) = mpsc::sync_channel(1);
+        ready_send.send(result).unwrap();
+        Self {
+            child_socket: None,
+            ready,
+            shutdown: None,
+            worker: None,
+        }
+    }
+
+    #[cfg(test)]
     fn test_stalled_pending(
         release: std::sync::Arc<std::sync::atomic::AtomicBool>,
         completed: std::sync::Arc<std::sync::atomic::AtomicBool>,

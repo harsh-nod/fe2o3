@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -165,6 +165,7 @@ struct ReapJob {
     process_group: libc::pid_t,
     process_group_terminal: bool,
     sandbox: Option<ApplicationSandboxGuard>,
+    _application: Option<OriginalApplicationHandoffV1>,
     _reservation: ReaperReservation,
     leader_status: Option<ExitStatus>,
     completion: Option<SyncSender<Result<ExitStatus, String>>>,
@@ -852,10 +853,12 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                         .map_err(|error| format!("failed to encode V3 challenge: {error}"))?,
                 ),
             );
-        let protocol = ApplicationHandoffExpectationV1 {
+        let protocol = Box::new(ApplicationHandoffExpectationV1 {
+            occurrence,
+            descriptors: [envelope_fd, artifact_directory_fd, ack_fd],
             expectation,
             challenge,
-        };
+        });
         let timeouts = timeouts.for_worker_v3();
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
@@ -1019,6 +1022,7 @@ pub(crate) fn wait_and_contain_application_group(
 pub(crate) struct ApplicationCleanup {
     reaper: ReaperReservation,
     sandbox: Option<ApplicationSandboxGuard>,
+    application: Option<OriginalApplicationHandoffV1>,
     timeout: Duration,
     #[cfg(test)]
     test_hold: Option<Arc<AtomicBool>>,
@@ -1055,7 +1059,7 @@ impl ApplicationHandoffFailure {
 pub(crate) struct PendingApplicationAck {
     read: File,
     parent_write: Option<File>,
-    protocol: ApplicationHandoffExpectationV1,
+    protocol: Box<ApplicationHandoffExpectationV1>,
     sandbox: Option<PendingApplicationSandbox>,
     reaper: Option<ReaperReservation>,
     timeouts: ApplicationTimeouts,
@@ -1065,18 +1069,34 @@ pub(crate) struct PendingApplicationAck {
     test_ready_parent_write: Option<File>,
 }
 
-#[derive(Clone, Copy)]
 struct ApplicationHandoffExpectationV1 {
+    occurrence: WorkerV3ApplicationOccurrenceV1,
+    // Historical child coordinates, not borrowed parent descriptors after spawn.
+    descriptors: [RawFd; 3],
     expectation: WorkerV3ApplicationHandoffExpectationV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
 }
 
 impl ApplicationHandoffExpectationV1 {
-    const fn maximum_ack_bytes(self) -> usize {
-        WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1
-    }
-
-    fn validate_ack(self, bytes: &[u8]) -> Result<(), String> {
+    fn validate_ack(&self, bytes: &[u8]) -> Result<(), String> {
+        if self.descriptors.iter().any(|fd| *fd <= 2)
+            || self.descriptors[0] == self.descriptors[1]
+            || self.descriptors[0] == self.descriptors[2]
+            || self.descriptors[1] == self.descriptors[2]
+            || self.occurrence.inputs().len() != self.descriptors.len()
+            || self
+                .occurrence
+                .inputs()
+                .iter()
+                .zip(1..=3)
+                .any(|(input, slot)| input.slot() != slot)
+            || WorkerV3ApplicationHandoffExpectationV1::new(
+                self.expectation.envelope(),
+                &self.occurrence,
+            ) != self.expectation
+        {
+            return Err("inconsistent retained application handoff binding".to_string());
+        }
         WorkerV3ApplicationHandoffAckV1::decode_canonical(bytes)
             .map_err(|error| format!("invalid Worker V3 application acknowledgment: {error}"))?
             .validate(self.expectation, self.challenge)
@@ -1084,84 +1104,157 @@ impl ApplicationHandoffExpectationV1 {
     }
 }
 
+struct OriginalApplicationHandoffV1 {
+    pidfd: OwnedFd,
+    pid: u32,
+    protocol: Box<ApplicationHandoffExpectationV1>,
+}
+
+impl OriginalApplicationHandoffV1 {
+    fn capture(
+        child: &Child,
+        protocol: Box<ApplicationHandoffExpectationV1>,
+    ) -> Result<Self, String> {
+        // An exited but unreaped child is valid: a fast application can ACK and exit before
+        // the runner is scheduled. Unique Child custody prevents PID reuse during capture.
+        observe_leader_exit_without_reaping_until(child.id() as libc::pid_t, None)?;
+        let pid = rustix::process::Pid::from_raw(child.id() as libc::pid_t)
+            .ok_or_else(|| "invalid application child PID".to_string())?;
+        let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            .map_err(|error| format!("failed to retain original application pidfd: {error}"))?;
+        Ok(Self {
+            pidfd,
+            pid: child.id(),
+            protocol,
+        })
+    }
+
+    fn validate_child(&self, child: &Child) -> Result<(), String> {
+        if self.pid != child.id() {
+            return Err("application ACK wait substituted the original child".to_string());
+        }
+        let flags = rustix::io::fcntl_getfd(&self.pidfd)
+            .map_err(|error| format!("failed to inspect retained application pidfd: {error}"))?;
+        if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
+            return Err("retained application pidfd lost CLOEXEC".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct SpawnedApplicationAck {
+    read: File,
+    cleanup: ApplicationCleanup,
+    ack_timeout: Duration,
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
+    test_ready_read: Option<File>,
+}
+
 impl PendingApplicationAck {
-    /// Converts a spawned, pre-ACK launch into complete containment custody.
-    pub(crate) fn into_cleanup_after_spawn(
+    /// Captures the original child and completes sandbox custody before any service wait.
+    pub(crate) fn after_spawn(
         mut self,
         child: &Child,
-    ) -> Result<ApplicationCleanup, ApplicationHandoffFailure> {
-        let sandbox = self.complete_sandbox_after_spawn(child)?;
-        Ok(self.cleanup(Some(sandbox)))
-    }
-
-    pub(crate) fn await_after_spawn(
-        mut self,
-        child: &mut Child,
-    ) -> Result<ApplicationHandoffGuard, ApplicationHandoffFailure> {
-        let sandbox = self.complete_sandbox_after_spawn(child)?;
-        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
-        if let Some(mut ready) = self.test_ready_read.take()
-            && let Err(message) = read_test_ack_ready(&mut ready)
-        {
-            return Err(self.failure(message, Some(sandbox)));
-        }
-        let result = read_application_handoff_ack(
-            &mut self.read,
-            child,
-            self.timeouts.ack,
-            self.protocol.maximum_ack_bytes(),
-        )
-        .and_then(|bytes| self.protocol.validate_ack(&bytes));
-        match result {
-            Ok(()) => Ok(ApplicationHandoffGuard {
-                cleanup: Some(self.cleanup(Some(sandbox))),
-            }),
-            Err(message) => Err(self.failure(message, Some(sandbox))),
-        }
-    }
-
-    fn complete_sandbox_after_spawn(
-        &mut self,
-        child: &Child,
-    ) -> Result<ApplicationSandboxGuard, ApplicationHandoffFailure> {
+    ) -> Result<SpawnedApplicationAck, ApplicationHandoffFailure> {
         drop(self.parent_write.take());
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         drop(self.test_ready_parent_write.take());
-        match self
-            .sandbox
-            .take()
-            .expect("pending acknowledgment owns its sandbox")
-            .complete(child.id())
-        {
-            Ok(sandbox) => Ok(sandbox),
-            Err(failure) => {
-                let (message, sandbox) = failure.into_parts();
-                Err(self.failure(message, Some(sandbox)))
-            }
-        }
-    }
-
-    fn cleanup(&mut self, sandbox: Option<ApplicationSandboxGuard>) -> ApplicationCleanup {
-        ApplicationCleanup {
+        let mut cleanup = ApplicationCleanup {
             reaper: self
                 .reaper
                 .take()
                 .expect("pending acknowledgment owns a reaper reservation"),
-            sandbox,
+            sandbox: None,
+            application: None,
             timeout: self.timeouts.cleanup,
             #[cfg(test)]
             test_hold: None,
+        };
+        let application = OriginalApplicationHandoffV1::capture(child, self.protocol);
+        let sandbox = self
+            .sandbox
+            .take()
+            .expect("pending acknowledgment owns its sandbox")
+            .complete(child.id());
+        let capture_error = match application {
+            Ok(application) => {
+                cleanup.application = Some(application);
+                None
+            }
+            Err(message) => Some(message),
+        };
+        match sandbox {
+            Ok(sandbox) => cleanup.sandbox = Some(sandbox),
+            Err(failure) => {
+                let (message, sandbox) = failure.into_parts();
+                cleanup.sandbox = Some(sandbox);
+                return Err(ApplicationHandoffFailure {
+                    message: match capture_error {
+                        Some(capture) => format!("{capture}; {message}"),
+                        None => message,
+                    },
+                    cleanup: Some(cleanup),
+                });
+            }
+        }
+        if let Some(message) = capture_error {
+            return Err(ApplicationHandoffFailure {
+                message,
+                cleanup: Some(cleanup),
+            });
+        }
+        Ok(SpawnedApplicationAck {
+            read: self.read,
+            cleanup,
+            ack_timeout: self.timeouts.ack,
+            #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
+            test_ready_read: self.test_ready_read,
+        })
+    }
+}
+
+impl SpawnedApplicationAck {
+    pub(crate) fn into_cleanup(self) -> ApplicationCleanup {
+        self.cleanup
+    }
+
+    pub(crate) fn await_ack(
+        mut self,
+        child: &Child,
+    ) -> Result<ApplicationHandoffGuard, ApplicationHandoffFailure> {
+        let application = self
+            .cleanup
+            .application
+            .as_ref()
+            .expect("spawned acknowledgment retains the original child");
+        if let Err(message) = application.validate_child(child) {
+            return Err(self.failure(message));
+        }
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
+        if let Some(mut ready) = self.test_ready_read.take()
+            && let Err(message) = read_test_ack_ready(&mut ready)
+        {
+            return Err(self.failure(message));
+        }
+        let result = read_application_handoff_ack(
+            &mut self.read,
+            child,
+            self.ack_timeout,
+            WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
+        )
+        .and_then(|bytes| application.protocol.validate_ack(&bytes));
+        match result {
+            Ok(()) => Ok(ApplicationHandoffGuard {
+                cleanup: Some(self.cleanup),
+            }),
+            Err(message) => Err(self.failure(message)),
         }
     }
 
-    fn failure(
-        &mut self,
-        message: String,
-        sandbox: Option<ApplicationSandboxGuard>,
-    ) -> ApplicationHandoffFailure {
+    fn failure(self, message: String) -> ApplicationHandoffFailure {
         ApplicationHandoffFailure {
             message,
-            cleanup: Some(self.cleanup(sandbox)),
+            cleanup: Some(self.cleanup),
         }
     }
 }
@@ -1504,6 +1597,7 @@ fn transfer_application_cleanup(
         process_group,
         process_group_terminal: false,
         sandbox: cleanup.sandbox.take(),
+        _application: cleanup.application.take(),
         _reservation: cleanup.reaper,
         leader_status: None,
         completion: Some(completion),
@@ -1746,6 +1840,10 @@ fn validate_envelope_stat(
 }
 
 #[cfg(test)]
+#[path = "application_handoff/startup_tests.rs"]
+mod startup_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -1829,6 +1927,7 @@ mod tests {
         ApplicationCleanup {
             reaper: application_reaper().reserve().unwrap(),
             sandbox: None,
+            application: None,
             timeout: Duration::from_secs(2),
             test_hold: None,
         }
@@ -2657,6 +2756,7 @@ mod tests {
                 process_group,
                 process_group_terminal: false,
                 sandbox: None,
+                _application: None,
                 _reservation: reservation,
                 leader_status: None,
                 completion: None,
@@ -2713,6 +2813,10 @@ mod tests {
         command.arg("30");
         let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
+        let application =
+            OriginalApplicationHandoffV1::capture(&child, Box::new(startup_tests::protocol()))
+                .unwrap();
+        let original_fd = application.pidfd.as_raw_fd();
         let timeout = Duration::from_millis(80);
         let started = Instant::now();
         let error = transfer_application_cleanup(
@@ -2721,6 +2825,7 @@ mod tests {
             ApplicationCleanup {
                 reaper: reservation,
                 sandbox: None,
+                application: Some(application),
                 timeout,
                 test_hold: Some(Arc::clone(&hold)),
             },
@@ -2742,6 +2847,17 @@ mod tests {
         };
         assert!(saturation.contains("saturated"));
         assert!(process_exists(process_group));
+        {
+            let jobs = supervisor.jobs.lock().unwrap();
+            let application = jobs[0]._application.as_ref().unwrap();
+            assert_eq!(application.pidfd.as_raw_fd(), original_fd);
+            assert_eq!(application.pid, process_group as u32);
+            assert_eq!(
+                application.protocol.occurrence,
+                startup_tests::protocol().occurrence
+            );
+            assert!(rustix::io::fcntl_getfd(&application.pidfd).is_ok());
+        }
 
         hold.store(false, Ordering::Release);
         supervisor.wake.notify_all();
@@ -2780,6 +2896,7 @@ mod tests {
                 process_group,
                 process_group_terminal: false,
                 sandbox,
+                _application: None,
                 _reservation: reservation,
                 leader_status: None,
                 completion: None,
@@ -2827,6 +2944,7 @@ mod tests {
             sandbox: Some(ApplicationSandboxGuard::test_stalled_guard(Arc::clone(
                 &release,
             ))),
+            _application: None,
             _reservation: reservation,
             leader_status: None,
             completion: None,
@@ -2901,6 +3019,7 @@ mod tests {
             process_group,
             process_group_terminal: false,
             sandbox: None,
+            _application: None,
             _reservation: reservation,
             leader_status: None,
             completion: Some(completion),
@@ -2963,6 +3082,10 @@ mod tests {
         command.arg("30");
         let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
+        let application =
+            OriginalApplicationHandoffV1::capture(&child, Box::new(startup_tests::protocol()))
+                .unwrap();
+        let original_fd = application.pidfd.as_raw_fd();
         let (completion, result) = mpsc::sync_channel(1);
         supervisor.panic_worker.store(true, Ordering::Release);
         supervisor.transfer(ReapJob {
@@ -2970,6 +3093,7 @@ mod tests {
             process_group,
             process_group_terminal: false,
             sandbox: None,
+            _application: Some(application),
             _reservation: reservation,
             leader_status: None,
             completion: Some(completion),
@@ -2990,6 +3114,13 @@ mod tests {
             Err(error) => error,
         };
         assert!(admission.contains("fails closed"), "{admission}");
+        {
+            let jobs = supervisor.jobs.lock().unwrap();
+            let application = jobs[0]._application.as_ref().unwrap();
+            assert_eq!(application.pidfd.as_raw_fd(), original_fd);
+            assert_eq!(application.pid, process_group as u32);
+            assert!(rustix::io::fcntl_getfd(&application.pidfd).is_ok());
+        }
 
         supervisor.finish_process().unwrap();
         assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
