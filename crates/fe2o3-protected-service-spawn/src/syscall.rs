@@ -12,6 +12,9 @@ use crate::{
     PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
 };
 
+#[cfg(test)]
+mod tests;
+
 const CLONE_PIDFD: u64 = 0x0000_1000;
 const CLONE_CLEAR_SIGHAND: u64 = 0x0000_0001_0000_0000;
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
@@ -75,6 +78,87 @@ struct CloneArgsV1 {
     set_tid: u64,
     set_tid_size: u64,
     cgroup: u64,
+}
+
+#[cfg(test)]
+pub(crate) mod signal_mask_tests;
+
+fn wait_for_cancelled_child(
+    pidfd: BorrowedFd<'_>,
+) -> rustix::io::Result<Option<rustix::process::WaitIdStatus>> {
+    #[cfg(test)]
+    if signal_mask_tests::take_wait_failure() {
+        return Err(rustix::io::Errno::IO);
+    }
+    rustix::process::waitid(
+        rustix::process::WaitId::PidFd(pidfd),
+        rustix::process::WaitIdOptions::EXITED,
+    )
+}
+
+struct SpawnSignalMaskV1 {
+    previous: u64,
+    armed: bool,
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl SpawnSignalMaskV1 {
+    fn block() -> io::Result<Self> {
+        let all = u64::MAX;
+        let mut previous = 0_u64;
+        // SAFETY: raw masking includes libc-reserved signals; x86-64 uses an eight-byte set.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_rt_sigprocmask,
+                libc::SIG_BLOCK,
+                &raw const all,
+                &raw mut previous,
+                KERNEL_SIGSET_BYTES,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            previous,
+            armed: true,
+            _thread: std::marker::PhantomData,
+        })
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if signal_mask_tests::take_restore_failure() {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        // SAFETY: only the originating parent thread restores its exact saved kernel mask.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_rt_sigprocmask,
+                SIG_SETMASK,
+                &raw const self.previous,
+                std::ptr::null_mut::<u64>(),
+                KERNEL_SIGSET_BYTES,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for SpawnSignalMaskV1 {
+    fn drop(&mut self) {
+        if self.restore().is_err() {
+            // Callers contain any created child before this final restoration attempt.
+            std::process::abort();
+        }
+    }
 }
 
 #[repr(C)]
@@ -178,17 +262,36 @@ pub(crate) fn spawn(
         set_tid_size: 0,
         cgroup: 0,
     };
+    #[cfg(test)]
+    let signal_probe = signal_mask_tests::child_probe_enabled();
+    let mut signals = SpawnSignalMaskV1::block()?;
     // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
     // child executes direct syscalls only and cannot return into Rust.
     let result = unsafe {
-        libc::syscall(
+        let result = libc::syscall(
             libc::SYS_clone3,
             &raw const arguments,
             std::mem::size_of::<CloneArgsV1>(),
-        )
+        );
+        if result < 0 && *libc::__errno_location() == libc::ENOSYS {
+            // Legacy x86-64 clone writes the atomic pidfd through parent_tid. No shared VM,
+            // handlers or descriptor table; blocked signals protect until child normalization.
+            libc::syscall(
+                libc::SYS_clone,
+                CLONE_PIDFD | SIGCHLD,
+                std::ptr::null_mut::<c_void>(),
+                &raw mut pidfd_raw,
+                std::ptr::null_mut::<i32>(),
+                0_u64,
+            )
+        } else {
+            result
+        }
     };
     if result < 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        signals.restore()?;
+        return Err(error);
     }
     if result == 0 {
         // SAFETY: this is the direct post-clone child; child_exec always execs or exits.
@@ -198,13 +301,13 @@ pub(crate) fn spawn(
                 credentials,
                 cap_last_cap,
                 expected_parent.as_raw_pid(),
+                #[cfg(test)]
+                signal_probe,
             )
         }
     }
-    let raw_pid =
-        i32::try_from(result).map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
-    let pid = rustix::process::Pid::from_raw(raw_pid)
-        .ok_or_else(|| io::Error::from_raw_os_error(libc::ESRCH))?;
+    let raw_pid = i32::try_from(result).unwrap_or_else(|_| std::process::abort());
+    let pid = rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
     if pidfd_raw < 0 {
         let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
         reap_pid(pid);
@@ -212,21 +315,26 @@ pub(crate) fn spawn(
     }
     // SAFETY: successful CLONE_PIDFD installed one fresh descriptor in pidfd_raw.
     let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
-    let flags = match rustix::io::fcntl_getfd(&pidfd) {
+    let mut child = RootOwnedProtectedServiceChildV1 {
+        pid,
+        pidfd: Some(pidfd),
+    };
+    if let Err(error) = signals.restore() {
+        child.contain();
+        return Err(error);
+    }
+    let flags = match rustix::io::fcntl_getfd(child.pidfd()) {
         Ok(flags) => flags,
         Err(source) => {
-            terminate_and_reap(pid, &pidfd);
+            child.contain();
             return Err(source.into());
         }
     };
     if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        terminate_and_reap(pid, &pidfd);
+        child.contain();
         return Err(io::Error::from_raw_os_error(libc::EPERM));
     }
-    Ok(RootOwnedProtectedServiceChildV1 {
-        pid,
-        pidfd: Some(pidfd),
-    })
+    Ok(child)
 }
 
 pub(crate) struct RootOwnedProtectedServiceChildV1 {
@@ -235,6 +343,15 @@ pub(crate) struct RootOwnedProtectedServiceChildV1 {
 }
 
 impl RootOwnedProtectedServiceChildV1 {
+    fn contain(&mut self) {
+        while self.pidfd.is_some() {
+            let _ = self.cancel_and_reap();
+            if self.pidfd.is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+
     #[cfg(feature = "test-support")]
     pub(crate) fn admit_non_authoritative_test(
         pid: rustix::process::Pid,
@@ -306,10 +423,7 @@ impl RootOwnedProtectedServiceChildV1 {
                 }
             };
         let wait_result = loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
+            match wait_for_cancelled_child(pidfd.as_fd()) {
                 Ok(Some(_)) => break Ok(()),
                 Ok(None) | Err(rustix::io::Errno::INTR) => {}
                 Err(rustix::io::Errno::CHILD) => break Err(ReapErrorV1::OwnershipLost),
@@ -332,35 +446,13 @@ impl RootOwnedProtectedServiceChildV1 {
 
 impl Drop for RootOwnedProtectedServiceChildV1 {
     fn drop(&mut self) {
-        let _ = self.cancel_and_reap();
+        self.contain();
     }
 }
 
 pub(crate) enum ReapErrorV1 {
     OwnershipLost,
     Io(io::Error),
-}
-
-fn terminate_and_reap(pid: rustix::process::Pid, pidfd: &OwnedFd) {
-    let signaled = match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => true,
-        Err(_) => matches!(
-            rustix::process::kill_process(pid, rustix::process::Signal::KILL),
-            Ok(()) | Err(rustix::io::Errno::SRCH)
-        ),
-    };
-    if signaled {
-        loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
-                Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => break,
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(_) => break,
-            }
-        }
-    }
 }
 
 fn reap_pid(pid: rustix::process::Pid) {
@@ -378,11 +470,20 @@ unsafe fn child_exec(
     credentials: ProtectedServiceCredentialProfileV1,
     cap_last_cap: u32,
     expected_parent: i32,
+    #[cfg(test)] signal_probe: bool,
 ) -> ! {
     // SAFETY: every operation below is a direct scalar syscall over inherited storage.
     unsafe {
+        #[cfg(test)]
+        if signal_probe && !signal_mask_tests::check_child_signals(true) {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 11);
+        }
         if normalize_signal_state() != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
+        }
+        #[cfg(test)]
+        if signal_probe && !signal_mask_tests::check_child_signals(false) {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
         }
         if arm_parent_death(expected_parent) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 2);

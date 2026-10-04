@@ -133,18 +133,19 @@ changing ownership after publication invalidates the ready record's ctime bindin
 That campaign remains next, followed by invocation admission and two-GPU
 fill/copy/readback. No new GPU run, formal theorem or HIP/HSA parity claim is made.
 
-Deployment qualification also has a concrete launcher compatibility blocker:
-the unit's existing `RestrictNamespaces=yes` denies `clone3` on the inspected
-systemd 255 implementation, while both protected launch paths require its atomic
-pidfd result. Do not replace that with a numeric-PID reopen or claim the unit
-starts successfully. Disabling this setting and denying `setns`, `unshare` and
-mount syscalls is not equivalent confinement: `clone3` can still request a user
-namespace. Resolve and qualify this policy boundary before the measured static
-deployment campaign. The isolated root tests do not run the systemd unit.
-The next candidate is an ENOSYS-only legacy `clone(CLONE_PIDFD)` compatibility
-path with a fully blocked pre-clone signal mask, exact parent-mask restoration
-and existing child containment. It preserves atomic original pidfd custody and
-the unit's namespace restriction; it still needs implementation and qualification.
+The [launcher compatibility checkpoint](evidence/dev-clone-compatibility-2026-10-04/README.md)
+addresses the inspected systemd 255 filter's `clone3 -> ENOSYS` behavior without
+changing `RestrictNamespaces=yes`. Both launch paths now use an ENOSYS-only
+x86-64 `clone(CLONE_PIDFD | SIGCHLD)` fallback, still returning the original pidfd
+atomically. The calling thread blocks the complete kernel signal mask before
+either clone; the child resets dispositions before unblocking. The parent takes
+cleanup custody before restoring its exact mask. Restoration failure contains
+the exact child before return or fail-stop, and unknown wait errors retain custody.
+Local qualification applies the installed systemd helper's actual namespace filter
+to the supervisor suite and private distinct-UID root launch cases, including
+negative namespace probes. It is not full systemd unit startup or the measured
+static deployment campaign. Those remain required before genuine compiler receipt
+acquisition, followed by exact invocation admission and two-GPU application testing.
 
 ## Reuse What Works
 

@@ -60,8 +60,14 @@ capability, access-mode, object-snapshot, byte, parent-continuity, and role
 non-aliasing checks. The retained stdout, stderr, and readiness readers remain
 private, and no prepared value exposes a descriptor.
 
-Production launch consumes that prepared state through one `clone3` call with
-exactly `CLONE_PIDFD | CLONE_CLEAR_SIGHAND` and `SIGCHLD`. Every launcher input
+Production launch first attempts `clone3` with exactly
+`CLONE_PIDFD | CLONE_CLEAR_SIGHAND` and `SIGCHLD`. Only `ENOSYS` permits an x86-64
+`clone(CLONE_PIDFD | SIGCHLD)` fallback with the same original atomic pidfd;
+there is no `pidfd_open` fallback. The complete calling-thread kernel signal mask
+is blocked before either syscall. The parent owns the child before restoring its
+exact mask; the child resets dispositions before unblocking. Restoration failure
+retains the artifact spawn reservation until exact child containment, and an
+unexpected wait error cannot release pidfd/reaper custody. Every launcher input
 is first duplicated above FD 215. The direct-syscall child resets signals,
 arms and verifies `PDEATHSIG=SIGKILL`, self-checks the inherited service
 profile, reports through a private gate, and cannot execute until the parent
@@ -132,7 +138,7 @@ cloneable stop handle provides graceful shutdown with a one-second maximum
 idle accept observation; active sessions retain their trusted timeout bounds.
 
 The launcher deliberately inherits an already established profile instead of
-performing privileged credential transitions after `clone3`. Deployment must
+performing privileged credential transitions after cloning. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
 and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
 zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.

@@ -23,10 +23,15 @@ process identities and descriptors. It separately owns an admitted external-
 anchor endpoint and exact service pidfd, requires their service identity to
 equal the launch manifest, and transfers both to the issuer. It now consumes
 that handoff into a sealed 704-byte static pre-exec manifest and an exact
-twelve-source table for destinations `0..=11`, retaining distinct stdout,
+fourteen-source table for destinations `0..=13`, retaining distinct stdout,
 stderr, and readiness readers. The supervisor now installs the manifest and
-issuer at FDs 198 and 199 and sources at FDs `200..211` through a gated
-`clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child. The child self-checks its
+issuer at FDs 198 and 199 and sources at FDs `200..213` through a gated
+`clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child, or, only after `ENOSYS`, an
+x86-64 `clone(CLONE_PIDFD | SIGCHLD)` child with the same atomic pidfd contract.
+Both paths block the full calling-thread signal mask before cloning and reset
+child dispositions before unblocking; the parent restores its exact prior mask
+after taking child custody. A restoration failure contains the exact child
+before return or fail-stop. The child self-checks its
 inherited process profile and parent-death signal; the parent independently
 checks procfs credentials, all capability sets, tracing, umask, and unchanged
 user/mount/PID/network/IPC/UTS/cgroup/time namespaces before release. Exact

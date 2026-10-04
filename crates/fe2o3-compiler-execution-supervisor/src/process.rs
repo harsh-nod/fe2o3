@@ -109,6 +109,87 @@ struct CloneArgsV1 {
     cgroup: u64,
 }
 
+#[cfg(test)]
+pub(crate) mod signal_mask_tests;
+
+fn wait_for_cancelled_child(
+    pidfd: BorrowedFd<'_>,
+) -> rustix::io::Result<Option<rustix::process::WaitIdStatus>> {
+    #[cfg(test)]
+    if signal_mask_tests::take_wait_failure() {
+        return Err(rustix::io::Errno::IO);
+    }
+    rustix::process::waitid(
+        rustix::process::WaitId::PidFd(pidfd),
+        rustix::process::WaitIdOptions::EXITED,
+    )
+}
+
+struct SpawnSignalMaskV1 {
+    previous: u64,
+    armed: bool,
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl SpawnSignalMaskV1 {
+    fn block() -> io::Result<Self> {
+        let all = u64::MAX;
+        let mut previous = 0_u64;
+        // SAFETY: raw masking includes libc-reserved signals; x86-64 uses an eight-byte set.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_rt_sigprocmask,
+                libc::SIG_BLOCK,
+                &raw const all,
+                &raw mut previous,
+                KERNEL_SIGSET_BYTES,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            previous,
+            armed: true,
+            _thread: std::marker::PhantomData,
+        })
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.armed {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if signal_mask_tests::take_restore_failure() {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        // SAFETY: only the originating parent thread restores its exact saved kernel mask.
+        if unsafe {
+            libc::syscall(
+                libc::SYS_rt_sigprocmask,
+                SIG_SETMASK,
+                &raw const self.previous,
+                std::ptr::null_mut::<u64>(),
+                KERNEL_SIGSET_BYTES,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for SpawnSignalMaskV1 {
+    fn drop(&mut self) {
+        if self.restore().is_err() {
+            // Callers contain any created child before this final restoration attempt.
+            std::process::abort();
+        }
+    }
+}
+
 #[repr(C)]
 struct KernelSigactionV1 {
     handler: u64,
@@ -704,21 +785,39 @@ impl ProtectedIssuerSupervisorV1 {
                 set_tid_size: 0,
                 cgroup: 0,
             };
+            #[cfg(test)]
+            let signal_probe = signal_mask_tests::child_probe_enabled();
+            let mut signals = SpawnSignalMaskV1::block()
+                .map_err(|source| io_error("block signals for protected issuer clone", source))?;
             // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
             // flags. The child executes only direct syscalls over preallocated state and never
             // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
             let clone_result = unsafe {
-                syscall(
+                let result = syscall(
                     SYS_CLONE3,
                     &raw const clone_arguments,
                     std::mem::size_of::<CloneArgsV1>(),
-                )
+                );
+                if result < 0 && *libc::__errno_location() == libc::ENOSYS {
+                    // x86-64 legacy clone returns the atomic pidfd through parent_tid.
+                    syscall(
+                        libc::SYS_clone,
+                        CLONE_PIDFD | SIGCHLD,
+                        std::ptr::null_mut::<c_void>(),
+                        &raw mut pidfd_raw,
+                        std::ptr::null_mut::<i32>(),
+                        0_u64,
+                    )
+                } else {
+                    result
+                }
             };
             if clone_result < 0 {
-                return Err(io_error(
-                    "clone3 protected issuer with atomic pidfd",
-                    io::Error::last_os_error(),
-                ));
+                let source = io::Error::last_os_error();
+                signals.restore().map_err(|source| {
+                    io_error("restore parent signals after failed issuer clone", source)
+                })?;
+                return Err(io_error("clone protected issuer with atomic pidfd", source));
             }
             if clone_result == 0 {
                 // SAFETY: this is the post-clone child. child_exec performs direct syscalls only
@@ -731,6 +830,8 @@ impl ProtectedIssuerSupervisorV1 {
                         profile_ready_reader.as_raw_fd(),
                         gate_writer.as_raw_fd(),
                         exec_status_reader.as_raw_fd(),
+                        #[cfg(test)]
+                        signal_probe,
                     )
                 }
             }
@@ -747,6 +848,20 @@ impl ProtectedIssuerSupervisorV1 {
             // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor in pidfd_raw.
             let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
             let mut process = ProtectedIssuerChildV1::new(pidfd, pid, reap_slot);
+            if let Err(source) = signals.restore() {
+                // Keep the spawn reservation and gate through confirmed containment. Drop may
+                // retry restoration, but must not fail-stop with deferred live-child custody.
+                while process.pidfd.is_some() {
+                    let _ = process.cancel_and_reap();
+                    if process.pidfd.is_some() {
+                        std::thread::sleep(REAPER_POLL_INTERVAL_V1);
+                    }
+                }
+                return Err(io_error(
+                    "restore parent signals after issuer clone",
+                    source,
+                ));
+            }
             if let Err(error) = process.validate_pidfd() {
                 let _ = process.cancel_and_reap();
                 return Err(error);
@@ -943,14 +1058,23 @@ unsafe fn child_exec(
     profile_ready_reader: c_int,
     gate_writer: c_int,
     exec_status_reader: c_int,
+    #[cfg(test)] signal_probe: bool,
 ) -> ! {
     // SAFETY: every call in this block is a direct Linux syscall over preallocated storage.
     unsafe {
+        #[cfg(test)]
+        if signal_probe && !signal_mask_tests::check_child_signals(true) {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 11);
+        }
         close(profile_ready_reader);
         close(gate_writer);
         close(exec_status_reader);
         if normalize_signal_state() != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
+        }
+        #[cfg(test)]
+        if signal_probe && !signal_mask_tests::check_child_signals(false) {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
         }
         if arm_parent_death(expected_parent_pid) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 2);
@@ -1845,10 +1969,7 @@ impl ProtectedIssuerChildV1 {
                 Err(source) => Some(io_error("pidfd-kill protected issuer", source.into())),
             };
         let wait_result = loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
+            match wait_for_cancelled_child(pidfd.as_fd()) {
                 Ok(Some(_)) => break Ok(()),
                 Ok(None) | Err(rustix::io::Errno::INTR) => {}
                 Err(rustix::io::Errno::CHILD) => {
@@ -1856,7 +1977,7 @@ impl ProtectedIssuerChildV1 {
                         "issuer child was reaped outside its pidfd owner",
                     ));
                 }
-                Err(source) => break Err(io_error("reap exact issuer pidfd", source.into())),
+                Err(source) => return Err(io_error("reap exact issuer pidfd", source.into())),
             }
         };
         drop(self.pidfd.take());
@@ -2239,5 +2360,25 @@ mod tests {
             }
         }
         assert!(child.wait().is_err(), "fallback waitpid must consume exit");
+    }
+
+    #[test]
+    fn cancellation_wait_error_retains_pidfd_and_reaper_reservation() {
+        let (not_pidfd, _writer) =
+            protected_pipe(PipeFlags::empty(), "create cancellation error fixture").unwrap();
+        let mut child = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            std::process::Command::new("/bin/sleep").arg("30").spawn()
+        })
+        .unwrap();
+        let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
+        let mut owner =
+            ProtectedIssuerChildV1::new(not_pidfd, pid, deferred_reaper().reserve().unwrap());
+        let result = owner.cancel_and_reap();
+        let retained = owner.pidfd.is_some() && owner.reap_slot.is_some();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        drop(owner);
+        assert!(result.is_err());
+        assert!(retained, "a failed wait must not release cleanup custody");
     }
 }
