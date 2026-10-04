@@ -155,8 +155,17 @@ pidfd, completes sandbox admission once, and retains the complete occurrence,
 descriptor coordinates, expectation and challenge through ACK and delayed cleanup.
 The binding is allocated before spawn and moved without cloning. Fast ACK-and-exit
 is valid; this custody is not a live-process observation or registration authority.
-The existing compiler-service path still opens its own pidfd under unreaped Child
-custody; the future proof path must transfer a duplicate of the retained original.
+Application compiler-service transfer now duplicates the captured original child
+pidfd. A private-field move-only owner also captures the original Cargo pidfd;
+it has no production raw-descriptor constructor or extraction. Live transfer
+revalidates current-parent waitability against the original pidfd, while cleanup
+may retain descriptor/history custody after exit or reaping. The ordinary compiler
+PID-based path and its two-right supervisor wire remain unchanged. The future
+four-right proof registration must use duplicates of these original handles.
+The [registration-prerequisite checkpoint](evidence/dev-application-registration-binding-2026-10-04/README.md)
+qualifies this transfer and the inert four-input binding. Both original handles
+and protocol occupy the same pre-spawn allocation through cleanup, without a new
+post-spawn allocation. This does not yet install the dedicated proof endpoint.
 The join must authenticate Cargo's
 spawn/sandbox supervision and protected service isolation, neither of which follows
 from the process snapshot alone. Then deploy the fixed keyless custodian, join its
@@ -166,9 +175,13 @@ The reviewed registration design reuses the supervisor/root registry without
 another listener. Implement the following as one coherent application profile;
 these are not yet implemented registration/deployment or remote proof ownership.
 
-1. Add a canonical application binding containing the full compiler supervisor
-   handoff, exact four-slot occurrence, descriptor coordinates, envelope expectation
-   and challenge. Cargo creates a nonblocking CLOEXEC seqpacket pair before spawn,
+1. The inert canonical application binding is implemented: exactly 840 bytes
+   contain the full compiler supervisor handoff, exact four-slot occurrence,
+   descriptor coordinates, envelope expectation and challenge. Bounded decoding
+   validates framing, all nested records and expectation/occurrence association;
+   coordinates must be distinct and exclude FD195. This is not authenticated
+   registration or an installed four-input profile. Next, Cargo creates a
+   nonblocking CLOEXEC seqpacket pair before spawn,
    enables PASSCRED and eagerly binds both endpoints. Include slot 4 before encoding
    the occurrence. Update Cargo, host claim/cleanup, and root observation together;
    all currently require exactly three slots. Keep FD195 unchanged.
