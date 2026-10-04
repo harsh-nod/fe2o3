@@ -2,9 +2,9 @@
 
 This is the frozen V1 contract. Its reader/installer and qualification APIs remain
 V1-only. The separately reviewable [native V3 prerequisite](compiler-execution-service-v3.md)
-has distinct manifest/owner types and a paired candidate builder; it is not a
-qualified default-service migration. Historical V1 build commands below require
-the matching V1 source revision, not the private paired V3 candidate.
+has distinct manifest/owner types and remains the builder's default; it is not a
+qualified default-service migration. Explicit `--v1` selects the retained V1
+implementations as one complete bundle, without changing the V3 default.
 
 Status: implemented source-bundle admission, atomic offline-root publication,
 fresh installed-root revalidation, sealed disposable-root preparation, and an
@@ -138,18 +138,41 @@ Linux cannot provide as one filesystem transaction.
 From a clean checkout:
 
 ```console
-$ scripts/build-static-compiler-execution-deployment.sh /tmp/fe2o3-deployment
+$ scripts/build-static-compiler-execution-deployment.sh --v1 /tmp/fe2o3-deployment
 bundle_path=/tmp/fe2o3-deployment
 manifest_sha256=<64 lowercase hexadecimal characters>
 git_commit=<40 lowercase hexadecimal characters>
 ```
 
-The builder qualifies all eight deployment images, runs the launcher's CTests,
+The builder checks all eight deployment images, runs the launcher's CTests,
 builds loader-independent static musl manifest, verifier, and installer
 executables, generates `SHA256SUMS` and `INSTALL-MANIFEST-V1`, and runs the
 static verifier before publishing the output directory. The final two lines are
 release inputs and must be distributed outside the bundle. The non-root builder
 does not invoke the privileged installer.
+
+V1 uses schema version `1` and **13 content records** (14 files including
+`INSTALL-MANIFEST-V1`). V3 uses schema version `3` and 12 content records. These
+counts are not schema versions. The explicit family selects the supervisor,
+issuer, anchor helper/service, coordinator, provisioner, systemd unit,
+`BUILD-INFO`, and manifest generator/verifier together. V1 additionally includes
+the real V1 client-check image. There is no per-role or schema override.
+
+The new `fe2o3-compiler-execution-coordinator-v1` and
+`fe2o3-compiler-execution-provision-v1` build targets call the unchanged V1
+entrypoints. The bundle installs their bytes at V1's existing canonical paths;
+the V3 executable targets and default builder invocations are unchanged. The
+separate `deployment/systemd/fe2o3-compiler-execution-v1.service` source is the
+historical V1 unit, installed under the canonical unit name only inside a V1
+bundle. Neither family may be overlaid onto the other family's live deployment.
+
+Packaging source tests do not qualify a static image, installed service, root
+custody, or ordinary tutorial compilation. Building a V1 bundle, externally
+pinning it, and completing the existing root/distinct-UID deployment qualification
+remain required. No client profile, policy, key, or compiler authority is
+fabricated by family selection. Ordinary `cargo-fe2o3 authority release` still
+requires its admitted V1 deployment independently of source-proof execution and
+independently of host-native load/launch authority.
 
 Install a qualified bundle into a private offline-root parent with the two
 out-of-band pins printed by the builder:

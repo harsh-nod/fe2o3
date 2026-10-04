@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "$#:${1-}" in
+  0:|1:v3) family=v3; suffix="" ;;
+  1:v1) family=v1; suffix="-v1" ;;
+  *) printf 'usage: %s [v1|v3]\n' "$0" >&2; exit 2 ;;
+esac
+readonly family suffix
+
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
-readonly target_dir="${FE2O3_STATIC_PROVISIONER_TARGET_DIR:-${repo_root}/target/static-provisioner}"
+readonly target_dir="${FE2O3_STATIC_PROVISIONER_TARGET_DIR:-${repo_root}/target/static-provisioner${suffix}}"
 readonly target="x86_64-unknown-linux-musl"
-readonly executable="${target_dir}/${target}/release/fe2o3-compiler-execution-provision"
+readonly binary="fe2o3-compiler-execution-provision${suffix}"
+readonly executable="${target_dir}/${target}/release/${binary}"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}" cargo rustc \
@@ -13,14 +21,14 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   --release \
   --target "${target}" \
   -p fe2o3-compiler-execution-coordinator \
-  --bin fe2o3-compiler-execution-provision \
+  --bin "${binary}" \
   -- \
   -C target-feature=+crt-static \
   -C relocation-model=static \
   -C link-arg=-static \
   -C link-arg=-no-pie
 
-readonly report="${target_dir}/fe2o3-compiler-execution-provision.readelf.txt"
+readonly report="${target_dir}/${binary}.readelf.txt"
 /usr/bin/readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
 /usr/bin/grep -Eq 'Class:[[:space:]]+ELF64' "${report}"
 /usr/bin/grep -Eq 'Type:[[:space:]]+EXEC' "${report}"
@@ -45,7 +53,9 @@ for argument in '' 0 01 +1; do
   smoke_status=$?
   set -e
   expected='native compiler coordinator requires exact root identity'
-  if [[ $(id -u) -eq 0 ]]; then
+  if [[ ${family} == v1 ]]; then
+    expected='expected exactly one canonical nonzero decimal policy generation'
+  elif [[ $(id -u) -eq 0 ]]; then
     case "${argument}" in
       +1) expected='generation is not decimal' ;;
       *) expected='expected one canonical nonzero generation' ;;
