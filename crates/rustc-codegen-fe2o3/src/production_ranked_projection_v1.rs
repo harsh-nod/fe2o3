@@ -1019,6 +1019,8 @@ pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
     source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>,
     canonical_kernel_order: Box<[usize]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
+    // Drop last, after roots and identity metadata.
+    phase: retained_phase_v1::RetainedProjectionPhaseV1,
 }
 
 /// Move-only custody of the exact ranked graph and all eight mandatory
@@ -1049,6 +1051,8 @@ pub(crate) struct AuthenticatedRankedVerificationRosterV1 {
     roots: Box<[AuthenticatedRankedVerificationRootV1]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
     canonical_kernel_order: Box<[usize]>,
+    // Same original account; the enclosing pipeline retains paired source first.
+    phase: retained_phase_v1::RetainedProjectionPhaseV1,
 }
 
 impl AuthenticatedRankedVerificationRosterV1 {
@@ -1685,7 +1689,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn into_module_verified_receipt(
-        self,
+        mut self,
     ) -> Result<
         (
             ProductionMaterializedRankedModuleReceiptV1,
@@ -1693,12 +1697,16 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         ),
         ProductionRankedVerificationErrorV1,
     > {
+        self.phase.require_clean_v1()?;
         self.verify_equivalence()?;
+        // Declare first so errors drop later-declared source/roots before it.
+        let phase = self.phase;
         let Self {
             materialized,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
+            ..
         } = self;
         let mut lowering_roots = Vec::with_capacity(source_order_roots.len());
         let mut verification_roots = Vec::with_capacity(source_order_roots.len());
@@ -1724,6 +1732,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 roots: verification_roots.into_boxed_slice(),
                 canonical_roster_identity,
                 canonical_kernel_order,
+                phase,
             },
         ))
     }
@@ -1778,7 +1787,7 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn into_verified_roster_receipt(
-        self,
+        mut self,
     ) -> Result<
         ProductionRankedSemanticProjectionRosterReceiptV1,
         ProductionRankedVerificationErrorV1,
@@ -1794,8 +1803,10 @@ impl ProductionRankedSemanticProgramV1 {
                 },
             );
         }
+        self.phase.require_clean_v1()?;
         // Locals drop in reverse declaration order, including early refusals.
-        let _phase = self.phase;
+        // Success transfers the same account instead of ending its lifetime.
+        let phase = self.phase;
         let Self {
             materialized,
             roots,
@@ -1874,6 +1885,7 @@ impl ProductionRankedSemanticProgramV1 {
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
+            phase,
         };
         receipt.verify_equivalence()?;
         Ok(receipt)

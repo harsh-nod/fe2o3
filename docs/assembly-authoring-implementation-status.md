@@ -1953,3 +1953,39 @@ Actual source/SSA construction, canonical/backend integration and genuine
 Shared-first whole-root preparation remain open. Ordinary compilation, native
 debugging and GPU dispatch are not activated. Broad accepted exits remain
 M1/V1/V2/U1/U2/U3 (6/18).
+
+## Retained-account handoff checkpoint (2026-10-04, R63)
+
+The same move-only projection phase now survives Program-to-projection-roster
+and authenticated-roster handoffs. The phase remains the last owner field so
+source/evidence ownership ends before its accounting state is released.
+The retained heap census includes the actual boxed account payload once;
+a numeric storage balance is not treated as another heap allocation.
+
+The clean-account check preserves an existing typed resource refusal before
+attempting its own one-unit work debit. This preserves the established
+work-before-storage refusal priority, not a new chronological ordering between
+failure kinds. Nine added controls cover custody, retained heap accounting and
+prior-denial behavior. One existing genuine metadata-refusal test now requires
+the new exact accepted check event, with all original refusal reasons and
+single-drop cleanup assertions retained.
+
+Validation: complete backend debug and release each passed 3,906 library
+tests (224 intentionally ignored), 73 extractor tests and both API tests.
+The first runs' stale test-expectation failures remain retained separately.
+These tests do not yet establish that genuine BF16 source crosses the next
+authenticated-roster boundary; that isolated frontend continuation is being
+prepared separately. Module attachment, ordinary admission, emission and GPU
+qualification are not implied.
+
+The debugger's read-only continuation also passed 32 census controls and
+28 current-consumer controls, followed by an actual bounded snapshot of 373
+named runtime inputs and 81 required absences. The snapshot paid the complete
+440,384,584-byte input schedule and 3,781,936-byte historical-record schedule.
+A root pretty-print output-limit refusal was preserved; compact serialization
+passed the unchanged 512 KiB output limit. This remains preparation, not a
+live stop or physical capture. Native-scope CPU/resource checks are separate
+from authorization to launch.
+
+Milestone acceptance remains 7/18: M1, M2, V1, V2, U1, U2 and U3. No additional
+milestone or tutorial is declared complete by this checkpoint.

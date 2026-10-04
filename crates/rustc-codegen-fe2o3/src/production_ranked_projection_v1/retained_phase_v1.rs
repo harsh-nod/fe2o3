@@ -31,8 +31,34 @@ impl RetainedProjectionPhaseV1 {
         }
     }
 
-    fn with_budget<R>(
+    /// Checks this original account before any new work debit, without
+    /// replacing/resetting it or changing existing Work-first denial priority.
+    pub(super) fn require_clean_v1(&mut self) -> Result<(), Error> {
+        self.with_budget_impl(true, |_| Ok(()))
+    }
+
+    /// Only this Box's concrete payload. Its Work, StorageState and allocation-
+    /// free WindowState are inline. The reserved-storage counter is NOT another
+    /// owned allocation and is not added to the actual roster's storage census.
+    pub(super) fn charge_retained_heap_storage_v1(
+        &self,
+        counter: &mut fe2o3_kernel_ir::LogicalStorageCounterV1,
+    ) -> Result<(), fe2o3_kernel_ir::LogicalStorageErrorV1> {
+        let _: &OwnedBudget = self.ledger.as_ref();
+        counter.array::<OwnedBudget>(1)
+    }
+
+    pub(super) fn with_budget<R>(
         &mut self,
+        consume: impl FnOnce(&mut Budget<'_>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        // Existing conditional consumers retain their exact entry-debit behavior.
+        self.with_budget_impl(false, consume)
+    }
+
+    fn with_budget_impl<R>(
+        &mut self,
+        check_prior: bool,
         consume: impl FnOnce(&mut Budget<'_>) -> Result<R, Error>,
     ) -> Result<R, Error> {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -48,6 +74,11 @@ impl RetainedProjectionPhaseV1 {
         let result = self.ledger.with_budget(|budget| {
             let account = budget.work_ledger_identity_v1();
             let result = catch_unwind(AssertUnwindSafe(|| {
+                if check_prior {
+                    budget
+                        .check_prior_denials_v1()
+                        .map_err(Error::ConditionalResource)?;
+                }
                 budget.charge_work(1).map_err(Error::ConditionalResource)?;
                 consume(budget)
             }));
@@ -79,8 +110,8 @@ impl RetainedProjectionPhaseV1 {
 
 impl Drop for RetainedProjectionPhaseV1 {
     fn drop(&mut self) {
-        // The program declares this field after its roots, and consuming paths
-        // keep it until after destroying/transferring all phase-owned evidence.
+        // Program and both roster owners declare this field after their roots.
+        // Consuming paths transfer it or keep it until local evidence is gone.
         // The account dies here; work and denial history are never reset.
         #[cfg(test)]
         let before = observation::Resources::from_owned(&self.ledger);
