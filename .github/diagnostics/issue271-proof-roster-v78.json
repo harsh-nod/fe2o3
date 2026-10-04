@@ -1,6 +1,6 @@
 {
-  "head": "d1b364182b7232f4806ca8eef99cd8a051aac63e",
-  "tree": "1d05610aac82624952cf1ad153463ce446cb4b73",
+  "head": "7bb2d4156ade8643abfd854881956e1aae39a452",
+  "tree": "bfa89cceae04f1ccc96ffbdc9441bb05f079b5ef",
   "package": "fe2o3-lower-mir-kernel",
   "expected_total": 4644,
   "required_normal_leaves": [
@@ -349,6 +349,10 @@
       "sha256": "db22bb88aeb006aab23aa3bb17ebe18454ffa217e4041c79df19d7e32cc63239"
     },
     {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_discarded_assert_v29_tests.rs",
+      "sha256": "2e4364a063a26755f8f4158fc8b63a74b108649a9cca03823e16b941e923b50b"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29.rs",
       "sha256": "2ce57411f214d01d20693c5c276fc8e52018350aa1b4bc3aa14084760e2733eb"
     },
@@ -498,7 +502,7 @@
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs",
-      "sha256": "54253db96d4c9043dbc54dc98ea2d7ca5cb9b18c338cac856c5a388975b768c1"
+      "sha256": "e266c6ea942cb58f6d48d06230a52ca7a5789b8e3350376da1e8af3c34c97980"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocations_v32_tests.rs",
@@ -514,7 +518,7 @@
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs",
-      "sha256": "9bc497c7c9ad63139f99f041400a9a207607502b124d4d4561218a50e97fcef4"
+      "sha256": "a4f48137ff4619d8f6b3e9d79310a66068ac2015997c83b28848ecd4aeaa569e"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85.rs",

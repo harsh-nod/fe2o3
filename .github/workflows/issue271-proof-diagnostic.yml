@@ -2,14 +2,14 @@ name: Issue 271 Broad Lowerer Ordinary Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-lowerer-broad-diagnostic-v87-20261004]
+    branches: [wip/issue271-lowerer-broad-diagnostic-v87-r2-20261004]
 
 permissions:
   contents: read
 
 jobs:
   verifier-ordinary:
-    name: Exact d1b364 full lowerer ordinary tests (diagnostic only)
+    name: Exact 7bb2d4 full lowerer ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: d1b364182b7232f4806ca8eef99cd8a051aac63e
+          ref: 7bb2d4156ade8643abfd854881956e1aae39a452
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-lowerer-broad-d1b364-ordinary-v87-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue271-lowerer-broad-v87-logs/
+          name: issue271-lowerer-broad-7bb2d4-ordinary-v87-r2-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-lowerer-broad-v87-r2-logs/
           if-no-files-found: warn
           retention-days: 7
