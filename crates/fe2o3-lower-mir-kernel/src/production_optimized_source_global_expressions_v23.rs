@@ -45,6 +45,22 @@ impl ProductionSourceCorrespondenceV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> SourceOwnedResultV18<()>,
     {
+        self.with_global_source_expressions_profile_v90::<false, F>(optimized, budget, consume)
+    }
+
+    fn with_global_source_expressions_profile_v90<'work, const PREDICATED_WRITES: bool, F>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: &mut F,
+    ) -> SourceOwnedResultV18<()>
+    where
+        F: for<'scope> FnMut(
+            usize,
+            &PendingGlobalSourceAccessesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> SourceOwnedResultV18<()>,
+    {
         // Observe custody and the original first denial before the generic
         // attempt may reserve a header on the supplied account.
         self.global_expression_entry_v23(optimized, budget)?;
@@ -72,7 +88,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     .checked_sub(before)
                     .ok_or(ArgumentResourceV1::Accounting)?;
                 for root in 0..self.source.root_count(budget)? {
-                    self.with_descriptor_source_roles_index_v23(
+                    self.with_descriptor_source_roles_profile_v90::<PREDICATED_WRITES, _, _>(
                         optimized,
                         root,
                         None,

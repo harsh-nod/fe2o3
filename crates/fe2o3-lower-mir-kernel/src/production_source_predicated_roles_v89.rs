@@ -1,5 +1,10 @@
 // The ordinary Store path and its pending value recipes remain unchanged.
 // Only the scoped V88 original-call/native constructor supplies additional rows.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PREDICATED_SEED_FAULT_V90: std::cell::Cell<Option<(u8, usize)>> = const { std::cell::Cell::new(None) };
+}
+
 fn predicated_source_role_headers_v89<F>() -> SourceOwnedResultV18<usize> {
     type Frame<'a> = (
         CheckedDescriptorSourceRolesV18<'a>,
@@ -160,6 +165,17 @@ impl ProductionSourceCorrespondenceV18<'_> {
             let mut roots = |root,
                              legacy: &PendingGlobalSourceAccessesV18<'_>,
                              budget: &mut ArgumentBudgetV1<'work>| {
+                #[cfg(test)]
+                if PREDICATED_SEED_FAULT_V90
+                    .get()
+                    .is_some_and(|(mode, _)| mode == 3)
+                {
+                    PREDICATED_SEED_FAULT_V90.set(Some((3, 1)));
+                    return scoped_raw_admission_v29::checked_issued_source_rows_v18(
+                        self, root, budget,
+                    )
+                    .map(|_| panic!("legacy CFG query must refuse checked writes"));
+                }
                 self.with_pending_source_native_writes_v88(optimized, root, native, budget, |writes, budget| {
                     let build = |budget: &mut ArgumentBudgetV1<'work>| {
                     let mut rows = emission_vec_v1(legacy.roles.rows.len(), budget).map_err(source_emission_error_v18)?;
@@ -168,6 +184,24 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     for ordinal in 0..writes.original_call_count(budget)? {
                         let Some(write) = writes.write(ordinal, budget)? else { continue; };
                         let pair = predicated_source_pair_v89(self, optimized, write.fact, budget)?;
+                        #[cfg(test)]
+                        let pair = {
+                            let mut pair = pair;
+                            if let Some((mode, count)) = PREDICATED_SEED_FAULT_V90.get() {
+                                let seed = legacy.roles.rows.iter().find(|row| row.output == write.fact.output[6]).unwrap();
+                                assert!(seed.role.is_none() && seed.global.is_none() && !seed.write_recipe_pending);
+                                PREDICATED_SEED_FAULT_V90.set(Some((mode, count + 1)));
+                                match mode {
+                                    1 => continue,
+                                    2 => pair.output.logical.guard = GlobalSourceGuardV85::ExplicitPredicate {
+                                        condition: pair.output.logical.root,
+                                        bound_comparison: pair.output.logical.index,
+                                    },
+                                    _ => unreachable!(),
+                                }
+                            }
+                            pair
+                        };
                         if pair.output.logical.guard != write.guard {
                             return self.source.missing("predicated source/native predicate differs");
                         }
@@ -217,7 +251,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 std::mem::size_of_val(&roots),
                 std::mem::align_of_val(&roots),
             ])?)?;
-            self.with_global_source_expressions_v23(optimized, budget, &mut roots)
+            self.with_global_source_expressions_profile_v90::<true, _>(
+                optimized, budget, &mut roots,
+            )
         };
         let frame = argument_sum_v1(&[std::mem::size_of_val(&run), std::mem::align_of_val(&run)])?;
         self.retain_query(source_scalar_normalization_scratch_v18(
