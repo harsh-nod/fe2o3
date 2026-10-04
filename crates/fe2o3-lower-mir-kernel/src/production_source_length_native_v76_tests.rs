@@ -109,7 +109,7 @@ fn source_length_abi_v76(
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
-    let [argument] = abi.arguments_mut(0) else {
+    let [argument] = abi.arguments_mut(0).as_mut_slice() else {
         panic!("one exact source carrier");
     };
     argument.kind = ProductionKernelArgumentAbiKindV18::Descriptor {
