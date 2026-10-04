@@ -295,7 +295,7 @@ def main():
     try:
         for name, tail, expected in [('success', b'echo success\n', 0),
                                      ('failure', b'exit 7\n', 1),
-                                     ('parent-death', b'/bin/busybox sh -c \'echo descendant-ready; exec /bin/busybox sleep 60\' <&0 &\nchild=$!\nwait "$child"\n', -9)]:
+                                     ('parent-death', b'/bin/busybox sh -c \'echo descendant-ready; exec /bin/busybox sleep 60\'\nexit 91\n', -9)]:
             with fixture(work, busybox, name, tail) as root:
                 before = root.stat()
                 status, stdout, stderr = invoke(tool, root, work, name, name == 'parent-death')
