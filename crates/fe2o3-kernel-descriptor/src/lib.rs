@@ -26,6 +26,7 @@ mod error;
 pub mod ffi_contract;
 mod launch_policy;
 pub mod mixed_conditional_v26;
+pub mod mixed_conditional_v86;
 mod mixed_descriptor_v53;
 mod model;
 mod nominal_v3;

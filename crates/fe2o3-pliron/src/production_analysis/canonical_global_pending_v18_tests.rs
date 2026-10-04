@@ -1,4 +1,5 @@
-use super::super::super::tests::{LAYOUTS, pointer_flow, with_checked};
+use super::super::super::tests::pointer_flow;
+pub(super) use super::super::super::tests::{LAYOUTS, with_checked};
 use super::*;
 #[path = "canonical_global_pending_generic_v18_tests.rs"]
 mod generic_carriers;
@@ -10,7 +11,7 @@ use fe2o3_kernel_ir::{
 
 const AMPLE: usize = 1 << 40;
 
-fn fixture(count: usize) -> Module {
+pub(super) fn fixture(count: usize) -> Module {
     let mut module = pointer_flow(false);
     let private = &mut module.functions[0];
     private
@@ -128,7 +129,7 @@ fn fixture(count: usize) -> Module {
     module
 }
 
-fn coordinate(function: u32, operation: u32) -> Coordinate {
+pub(super) fn coordinate(function: u32, operation: u32) -> Coordinate {
     Coordinate {
         block: Block {
             function: CanonicalKirFunctionCoordinateV1(function),
