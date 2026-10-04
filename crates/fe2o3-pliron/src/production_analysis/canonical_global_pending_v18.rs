@@ -24,6 +24,7 @@ pub struct PendingCanonicalGlobalAccessesV18<'s, 'g> {
     epoch: u64,
     guard: &'s Guard,
     refund_denied: &'s Cell<bool>,
+    guarded_stores_v87: bool,
 }
 
 #[path = "canonical_global_predicate_v86.rs"]
@@ -46,6 +47,7 @@ impl<'s, 'g> PendingCanonicalGlobalAccessesV18<'s, 'g> {
             epoch,
             guard,
             refund_denied,
+            guarded_stores_v87: false,
         }
     }
 }
@@ -93,6 +95,20 @@ impl PendingCanonicalGlobalAccessesV18<'_, '_> {
             .and_then(|body| body.blocks.get(coordinate.block.block as usize))
             .and_then(|block| block.operations.get(coordinate.operation as usize))
             .ok_or_else(|| self.guard.exact_graph())?;
+        if self.guarded_stores_v87
+            && matches!(
+                row.kind,
+                fe2o3_kernel_ir::OperationKind::GuardedStore { .. }
+            )
+        {
+            return Ok(self
+                .graph
+                .pending_guarded_global_operation_v87(coordinate)
+                .map(|actual| {
+                    debug_assert!(std::ptr::eq(row, actual));
+                    actual
+                }));
+        }
         Ok(self
             .graph
             .pending_global_operation_v18(coordinate)
@@ -214,6 +230,33 @@ impl PendingCanonicalRankedSourceRolesV18<'_, '_> {
             &mut Budget<'w>,
         ) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
+        self.with_pending_global_profile_v87::<false>(owner, budget, callback)
+    }
+
+    /// Opt-in native correspondence for preserved checked stores. This adds no
+    /// source-call, predicate truth, pointer formation or memory-safety proof.
+    /// The legacy V18 and mixed V26 entry points retain their closed classifier.
+    pub fn with_pending_global_accesses_v87<'w>(
+        &self,
+        owner: &VerifiedCanonicalKernelIrModuleV18,
+        budget: &mut Budget<'w>,
+        callback: impl for<'s, 'g> FnOnce(
+            &PendingCanonicalGlobalAccessesV18<'s, 'g>,
+            &mut Budget<'w>,
+        ) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        self.with_pending_global_profile_v87::<true>(owner, budget, callback)
+    }
+
+    fn with_pending_global_profile_v87<'w, const GUARDED: bool>(
+        &self,
+        owner: &VerifiedCanonicalKernelIrModuleV18,
+        budget: &mut Budget<'w>,
+        callback: impl for<'s, 'g> FnOnce(
+            &PendingCanonicalGlobalAccessesV18<'s, 'g>,
+            &mut Budget<'w>,
+        ) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
         self.guard.check(budget)?;
         if !std::ptr::eq(owner, self.owner) {
             return Err(self.guard.exact_graph());
@@ -232,6 +275,16 @@ impl PendingCanonicalRankedSourceRolesV18<'_, '_> {
         budget
             .reserve_storage(
                 headers(capture, alignment)
+                    .and_then(|legacy| {
+                        if GUARDED {
+                            checked_add(
+                                legacy,
+                                crate::KirPlironGraphV18::pending_guarded_scan_headers_v87()?,
+                            )
+                        } else {
+                            Ok(legacy)
+                        }
+                    })
                     .map_err(|error| self.retain_global_failure_v18(error))?,
             )
             .map_err(|error| self.guard.resource(error))?;
@@ -247,6 +300,16 @@ impl PendingCanonicalRankedSourceRolesV18<'_, '_> {
                 drop(callback);
                 return Ok(());
             }
+            if GUARDED {
+                if let Err(error) = self
+                    .graph
+                    .check_pending_guarded_carriers_v87(owner, self.epoch, budget)
+                {
+                    construction_error = Some(self.retain_global_failure_v18(error));
+                    drop(callback);
+                    return Ok(());
+                }
+            }
             let guard = Guard::new(budget);
             let view = PendingCanonicalGlobalAccessesV18 {
                 owner: self.owner,
@@ -254,6 +317,7 @@ impl PendingCanonicalRankedSourceRolesV18<'_, '_> {
                 epoch: self.epoch,
                 guard: &guard,
                 refund_denied: self.refund_denied,
+                guarded_stores_v87: GUARDED,
             };
             let result = guard.callback(budget, |budget| callback(&view, budget));
             self.graph
@@ -322,3 +386,7 @@ impl PendingCanonicalRankedSourceRolesV18<'_, '_> {
 #[cfg(test)]
 #[path = "canonical_global_pending_v18_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "canonical_global_guarded_v87_tests.rs"]
+mod guarded_v87_tests;
