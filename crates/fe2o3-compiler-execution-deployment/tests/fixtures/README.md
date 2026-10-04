@@ -15,3 +15,8 @@ mksquashfs squashfs-root qualification-base-v1.squashfs \
 
 SquashFS's `NO_XATTR` is bit 9 (`0x0200`); bit 8 means uncompressed xattrs,
 not absent xattrs. See the [4.6.1 format definition](https://github.com/plougher/squashfs-tools/blob/4.6.1/squashfs-tools/squashfs_fs.h#L57-L108).
+
+`mount-only-gzip.squashfs` uses the same command with `-comp gzip` and that
+output name. It exercises the read-only superblock/mount mechanism on kernels
+without SquashFS zstd support. It is not an admissible qualification base and
+does not replace the separate zstd mount test or measured deployment campaign.

@@ -6,7 +6,8 @@ use fe2o3_loop_device::{ReadOnlyAutoclearLoopDeviceV1, attach_sealed_read_only_l
 use rustix::fs::{Mode, OFlags, ResolveFlags, fstat, fstatfs, openat2};
 use rustix::mount::{
     FsMountFlags, FsOpenFlags, MountAttrFlags, MountPropagationFlags, MoveMountFlags, UnmountFlags,
-    fsconfig_create, fsconfig_set_string, fsmount, fsopen, mount_change, move_mount, unmount,
+    fsconfig_create, fsconfig_set_flag, fsconfig_set_string, fsmount, fsopen, mount_change,
+    move_mount, unmount,
 };
 
 use super::fault::{NoQualificationFaultV1, QualificationFaultHooksV1};
@@ -490,20 +491,7 @@ fn attach_base(
             format!("revalidate qualification loop device: {source}"),
         )
     })?;
-    let context = fsopen("squashfs", FsOpenFlags::FSOPEN_CLOEXEC)
-        .map_err(|source| io_error("open SquashFS mount context", source))?;
-    fsconfig_set_string(&context, "source", loop_device.device_path())
-        .map_err(|source| io_error("bind loop device to SquashFS context", source))?;
-    fsconfig_create(&context)
-        .map_err(|source| io_error("create qualification SquashFS superblock", source))?;
-    let detached = fsmount(
-        &context,
-        FsMountFlags::FSMOUNT_CLOEXEC,
-        MountAttrFlags::MOUNT_ATTR_RDONLY
-            | MountAttrFlags::MOUNT_ATTR_NODEV
-            | MountAttrFlags::MOUNT_ATTR_NOSUID,
-    )
-    .map_err(|source| io_error("create detached qualification SquashFS mount", source))?;
+    let detached = create_read_only_squashfs_mount(loop_device)?;
     let staged = mounted
         .staged
         .as_ref()
@@ -522,6 +510,28 @@ fn attach_base(
     require_filesystem(&base, SQUASHFS_MAGIC_V1, "qualification SquashFS base")?;
     mounted.mounted_base = Some(base);
     Ok(())
+}
+
+fn create_read_only_squashfs_mount(
+    loop_device: &ReadOnlyAutoclearLoopDeviceV1,
+) -> Result<OwnedFd, DeploymentVerificationErrorV1> {
+    let context = fsopen("squashfs", FsOpenFlags::FSOPEN_CLOEXEC)
+        .map_err(|source| io_error("open SquashFS mount context", source))?;
+    fsconfig_set_string(&context, "source", loop_device.device_path())
+        .map_err(|source| io_error("bind loop device to SquashFS context", source))?;
+    // The superblock opens its block device before fsmount can apply mount attributes.
+    fsconfig_set_flag(&context, "ro")
+        .map_err(|source| io_error("make qualification SquashFS context read-only", source))?;
+    fsconfig_create(&context)
+        .map_err(|source| io_error("create qualification SquashFS superblock", source))?;
+    fsmount(
+        &context,
+        FsMountFlags::FSMOUNT_CLOEXEC,
+        MountAttrFlags::MOUNT_ATTR_RDONLY
+            | MountAttrFlags::MOUNT_ATTR_NODEV
+            | MountAttrFlags::MOUNT_ATTR_NOSUID,
+    )
+    .map_err(|source| io_error("create detached qualification SquashFS mount", source))
 }
 
 fn attach_overlay(
@@ -732,6 +742,75 @@ fn require_filesystem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires effective root, loop-control and SquashFS zstd support"]
+    fn root_mounts_real_fixture_from_sealed_read_only_loop() {
+        assert_mounts_from_sealed_read_only_loop(include_bytes!(
+            "../tests/fixtures/qualification-base-v1.squashfs"
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires effective root, loop-control and SquashFS gzip support"]
+    fn root_mounts_gzip_fixture_from_sealed_read_only_loop() {
+        assert_mounts_from_sealed_read_only_loop(include_bytes!(
+            "../tests/fixtures/mount-only-gzip.squashfs"
+        ));
+    }
+
+    fn assert_mounts_from_sealed_read_only_loop(bytes: &[u8]) {
+        use rustix::fs::{MemfdFlags, SealFlags, StatVfsMountFlags};
+        use std::io::{Read as _, Write as _};
+
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let mut backing = File::from(
+            rustix::fs::memfd_create(
+                c"fe2o3-qualification-mount-test-v1",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap(),
+        );
+        backing.write_all(bytes).unwrap();
+        rustix::fs::fchmod(&backing, Mode::from_raw_mode(0o444)).unwrap();
+        rustix::fs::fcntl_add_seals(
+            &backing,
+            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL,
+        )
+        .unwrap();
+        let device = attach_sealed_read_only_loop_device_v1(&backing).unwrap();
+        let detached = create_read_only_squashfs_mount(&device).unwrap();
+        assert_eq!(fstatfs(&detached).unwrap().f_type, SQUASHFS_MAGIC_V1);
+        assert!(rustix::fs::fstatvfs(&detached).unwrap().f_flag.contains(
+            StatVfsMountFlags::RDONLY | StatVfsMountFlags::NODEV | StatVfsMountFlags::NOSUID
+        ));
+        let marker = openat2(
+            &detached,
+            "marker.txt",
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+        )
+        .unwrap();
+        let mut content = String::new();
+        File::from(marker).read_to_string(&mut content).unwrap();
+        assert_eq!(content, "fe2o3 qualification profile fixture\n");
+        assert_eq!(
+            openat2(
+                &detached,
+                "marker.txt",
+                OFlags::WRONLY | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+            )
+            .unwrap_err(),
+            rustix::io::Errno::ROFS
+        );
+        device.revalidate().unwrap();
+        // This mount is never attached to any namespace; closing it releases all mount custody.
+        drop(detached);
+        drop(device);
+    }
 
     #[test]
     fn descriptor_mount_paths_and_lower_order_are_canonical() {

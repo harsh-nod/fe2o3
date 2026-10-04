@@ -2141,6 +2141,26 @@ mod tests {
     }
 
     #[test]
+    fn qualification_rejects_mount_only_gzip_fixture() {
+        let bytes = include_bytes!("../tests/fixtures/mount-only-gzip.squashfs");
+        let (_base_root, base_path, digest) = qualification_base_fixture(bytes);
+        let (installed, _install_parent) = installed_for_qualification();
+        let parent = private_install_parent();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &digest,
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBase
+        );
+    }
+
+    #[test]
     fn qualification_preparation_retains_exact_installed_and_base_evidence() {
         let (installed, _install_parent) = installed_for_qualification();
         let expected_manifest_sha256 = installed.manifest_sha256();
