@@ -1,4 +1,5 @@
 use super::*;
+use fe2o3_kernel_ir::{ExplicitLaunchExtent, FormalIndexWidth};
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 100_000_000;
