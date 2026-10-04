@@ -50,6 +50,10 @@ mod conditional_fill;
 pub use conditional_fill::{
     CheckedWorkerV3ConditionalFillAssociationV1, WorkerV3ConditionalFillAssociationErrorV1,
 };
+#[cfg(target_os = "linux")]
+pub use conditional_fill::{
+    PendingWorkerV3ConditionalFillArtifactV1, WorkerV3ConditionalFillPendingErrorV1,
+};
 
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;

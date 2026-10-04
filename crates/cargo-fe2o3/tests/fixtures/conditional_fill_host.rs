@@ -11,12 +11,12 @@ use fe2o3_verifier::{
 };
 use object::{Object, ObjectSection};
 
-const FILL_BINDING: [u8; 32] = [
+pub(super) const FILL_BINDING: [u8; 32] = [
     201, 142, 90, 172, 23, 165, 117, 211, 118, 242, 35, 196, 101, 72, 69, 111, 43, 149, 220, 157,
     53, 77, 204, 69, 78, 200, 101, 203, 153, 151, 146, 240,
 ];
 
-struct AuditOnlyFillMarker;
+pub(super) struct AuditOnlyFillMarker;
 
 // SAFETY: this fixture marker matches the captured descriptor, as checked below.
 // It is used only with the safe audit API, not with a verifier or preparation API.

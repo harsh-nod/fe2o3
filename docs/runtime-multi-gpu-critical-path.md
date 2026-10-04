@@ -1,6 +1,6 @@
 # Working Multi-GPU Critical Path
 
-Priority refresh: 2026-10-03. This is an implementation work order, not an A3
+Priority refresh: 2026-10-04. This is an implementation work order, not an A3
 completion claim. Native agents reviewed Context admission, backend custody and
 existing MI300X evidence independently. Primary owns edits, integration and tests.
 
@@ -19,11 +19,12 @@ opcode coverage before clearing application admission.
    relation from their actual operand graphs, execute the shared machine bodies
    under the protected Verus runtime, and retain a distinct signed refinement
    receipt. This proves the conditional projection, not native launch premises.
-3. The consuming owned refinement producer now retains original compiler, target
-   and analyzer owners plus the executed proof. Implement a distinct owned pending
-   conditional artifact and protected compiler service/current-record association.
-   Preserve unconditional admission; never expose the
-   pending state through existing unconditional executable/load APIs.
+3. The owned pending artifact now retains the original compiler/target/analyzer
+   refinement, publication token, independently rechecked finalizer and fresh
+   exact compiler-current-record audit. Complete the protected compiler-deployment
+   and service-session join; signed test-key audit evidence alone is not that join.
+   Preserve unconditional admission; never expose the pending state through existing
+   unconditional executable/load APIs.
 4. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
    and publication currentness before creating private invocation authority.
 5. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
@@ -40,6 +41,9 @@ removes borrowed-proof lifetime constraints without self-reference or reimport.
 Retain one compiler-service admission for the artifact: its inherited current-record
 connection is one-use. Discharge each selected GPU's invocation separately without
 treating copied signed records as original evidence custody.
+The [pending-admission checkpoint](evidence/dev-pending-fill-admission-2026-10-04/README.md)
+adds the concrete one-use service transaction under retained publication currentness.
+It remains distinct from production deployment approval and invocation authority.
 
 ## Reuse What Works
 
@@ -170,19 +174,26 @@ edges and proves their relation to the shared wave execution and byte projection
 Its distinct boundary retains actual protected execution and strict signed import.
 The protected qualification includes six logical operand mutations and an
 equivalent alias rewrite, not merely fixed machine theorems with attached hashes.
-Implement owned pending custody, protected compiler-service association and the
-consuming invocation transition next. Only then
+Owned pending custody and the concrete signed service transaction now pass native
+qualification. Complete the independently pinned production deployment association
+and consuming invocation transition next. Only then
 qualify admitted fill, tracked upload, native XGMI and readback on two GPUs in
 both directions.
 
-The pending owner must consume and retain the original compiler inputs, target
-lineage and authenticated analysis, not reconstruct authority from signed bytes or
-hold self-referential borrowed views. Actual DATA pointers are patched in the KFD
+The pending owner now consumes and retains the original compiler inputs, target
+lineage and authenticated analysis without reconstructing authority from signed
+bytes or holding self-referential borrowed views. Actual DATA pointers are patched in the KFD
 queue-dispatch preparation layer, after host preparation. Discharge alignment,
 bounds, non-overflow and DATA/kernarg disjointness there before issue; a hash of the
 unpatched template is insufficient. Current-record audit evidence is also not
-protected compiler-key custody: retain the concrete service/coordinator continuity
-owners when building the pending artifact.
+protected compiler-key custody. Independently admit the fixed production client,
+supervisor and anchor configuration, verify their exact policy/UID/key links, and
+retain/recheck installed-path provenance around the exchange and later authorization.
+The existing hardened issuer already checks actual compiler occurrence, signing-key
+custody, ledger currentness and a live independent anchor before signing. Reuse that
+mechanism; do not trust the carriage's self-selected policy or mistake FD195 socket
+credentials for the transferred issuer's identity. No new signing protocol is needed
+for this trusted-local-root/kernel scope.
 
 The current Worker artifact verifier accepts only unconditional compiler proof
 inputs and runs before invocation arguments exist. Do not retag the conditional

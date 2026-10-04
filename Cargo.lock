@@ -312,6 +312,7 @@ dependencies = [
  "fe2o3-compiler-lineage",
  "fe2o3-core",
  "fe2o3-device",
+ "fe2o3-external-anchor-protocol",
  "fe2o3-functional-proof",
  "fe2o3-host",
  "fe2o3-hsa-runtime",

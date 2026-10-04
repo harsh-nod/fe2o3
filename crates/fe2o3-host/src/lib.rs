@@ -319,6 +319,10 @@ pub use worker_v3_verification_admission::{
     WorkerV3VerificationRosterIdentityV1, WorkerV3VerifierV1,
     audit_recovered_worker_v3_verification_v1,
 };
+#[cfg(target_os = "linux")]
+pub use worker_v3_verification_admission::{
+    PendingWorkerV3ConditionalFillArtifactV1, WorkerV3ConditionalFillPendingErrorV1,
+};
 #[cfg(feature = "worker-v3-verifier-test-support")]
 #[doc(hidden)]
 pub use worker_v3_verification_admission::{

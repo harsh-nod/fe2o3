@@ -11,6 +11,13 @@ use fe2o3_kernel_analysis::CheckedGfx942FillAnalysisV1;
 use fe2o3_verifier::CheckedConditionalFillProgramV1;
 use std::{error::Error, fmt};
 
+#[cfg(target_os = "linux")]
+mod pending;
+#[cfg(target_os = "linux")]
+pub use pending::{
+    PendingWorkerV3ConditionalFillArtifactV1, WorkerV3ConditionalFillPendingErrorV1,
+};
+
 /// Borrows the request and both checked owners for the duration of its publication audit.
 ///
 /// This cannot escape as `WorkerV3AuditorV1::Evidence`. It neither authenticates the
