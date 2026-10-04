@@ -6,6 +6,8 @@ use crate::production_pipeline::source_owned_v29::mixed_worker_v28::Worker;
 use fe2o3_kernel_descriptor::mixed_conditional_v26::decode_mixed_contract_v26;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 
+#[path = "production_rustc_driver_predicated_publication_v90_tests.rs"]
+mod predicated_publication_v90_tests;
 #[path = "production_rustc_driver_mixed_publication_v28_tests.rs"]
 mod publication_tests;
 
