@@ -321,6 +321,16 @@ fn typed_prefix_removed_original_block_has_no_fabricated_cursor_or_runtime_state
 #[test]
 fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results() {
     let mut module = fixture();
+    let loop_body = &mut module.functions[0].body.as_mut().unwrap().blocks[3];
+    let repeated = [
+        loop_body.operations.remove(1),
+        loop_body.operations.remove(1),
+    ];
+    assert_eq!(repeated[0].results[0].id, ValueId(11));
+    assert_eq!(repeated[1].results[0].id, ValueId(12));
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .extend(repeated);
     for argument in 0..24 {
         let scalar = match argument % 4 {
             0 => ScalarType::Index,
@@ -450,6 +460,52 @@ fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results
             };
             let measured = run(floor, LIMIT, LIMIT, generate);
             let expected = measured.0.unwrap();
+            let prefix_relation = expected
+                .split_once("spec fn typed_prefix_related_0_v49(")
+                .unwrap()
+                .1
+                .split_once("\n}\n")
+                .unwrap()
+                .0;
+            let originals: Vec<_> = [ValueId(11), ValueId(12)]
+                .iter()
+                .map(|id| {
+                    prefix
+                        .input()
+                        .operations()
+                        .iter()
+                        .find(|row| row.operation.results.iter().any(|result| result.id == *id))
+                        .unwrap()
+                        .results
+                        .start
+                })
+                .collect();
+            let mut retained_distinct_sources = false;
+            for segment in prefix_relation.split("\n if before.pc == ").skip(1) {
+                let mut equalities = std::collections::BTreeSet::new();
+                for line in segment.lines() {
+                    let Some(equality) = line.strip_prefix(" && before.values[") else {
+                        continue;
+                    };
+                    let (original, target) = equality.split_once("] == after.values[").unwrap();
+                    let target = target.split_once(']').unwrap().0;
+                    let pair = (
+                        original.parse::<usize>().unwrap(),
+                        target.parse::<usize>().unwrap(),
+                    );
+                    assert!(
+                        equalities.insert(pair),
+                        "duplicate boundary equality {pair:?}"
+                    );
+                }
+                retained_distinct_sources |= equalities.iter().any(|&(original, target)| {
+                    original == originals[0] && equalities.contains(&(originals[1], target))
+                });
+            }
+            assert!(
+                retained_distinct_sources,
+                "distinct CSE source values must both constrain the target"
+            );
             for (helper, relation, inventory) in [
                 (
                     "typed_prefix_arguments_0_v102",

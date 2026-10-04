@@ -322,6 +322,15 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                                     segment.start,
                                     out,
                                 )? {
+                                    self.bridge.charge(2, out)?;
+                                    // The available target's anchor equality was
+                                    // emitted above. Other source descendants
+                                    // still need their own equality to this target.
+                                    if output_row.definitions.contains(&target)
+                                        && self.anchors[target] == original
+                                    {
+                                        continue;
+                                    }
                                     emit!(
                                         out,
                                         "\n && before.values[{original}] == after.values[{target}]"
