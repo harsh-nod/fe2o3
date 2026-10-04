@@ -4,6 +4,12 @@
 #[cfg(test)]
 include!("production_source_descriptor_length_checks_v30_tests.rs");
 
+#[derive(Clone, Copy)]
+enum DescriptorLengthSourceV76<'a> {
+    Assignment(&'a SourceRvalueRowV30),
+    Call(&'a PendingSourceLengthV76),
+}
+
 fn descriptor_length_assignment_v30<'a>(
     original: &'a ProductionSourceCorrespondenceV18<'_>,
     root: usize,
@@ -48,6 +54,12 @@ fn descriptor_length_headers_v30() -> Result<usize, ArgumentResourceV1> {
         size_of::<Frame<'_>>(),
         std::mem::align_of::<Frame<'_>>(),
         source_descriptor_origin_headers_v30()?,
+        scoped_raw_admission_v29::source_length_replay_headers_v76()?,
+        size_of::<DescriptorLengthSourceV76<'_>>(),
+        size_of::<std::slice::Iter<'_, PendingSourceLengthV76>>(),
+        size_of::<&[PendingSourceLengthV76]>(),
+        argument_product_v1(2, size_of::<fn()>())?,
+        argument_product_v1(3, size_of::<&()>())?,
     ])
 }
 
@@ -194,6 +206,8 @@ fn complete_source_descriptor_lengths_v30(
                         "original assignment result roster is absent",
                     ),
                 )?;
+                let lengths =
+                    scoped_raw_admission_v29::checked_source_lengths_v76(original, root, budget)?;
                 super::value_origin_v1::with_whole_value_origins_v18(
                     original,
                     input_function.coordinate,
@@ -207,25 +221,39 @@ fn complete_source_descriptor_lengths_v30(
                             budget,
                             |after, budget| {
                                 let result = (|| {
-                                    for locator in &roster.rows {
+                                    for source in roster
+                                        .rows
+                                        .iter()
+                                        .map(DescriptorLengthSourceV76::Assignment)
+                                        .chain(lengths.iter().map(DescriptorLengthSourceV76::Call))
+                                    {
                                         budget.charge_work(4)?;
-                                        let assignment = descriptor_length_assignment_v30(
-                                            original, root, locator, budget,
-                                        )?;
-                                        let Some(scalar) = descriptor_length_source_scalar_v30(
-                                            original, assignment, budget,
-                                        )?
-                                        else {
-                                            continue;
-                                        };
-                                        let SourceRvalueEndpointV30::Scalar {
-                                            value,
-                                            scalar: ScalarType::Index,
-                                        } = locator.endpoint
-                                        else {
-                                            return original.source.missing(
+                                        let (value, scalar) = match source {
+                                            DescriptorLengthSourceV76::Assignment(locator) => {
+                                                let assignment = descriptor_length_assignment_v30(
+                                                    original, root, locator, budget,
+                                                )?;
+                                                let Some(scalar) =
+                                                    descriptor_length_source_scalar_v30(
+                                                        original, assignment, budget,
+                                                    )?
+                                                else {
+                                                    continue;
+                                                };
+                                                let SourceRvalueEndpointV30::Scalar {
+                                                    value,
+                                                    scalar: ScalarType::Index,
+                                                } = locator.endpoint
+                                                else {
+                                                    return original.source.missing(
                                                 "descriptor length archived representation differs",
                                             );
+                                                };
+                                                (value, scalar)
+                                            }
+                                            DescriptorLengthSourceV76::Call(row) => {
+                                                (row.length, row.element)
+                                            }
                                         };
                                         let definition = original
                                             .inventory
@@ -246,12 +274,24 @@ fn complete_source_descriptor_lengths_v30(
                                                 scalar,
                                                 budget,
                                             )?;
-                                        original.check_descriptor_operand_v30(
-                                            root,
-                                            locator,
-                                            input_slice,
-                                            budget,
-                                        )?;
+                                        match source {
+                                            DescriptorLengthSourceV76::Assignment(locator) => {
+                                                original.check_descriptor_operand_v30(
+                                                    root,
+                                                    locator,
+                                                    input_slice,
+                                                    budget,
+                                                )?
+                                            }
+                                            DescriptorLengthSourceV76::Call(row) => {
+                                                budget.charge_work(2)?;
+                                                if input_slice != row.receiver {
+                                                    return original.source.missing(
+                                                        "source length call receiver differs",
+                                                    );
+                                                }
+                                            }
+                                        }
                                         let ProductionOptimizedSourceOperationV18::Retained {
                                             output: output_operation,
                                             ..
@@ -266,6 +306,10 @@ fn complete_source_descriptor_lengths_v30(
                                         )?;
                                         if operations[index]
                                             == Some(CompletedGlobalOperationV26::Length)
+                                            && matches!(
+                                                source,
+                                                DescriptorLengthSourceV76::Assignment(_)
+                                            )
                                         {
                                             continue;
                                         }
@@ -338,6 +382,22 @@ fn complete_source_descriptor_lengths_v30(
                                             return original.source.missing(
                                             "descriptor length parameter belongs to another root",
                                         );
+                                        }
+                                        if let DescriptorLengthSourceV76::Call(row) = source {
+                                            budget.charge_work(3)?;
+                                            if input_parameter
+                                                != (SliceDefinition::FunctionArgument {
+                                                    function: input_owner,
+                                                    argument: u32::try_from(row.root_parameter)
+                                                        .map_err(|_| {
+                                                            ArgumentResourceV1::Arithmetic
+                                                        })?,
+                                                })
+                                            {
+                                                return original.source.missing(
+                                                    "source length call root parameter differs",
+                                                );
+                                            }
                                         }
                                         issued_output_definition_v18(
                                             original,

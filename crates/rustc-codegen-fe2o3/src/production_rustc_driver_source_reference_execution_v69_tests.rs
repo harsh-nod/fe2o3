@@ -260,3 +260,68 @@ fn actual_registered_scalar_reference_retains_exact_budget_and_custody_boundarie
         },
     );
 }
+
+#[test]
+#[ignore = "requires actual two-target rustc imports and original resource/custody checks; no proof execution"]
+fn actual_registered_scalar_reference_length_calls_retain_cumulative_custody() {
+    const ORIGINAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child";
+    run_actual_sources::<serde_json::Value>(
+        &[
+            ("single_length", "single_length"),
+            ("repeated_lengths", "repeated_lengths"),
+        ],
+        &[(0, 0)],
+        ORIGINAL_CHILD,
+        "REGISTERED_REFERENCE_LENGTH_CUSTODY_V76",
+        |case| {
+            let source = program("fill");
+            match case {
+                "single_length" => source,
+                "repeated_lengths" => source.replace(
+                    "let length = output.len();",
+                    "let length = output.len(); let second_length = output.len();",
+                ),
+                _ => panic!("unknown length source case"),
+            }
+        },
+        |_, _, _, report, _| {
+            assert_eq!(report["census"][0].as_u64(), Some(2));
+            assert!(report["work"].as_u64().unwrap() > 0);
+            assert!(report["peak"].as_u64().unwrap() > 41);
+        },
+    );
+}
+
+#[test]
+#[ignore = "requires actual two-target WriteOnlyDisjointSlice imports; source custody only, no reference proof execution"]
+fn actual_write_only_source_length_calls_retain_cumulative_custody() {
+    const ORIGINAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child";
+    run_actual_sources::<serde_json::Value>(
+        &[("write_only_lengths", "write_only_lengths")],
+        &[(0, 0)],
+        ORIGINAL_CHILD,
+        "WRITE_ONLY_SOURCE_LENGTH_CUSTODY_V76",
+        |_| {
+            let mut source =
+                "use fe2o3_device::{WriteOnlyDisjointSlice, kernel, thread};\n".to_owned();
+            for (name, value) in [("alpha", 17), ("zeta", 23)] {
+                source.push_str(&format!(
+                    r#"
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn {name}(mut output: WriteOnlyDisjointSlice<u32>) {{
+    let length = output.len();
+    let second_length = output.len();
+    let _ = output.write(thread::index_1d(), {value});
+}}
+"#
+                ));
+            }
+            source
+        },
+        |_, _, _, report, _| {
+            assert_eq!(report["census"][0].as_u64(), Some(2));
+            assert!(report["work"].as_u64().unwrap() > 0);
+            assert!(report["peak"].as_u64().unwrap() > 41);
+        },
+    );
+}

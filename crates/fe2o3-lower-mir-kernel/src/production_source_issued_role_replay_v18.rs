@@ -3,6 +3,7 @@
 // the exact original graph/root first; no alternate memory profile is selected.
 
 include!("production_source_reference_selection_replay_v30.rs");
+include!("production_source_length_replay_v76.rs");
 
 pub(super) fn source_issued_tail_locations_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
@@ -223,18 +224,17 @@ pub(super) fn selected_row_count_oracle_v30(pending: &PendingSourceMemoryV29) ->
 fn check_issued_original_definition_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     root: usize,
-    row: &PendingSourceIssuedIssuerV29,
+    instance: ProductionCallInstanceIdV1,
+    block: SemanticBlockIdV1,
+    expected_definition: Option<SsaValueV1>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
     let source = original.source.source_semantic(budget)?;
-    let function_id = original
-        .source
-        .instance(root, row.instance.index(), budget)?
-        .0;
+    let function_id = original.source.instance(root, instance.index(), budget)?.0;
     let function = source.functions().get(function_id.index() as usize).ok_or(
         ProductionSourceOwnedViewErrorV18::Binding("issued original definition function"),
     )?;
-    let call = source_issued_call_v29(source, function, row.block, budget)
+    let call = source_issued_call_v29(source, function, block, budget)
         .map_err(immutable_memory_error_v29)?
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "issued original definition call",
@@ -258,7 +258,7 @@ fn check_issued_original_definition_v18(
         budget.charge_work(6)?;
         if edge.is_reachable()
             && edge.is_promoted()
-            && edge.edge().source().get() == row.block.index()
+            && edge.edge().source().get() == block.index()
             && edge.edge().ordinal() == 0
             && edge.ordinal() == 0
             && edge.variable().get() == destination.local().index()
@@ -279,7 +279,7 @@ fn check_issued_original_definition_v18(
         }
     }
     budget.charge_work(1)?;
-    if definition != Some(row.definition) {
+    if definition != expected_definition {
         return original
             .source
             .missing("issued original definition differs");
@@ -440,7 +440,7 @@ fn check_immutable_issued_roles_inner_v18(
             .missing("issued source issuer census differs");
     }
     if source_count == 0 {
-        if !rows.issuers.is_empty() || !rows.accesses.is_empty() {
+        if !rows.issuers.is_empty() || !rows.lengths.is_empty() || !rows.accesses.is_empty() {
             return original
                 .source
                 .missing("issued evidence lacks original issuer");
@@ -520,7 +520,14 @@ fn check_immutable_issued_roles_inner_v18(
         {
             return original.source.missing("issued source unclaimed issuer");
         }
-        check_issued_original_definition_v18(original, root, row, budget)?;
+        check_issued_original_definition_v18(
+            original,
+            root,
+            row.instance,
+            row.block,
+            Some(row.definition),
+            budget,
+        )?;
         let [length, compare, data, address] =
             source_issued_tail_locations_v18(original, root, row, budget)?;
         let length = source_operation_row_v18(original.inventory, length, budget)?.operation;
@@ -554,6 +561,7 @@ fn check_immutable_issued_roles_inner_v18(
             return Err(immutable_memory_error_v29(source_issued_error_v29()));
         }
     }
+    check_immutable_source_lengths_v76(original, root, rows, function, budget)?;
     let mut previous_access = None;
     for row in &rows.accesses {
         budget.charge_work(2)?;
@@ -691,13 +699,20 @@ fn check_immutable_issued_roles_inner_v18(
         .map_err(immutable_memory_error_v29)?;
     budget.charge_work(argument_product_v1(
         2,
-        argument_sum_v1(&[rows.issuers.len(), accesses.len()])?,
+        argument_sum_v1(&[rows.issuers.len(), rows.lengths.len(), accesses.len()])?,
     )?)?;
     let mut valid = true;
     fe2o3_kernel_ir::with_function_control_flow_v1(function, Default::default(), budget, |view| {
         for issuer in &rows.issuers {
             if issuer.receiver != issuer.root_input
                 && view.unique_value_origin(issuer.receiver)? != Some(issuer.root_input)
+            {
+                valid = false;
+            }
+        }
+        for length in &rows.lengths {
+            if length.receiver != length.root_input
+                && view.unique_value_origin(length.receiver)? != Some(length.root_input)
             {
                 valid = false;
             }
@@ -728,6 +743,7 @@ pub(super) fn source_issued_replay_headers_v18() -> Result<usize, ArgumentResour
         ])
     }
     argument_sum_v1(&[
+        source_length_replay_headers_v76()?,
         source_issued_census_query_headers_v29()?,
         h::<usize>()?,
         h::<bool>()?,

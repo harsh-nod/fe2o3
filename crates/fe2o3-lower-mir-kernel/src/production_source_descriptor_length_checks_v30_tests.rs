@@ -187,6 +187,14 @@ fn descriptor_length_headers_have_exact_independent_query_and_transport_oracles(
     assert_eq!(source_descriptor_origin_headers_v30().unwrap(), origin);
     assert_eq!(
         descriptor_length_headers_v30().unwrap(),
-        size_of::<Frame<'_>>() + std::mem::align_of::<Frame<'_>>() + origin
+        size_of::<Frame<'_>>()
+            + std::mem::align_of::<Frame<'_>>()
+            + origin
+            + scoped_raw_admission_v29::source_length_replay_headers_v76().unwrap()
+            + size_of::<DescriptorLengthSourceV76<'_>>()
+            + size_of::<std::slice::Iter<'_, PendingSourceLengthV76>>()
+            + size_of::<&[PendingSourceLengthV76]>()
+            + 2 * size_of::<fn()>()
+            + 3 * size_of::<&()>()
     );
 }

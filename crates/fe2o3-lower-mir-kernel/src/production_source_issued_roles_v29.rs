@@ -40,6 +40,7 @@ struct PendingSourceIssuedAccessV29 {
 struct PendingSourceIssuedRolesV29 {
     sources: Vec<PendingSourceIssuedSiteV29>,
     issuers: Vec<PendingSourceIssuedIssuerV29>,
+    lengths: Vec<PendingSourceLengthV76>,
     accesses: Vec<PendingSourceIssuedAccessV29>,
     selected: Vec<PendingSourceSelectedAccessV30>,
 }
@@ -49,6 +50,7 @@ impl PendingSourceIssuedRolesV29 {
         Self {
             sources: Vec::new(),
             issuers: Vec::new(),
+            lengths: Vec::new(),
             accesses: Vec::new(),
             selected: Vec::new(),
         }
@@ -67,6 +69,7 @@ impl PendingSourceIssuedRolesV29 {
                 self.issuers.capacity(),
                 std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
             )?,
+            argument_product_v1(self.lengths.capacity(), size_of::<PendingSourceLengthV76>())?,
             argument_product_v1(
                 self.accesses.capacity(),
                 std::mem::size_of::<PendingSourceIssuedAccessV29>(),
@@ -89,9 +92,10 @@ fn pending_issued_roles_match_v29(
     right: &PendingSourceIssuedRolesV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
-    budget.charge_work(4)?;
+    budget.charge_work(5)?;
     if left.sources.len() != right.sources.len()
         || left.issuers.len() != right.issuers.len()
+        || left.lengths.len() != right.lengths.len()
         || left.accesses.len() != right.accesses.len()
         || left.selected.len() != right.selected.len()
     {
@@ -106,6 +110,7 @@ fn pending_issued_roles_match_v29(
             left.issuers.len(),
             std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
         )?,
+        argument_product_v1(left.lengths.len(), size_of::<PendingSourceLengthV76>())?,
         argument_product_v1(
             left.accesses.len(),
             std::mem::size_of::<PendingSourceIssuedAccessV29>(),
@@ -118,6 +123,7 @@ fn pending_issued_roles_match_v29(
     }
     Ok(left.sources == right.sources
         && left.issuers == right.issuers
+        && left.lengths == right.lengths
         && left.accesses == right.accesses)
 }
 
@@ -191,6 +197,8 @@ fn source_issued_call_v29<'a>(
         operation,
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. }
     )
     .then_some(call))
 }
@@ -289,6 +297,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
         references.plan.check_owner(self.instances, budget)?;
         let before = budget.storage();
         budget.reserve_storage(argument_sum_v1(&[
+            source_length_call_headers_v76()?,
             std::mem::size_of::<SourceIssuedOriginalV29<'_, '_, '_>>(),
             std::mem::size_of::<Result<SourceIssuedOriginalV29<'_, '_, '_>, ProductionSemanticKirErrorV1>>(),
             std::mem::size_of::<SourceIssuedRecipeV29>(),
@@ -390,6 +399,19 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
                         }
                     }
                 }
+                if source_length_call_v76(self.instances.owner().source_semantic(), call).is_some()
+                {
+                    let (transport, retained) = original.actual_length_v76(
+                        block,
+                        definition,
+                        references,
+                        &self.actual,
+                        budget,
+                    )?;
+                    emission_push_v1(&mut self.transports, transport, budget)?;
+                    emission_push_v1(&mut self.retained.lengths, retained, budget)?;
+                    continue;
+                }
                 let Some(definition) = definition else {
                     continue;
                 };
@@ -434,3 +456,5 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
         Ok(())
     }
 }
+
+include!("production_source_length_calls_v76.rs");
