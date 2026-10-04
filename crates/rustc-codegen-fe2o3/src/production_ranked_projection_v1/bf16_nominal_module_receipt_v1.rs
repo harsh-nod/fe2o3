@@ -4198,3 +4198,425 @@ mod private_checked_output_diagnostic {
         }
     }
 }
+
+impl PrivateBf16OptimizedV1 {
+    /// Separate actual-O structural guard continuation. The original raw
+    /// diagnostic and complete-only consumer keep their original refusal.
+    /// Source/O/target custody and both accounts remain intact; no report escapes.
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_guarded_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16TargetErrorV1> {
+        self.revalidate_private_bf16_optimization_v1(requested_return, typed_roots, profile)?;
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        let checked = &self.optimization.checked;
+        let owner = &self.target.formal.owner;
+        let roots = &self.target.formal.verification.roots;
+        let result = self.target.formal.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata(
+                    "private guarded output safety changed source roots",
+                ));
+            };
+            let storage = std::mem::size_of::<Option<Result<(), PrivateBf16TargetErrorV1>>>();
+            budget.reserve_storage(storage).map_err(resource)?;
+            let mut observed: Option<Result<(), PrivateBf16TargetErrorV1>> = None;
+            let loan = owner.with_private_bf16_target_source_v1(
+                root.semantic_root,
+                requested_return,
+                budget,
+                |_source_module, function, source_obligations, budget| {
+                    // Actual O geometry and exact target idempotence are checked
+                    // independently; source obligations provide no O guard proof.
+                    observed = Some(
+                        check_private_bf16_output_target_v1(
+                            checked.owner().module(),
+                            function,
+                            source_obligations,
+                            typed_roots,
+                            profile,
+                            budget,
+                        )
+                        .and_then(|()| {
+                            owner
+                                .with_private_bf16_checked_output_guarded_formal_v1(
+                                    checked.owner(),
+                                    root.semantic_root,
+                                    requested_return,
+                                    budget,
+                                    |_actual_output_attempt, _guard_result, _budget| Ok(()),
+                                )
+                                .map_err(PrivateBf16TargetErrorV1::FormalMemoryAdmission)
+                        }),
+                    );
+                    Ok(())
+                },
+            );
+            if let Err(error) = loan {
+                drop(observed);
+                budget.release_storage(storage).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                return Err(E::FormalMemory(error));
+            }
+            let observed = observed.ok_or_else(|| resource(Resource::Accounting))?;
+            match observed {
+                Ok(()) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Ok(()))
+                }
+                Err(error) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Err(error))
+                }
+            }
+        });
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16TargetErrorV1::RankedVerification)?
+    }
+}
+
+#[cfg(test)]
+mod private_checked_output_guard_observer {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkLedgerIdentityV1 as Ledger, FormalMemoryIncompleteReason as Reason,
+        FormalMemoryObligationAnalysis as Analysis, FormalMemoryObligationError as FormalError,
+    };
+    type Attempt = Result<Analysis, FormalError>;
+    fn prepay_error(error: &FormalError, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match error {
+            FormalError::InvalidModule(errors) => {
+                budget
+                    .charge_work(errors.diagnostics().len())
+                    .map_err(resource)?;
+                for row in errors.diagnostics() {
+                    budget.charge_work(32).map_err(resource)?;
+                    let bytes = row
+                        .location
+                        .module
+                        .as_str()
+                        .len()
+                        .checked_add(
+                            row.location
+                                .function
+                                .as_ref()
+                                .map_or(0, |v| v.as_str().len()),
+                        )
+                        .and_then(|n| {
+                            n.checked_add(
+                                row.location.kernel.as_ref().map_or(0, |v| v.as_str().len()),
+                            )
+                        })
+                        .and_then(|n| n.checked_add(row.message.len()))
+                        .ok_or_else(|| resource(Resource::Arithmetic))?;
+                    budget.charge_work(bytes).map_err(resource)?;
+                }
+            }
+            FormalError::MissingKernel { kernel } => {
+                budget
+                    .charge_work(kernel.as_str().len())
+                    .map_err(resource)?;
+            }
+            FormalError::InvalidInvocationRange(_) | FormalError::GuardedResource(_) => {}
+        }
+        Ok(())
+    }
+
+    fn prepay_attempt(attempt: &Attempt, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match attempt {
+            Err(error) => prepay_error(error, budget),
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                let rows = o
+                    .allocations()
+                    .len()
+                    .checked_add(o.accesses().len())
+                    .and_then(|n| n.checked_add(o.bounds_requirements().len()))
+                    .and_then(|n| n.checked_add(o.runtime_alias_requirements().len()))
+                    .and_then(|n| n.checked_add(o.inter_invocation_conflicts().len()))
+                    .and_then(|n| n.checked_add(analysis.incomplete_reasons().len()))
+                    .and_then(|n| n.checked_mul(128))
+                    .ok_or_else(|| resource(Resource::Arithmetic))?;
+                // Known row counts are paid before any traversal/comparison.
+                // This selected field-visit allowance is not formatter/RSS work.
+                budget.charge_work(rows).map_err(resource)?;
+                budget
+                    .charge_work(sum(o.kernel().as_str().len(), o.entry().as_str().len())?)
+                    .map_err(resource)?;
+                for reason in analysis.incomplete_reasons() {
+                    if let Reason::CallEffectsUnavailable { callee, .. } = reason {
+                        budget
+                            .charge_work(callee.as_str().len())
+                            .map_err(resource)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn emit_attempt(attempt: &Attempt, consumer: &str) {
+        match attempt {
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-summary-v1 consumer={} analysis={} allocations={} accesses={} bounds={} aliases={} conflicts={} incomplete_reasons={} optimized_formal_admission=false",
+                    consumer,
+                    if analysis.is_complete() {
+                        "complete"
+                    } else {
+                        "incomplete"
+                    },
+                    o.allocations().len(),
+                    o.accesses().len(),
+                    o.bounds_requirements().len(),
+                    o.runtime_alias_requirements().len(),
+                    o.inter_invocation_conflicts().len(),
+                    analysis.incomplete_reasons().len(),
+                );
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-header-v1 kernel={:?} entry={:?} index_width={:?} basis={:?} invocations={:?}",
+                    o.kernel(),
+                    o.entry(),
+                    o.index_width(),
+                    o.analysis_basis(),
+                    o.invocations(),
+                );
+                for (i, row) in o.allocations().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-allocation-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.accesses().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-access-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.bounds_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-bounds-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.runtime_alias_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-alias-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.inter_invocation_conflicts().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-conflict-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in analysis.incomplete_reasons().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-reason-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::InvalidModule(errors)) => {
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=InvalidModule diagnostics={}",
+                    consumer,
+                    errors.diagnostics().len()
+                );
+                for (i, row) in errors.diagnostics().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-verifier-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::MissingKernel { kernel }) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=MissingKernel value={:?}",
+                consumer, kernel
+            ),
+            Err(FormalError::InvalidInvocationRange(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=InvalidInvocationRange value={:?}",
+                consumer, error
+            ),
+            Err(FormalError::GuardedResource(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=GuardedResource value={:?}",
+                consumer, error
+            ),
+        }
+    }
+
+    // Non-Copy record only exists inside the surviving original phase loan.
+    struct Observation {
+        ledger: Ledger,
+        floor: usize,
+        initial_work: usize,
+        output_sha: [u8; 32],
+        output_bytes: u64,
+        discharged_reasons: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+    impl Observation {
+        fn emit(self, requested: [u8; 4], scratch: usize) {
+            struct Hex<'a>(&'a [u8; 32]);
+            impl std::fmt::Display for Hex<'_> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    for byte in self.0 {
+                        write!(f, "{byte:02x}")?;
+                    }
+                    Ok(())
+                }
+            }
+            eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-collected-v1 permutation={} consumer=guarded output_version=12 output_sha256={} output_bytes={} discharged_reasons={} work={} storage={} peak={} observation_storage={} same_account=true actual_checked_output=true fresh_raw_analysis=true actual_output_guard_proved=true raw_incomplete_preserved=true geometry_target_completed=true cleanup_pending=true optimized_formal_admission=false normal_admission=false llvm=false launch_authenticated=false",
+                if requested == [0, 1, 2, 3] {
+                    "identity"
+                } else {
+                    "swap01"
+                },
+                Hex(&self.output_sha),
+                self.output_bytes,
+                self.discharged_reasons,
+                self.work,
+                self.storage,
+                self.peak,
+                scratch,
+            );
+        }
+    }
+
+    impl PrivateBf16OptimizedV1 {
+        pub(crate) fn observe_private_bf16_checked_output_guard_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), PrivateBf16TargetErrorV1> {
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            let checked = &self.optimization.checked;
+            let owner = &self.target.formal.owner;
+            let roots = &self.target.formal.verification.roots;
+            let result = self.target.formal.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(16).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata("actual O guard observer changed source roots"));
+                };
+                let slot_storage = std::mem::size_of::<Option<Result<(), E>>>();
+                budget.reserve_storage(slot_storage).map_err(resource)?;
+                let mut observed: Option<Result<(), E>> = None;
+                // This is another fresh, independently charged actual O analysis
+                // and structural proof, not replay of the shipping unit result.
+                let loan = owner.with_private_bf16_checked_output_guarded_formal_v1(
+                    checked.owner(), root.semantic_root, requested, budget,
+                    |attempt, proof, budget| {
+                        observed = Some((|| {
+                            prepay_attempt(attempt, budget)?;
+                            budget.charge_work(64).map_err(resource)?;
+                            emit_attempt(attempt, "guarded");
+                            if let Err(detail) = proof {
+                                eprintln!("fe2o3-bf16-private-checked-output-guard-refusal-v1 detail={:?}", detail);
+                                return Err(E::RosterMetadata("actual O structural proof refused"));
+                            }
+                            let analysis = attempt.as_ref().map_err(|_| E::RosterMetadata(
+                                "actual O guard observer requires a fresh raw analysis",
+                            ))?;
+                            if analysis.is_complete() || analysis.incomplete_reasons().is_empty()
+                                || !analysis.obligations().inter_invocation_conflicts().is_empty()
+                                || analysis.incomplete_reasons().iter().any(|r| !matches!(r,
+                                    Reason::GuardedAccessRequiresRankedProof { .. }))
+                            {
+                                return Err(E::RosterMetadata("actual O raw guarded reason roster changed"));
+                            }
+                            let scratch = std::mem::size_of::<Observation>();
+                            let floor = budget.storage();
+                            budget.reserve_storage(scratch).map_err(resource)?;
+                            let mut observation = Observation {
+                                ledger: budget.work_ledger_identity_v1(), floor,
+                                initial_work: budget.work(),
+                                output_sha: *checked.owner().canonical().identity().digest(),
+                                output_bytes: checked.owner().canonical().identity().canonical_length(),
+                                discharged_reasons: analysis.incomplete_reasons().len(),
+                                work: 0, storage: 0, peak: 0,
+                            };
+                            let inspected = (|| {
+                                budget.charge_work(64).map_err(resource)?;
+                                if budget.work_ledger_identity_v1() != observation.ledger
+                                    || budget.storage() != sum(observation.floor, scratch)?
+                                    || budget.work() <= observation.initial_work
+                                {
+                                    return Err(resource(Resource::Accounting));
+                                }
+                                observation.work = budget.work();
+                                observation.storage = budget.storage();
+                                observation.peak = budget.peak_storage();
+                                observation.emit(requested, scratch);
+                                Ok(())
+                            })();
+                            // The capture dies on success or early returned error
+                            // before its exact refund. Raw/proof remain lent and
+                            // paid by the unchanged inner lowerer frame.
+                            budget.release_storage(scratch).map_err(resource)?;
+                            budget.check_prior_denials_v1().map_err(resource)?;
+                            inspected
+                        })());
+                        Ok(())
+                    },
+                );
+                if let Err(error) = loan {
+                    drop(observed);
+                    budget.release_storage(slot_storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    return Err(E::FormalMemory(error));
+                }
+                let observed = observed.ok_or_else(|| resource(Resource::Accounting))?;
+                match observed {
+                    Ok(()) => {
+                        budget.release_storage(slot_storage).map_err(resource)?;
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        budget.release_storage(slot_storage).map_err(resource)?;
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        Err(error)
+                    }
+                }
+            });
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16TargetErrorV1::RankedVerification)
+        }
+    }
+}

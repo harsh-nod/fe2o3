@@ -11,6 +11,66 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 optimized-output structural guards — 2026-10-04
+
+The private owning pipeline now proves guarded accesses on the actual retained
+optimized V12 module. It first replays checked input/output correspondence and
+target binding, then derives a fresh output analysis and applies the existing
+structural guard checker to the output's own definitions, predicates, slices,
+indices and operation locations. Source proof locations are not substituted.
+Ignoring a typed proof failure cannot turn rejection into success.
+
+Four fresh frontend processes (Identity and swapped inputs, debug and release)
+completed the production guarded-output consumer and a separately derived
+output proof. Each discharged all eight guarded two-byte input reads at its
+actual optimized locations. The independent raw analysis remains **Incomplete**:
+three allocations, nine accesses, one 256-byte output bound, two input/output
+alias requirements, no reported conflicts and the same eight reasons. The raw
+record is preserved rather than relabelled Complete. Runtime bounds, aliases
+and launch inputs remain unauthenticated.
+
+Full guard observations and raw stderr agree across debug and release. Four
+additional fresh raw-diagnostic frontend processes retained the complete-only
+consumer's original Incomplete result; their raw stderr is byte-identical to
+the previous checkpoint. Every allocation, access, bound, alias and reason
+payload agrees between the raw and guarded paths. This establishes the narrow
+structural guard fact, not whole-kernel launch safety.
+
+The temporary guarded observer reserves 96 bytes on the original projection
+account; live storage is 910,703,221 bytes and peak storage is 962,461,661.
+After the private stage owners are dropped, the distinct materialization account returns to
+816,298,804 bytes (816,287,380 nominal plus 11,424 occurrence bytes). The original
+accounts, sticky denials and exact refunds are retained. Existing formal-engine,
+geometry, formatting and diagnostic allocation exclusions remain: these are
+selected logical accounts, not whole-engine or process-RSS bounds.
+
+The six-source continuation passed seven focused tests (six new plus one
+existing filter match), 14 guard-parent controls, 14 unchanged raw-parent
+controls, **3,957 compiler library tests** (234 ignored), 73 extractor tests and
+two API tests in each build mode, **2,088 lowerer tests** in each mode, release
+product builds and all eight fresh frontend processes. Existing warnings remain
+recorded. Qualified source census:
+`96c99d1a05858d0ff577b25760343bc7a40a5c0c3342544434df5f5f622ad829`.
+
+The scalar debugger's finite native attempt failed before scope-owner creation:
+the launcher required a missing parent directory. No physical capture or normal
+scope cleanup receipt was produced; the failed record and consumed lease remain
+preserved. Separate post-run whole-debugger/provider and 684-file scope checks
+matched their pre-run content. A fixed-parent preparation/preflight helper passed
+11 mocked controls and its exclusive preparation; the fresh wrapper passed
+34 controls, including a rerun declaring a previously omitted test input.
+The preparation driver's three unselected historical request/stdout/stderr reads are
+documented separately; its nine-call helper accounting does not cover the whole
+driver. Fresh parent verification, currentness, a distinct envelope and lease,
+and a successful native attempt remain required.
+
+Next is verified full-wave matrix-helper context and an owning LLVM continuation,
+followed by descriptor/runtime integration. Those source proposals are not
+compiled or accepted here. Ordinary compilation, LLVM/artifact/launch admission
+and public debugger capture remain closed on these private paths. No milestone
+or tutorial is completed here; accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 optimized-output safety diagnostics — 2026-10-04
 
 The private owning path now replays the actual checked V12 output and invokes
