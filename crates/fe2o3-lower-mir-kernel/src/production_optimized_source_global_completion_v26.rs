@@ -1,6 +1,7 @@
 // Closed source-global evidence, shared only with the composing compiler.
 // Runtime premises are retained data, never a caller-authored proof producer.
 include!("production_source_aggregate_global_transport_v30.rs");
+include!("production_source_runtime_occurrences_v89.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CompletedGlobalOperationV26 {
     Read,
@@ -174,19 +175,50 @@ impl ProductionMixedRuntimeOccurrenceV26 {
     }
 }
 
-pub(super) struct CompletedGlobalSourcesV26<'s, 'g> {
+fn completed_global_index_v26(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    at: SliceOperation,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<usize> {
+    let block = source_block_row_v18(inventory, at.block, budget)?;
+    budget.charge_work(4)?;
+    let index = block
+        .operations
+        .start
+        .checked_add(at.operation as usize)
+        .filter(|index| *index < block.operations.end)
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "mixed global operation is absent",
+        ))?;
+    if inventory
+        .operations()
+        .get(index)
+        .is_none_or(|row| row.coordinate != at)
+    {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "mixed global operation coordinate differs",
+        ));
+    }
+    Ok(index)
+}
+
+// Each instantiation retains a distinct native owner and occurrence type.
+// The V26 instantiation cannot encode an explicit predicate as a CFG edge.
+macro_rules! completed_global_family_v89 {
+    ($completed:ident, $native:ident, $occurrence:ident, $headers:ident, $collect:ident, $make_occurrence:ident, $predicated:literal) => {
+pub(super) struct $completed<'s, 'g> {
     original: &'s ProductionSourceCorrespondenceV18<'s>,
     optimized: &'s ProductionOptimizedSourceCorrespondenceV18<'s>,
-    native: &'s fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'s, 'g>,
+    native: &'s fe2o3_pliron::$native<'s, 'g>,
     operations: &'s [Option<CompletedGlobalOperationV26>],
     premises: &'s [ProductionMixedSliceRuntimePremiseV26],
-    occurrences: &'s [ProductionMixedRuntimeOccurrenceV26],
+    occurrences: &'s [$occurrence],
     roots: usize,
     operation_count: usize,
     scope: DescriptorRoleScopeV18,
 }
 
-impl CompletedGlobalSourcesV26<'_, '_> {
+impl $completed<'_, '_> {
     pub(super) fn check_source_subject(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,
@@ -250,7 +282,7 @@ impl CompletedGlobalSourcesV26<'_, '_> {
     pub(super) fn runtime_occurrences(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]> {
+    ) -> SourceOwnedResultV18<&[$occurrence]> {
         self.check_source_subject(self.original, self.optimized, budget)?;
         Ok(self.occurrences)
     }
@@ -262,48 +294,21 @@ impl CompletedGlobalSourcesV26<'_, '_> {
     }
 }
 
-fn completed_global_index_v26(
-    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
-    at: SliceOperation,
-    budget: &mut ArgumentBudgetV1<'_>,
-) -> SourceOwnedResultV18<usize> {
-    let block = source_block_row_v18(inventory, at.block, budget)?;
-    budget.charge_work(4)?;
-    let index = block
-        .operations
-        .start
-        .checked_add(at.operation as usize)
-        .filter(|index| *index < block.operations.end)
-        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-            "mixed global operation is absent",
-        ))?;
-    if inventory
-        .operations()
-        .get(index)
-        .is_none_or(|row| row.coordinate != at)
-    {
-        return Err(ProductionSourceOwnedViewErrorV18::Binding(
-            "mixed global operation coordinate differs",
-        ));
-    }
-    Ok(index)
-}
-
-fn global_completion_headers_v26<F>() -> Result<usize, ArgumentResourceV1> {
+fn $headers<F>() -> Result<usize, ArgumentResourceV1> {
     type Frame<'a> = (
-        CompletedGlobalSourcesV26<'a, 'a>,
+        $completed<'a, 'a>,
         ProductionMixedSliceRuntimePremiseV26,
         Option<CompletedGlobalOperationV26>,
         Vec<Option<CompletedGlobalOperationV26>>,
         Vec<ProductionMixedSliceRuntimePremiseV26>,
-        Vec<ProductionMixedRuntimeOccurrenceV26>,
-        ProductionMixedRuntimeOccurrenceV26,
+        Vec<$occurrence>,
+        $occurrence,
         DescriptorRoleScopeV18,
         Vec<usize>,
         Vec<Option<usize>>,
         Vec<bool>,
         &'a SourceSliceRootCompletionV25<'a, 'a, 'a>,
-        &'a fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'a, 'a>,
+        &'a fe2o3_pliron::$native<'a, 'a>,
         &'a fe2o3_kernel_ir::CheckedCanonicalConditionalSliceDomainsV26<'a, 'a>,
         &'a fe2o3_kernel_ir::CanonicalConditionalSliceParameterV26,
         Option<&'a fe2o3_kernel_ir::CanonicalConditionalSliceParameterV26>,
@@ -331,10 +336,10 @@ fn global_completion_headers_v26<F>() -> Result<usize, ArgumentResourceV1> {
     ])
 }
 
-pub(super) fn with_completed_global_sources_v26<'work, F>(
+pub(super) fn $collect<'work, F>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
-    native: &fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'_, '_>,
+    native: &fe2o3_pliron::$native<'_, '_>,
     reads: &GlobalReadFactsV18<'_, '_>,
     stores: &GlobalStoreFactsV25<'_, '_>,
     launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
@@ -344,13 +349,13 @@ pub(super) fn with_completed_global_sources_v26<'work, F>(
 ) -> SourceOwnedResultV18<()>
 where
     F: for<'s, 'g> FnMut(
-        &CompletedGlobalSourcesV26<'s, 'g>,
+        &$completed<'s, 'g>,
         &mut ArgumentBudgetV1<'work>,
     ) -> SourceOwnedResultV18<()>,
 {
     original.global_expression_entry_v23(optimized, budget)?;
     let run = |budget: &mut ArgumentBudgetV1<'work>| {
-        budget.reserve_storage(global_completion_headers_v26::<F>()?)?;
+        budget.reserve_storage($headers::<F>()?)?;
         let globals = native
             .conditional_globals(budget)
             .map_err(slice_entry_native_error_v25)?;
@@ -415,7 +420,7 @@ where
                         .missing("mixed global source root order differs");
                 }
                 source.with_shared_entry_regions_v18(budget, |entries, budget| {
-                    entries.with_complete_slice_domains_v25(
+                    entries.with_complete_slice_domains_profile_v89::<$predicated, _>(
                         accesses,
                         reads,
                         stores,
@@ -625,13 +630,7 @@ where
                                             .source
                                             .missing("mixed global occurrence contract differs");
                                     }
-                                    occurrences.push(ProductionMixedRuntimeOccurrenceV26 {
-                                        premise,
-                                        source: *pair,
-                                        cfg_guard: pair.output.logical.guard.require_cfg_v26()?,
-                                        domain: fact.domain(),
-                                        projection: fact.invocation_projection(),
-                                    });
+                                    occurrences.push($make_occurrence(premise, *pair, fact.domain(), fact.invocation_projection())?);
                                     counts[usize::from(writing)] = counts[usize::from(writing)]
                                         .checked_add(1)
                                         .ok_or(ArgumentResourceV1::Arithmetic)?;
@@ -671,7 +670,11 @@ where
             std::mem::size_of_val(&root_consumer),
             std::mem::align_of_val(&root_consumer),
         ])?)?;
-        original.with_global_source_expressions_v23(optimized, budget, &mut root_consumer)?;
+        if $predicated {
+            original.with_predicated_global_source_expressions_v89(optimized, accesses, budget, &mut root_consumer)?;
+        } else {
+            original.with_global_source_expressions_v23(optimized, budget, &mut root_consumer)?;
+        }
         drop(root_consumer);
         if completed_roots != roots
             || effects
@@ -683,7 +686,7 @@ where
                 .source
                 .missing("mixed global whole-module source census is incomplete");
         }
-        let completed = CompletedGlobalSourcesV26 {
+        let completed = $completed {
             original,
             optimized,
             native,
@@ -706,3 +709,25 @@ where
         run,
     ))
 }
+
+    };
+}
+
+completed_global_family_v89!(
+    CompletedGlobalSourcesV26,
+    PendingCanonicalMixedMemoryPoliciesV26,
+    ProductionMixedRuntimeOccurrenceV26,
+    global_completion_headers_v26,
+    with_completed_global_sources_v26,
+    cfg_runtime_occurrence_v26,
+    false
+);
+completed_global_family_v89!(
+    CompletedGlobalSourcesV89,
+    PendingCanonicalPredicatedMemoryPoliciesV89,
+    ProductionMixedRuntimeOccurrenceV89,
+    global_completion_headers_v89,
+    with_completed_global_sources_v89,
+    predicated_runtime_occurrence_v89,
+    true
+);

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_ranked_predicated_pending_v89_tests.rs"]
+mod predicated_memory_v89;
 #[path = "canonical_ranked_selected_pending_v30_tests.rs"]
 mod selected_memory_v30;
 use fe2o3_kernel_ir::{

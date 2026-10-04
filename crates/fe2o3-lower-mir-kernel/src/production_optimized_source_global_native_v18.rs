@@ -138,6 +138,32 @@ impl PendingGlobalSourceAccessesV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), PendingGlobalNativeErrorV18>,
     ) -> Result<(), PendingGlobalNativeErrorV18> {
+        self.with_native_access_profile_v89::<false>(native, operation, budget, consume)
+    }
+
+    fn with_native_access_v89<'work>(
+        &self,
+        native: &fe2o3_pliron::PendingCanonicalGlobalAccessesV18<'_, '_>,
+        operation: SliceOperation,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'s, 'g> FnOnce(
+            Option<&PendingGlobalSourceNativeAccessV18<'s, 'g>>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), PendingGlobalNativeErrorV18>,
+    ) -> Result<(), PendingGlobalNativeErrorV18> {
+        self.with_native_access_profile_v89::<true>(native, operation, budget, consume)
+    }
+
+    fn with_native_access_profile_v89<'work, const PREDICATED: bool>(
+        &self,
+        native: &fe2o3_pliron::PendingCanonicalGlobalAccessesV18<'_, '_>,
+        operation: SliceOperation,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'s, 'g> FnOnce(
+            Option<&PendingGlobalSourceNativeAccessV18<'s, 'g>>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), PendingGlobalNativeErrorV18>,
+    ) -> Result<(), PendingGlobalNativeErrorV18> {
         let mut consume = SourceCallbackCustodyV29::new(consume);
         self.roles.original.check(budget)?;
         self.roles.observe_custody(budget)?;
@@ -151,6 +177,11 @@ impl PendingGlobalSourceAccessesV18<'_> {
         let prepared = self.roles.original.retain_query((|| {
             let storage = argument_sum_v1(&[
                 global_native_headers_v18(std::mem::size_of_val(&consume))?,
+                if PREDICATED {
+                    predicated_source_role_headers_v89::<()>()?
+                } else {
+                    0
+                },
                 source_owned_finish_preflight_v26::<(), PendingGlobalNativeErrorV18>(budget)?,
             ])?;
             budget.reserve_storage(storage)?;
@@ -175,7 +206,16 @@ impl PendingGlobalSourceAccessesV18<'_> {
                     None, budget
                 )?,
                 Some(pair) => {
-                    self.check_native_pair_v18(native, pair, budget)?;
+                    if PREDICATED
+                        && matches!(
+                            pair.output.logical.guard,
+                            GlobalSourceGuardV85::ExplicitPredicate { .. }
+                        )
+                    {
+                        self.check_predicated_native_pair_v89(native, pair, budget)?;
+                    } else {
+                        self.check_native_pair_v18(native, pair, budget)?;
+                    }
                     consume
                         .take()
                         .expect("native access callback is invoked once")(
@@ -269,7 +309,11 @@ impl PendingGlobalSourceAccessesV18<'_> {
                 budget,
             )
             .map_err(PendingGlobalNativeErrorV18::Native)?;
-        let expected = source_block_row_v18(inventory, endpoint.logical.guard.require_cfg_v26()?.edge.source, budget)?;
+        let expected = source_block_row_v18(
+            inventory,
+            endpoint.logical.guard.require_cfg_v26()?.edge.source,
+            budget,
+        )?;
         if !guard
             .zip(expected.block.terminator.as_ref())
             .is_some_and(|(actual, expected)| std::ptr::eq(actual, expected))

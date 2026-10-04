@@ -17,14 +17,16 @@ pub use coordinates::ProductionMixedLicmDefinitionProjectionV28;
 mod store_consensus;
 pub use store_consensus::{
     ProductionMixedFixedpointStoreConsensusV46, ProductionMixedStoreConsensusV46,
+    ProductionPredicatedStoreConsensusV90,
 };
 
 #[path = "production_source_mixed_licm_native_v28.rs"]
 mod native;
 pub use native::{
     ProductionConditionalMixedFixedpointLicmOutputHandoffV29,
-    ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedLicmCompletionErrorV28,
-    ProductionMixedLicmRuntimeOccurrenceV28,
+    ProductionConditionalMixedLicmOutputHandoffV28,
+    ProductionConditionalPredicatedLicmOutputHandoffV90, ProductionMixedLicmCompletionErrorV28,
+    ProductionMixedLicmRuntimeOccurrenceV28, ProductionPredicatedLicmRuntimeOccurrenceV90,
 };
 
 /// Refusal while retaining or replaying a source-bound checked-prefix LICM tail.
@@ -108,9 +110,9 @@ impl std::error::Error for Error {
 /// separate gates; no prefix witness is reinterpreted as a motion witness.
 #[must_use = "retain the source prefix and discard this owner's exact credit explicitly"]
 pub struct ProductionMixedLicmRelocationV28<'prefix, 'view, 'source,
-    P: ProductionMixedPrefixOwnerV29<'view, 'source> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>> {
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>, R: ProductionContinuationOccurrenceV90 = ProductionMixedRuntimeOccurrenceV26> {
     prefix: &'prefix P,
-    source_lifetime: std::marker::PhantomData<&'view ProductionSourceOwnedViewV18<'source>>,
+    source_lifetime: std::marker::PhantomData<(&'view ProductionSourceOwnedViewV18<'source>, R)>,
     tail: Tail,
     projection: coordinates::Projection,
     retained: usize,
@@ -119,14 +121,18 @@ pub struct ProductionMixedLicmRelocationV28<'prefix, 'view, 'source,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
-fn headers<'view, 'source: 'view, P: ProductionMixedPrefixOwnerV29<'view, 'source>>()
--> Result<(usize, usize)> {
-    let owner = size_of::<ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>>()
+fn headers<
+    'view,
+    'source: 'view,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+>() -> Result<(usize, usize)> {
+    let owner = size_of::<ProductionMixedLicmRelocationV28<'_, 'view, 'source, P, R>>()
         .checked_sub(size_of::<Tail>())
         .and_then(|bytes| bytes.checked_sub(size_of::<coordinates::Projection>()))
         .and_then(|bytes| {
             bytes.checked_add(align_of::<
-                ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>,
+                ProductionMixedLicmRelocationV28<'_, 'view, 'source, P, R>,
             >())
         })
         .ok_or(ArgumentResourceV1::Arithmetic)?;
@@ -156,6 +162,26 @@ pub type ProductionMixedFixedpointLicmRelocationV29<'prefix, 'view, 'source> =
         ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
     >;
 
+/// Actual LICM continuation retaining the typed predicated Policy11 prefix.
+pub type ProductionPredicatedFixedpointLicmRelocationV90<'prefix, 'view, 'source> =
+    ProductionMixedLicmRelocationV28<
+        'prefix,
+        'view,
+        'source,
+        ProductionConditionalPredicatedFixedpointOutputHandoffV89<'view, 'source>,
+        ProductionMixedRuntimeOccurrenceV89,
+    >;
+
+impl<'view, 'source> ProductionConditionalPredicatedFixedpointOutputHandoffV89<'view, 'source> {
+    /// Runs the same actual LICM and complete MemorySSA replay on the V89 owner.
+    pub fn prepare_predicated_fixedpoint_licm_v90<'prefix>(
+        &'prefix self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionPredicatedFixedpointLicmRelocationV90<'prefix, 'view, 'source>> {
+        ProductionMixedLicmRelocationV28::prepare(self, budget)
+    }
+}
+
 impl<'view, 'source> ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source> {
     /// Runs actual LICM on the historical Policy10 output.
     pub fn prepare_mixed_licm_v28<'prefix>(
@@ -174,8 +200,13 @@ impl<'view, 'source> ProductionConditionalMixedFixedpointOutputHandoffV29<'view,
         ProductionMixedLicmRelocationV28::prepare(self, budget)
     }
 }
-impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+impl<
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>
 {
     fn prepare(prefix: &'prefix P, budget: &mut ArgumentBudgetV1<'_>) -> Result<Self> {
         prefix.check_prefix_v29(budget)?;
@@ -184,7 +215,7 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
         let (tail, projection, retained) =
             scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| -> Result<_> {
                 let entry = budget.storage();
-                let (owner_header, scratch_header) = headers::<P>()?;
+                let (owner_header, scratch_header) = headers::<P, R>()?;
                 budget.reserve_storage(argument_sum_v1(&[owner_header, scratch_header])?)?;
                 let input = prefix.checked_prefix_v29(budget)?.owner();
                 let layouts = source.limits(budget)?.storage_layout_limits();
@@ -249,8 +280,13 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
     }
 }
 
-impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+impl<
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>
 {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let source = self.prefix.source_owned_v29();
@@ -318,7 +354,7 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
         let floor = budget.storage();
         scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
             let entry = budget.storage();
-            let scratch_header = headers::<P>()?.1;
+            let scratch_header = headers::<P, R>()?.1;
             budget.reserve_storage(scratch_header)?;
             let input = self.prefix.checked_prefix_v29(budget)?.owner();
             let (pair, ps) = self.tail.replay_against(input, budget)?;

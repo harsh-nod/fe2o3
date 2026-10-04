@@ -34527,6 +34527,7 @@ pub use optimized_source_v18::{
     ProductionOptimizedSourceGapV18, ProductionOptimizedSourceMemoryAccessV18,
     ProductionOptimizedSourceOperationV18, ProductionOptimizedSourcePayloadV18,
     ProductionOptimizedSourceSpanV18, ProductionOptimizedSourceTerminatorV18,
+    ProductionPredicatedMemoryCheckedNativePoliciesV89,
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
 };

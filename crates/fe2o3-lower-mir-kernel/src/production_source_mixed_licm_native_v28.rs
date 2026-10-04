@@ -18,6 +18,7 @@ use fe2o3_pliron::{
     CanonicalRankedPolicyFailureV1 as NativeError, CanonicalRankedPolicyHistoryV1 as History,
     CanonicalRankedSourceRequirementV18 as Requirement,
     PendingCanonicalMixedMemoryPoliciesV26 as Native,
+    PendingCanonicalPredicatedMemoryPoliciesV89 as PredicatedNative,
 };
 
 /// Refusal while joining fresh final-native checks to a source-bound LICM tail.
@@ -111,6 +112,72 @@ fn mismatch(message: &'static str) -> Error {
     ProductionMixedLicmRelocationErrorV28::Binding(message).into()
 }
 
+// Only the two checked native owners can enter the final complete census.
+// The adapters make no occurrence conversion and perform the same queries.
+trait FinalNativeV90 {
+    fn owner(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18>;
+    fn obligations(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&[fe2o3_pliron::CanonicalRankedSourceObligationV18]>;
+    fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize>;
+    fn clean_history(
+        &self,
+        function: usize,
+        has_body: bool,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<History>>;
+}
+macro_rules! final_native_v90 {
+    ($native:ty) => {
+        impl FinalNativeV90 for $native {
+            fn owner(
+                &self,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> Result<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18> {
+                Ok(<$native>::owner(self, budget)?)
+            }
+            fn obligations(
+                &self,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> Result<&[fe2o3_pliron::CanonicalRankedSourceObligationV18]> {
+                Ok(<$native>::obligations(self, budget)?)
+            }
+            fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize> {
+                Ok(<$native>::function_count(self, budget)?)
+            }
+            fn clean_history(
+                &self,
+                function: usize,
+                has_body: bool,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> Result<Option<History>> {
+                let report = <$native>::report(self, function, budget)?;
+                let history = <$native>::history(self, function, budget)?;
+                match (has_body, report, history) {
+                    (true, Some(report), Some(_))
+                        if report.reports().is_clean() && report.paired_stage_count() == 9 =>
+                    {
+                        ()
+                    }
+                    (false, None, None) => (),
+                    _ => {
+                        return Err(mismatch(
+                            "LICM final function lacks all nine clean native stages",
+                        ));
+                    }
+                }
+                Ok(history)
+            }
+        }
+    };
+}
+final_native_v90!(Native<'_, '_>);
+final_native_v90!(PredicatedNative<'_, '_>);
+
 // The enclosing source attempt owns both the prepaid payload and any allocator
 // excess until these vectors are dropped or moved into the retained handoff.
 fn vector<T>(
@@ -132,69 +199,102 @@ fn vector<T>(
 /// Exact original occurrence plus independently checked final coordinates.
 /// Copies are inert: source and conditional native authority stay in the owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProductionMixedLicmRuntimeOccurrenceV28 {
-    prefix: ProductionMixedRuntimeOccurrenceV26,
+pub struct ProductionMixedLicmRuntimeOccurrenceV28<
+    R: ProductionContinuationOccurrenceV90 = ProductionMixedRuntimeOccurrenceV26,
+> {
+    prefix: R,
     operation: Operation,
     formation: Operation,
     address_index: Definition,
-    condition: Definition,
+    condition: R::RelocatedGuard,
 }
+macro_rules! relocated_occurrence_v90 {
+    ($row:ty) => {
+        impl ProductionMixedLicmRuntimeOccurrenceV28<$row> {
+            /// Index into the retained complete original slice-premise roster.
+            pub const fn premise_index(&self) -> usize {
+                self.prefix.premise_index()
+            }
+            /// Original semantic call-instance ordinal owning the memory occurrence.
+            pub const fn original_instance(&self) -> usize {
+                self.prefix.original_instance()
+            }
+            /// Memory-access coordinate before the checked prefix and LICM tail.
+            pub const fn original_operation(&self) -> Operation {
+                self.prefix.original_operation()
+            }
+            /// Independently relocated memory-access coordinate in the final graph.
+            pub const fn output_operation(&self) -> Operation {
+                self.operation
+            }
+            /// Address-formation coordinate in the original source-bound graph.
+            pub const fn original_address_formation(&self) -> Operation {
+                self.prefix.original_address_formation()
+            }
+            /// Independently relocated address-formation coordinate in the final graph.
+            pub const fn output_address_formation(&self) -> Operation {
+                self.formation
+            }
+            /// Final definition supplying this occurrence's address index.
+            pub const fn output_address_index(&self) -> Definition {
+                self.address_index
+            }
+            /// Conditional index domain rechecked on the actual final occurrence.
+            pub const fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26 {
+                self.prefix.domain()
+            }
+            /// Retained invocation projection used by the conditional access domain.
+            pub const fn invocation_projection(&self) -> Option<(Axis, ValueId)> {
+                self.prefix.invocation_projection()
+            }
+            /// Exact memory-access representation preserved across both transformations.
+            pub const fn memory_access(&self) -> MemoryAccess {
+                self.prefix.memory_access()
+            }
+            /// Always true: address formation needs its own domain, not just the access guard.
+            pub const fn requires_address_formation_domain(&self) -> bool {
+                true
+            }
+            /// Always false: copied occurrence coordinates do not confer authority.
+            pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+                false
+            }
+        }
+    };
+}
+relocated_occurrence_v90!(ProductionMixedRuntimeOccurrenceV26);
+relocated_occurrence_v90!(ProductionMixedRuntimeOccurrenceV89);
+
 impl ProductionMixedLicmRuntimeOccurrenceV28 {
-    /// Index into the retained complete original slice-premise roster.
-    pub const fn premise_index(&self) -> usize {
-        self.prefix.premise_index()
-    }
-    /// Original semantic call-instance ordinal owning the memory occurrence.
-    pub const fn original_instance(&self) -> usize {
-        self.prefix.original_instance()
-    }
-    /// Memory-access coordinate before the checked prefix and LICM tail.
-    pub const fn original_operation(&self) -> Operation {
-        self.prefix.original_operation()
-    }
-    /// Independently relocated memory-access coordinate in the final graph.
-    pub const fn output_operation(&self) -> Operation {
-        self.operation
-    }
-    /// Address-formation coordinate in the original source-bound graph.
-    pub const fn original_address_formation(&self) -> Operation {
-        self.prefix.original_address_formation()
-    }
-    /// Independently relocated address-formation coordinate in the final graph.
-    pub const fn output_address_formation(&self) -> Operation {
-        self.formation
-    }
-    /// Final definition supplying this occurrence's address index.
-    pub const fn output_address_index(&self) -> Definition {
-        self.address_index
-    }
-    /// Final definition supplying the retained access guard's condition.
+    /// Final definition supplying the actual CFG guard's condition.
     pub const fn output_guard_condition(&self) -> Definition {
         self.condition
     }
-    /// Access guard edge, preserved because this LICM tail does not change CFG.
+    /// Actual CFG edge retained by the legacy continuation; never synthesized.
     pub const fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
         self.prefix.output_guard_edge()
     }
-    /// Conditional index domain rechecked on the actual final occurrence.
-    pub const fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26 {
-        self.prefix.domain()
+}
+
+/// Exact final coordinates retaining either a CFG edge or explicit predicate.
+pub type ProductionPredicatedLicmRuntimeOccurrenceV90 =
+    ProductionMixedLicmRuntimeOccurrenceV28<ProductionMixedRuntimeOccurrenceV89>;
+
+impl ProductionPredicatedLicmRuntimeOccurrenceV90 {
+    /// Final complete predicate, distinct from its optional bound comparison.
+    pub const fn output_guard_condition(&self) -> Definition {
+        match self.condition {
+            ProductionMixedRuntimeGuardV89::CfgEdge { condition, .. }
+            | ProductionMixedRuntimeGuardV89::ExplicitPredicate { condition, .. } => condition,
+        }
     }
-    /// Retained invocation projection used by the conditional access domain.
-    pub const fn invocation_projection(&self) -> Option<(Axis, ValueId)> {
-        self.prefix.invocation_projection()
+    /// Typed guard reprojected through the actual checked LICM transaction.
+    pub const fn output_guard(&self) -> ProductionMixedRuntimeGuardV89 {
+        self.condition
     }
-    /// Exact memory-access representation preserved across both transformations.
-    pub const fn memory_access(&self) -> MemoryAccess {
-        self.prefix.memory_access()
-    }
-    /// Always true: address formation needs its own domain, not just the access guard.
-    pub const fn requires_address_formation_domain(&self) -> bool {
-        true
-    }
-    /// Always false: copied occurrence coordinates do not confer authority.
-    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
-        false
+    /// Conservative unconditional formation envelope retained from the source.
+    pub const fn explicit_formation_invocation_axis(&self) -> Option<Axis> {
+        self.prefix.explicit_formation_invocation_axis()
     }
 }
 
@@ -202,10 +302,10 @@ impl ProductionMixedLicmRuntimeOccurrenceV28 {
 /// Concrete runtime bindings and executed refinement remain separate gates.
 #[must_use = "discard this native owner's exact credit before its borrowed relocation"]
 pub struct ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source,
-    P: ProductionMixedPrefixOwnerV29<'view, 'source> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>> {
-    relocation: &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>,
-    forwarding: Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>>,
-    occurrences: Vec<ProductionMixedLicmRuntimeOccurrenceV28>,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>, R: ProductionContinuationOccurrenceV90 = ProductionMixedRuntimeOccurrenceV26> {
+    relocation: &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>,
+    forwarding: Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P, R>>,
+    occurrences: Vec<ProductionMixedLicmRuntimeOccurrenceV28<R>>,
     histories: Vec<Option<History>>,
     retained: usize,
     required: usize,
@@ -226,8 +326,50 @@ pub type ProductionConditionalMixedFixedpointLicmOutputHandoffV29<
     ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
 >;
 
-impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>
+/// Final checked native owner retaining the exact predicated Policy11 chain.
+pub type ProductionConditionalPredicatedLicmOutputHandoffV90<'native, 'prefix, 'view, 'source> =
+    ProductionConditionalMixedLicmOutputHandoffV28<
+        'native,
+        'prefix,
+        'view,
+        'source,
+        ProductionConditionalPredicatedFixedpointOutputHandoffV89<'view, 'source>,
+        ProductionMixedRuntimeOccurrenceV89,
+    >;
+
+impl<'motion, 'prefix, 'view, 'source>
+    ProductionPredicatedStoreConsensusV90<'motion, 'prefix, 'view, 'source>
+{
+    /// Replays both actual transformations and all final native/domain stages.
+    pub fn complete_native_v90<'native>(
+        &'native self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionConditionalPredicatedLicmOutputHandoffV90<'native, 'prefix, 'view, 'source>>
+    {
+        self.complete_native_v46(budget)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_native_fault_v90<'native>(
+        &'native self,
+        fault: u8,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionConditionalPredicatedLicmOutputHandoffV90<'native, 'prefix, 'view, 'source>>
+    {
+        self.check(budget)?;
+        self.relocation
+            .complete_native_inner_v28(Some(self), budget, Some(fault))
+    }
+}
+
+impl<
+    'native,
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P, R>
 {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let source = self.relocation.prefix.source_owned_v29();
@@ -254,8 +396,9 @@ impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
     pub fn relocation(
         &self,
         budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>>
-    {
+    ) -> SourceOwnedResultV18<
+        &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>,
+    > {
         self.check(budget)?;
         Ok(self.relocation)
     }
@@ -276,7 +419,7 @@ impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
         &self,
         budget: &ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<
-        Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>>,
+        Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P, R>>,
     > {
         self.check(budget)?;
         Ok(self.forwarding)
@@ -313,7 +456,7 @@ impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
     pub fn runtime_occurrences(
         &self,
         budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&[ProductionMixedLicmRuntimeOccurrenceV28]> {
+    ) -> SourceOwnedResultV18<&[ProductionMixedLicmRuntimeOccurrenceV28<R>]> {
         self.check(budget)?;
         Ok(&self.occurrences)
     }
@@ -550,16 +693,23 @@ fn with_pending(
     with_source_pending_native_v30(inventory, layouts, budget, mismatch, |_| {}, consume)
 }
 
-impl<'motion, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P>
+impl<
+    'motion,
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P, R>
 {
     /// Replays both actual transformations and reruns all final native stages
     /// on the forwarding output. This does not execute either refinement proof.
     pub fn complete_native_v46<'native>(
         &'native self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
-    {
+    ) -> Result<
+        ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P, R>,
+    > {
         self.check(budget)?;
         self.relocation.complete_native_inner_v28(
             Some(self),
@@ -571,15 +721,20 @@ impl<'motion, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
 }
 
 #[allow(clippy::too_many_arguments)]
-fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
-    relocated: &ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>,
+fn join_final<
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+>(
+    relocated: &ProductionMixedLicmRelocationV28<'_, 'view, 'source, P, R>,
     output: &Inventory<'_>,
-    native: &Native<'_, '_>,
+    native: &impl FinalNativeV90,
     globals: &Globals<'_, '_>,
     source_roles: &[Option<Requirement>],
     role_count: usize,
     parameter_premises: &[Option<usize>],
-    occurrences: &[ProductionMixedLicmRuntimeOccurrenceV28],
+    occurrences: &[ProductionMixedLicmRuntimeOccurrenceV28<R>],
     seen: &mut [bool],
     histories: &mut Vec<Option<History>>,
     budget: &mut ArgumentBudgetV1<'_>,
@@ -633,21 +788,7 @@ fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
     for function in output.functions() {
         budget.charge_work(4)?;
         let ordinal = function.coordinate.0 as usize;
-        let report = native.report(ordinal, budget)?;
-        let history = native.history(ordinal, budget)?;
-        match (function.function.body.is_some(), report, history) {
-            (true, Some(report), Some(_))
-                if report.reports().is_clean() && report.paired_stage_count() == 9 =>
-            {
-                ()
-            }
-            (false, None, None) => (),
-            _ => {
-                return Err(mismatch(
-                    "LICM final function lacks all nine clean native stages",
-                ));
-            }
-        }
+        let history = native.clean_history(ordinal, function.function.body.is_some(), budget)?;
         histories.push(history);
         for parameter in 0..function.function.signature.parameters.len() {
             budget.charge_work(8)?;
@@ -714,8 +855,8 @@ fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
             .map_err(NativeError::ConditionalGlobalsV26)?
             .ok_or_else(|| mismatch("LICM final conditional access absent"))?;
         if seen[ordinal]
-            || actual.domain() != occurrence.domain()
-            || actual.invocation_projection() != occurrence.invocation_projection()
+            || actual.domain() != occurrence.prefix.domain()
+            || actual.invocation_projection() != occurrence.prefix.invocation_projection()
         {
             return Err(mismatch(
                 "LICM final conditional access changed or duplicated",
@@ -725,22 +866,139 @@ fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
         let operation = output.operations()[ordinal].operation;
         let access = match operation.kind {
             OperationKind::Load { access, .. } | OperationKind::Store { access, .. } => access,
+            OperationKind::GuardedStore { access, .. } if R::PREDICATED => access,
             _ => {
                 return Err(mismatch(
                     "LICM final global occurrence changed its operation family",
                 ));
             }
         };
-        if access != occurrence.memory_access() {
+        if access != occurrence.prefix.memory_access() {
             return Err(mismatch("LICM final access representation changed"));
+        }
+        if R::PREDICATED {
+            recheck_final_guard_v90(output, occurrence, actual.domain(), budget)?;
         }
     }
     relocated.check(budget)?;
     Ok(())
 }
 
-impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+fn recheck_final_guard_v90<R: ProductionContinuationOccurrenceV90>(
+    output: &Inventory<'_>,
+    occurrence: &ProductionMixedLicmRuntimeOccurrenceV28<R>,
+    domain: fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<()> {
+    let guard = occurrence.prefix.relocated_guard(occurrence.condition);
+    let ProductionMixedRuntimeGuardV89::ExplicitPredicate {
+        condition,
+        bound_comparison,
+    } = guard
+    else {
+        // The unchanged checked LICM/forwarding pairs preserve CFG edges and
+        // their operations; the fresh CFG domain was already joined above.
+        return Ok(());
+    };
+    type Frame<'a> = (
+        [&'a (); 24],
+        [usize; 16],
+        [Definition; 6],
+        [Operation; 5],
+        ProductionMixedRuntimeGuardV89,
+        fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26,
+        [Option<ValueId>; 4],
+        [Result<()>; 4],
+    );
+    let header = argument_sum_v1(&[size_of::<Frame<'_>>(), align_of::<Frame<'_>>()])?;
+    budget.reserve_storage(header)?;
+    let checked = (|| -> Result<()> {
+        budget.charge_work(96)?;
+        let fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26::Store(domain) = domain else {
+            return Err(mismatch("LICM explicit guard is not a Store domain"));
+        };
+        let definition = |at| -> Result<_> {
+            Ok(&output.definitions()[coordinates::definition_index(output, at)?])
+        };
+        let operation = |at| -> Result<_> {
+            Ok(output.operations()[coordinates::operation_index(output, at)?].operation)
+        };
+        let predicate = definition(condition)?;
+        let comparison = definition(bound_comparison)?;
+        let selected = definition(occurrence.address_index)?;
+        let Definition::Result {
+            operation: compare_at,
+            result: 0,
+        } = comparison.coordinate
+        else {
+            return Err(mismatch("LICM explicit comparison definition changed"));
+        };
+        let Definition::Result {
+            operation: select_at,
+            result: 0,
+        } = selected.coordinate
+        else {
+            return Err(mismatch("LICM explicit Select definition changed"));
+        };
+        let OperationKind::Select {
+            condition: selected_predicate,
+            true_value,
+            false_value,
+        } = operation(select_at)?.kind
+        else {
+            return Err(mismatch("LICM unconditional formation lost its Select"));
+        };
+        let zero = output
+            .definition_for_value(occurrence.operation.block.function, false_value, budget)?
+            .ok_or_else(|| mismatch("LICM inactive address zero definition absent"))?;
+        let Definition::Result {
+            operation: zero_at,
+            result: 0,
+        } = zero.coordinate
+        else {
+            return Err(mismatch("LICM inactive address is not a constant"));
+        };
+        let zero_op = operation(zero_at)?;
+        let store = operation(occurrence.operation)?;
+        let formation = operation(occurrence.formation)?;
+        if domain.path() != fe2o3_kernel_ir::FormalGuardedPathV1::ExplicitPredicate
+            || predicate.ty != &Type::BOOL
+            || predicate.value != Some(domain.predicate())
+            || comparison.ty != &Type::BOOL
+            || selected.ty != &Type::INDEX
+            || selected_predicate != domain.predicate()
+            || true_value != domain.index()
+            || domain.index() != domain.guard_index()
+            || !matches!(operation(compare_at)?.kind, OperationKind::Compare {
+            predicate: fe2o3_kernel_ir::ComparePredicate::LessThan, lhs, rhs
+        } if lhs == domain.guard_index() && rhs == domain.length())
+            || !matches!(zero_op.kind, OperationKind::Constant(Constant::Index(0)))
+            || !matches!(zero_op.results.as_slice(), [value] if value.id == false_value && value.ty == Type::INDEX)
+            || !matches!(store.kind, OperationKind::GuardedStore { pointer, predicate, .. }
+            if pointer == domain.pointer() && predicate == domain.predicate())
+            || !store.results.is_empty()
+            || !matches!(formation.kind, OperationKind::GetElementPointer { offset, .. }
+            if selected.value == Some(offset))
+            || !matches!(formation.results.as_slice(), [value] if value.id == domain.pointer())
+        {
+            return Err(mismatch(
+                "LICM final explicit predicate or zero-selected formation changed",
+            ));
+        }
+        Ok(())
+    })();
+    checked?;
+    budget.release_storage(header)?;
+    Ok(())
+}
+
+impl<
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>
 {
     /// Replays actual relocation/private memory, then joins fresh final-native
     /// checks with the complete original source roles and runtime premise roster.
@@ -748,8 +1006,9 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
     pub fn complete_native_v28<'native>(
         &'native self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
-    {
+    ) -> Result<
+        ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P, R>,
+    > {
         self.complete_native_inner_v28(
             None,
             budget,
@@ -763,20 +1022,22 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
         &'native self,
         fault: u8,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
-    {
+    ) -> Result<
+        ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P, R>,
+    > {
         self.complete_native_inner_v28(None, budget, Some(fault))
     }
 
     pub(super) fn complete_native_inner_v28<'native>(
         &'native self,
         forwarding: Option<
-            &'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>,
+            &'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P, R>,
         >,
         budget: &mut ArgumentBudgetV1<'_>,
         #[cfg(test)] fault: Option<u8>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
-    {
+    ) -> Result<
+        ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P, R>,
+    > {
         self.check(budget)?;
         if let Some(forwarding) = forwarding {
             forwarding.check(budget)?;
@@ -786,11 +1047,14 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
         }
         let source = self.prefix.source_owned_v29();
         let floor = budget.storage();
-        let (occurrences, histories, retained) =
-            scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| -> Result<_> {
+        let (occurrences, histories, retained) = scoped_source_attempt_v29(
+            source.cleanup,
+            budget,
+            floor,
+            |budget| -> Result<_> {
                 let entry = budget.storage();
-                type Handoff<'a, 'v, 's, P> =
-                    ProductionConditionalMixedLicmOutputHandoffV28<'a, 'a, 'v, 's, P>;
+                type Handoff<'a, 'v, 's, P, R> =
+                    ProductionConditionalMixedLicmOutputHandoffV28<'a, 'a, 'v, 's, P, R>;
                 type Vectors = (
                     Vec<Option<Requirement>>,
                     Vec<Option<usize>>,
@@ -799,8 +1063,8 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     Vec<fe2o3_kernel_ir::ExplicitLaunchExtent>,
                 );
                 let owner_header = argument_sum_v1(&[
-                    size_of::<Handoff<'_, 'view, 'source, P>>(),
-                    align_of::<Handoff<'_, 'view, 'source, P>>(),
+                    size_of::<Handoff<'_, 'view, 'source, P, R>>(),
+                    align_of::<Handoff<'_, 'view, 'source, P, R>>(),
                 ])?;
                 let scratch_header = argument_sum_v1(&[
                     ProductionCheckedMixedPrefixViewV29::inspection_storage_v29()?,
@@ -1024,12 +1288,9 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                             occurrence.output_address_index(),
                             budget,
                         )?,
-                        condition: coordinates::expected_definition(
-                            &pair,
-                            &input,
-                            occurrence.output_guard_condition(),
-                            budget,
-                        )?,
+                        condition: occurrence.relocate_guard(|definition| {
+                            coordinates::expected_definition(&pair, &input, definition, budget)
+                        })?,
                     });
                 }
                 #[cfg(test)]
@@ -1064,58 +1325,93 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                             roles.pop();
                         }
                         10 => role_count -= 1,
+                        11 => {
+                            let index = occurrences[0].address_index;
+                            occurrences[0].condition = occurrences[0]
+                                .prefix
+                                .relocate_guard(|_| Ok::<_, coordinates::Error>(index))?;
+                        }
+                        12 => {
+                            occurrences[0].address_index = match occurrences[0]
+                                .prefix
+                                .relocated_guard(occurrences[0].condition)
+                            {
+                                ProductionMixedRuntimeGuardV89::CfgEdge { condition, .. }
+                                | ProductionMixedRuntimeGuardV89::ExplicitPredicate {
+                                    condition,
+                                    ..
+                                } => condition,
+                            };
+                        }
+                        13 => occurrences[0].formation = occurrences[0].operation,
                         _ => panic!("unknown final native join fault"),
                     }
                 }
                 with_pending(&output, layouts, budget, |pending, budget| {
                     let mut selected = None;
                     let mut native_result = None;
-                    let family = fe2o3_kernel_ir::with_canonical_guarded_global_reads_v18(
-                        output.owner(),
-                        Default::default(),
-                        budget,
-                        |reads, budget| {
-                            fe2o3_kernel_ir::with_canonical_guarded_global_stores_v24(
+                    macro_rules! final_family_v90 {
+                        ($stores:path, $domains:path, $observe:ident) => {{
+                            fe2o3_kernel_ir::with_canonical_guarded_global_reads_v18(
                                 output.owner(),
                                 Default::default(),
                                 budget,
-                                |stores, budget| {
-                                    fe2o3_kernel_ir::with_canonical_conditional_slice_domains_v26(
-                                        reads,
-                                        stores,
-                                        &launches,
-                                        width,
+                                |reads, budget| {
+                                    $stores(
+                                        output.owner(),
+                                        Default::default(),
                                         budget,
-                                        |globals, budget| {
-                                            native_result =
-                                                Some(pending.with_mixed_memory_observations_v26(
-                                                    &after,
-                                                    globals,
-                                                    budget,
-                                                    |native, budget| {
-                                                        selected = Some(join_final(
-                                                            self,
-                                                            &output,
-                                                            native,
-                                                            globals,
-                                                            &roles,
-                                                            role_count,
-                                                            &parameters,
-                                                            &occurrences,
-                                                            &mut seen,
-                                                            &mut histories,
-                                                            budget,
-                                                        ));
-                                                        Ok(())
-                                                    },
-                                                ));
-                                            Ok(())
+                                        |stores, budget| {
+                                            $domains(
+                                                reads,
+                                                stores,
+                                                &launches,
+                                                width,
+                                                budget,
+                                                |globals, budget| {
+                                                    native_result = Some(pending.$observe(
+                                                        &after,
+                                                        globals,
+                                                        budget,
+                                                        |native, budget| {
+                                                            selected = Some(join_final(
+                                                                self,
+                                                                &output,
+                                                                native,
+                                                                globals,
+                                                                &roles,
+                                                                role_count,
+                                                                &parameters,
+                                                                &occurrences,
+                                                                &mut seen,
+                                                                &mut histories,
+                                                                budget,
+                                                            ));
+                                                            Ok(())
+                                                        },
+                                                    ));
+                                                    Ok(())
+                                                },
+                                            )
                                         },
                                     )
                                 },
                             )
-                        },
-                    );
+                        }};
+                    }
+                    let family = if R::PREDICATED {
+                        final_family_v90!(
+                            fe2o3_kernel_ir::with_canonical_predicated_global_stores_v84,
+                            fe2o3_kernel_ir::with_canonical_predicated_conditional_slice_domains_v85,
+                            with_predicated_memory_observations_v89
+                        )
+                    } else {
+                        final_family_v90!(
+                            fe2o3_kernel_ir::with_canonical_guarded_global_stores_v24,
+                            fe2o3_kernel_ir::with_canonical_conditional_slice_domains_v26,
+                            with_mixed_memory_observations_v26
+                        )
+                    };
                     let called = selected.is_some();
                     if let Some(Err(error)) = selected {
                         return Err(error);
@@ -1175,7 +1471,8 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     return Err(ArgumentResourceV1::Accounting.into());
                 }
                 Ok((occurrences, histories, retained))
-            })?;
+            },
+        )?;
         Ok(ProductionConditionalMixedLicmOutputHandoffV28 {
             relocation: self,
             forwarding,

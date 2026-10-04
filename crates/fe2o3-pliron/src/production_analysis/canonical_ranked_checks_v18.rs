@@ -8,9 +8,9 @@ use fe2o3_kernel_ir::{StorageLayoutLimitsV1, VerifiedCanonicalKernelIrModuleV18}
 mod pending;
 pub use pending::{
     PendingCanonicalGlobalAccessesV18, PendingCanonicalMixedMemoryPoliciesV26,
-    PendingCanonicalPrivateMemoryPoliciesV18, PendingCanonicalRankedPoliciesV18,
-    PendingCanonicalRankedSourceRolesV18, PendingCanonicalSelectedMemoryPoliciesV30,
-    with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalPredicatedMemoryPoliciesV89, PendingCanonicalPrivateMemoryPoliciesV18,
+    PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
+    PendingCanonicalSelectedMemoryPoliciesV30, with_pending_canonical_ranked_source_roles_v18,
 };
 
 /// Closed role whose source/output recipe is required before policy admission.

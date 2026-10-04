@@ -149,12 +149,33 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> SourceOwnedResultV18<()>,
     {
+        self.with_complete_slice_domains_profile_v89::<false, F>(
+            native, reads, stores, launch, width, budget, consume,
+        )
+    }
+
+    fn with_complete_slice_domains_profile_v89<'work, const PREDICATED: bool, F>(
+        &self,
+        native: &fe2o3_pliron::PendingCanonicalGlobalAccessesV18<'_, '_>,
+        reads: &GlobalReadFactsV18<'_, '_>,
+        stores: &GlobalStoreFactsV25<'_, '_>,
+        launch: fe2o3_kernel_ir::ExplicitLaunchExtent,
+        width: fe2o3_kernel_ir::FormalIndexWidth,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: &mut F,
+    ) -> SourceOwnedResultV18<()>
+    where
+        F: for<'s, 'a, 'g> FnMut(
+            &SourceSliceRootCompletionV25<'s, 'a, 'g>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> SourceOwnedResultV18<()>,
+    {
         let original = self.original();
         original.global_expression_entry_v23(self.source.optimized(), budget)?;
         let run = |budget: &mut ArgumentBudgetV1<'work>| {
             let mut indexed = |index: &SourceSliceEntryIndexV26<'_, '_>,
                                budget: &mut ArgumentBudgetV1<'work>| {
-                self.with_complete_indexed_slice_domains_v26(
+                self.with_complete_indexed_slice_domains_v26::<PREDICATED, F>(
                     index, native, reads, stores, launch, width, budget, consume,
                 )
             };
@@ -173,7 +194,7 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
         ))
     }
 
-    fn with_complete_indexed_slice_domains_v26<'work, F>(
+    fn with_complete_indexed_slice_domains_v26<'work, const PREDICATED: bool, F>(
         &self,
         index: &SourceSliceEntryIndexV26<'_, '_>,
         native: &fe2o3_pliron::PendingCanonicalGlobalAccessesV18<'_, '_>,
@@ -210,6 +231,9 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
         let run = |budget: &mut ArgumentBudgetV1<'work>| -> SourceOwnedResultV18<()> {
             // Every callback and query carrier remains below this scratch floor.
             budget.reserve_storage(slice_completion_headers_v25::<F>()?)?;
+            if PREDICATED {
+                budget.reserve_storage(predicated_source_role_headers_v89::<F>()?)?;
+            }
             let read_owner = reads
                 .owner(budget)
                 .map_err(|error| optimized_source_observed_formal_error_v18(original, &error))?;
@@ -279,13 +303,17 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
                             .map_err(slice_completion_read_error_v25)?;
                     }
                     Some(DescriptorSourceRoleV18::Write) => {
-                        self.source.with_native_access_v18(native, row.output, budget, |access, budget| {
+                        self.source.with_native_access_profile_v89::<PREDICATED>(native, row.output, budget, |access, budget| {
                             let access = access.ok_or(ProductionSourceOwnedViewErrorV18::Binding("slice Store occurrence is absent"))?;
                             let outcome = stores.store_at(row.output, budget).map_err(|error| optimized_source_observed_formal_error_v18(original, &error))?;
                             let fe2o3_kernel_ir::CanonicalGuardedGlobalStoreOutcomeV24::ProvedLocalConditions(fact) = outcome else {
                                 return Err(ProductionSourceOwnedViewErrorV18::Binding("slice Store local conditions remain unproved").into());
                             };
-                            self.source.check_local_store_domain_v25(stores, access.pair, &fact, budget)?;
+                            if PREDICATED && matches!(access.pair.output.logical.guard, GlobalSourceGuardV85::ExplicitPredicate { .. }) {
+                                self.source.check_predicated_store_domain_v89(stores, access.pair, &fact, budget)?;
+                            } else {
+                                self.source.check_local_store_domain_v25(stores, access.pair, &fact, budget)?;
+                            }
                             let proof = fact.distinct_invocations(launch, width, budget)
                                 .map_err(|error| optimized_source_observed_formal_error_v18(original, &error))?
                                 .ok_or(ProductionSourceOwnedViewErrorV18::Binding("slice Store invocation injectivity remains unproved"))?;

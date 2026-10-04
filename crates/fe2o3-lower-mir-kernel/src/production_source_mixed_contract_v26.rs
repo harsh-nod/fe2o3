@@ -9,11 +9,13 @@ mod mixed_source_contract_v26 {
     };
     mod wire {
         pub(super) use fe2o3_kernel_descriptor::mixed_conditional_v26::*;
+        pub(super) use fe2o3_kernel_descriptor::mixed_conditional_v86::*;
         pub(super) use fe2o3_kernel_descriptor::*;
     }
     use wire::{MixedArgumentV26, MixedOccurrenceV26, MixedScalarV26};
 
     trait ContractOccurrence {
+        type Wire: EncodedOccurrence;
         fn premise_index(&self) -> usize;
         fn original_instance(&self) -> usize;
         fn original_operation(&self) -> SliceOperation;
@@ -21,15 +23,18 @@ mod mixed_source_contract_v26 {
         fn original_address_formation(&self) -> SliceOperation;
         fn output_address_formation(&self) -> SliceOperation;
         fn output_address_index(&self) -> SliceDefinition;
-        fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1;
-        fn output_guard_condition(&self) -> SliceDefinition;
+        fn output_guard(&self) -> ProductionMixedRuntimeGuardV89;
         fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26;
         fn invocation_projection(&self) -> Option<(Axis, ValueId)>;
         fn memory_access(&self) -> MemoryAccess;
     }
     macro_rules! contract_occurrence {
         ($ty:ty) => {
+            contract_occurrence!($ty, MixedOccurrenceV26, cfg_occurrence_guard_v26);
+        };
+        ($ty:ty, $wire:ty, $guard:ident) => {
             impl ContractOccurrence for $ty {
+                type Wire = $wire;
                 fn premise_index(&self) -> usize {
                     <$ty>::premise_index(self)
                 }
@@ -51,11 +56,8 @@ mod mixed_source_contract_v26 {
                 fn output_address_index(&self) -> SliceDefinition {
                     <$ty>::output_address_index(self)
                 }
-                fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
-                    <$ty>::output_guard_edge(self)
-                }
-                fn output_guard_condition(&self) -> SliceDefinition {
-                    <$ty>::output_guard_condition(self)
+                fn output_guard(&self) -> ProductionMixedRuntimeGuardV89 {
+                    $guard(self)
                 }
                 fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26 {
                     <$ty>::domain(self)
@@ -69,8 +71,48 @@ mod mixed_source_contract_v26 {
             }
         };
     }
+    macro_rules! cfg_occurrence_guard {
+        ($ty:ty) => {
+            impl CfgOccurrenceGuard for $ty {
+                fn cfg_guard(&self) -> ProductionMixedRuntimeGuardV89 {
+                    ProductionMixedRuntimeGuardV89::CfgEdge {
+                        condition: self.output_guard_condition(),
+                        edge: self.output_guard_edge(),
+                    }
+                }
+            }
+        };
+    }
+    trait CfgOccurrenceGuard {
+        fn cfg_guard(&self) -> ProductionMixedRuntimeGuardV89;
+    }
+    fn cfg_occurrence_guard_v26(row: &impl CfgOccurrenceGuard) -> ProductionMixedRuntimeGuardV89 {
+        row.cfg_guard()
+    }
+    fn predicated_occurrence_guard_v89(
+        row: &ProductionMixedRuntimeOccurrenceV89,
+    ) -> ProductionMixedRuntimeGuardV89 {
+        row.output_guard()
+    }
+    fn predicated_licm_occurrence_guard_v90(
+        row: &ProductionPredicatedLicmRuntimeOccurrenceV90,
+    ) -> ProductionMixedRuntimeGuardV89 {
+        row.output_guard()
+    }
+    cfg_occurrence_guard!(ProductionMixedRuntimeOccurrenceV26);
+    cfg_occurrence_guard!(ProductionMixedLicmRuntimeOccurrenceV28);
+    contract_occurrence!(
+        ProductionMixedRuntimeOccurrenceV89,
+        wire::MixedOccurrenceV86,
+        predicated_occurrence_guard_v89
+    );
     contract_occurrence!(ProductionMixedRuntimeOccurrenceV26);
     contract_occurrence!(ProductionMixedLicmRuntimeOccurrenceV28);
+    contract_occurrence!(
+        ProductionPredicatedLicmRuntimeOccurrenceV90,
+        wire::MixedOccurrenceV86,
+        predicated_licm_occurrence_guard_v90
+    );
 
     struct ContractParts<'view, 'source, R> {
         source: &'view ProductionSourceOwnedViewV18<'source>,
@@ -95,8 +137,11 @@ mod mixed_source_contract_v26 {
     }
     macro_rules! contract_prefix_owner {
         ($ty:ty) => {
+            contract_prefix_owner!($ty, ProductionMixedRuntimeOccurrenceV26);
+        };
+        ($ty:ty, $occurrence:ty) => {
             impl ContractOwner for $ty {
-                type Occurrence = ProductionMixedRuntimeOccurrenceV26;
+                type Occurrence = $occurrence;
                 fn parts(
                     &self,
                     budget: &ArgumentBudgetV1<'_>,
@@ -121,6 +166,10 @@ mod mixed_source_contract_v26 {
             }
         };
     }
+    contract_prefix_owner!(
+        ProductionConditionalPredicatedFixedpointOutputHandoffV89<'_, '_>,
+        ProductionMixedRuntimeOccurrenceV89
+    );
     contract_prefix_owner!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
     contract_prefix_owner!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
     contract_prefix_owner!(ProductionConditionalMixedFixedpointOutputHandoffV29<'_, '_>);
@@ -128,6 +177,32 @@ mod mixed_source_contract_v26 {
         for ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, 'view, 'source, P>
     {
         type Occurrence = ProductionMixedLicmRuntimeOccurrenceV28;
+        fn parts(
+            &self,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>> {
+            let source = self.relocation(budget)?.prefix(budget)?.source_owned_v29();
+            let (launches, width) = self.launch_context(budget)?;
+            Ok(ContractParts {
+                source,
+                graph: self.output(budget)?,
+                premises: self.runtime_premises(budget)?,
+                occurrences: self.runtime_occurrences(budget)?,
+                launches,
+                width,
+            })
+        }
+        fn observe(
+            &self,
+            required: usize,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<()> {
+            self.observe_retained_storage_v28(required, budget)
+        }
+    }
+
+    impl ContractOwner for ProductionConditionalPredicatedLicmOutputHandoffV90<'_, '_, '_, '_> {
+        type Occurrence = ProductionPredicatedLicmRuntimeOccurrenceV90;
         fn parts(
             &self,
             budget: &ArgumentBudgetV1<'_>,
@@ -298,24 +373,64 @@ mod mixed_source_contract_v26 {
         Ok(())
     }
 
-    fn occurrence(
-        row: &impl ContractOccurrence,
+    fn cfg_wire_guard(
+        guard: ProductionMixedRuntimeGuardV89,
+    ) -> SourceOwnedResultV18<(wire::MixedEdgeV26, wire::MixedDefinitionV26)> {
+        let ProductionMixedRuntimeGuardV89::CfgEdge { condition, edge } = guard else {
+            return Err(Binding("V26 contract requires a real CFG edge"));
+        };
+        Ok((
+            wire::MixedEdgeV26 {
+                function: edge.source.function.0,
+                block: edge.source.block,
+                successor: edge.successor,
+            },
+            definition(condition),
+        ))
+    }
+    fn predicated_wire_guard(
+        guard: ProductionMixedRuntimeGuardV89,
+    ) -> SourceOwnedResultV18<wire::MixedAccessGuardV86> {
+        Ok(match guard {
+            ProductionMixedRuntimeGuardV89::CfgEdge { condition, edge } => {
+                wire::MixedAccessGuardV86::CfgEdge {
+                    condition: definition(condition),
+                    edge: wire::MixedEdgeV26 {
+                        function: edge.source.function.0,
+                        block: edge.source.block,
+                        successor: edge.successor,
+                    },
+                }
+            }
+            ProductionMixedRuntimeGuardV89::ExplicitPredicate {
+                condition,
+                bound_comparison,
+            } => wire::MixedAccessGuardV86::ExplicitPredicate {
+                condition: definition(condition),
+                bound_comparison: definition(bound_comparison),
+            },
+        })
+    }
+    macro_rules! occurrence_encoder_v89 {
+        ($name:ident, $wire:ident, $row:ident, $guard:ident, $encode_guard:ident, {$($guard_field:ident: $guard_value:expr),+ $(,)?}) => {
+    fn $name(
+        $row: &impl ContractOccurrence,
         argument: u16,
         function: &fe2o3_kernel_ir::Function,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<MixedOccurrenceV26> {
+    ) -> SourceOwnedResultV18<$wire> {
         use fe2o3_kernel_ir::{
             CanonicalConditionalSliceDomainV26 as Domain, FormalGuardedPathV1 as Path,
         };
         budget.charge_work(128)?;
-        let domain = row.domain();
+        let domain = $row.domain();
         let (guard_index, length, predicate, path) = match domain {
             Domain::Read(d) => (d.guard_index(), d.length(), d.predicate(), d.path()),
             Domain::Store(d) => (d.guard_index(), d.length(), d.predicate(), d.path()),
         };
-        let edge = row.output_guard_edge();
-        let projection = row.invocation_projection();
-        let formation = row.output_address_formation();
+        let $guard = $encode_guard($row.output_guard())?;
+        let projection = $row.invocation_projection();
+        let formation = $row.output_address_formation();
         let body = function.body.as_ref().ok_or_else(mismatch)?;
         let formation_block = body
             .blocks
@@ -340,7 +455,7 @@ mod mixed_source_contract_v26 {
                 axis: axis(projection),
             }
         } else {
-            let ty = match row.output_address_index() {
+            let ty = match $row.output_address_index() {
                 SliceDefinition::FunctionArgument { argument, .. } => {
                     function.signature.parameters.get(argument as usize)
                 }
@@ -366,7 +481,7 @@ mod mixed_source_contract_v26 {
             };
             wire::MixedIndexEnvelopeV26::UnsignedWidth { bits }
         };
-        let memory = row.memory_access();
+        let memory = $row.memory_access();
         // The retained native/source occurrence already joins this physical
         // pointer to its exact Global slice domain. Preserve the access's real
         // representation; Generic by itself never establishes that domain.
@@ -375,20 +490,15 @@ mod mixed_source_contract_v26 {
             AddressSpace::Generic => wire::MixedMemorySpaceV26::Generic,
             _ => return Err(Binding("mixed source contract memory space differs")),
         };
-        Ok(MixedOccurrenceV26 {
+        Ok($wire {
             argument,
-            original_instance: ordinal(row.original_instance())?,
-            original_operation: operation(row.original_operation()),
-            output_operation: operation(row.output_operation()),
-            original_formation: operation(row.original_address_formation()),
+            original_instance: ordinal($row.original_instance())?,
+            original_operation: operation($row.original_operation()),
+            output_operation: operation($row.output_operation()),
+            original_formation: operation($row.original_address_formation()),
             output_formation: operation(formation),
-            output_address_index: definition(row.output_address_index()),
-            output_guard_edge: wire::MixedEdgeV26 {
-                function: edge.source.function.0,
-                block: edge.source.block,
-                successor: edge.successor,
-            },
-            output_guard_condition: definition(row.output_guard_condition()),
+            output_address_index: definition($row.output_address_index()),
+            $($guard_field: $guard_value,)+
             slice_value: domain.slice().0,
             pointer_value: domain.pointer().0,
             index_value: domain.index().0,
@@ -421,6 +531,118 @@ mod mixed_source_contract_v26 {
         })
     }
 
+        };
+    }
+    use wire::MixedOccurrenceV86;
+    occurrence_encoder_v89!(cfg_occurrence_v26, MixedOccurrenceV26, row, guard, cfg_wire_guard, {output_guard_edge: guard.0, output_guard_condition: guard.1});
+    occurrence_encoder_v89!(predicated_occurrence_v89, MixedOccurrenceV86, row, guard, predicated_wire_guard, {output_guard: guard});
+
+    trait EncodedOccurrence: Sized {
+        const CODEC_STORAGE: usize;
+        const MAX_ARGUMENTS: usize;
+        const MAX_OCCURRENCES: usize;
+        fn from_source(
+            row: &impl ContractOccurrence,
+            argument: u16,
+            function: &fe2o3_kernel_ir::Function,
+            budget: &mut ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<Self>;
+        fn encoded_len(
+            subjects: wire::MixedContractSubjectsV26,
+            arguments: &[MixedArgumentV26],
+            occurrences: &[Self],
+            budget: &mut ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<usize>;
+        fn encode(
+            subjects: wire::MixedContractSubjectsV26,
+            arguments: &[MixedArgumentV26],
+            occurrences: &[Self],
+            output: &mut [u8],
+            budget: &mut ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<()>;
+    }
+    fn predicated_codec_error(
+        error: wire::MixedContractErrorV86<ArgumentResourceV1>,
+    ) -> ProductionSourceOwnedViewErrorV18 {
+        match error {
+            wire::MixedContractErrorV86::Resource(e) => e.into(),
+            wire::MixedContractErrorV86::Invalid(e) => Binding(e),
+        }
+    }
+    macro_rules! contract_codec_v89 {
+        ($row:ident, $input:ident, $storage:ident, $arguments:ident, $occurrences:ident, $build:ident, $len:ident, $encode:ident, $error:ident) => {
+            impl EncodedOccurrence for wire::$row {
+                const CODEC_STORAGE: usize = wire::$storage;
+                const MAX_ARGUMENTS: usize = wire::$arguments;
+                const MAX_OCCURRENCES: usize = wire::$occurrences;
+                fn from_source(
+                    row: &impl ContractOccurrence,
+                    argument: u16,
+                    function: &fe2o3_kernel_ir::Function,
+                    budget: &mut ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<Self> {
+                    $build(row, argument, function, budget)
+                }
+                fn encoded_len(
+                    subjects: wire::MixedContractSubjectsV26,
+                    arguments: &[MixedArgumentV26],
+                    occurrences: &[Self],
+                    budget: &mut ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<usize> {
+                    wire::$len(
+                        &wire::$input {
+                            subjects,
+                            arguments,
+                            occurrences,
+                        },
+                        &mut |n| budget.charge_work(n),
+                    )
+                    .map_err($error)
+                }
+                fn encode(
+                    subjects: wire::MixedContractSubjectsV26,
+                    arguments: &[MixedArgumentV26],
+                    occurrences: &[Self],
+                    output: &mut [u8],
+                    budget: &mut ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<()> {
+                    wire::$encode(
+                        &wire::$input {
+                            subjects,
+                            arguments,
+                            occurrences,
+                        },
+                        output,
+                        &mut |n| budget.charge_work(n),
+                    )
+                    .map_err($error)
+                }
+            }
+        };
+    }
+    contract_codec_v89!(
+        MixedOccurrenceV26,
+        MixedContractInputV26,
+        MIXED_CONTRACT_CODEC_STORAGE_V26,
+        MAX_MIXED_ARGUMENTS_V26,
+        MAX_MIXED_OCCURRENCES_V26,
+        cfg_occurrence_v26,
+        encoded_mixed_contract_v26_len,
+        encode_mixed_contract_v26,
+        codec_error
+    );
+    contract_codec_v89!(
+        MixedOccurrenceV86,
+        MixedContractInputV86,
+        MIXED_CONTRACT_CODEC_STORAGE_V86,
+        MAX_MIXED_ARGUMENTS_V86,
+        MAX_MIXED_OCCURRENCES_V86,
+        predicated_occurrence_v89,
+        encoded_mixed_contract_v86_len,
+        encode_mixed_contract_v86,
+        predicated_codec_error
+    );
+
     fn emit_contract<H: ContractOwner>(
         owner: &H,
         original_root: usize,
@@ -441,10 +663,10 @@ mod mixed_source_contract_v26 {
                 let scratch_floor = budget.storage();
                 let headers = argument_sum_v1(&[
                     wire::DESCRIPTOR_QUERY_STORAGE_V3,
-                    wire::MIXED_CONTRACT_CODEC_STORAGE_V26,
+                    <H::Occurrence as ContractOccurrence>::Wire::CODEC_STORAGE,
                     size_of::<[Vec<usize>; 4]>(),
                     size_of::<[MixedArgumentV26; 4]>(),
-                    size_of::<[MixedOccurrenceV26; 4]>(),
+                    size_of::<[<H::Occurrence as ContractOccurrence>::Wire; 4]>(),
                     size_of::<[usize; 64]>(),
                     size_of::<ContractParts<'_, '_, H::Occurrence>>(),
                     output.len(),
@@ -528,13 +750,17 @@ mod mixed_source_contract_v26 {
                         "mixed source contract kernel launch or ABI differs",
                     ));
                 }
-                let mut selected =
-                    source_reference_emission_vec_v29(wire::MAX_MIXED_ARGUMENTS_V26, budget)
-                        .map_err(source_argument_error_v18)?;
+                let mut selected = source_reference_emission_vec_v29(
+                    <H::Occurrence as ContractOccurrence>::Wire::MAX_ARGUMENTS,
+                    budget,
+                )
+                .map_err(source_argument_error_v18)?;
                 for premise in parts.premises {
                     budget.charge_work(3)?;
                     if premise.root() == original_root {
-                        if selected.len() == wire::MAX_MIXED_ARGUMENTS_V26 {
+                        if selected.len()
+                            == <H::Occurrence as ContractOccurrence>::Wire::MAX_ARGUMENTS
+                        {
                             return Err(Binding("mixed source contract argument limit exceeded"));
                         }
                         selected.push(premise);
@@ -664,9 +890,11 @@ mod mixed_source_contract_v26 {
                 {
                     return Err(Binding("mixed source contract argument census differs"));
                 }
-                let mut occurrences =
-                    source_reference_emission_vec_v29(wire::MAX_MIXED_OCCURRENCES_V26, budget)
-                        .map_err(source_argument_error_v18)?;
+                let mut occurrences = source_reference_emission_vec_v29(
+                    <H::Occurrence as ContractOccurrence>::Wire::MAX_OCCURRENCES,
+                    budget,
+                )
+                .map_err(source_argument_error_v18)?;
                 for row in parts.occurrences {
                     budget.charge_work(3)?;
                     let premise = parts
@@ -676,14 +904,17 @@ mod mixed_source_contract_v26 {
                     if premise.root() != original_root {
                         continue;
                     }
-                    if occurrences.len() == wire::MAX_MIXED_OCCURRENCES_V26 {
+                    if occurrences.len()
+                        == <H::Occurrence as ContractOccurrence>::Wire::MAX_OCCURRENCES
+                    {
                         return Err(Binding("mixed source contract occurrence limit exceeded"));
                     }
-                    budget.charge_work(wire::MAX_MIXED_ARGUMENTS_V26)?;
+                    budget
+                        .charge_work(<H::Occurrence as ContractOccurrence>::Wire::MAX_ARGUMENTS)?;
                     let argument = arguments
                         .binary_search_by_key(&premise.original_argument(), |a| a.source_argument)
                         .map_err(|_| mismatch())?;
-                    occurrences.push(occurrence(
+                    occurrences.push(<H::Occurrence as ContractOccurrence>::Wire::from_source(
                         row,
                         argument
                             .try_into()
@@ -711,19 +942,21 @@ mod mixed_source_contract_v26 {
                     explicit_argument_bytes: root.explicit_argument_bytes,
                     kernarg_alignment: root.kernarg_alignment_bytes,
                 };
-                let input = wire::MixedContractInputV26 {
+                let len = <H::Occurrence as ContractOccurrence>::Wire::encoded_len(
                     subjects,
-                    arguments: &arguments,
-                    occurrences: &occurrences,
-                };
-                let len =
-                    wire::encoded_mixed_contract_v26_len(&input, &mut |n| budget.charge_work(n))
-                        .map_err(codec_error)?;
+                    &arguments,
+                    &occurrences,
+                    budget,
+                )?;
                 let output = output.get_mut(..len).ok_or_else(mismatch)?;
                 owner.parts(budget)?;
-                wire::encode_mixed_contract_v26(&input, output, &mut |n| budget.charge_work(n))
-                    .map_err(codec_error)?;
-                drop(input);
+                <H::Occurrence as ContractOccurrence>::Wire::encode(
+                    subjects,
+                    &arguments,
+                    &occurrences,
+                    output,
+                    budget,
+                )?;
                 drop(occurrences);
                 drop(arguments);
                 drop(selected);
@@ -740,13 +973,14 @@ mod mixed_source_contract_v26 {
         ))
     }
     macro_rules! mixed_source_contract_emitter_v26 {
-        ($handoff:ty) => { mixed_source_contract_emitter_v26!(@impl [] $handoff); };
-        (@impl [$($generics:tt)*] $handoff:ty) => {
+        ($handoff:ty) => { mixed_source_contract_emitter_v26!(@impl [] $handoff, emit_mixed_contract_v26); };
+        (@impl [$($generics:tt)*] $handoff:ty) => { mixed_source_contract_emitter_v26!(@impl [$($generics)*] $handoff, emit_mixed_contract_v26); };
+        (@impl [$($generics:tt)*] $handoff:ty, $method:ident) => {
             impl $($generics)* $handoff {
                 /// Emits a complete descriptor-bound runtime contract from the
                 /// genuine retained final graph. Bytes remain inert and cannot
                 /// replace the owner, refinement proof or runtime discharge.
-                pub fn emit_mixed_contract_v26(
+                pub fn $method(
                     &self,
                     original_root: usize,
                     abi: ProductionKernelArgumentAbiInputV18<'_>,
@@ -769,6 +1003,8 @@ mod mixed_source_contract_v26 {
         };
     }
 
+    mixed_source_contract_emitter_v26!(@impl [] ProductionConditionalPredicatedFixedpointOutputHandoffV89<'_, '_>, emit_predicated_contract_v89);
+    mixed_source_contract_emitter_v26!(@impl [] ProductionConditionalPredicatedLicmOutputHandoffV90<'_, '_,'_, '_>, emit_predicated_contract_v90);
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(
