@@ -23,8 +23,12 @@ multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
 have scoped hardware qualification. Do not add more routing wrappers or expand
 opcode coverage before clearing application admission.
 
-The immediate implementation work is the consuming application proof client and
-conditional invocation join to existing per-device native preparation.
+The [consuming application proof client](runtime-application-proof-client-v1.md)
+and explicit host remote conditional artifact are now implemented. Transport
+qualification includes cross-UID failure controls and the exact Cargo syscall
+allowlist installed after helper entry. The composed observed manager / actual
+proof / production FD195 host path is not yet qualified. Next complete that
+composition and the conditional invocation join to per-device native preparation.
 The [fixed-controller execution campaign](evidence/dev-proof-controller-execution-2026-10-04/README.md)
 now passes real post-exec analysis/proof, retained-owner probing, three mismatch
 controls and live-Verus cancellation. Do not substitute another isolated identity
@@ -36,8 +40,9 @@ retains original process custody and contains each proof tree in a fresh cgroup.
 Its [pollable lifecycle](runtime-proof-custodian-polling-v1.md) supports cooperative
 startup, proof execution and cancellation on the originating root thread. The
 independent manager now consumes the broker's authenticated registered owner and
-uses that lifecycle for a staged application session. Next implement the consuming
-host client, remote conditional owner and per-device native invocation join.
+uses that lifecycle for a staged application session. The consuming host client
+and remote conditional artifact now exist; qualify their composition and complete
+the per-device native invocation join.
 Keep general performance work and additional GPU counts out of this critical path.
 
 The [staged application controller](runtime-application-proof-controller-v1.md)
@@ -46,8 +51,8 @@ retained proof probing and quarantine. Its root staging primitive now requires t
 manager's authenticated received registration; the staged capsule alone cannot
 authenticate that observation. The generated-only
 multi-device native-peer constructor is also implemented without granting generic
-compute authority. Next priorities are the consuming host proof client, remote
-conditional native-invocation join and two-GPU application qualification.
+compute authority. Next priorities are composed host proof qualification, the
+remote conditional native-invocation join and two-GPU application qualification.
 The [application-controller campaign](evidence/dev-application-proof-controller-2026-10-04/README.md)
 now passes genuine proof/probe/EOF-quarantine and three application rejection cases,
 plus all 18 existing launcher regressions. Its registration records are component

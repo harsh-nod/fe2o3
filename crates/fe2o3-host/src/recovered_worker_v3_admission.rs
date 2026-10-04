@@ -432,6 +432,54 @@ impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
 }
 
 impl RecoveredWorkerV3PinnedDescriptorV1 {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn request_application_custodian_proof(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+        deadline: std::time::Instant,
+    ) -> Result<Vec<u8>, crate::WorkerV3ApplicationDescriptorHandoffErrorV1> {
+        use crate::WorkerV3ApplicationDescriptorHandoffErrorV1 as E;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        let descriptors = self
+            .artifact
+            .application_descriptors
+            .as_ref()
+            .ok_or(E::Admission(
+                RecoveredWorkerV3AdmissionErrorV1::ApplicationDescriptorsChanged,
+            ))?;
+        let subject = descriptors.request_custodian_proof(
+            self.descriptor().kernel_id(),
+            current.exact_artifact_bytes(),
+            deadline,
+        )?;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        Ok(subject)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn probe_application_custodian_proof(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+        deadline: std::time::Instant,
+    ) -> Result<(), crate::WorkerV3ApplicationDescriptorHandoffErrorV1> {
+        use crate::WorkerV3ApplicationDescriptorHandoffErrorV1 as E;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        let descriptors = self
+            .artifact
+            .application_descriptors
+            .as_ref()
+            .ok_or(E::Admission(
+                RecoveredWorkerV3AdmissionErrorV1::ApplicationDescriptorsChanged,
+            ))?;
+        descriptors.probe_custodian_proof(deadline)?;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        Ok(())
+    }
+
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         let current = self.acquire_retained_currentness_token()?;
         drop(current);

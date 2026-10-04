@@ -45,6 +45,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod custodian;
+use custodian::ApplicationCustodianStateV1;
+pub use custodian::RegisteredWorkerV3CustodianApplicationV1;
+
 const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v2-load-envelope-v1-";
@@ -151,11 +155,13 @@ pub(crate) struct RetainedWorkerV3ApplicationDescriptorsV1 {
 enum ApplicationRegistrationCustodyV1 {
     Unregistered(RetainedApplicationProofEndpointV1),
     Registered(RegisteredApplicationProofEndpointV1),
+    Custodian(std::sync::Mutex<ApplicationCustodianStateV1>),
 }
 
 #[derive(Clone, Copy)]
 enum ApplicationRegistrationModeV1 {
     Required,
+    Custodian,
     #[cfg(feature = "hardware-test-hooks")]
     EnvelopeOnlyFixture,
 }
@@ -190,6 +196,10 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
         match &self.proof {
             ApplicationRegistrationCustodyV1::Unregistered(proof) => proof.revalidate(),
             ApplicationRegistrationCustodyV1::Registered(proof) => proof.revalidate(),
+            ApplicationRegistrationCustodyV1::Custodian(proof) => proof
+                .try_lock()
+                .map_err(|_| custodian::terminal())?
+                .revalidate(),
         }
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel)?;
         Ok(())
@@ -202,16 +212,23 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
         deadline: Instant,
     ) -> Result<Self, WorkerV3ApplicationDescriptorHandoffErrorV1> {
         match mode {
-            ApplicationRegistrationModeV1::Required => {
+            ApplicationRegistrationModeV1::Required | ApplicationRegistrationModeV1::Custodian => {
                 self.proof = match self.proof {
                     ApplicationRegistrationCustodyV1::Unregistered(proof) => {
-                        ApplicationRegistrationCustodyV1::Registered(
-                            proof.register_pre_ack(inputs, deadline).map_err(
-                                WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel,
-                            )?,
-                        )
+                        if matches!(mode, ApplicationRegistrationModeV1::Custodian) {
+                            ApplicationRegistrationCustodyV1::Custodian(std::sync::Mutex::new(
+                                ApplicationCustodianStateV1::register(proof, inputs, deadline)?,
+                            ))
+                        } else {
+                            ApplicationRegistrationCustodyV1::Registered(
+                                proof.register_pre_ack(inputs, deadline).map_err(
+                                    WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel,
+                                )?,
+                            )
+                        }
                     }
-                    ApplicationRegistrationCustodyV1::Registered(_) => {
+                    ApplicationRegistrationCustodyV1::Registered(_)
+                    | ApplicationRegistrationCustodyV1::Custodian(_) => {
                         unreachable!("single-use startup registration")
                     }
                 };
@@ -321,6 +338,35 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
         claimed.challenge,
         kernel_id,
     )
+}
+
+/// Consumes the strict handoff through the independently installed proof custodian.
+///
+/// Requires root CustodianReady, emits ACK, and retains the original controller endpoint
+/// inside the recovered publication. Legacy Ready is rejected without fallback. This is
+/// still inert admission: no proof request, compiler audit or native launch occurs here.
+///
+/// # Safety
+///
+/// The same exclusive startup/environment/descriptor contract as
+/// [`consume_inherited_worker_v3_application_handoff_v1`] applies.
+pub unsafe fn consume_inherited_worker_v3_application_custodian_handoff_v1(
+    kernel_id: KernelId,
+) -> Result<RegisteredWorkerV3CustodianApplicationV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    // SAFETY: caller promises the same exclusive startup contract as the private claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.proof,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        ApplicationRegistrationModeV1::Custodian,
+        |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
+    )
+    .map(|(admission, current)| RegisteredWorkerV3CustodianApplicationV1 { admission, current })
 }
 
 /// Consumes Cargo's strict Worker V3 descriptor handoff into one exact generated roster.
@@ -504,6 +550,7 @@ pub unsafe fn consume_inherited_worker_v3_envelope_only_fixture_v1(
         ApplicationRegistrationModeV1::EnvelopeOnlyFixture,
         |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
     )
+    .map(|(admission, _current)| admission)
 }
 
 /// Envelope-only roster fixture. Does not establish a registered application session.
@@ -529,6 +576,7 @@ where
         ApplicationRegistrationModeV1::EnvelopeOnlyFixture,
         admit_recovered_worker_v3_roster_v1::<R>,
     )
+    .map(|(admission, _current)| admission)
 }
 
 /// Descriptor-level strict V3 application recovery used by the public startup boundary.
@@ -554,6 +602,7 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
         ApplicationRegistrationModeV1::Required,
         |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
     )
+    .map(|(admission, _current)| admission)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -580,6 +629,7 @@ where
         ApplicationRegistrationModeV1::Required,
         admit_recovered_worker_v3_roster_v1::<R>,
     )
+    .map(|(admission, _current)| admission)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -595,7 +645,10 @@ fn consume_worker_v3_application_handoff_with_admission_v1<Admission>(
     admit: impl FnOnce(
         RecoveredWorkerV3LoadEnvelopeV2,
     ) -> Result<Admission, RecoveredWorkerV3AdmissionErrorV1>,
-) -> Result<Admission, WorkerV3ApplicationDescriptorHandoffErrorV1>
+) -> Result<
+    (Admission, DurableCurrentLinkPublicationTokenV1),
+    WorkerV3ApplicationDescriptorHandoffErrorV1,
+>
 where
     Admission: WorkerV3ApplicationHandoffAdmissionV1,
 {
@@ -714,8 +767,7 @@ where
             .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
         retained.revalidate()
     })?;
-    drop(current);
-    Ok(recovered.retain_application_descriptors(retained))
+    Ok((recovered.retain_application_descriptors(retained), current))
 }
 
 fn worker_v2_handoff_environment_names() -> [&'static str; 5] {

@@ -115,11 +115,13 @@ pub mod __hardware_test {
 
 #[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
-    ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+    ApplicationDescriptorHandoffErrorV1, RegisteredWorkerV3CustodianApplicationV1,
+    WorkerV3ApplicationDescriptorHandoffErrorV1,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use application_descriptor_handoff::{
+    consume_inherited_worker_v3_application_custodian_handoff_v1,
     consume_inherited_worker_v3_application_handoff_v1,
     consume_inherited_worker_v3_application_roster_handoff_v1,
 };
@@ -330,6 +332,10 @@ pub use worker_v3_verification_admission::{
     InertWorkerV3ConditionalFillSubjectV1, PendingWorkerV3ConditionalFillArtifactV1,
     RetainedWorkerV3ConditionalFillProofV1, WorkerV3ConditionalFillPendingErrorV1,
     WorkerV3ConditionalFillRetainedErrorV1, execute_retained_worker_v3_conditional_fill_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use worker_v3_verification_admission::{
+    RemoteConditionalFillArtifactV1, WorkerV3RemoteConditionalFillErrorV1,
 };
 #[cfg(feature = "worker-v3-verifier-test-support")]
 #[doc(hidden)]

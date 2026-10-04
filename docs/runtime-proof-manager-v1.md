@@ -93,10 +93,11 @@ separate evidence boundary.
 ## Remaining Multi-GPU Gates
 
 The host and production supervisor still select the legacy registration route.
-Switching them requires the complete deployment above, the consuming
-CustodianReady/proof client and remote conditional owner, not acceptance of
-matching session bytes alone. Complete that
-owner and its existing per-device native invocation join, then qualify ordinary
+Switching them requires the complete deployment above. The
+[consuming CustodianReady/proof client and host remote artifact](runtime-application-proof-client-v1.md)
+are now implemented, but their composition with this observed manager, actual proof
+and production FD195 audit remains unqualified. Complete that campaign and the
+per-device native invocation join, then qualify ordinary
 two-GPU compute, upload, PUBLIC XGMI and guarded readback in both directions.
 Manager proof probing, settlement-driven release/reuse, actual systemd deployment
 qualification and full ordinary-application proof composition remain open.

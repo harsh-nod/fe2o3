@@ -27,6 +27,11 @@ mod subject;
 #[cfg(target_os = "linux")]
 pub use subject::InertWorkerV3ConditionalFillSubjectV1;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod remote;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use remote::{RemoteConditionalFillArtifactV1, WorkerV3RemoteConditionalFillErrorV1};
+
 #[cfg(target_os = "linux")]
 mod retained;
 #[cfg(target_os = "linux")]
@@ -167,6 +172,30 @@ impl<'evidence> ConditionalFillArtifactView<'evidence> {
         machine: &CheckedGfx942FillAnalysisV1<'_>,
     ) -> Result<[u8; 32], WorkerV3ConditionalFillAssociationErrorV1> {
         use WorkerV3ConditionalFillAssociationErrorV1 as E;
+        let source = self.check_program(program)?;
+        let bytes = machine.kernel().code_object();
+        if bytes != self.finalized {
+            return Err(E::Machine("finalized payload"));
+        }
+        if ContentIdentityV1::calculate(bytes) != self.finalizer.finalized_hsaco_identity() {
+            return Err(E::Machine("finalizer identity"));
+        }
+        if machine.kernel().binding() != self.binding {
+            return Err(E::Machine("selected descriptor"));
+        }
+        if program.function_symbol() != self.descriptor.entry_name().as_str()
+            || machine.entry_symbol() != program.function_symbol()
+        {
+            return Err(E::Machine("entry symbol"));
+        }
+        derive_worker_v3_conditional_fill_host_contract_v1(program, &source)
+    }
+
+    fn check_program(
+        &self,
+        program: &CheckedConditionalFillProgramV1<'_>,
+    ) -> Result<CompilerDescriptorSourceV1, WorkerV3ConditionalFillAssociationErrorV1> {
+        use WorkerV3ConditionalFillAssociationErrorV1 as E;
         let receipts = self.handoff.capsule().receipts();
         let inputs = program.inputs();
         for (matches, field) in [
@@ -253,22 +282,7 @@ impl<'evidence> ConditionalFillArtifactView<'evidence> {
         {
             return Err(E::Target);
         }
-        let bytes = machine.kernel().code_object();
-        if bytes != self.finalized {
-            return Err(E::Machine("finalized payload"));
-        }
-        if ContentIdentityV1::calculate(bytes) != self.finalizer.finalized_hsaco_identity() {
-            return Err(E::Machine("finalizer identity"));
-        }
-        if machine.kernel().binding() != self.binding {
-            return Err(E::Machine("selected descriptor"));
-        }
-        if program.function_symbol() != self.descriptor.entry_name().as_str()
-            || machine.entry_symbol() != program.function_symbol()
-        {
-            return Err(E::Machine("entry symbol"));
-        }
-        derive_worker_v3_conditional_fill_host_contract_v1(program, &source)
+        Ok(source)
     }
 }
 

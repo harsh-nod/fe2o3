@@ -450,8 +450,17 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
     #[cfg(target_arch = "x86_64")]
     pub fn admit_production_application_service()
     -> Result<Self, WorkerV3CompilerCurrentRecordAuditErrorV1> {
-        let client = CompilerExecutionClientV1::admit_inherited_child(
+        Self::admit_production_application_service_with_timeout(
             WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
+        )
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn admit_production_application_service_with_timeout(
+        timeout: std::time::Duration,
+    ) -> Result<Self, WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        let client = CompilerExecutionClientV1::admit_inherited_child(
+            timeout.min(WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1),
         )
         .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
         let deployment = ProductionCompilerExecutionDeploymentV1::open()

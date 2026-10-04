@@ -13,6 +13,8 @@ use std::fmt;
 
 const DOMAIN: &[u8] = b"FE2O3/WORKER-V3-CONDITIONAL-FILL-SUBJECT/V1\0";
 const CANONICAL_BYTES: usize = DOMAIN.len() + 32 + 32 + 1 + 40 + 40 + 32;
+// Stable wire discriminant; the test below checks it against the proof schema.
+const CONDITIONAL_FILL_BOUNDARY: u8 = 5;
 
 /// Identifies an exact checked compiler/proof association and its executed refinement.
 ///
@@ -82,6 +84,34 @@ impl fmt::Debug for InertWorkerV3ConditionalFillSubjectV1 {
 }
 
 impl InertWorkerV3ConditionalFillSubjectV1 {
+    // Private matching only: callers must retain the independently authenticated remote owner.
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn match_remote(
+        bytes: &[u8],
+        lineage: [u8; 32],
+        challenge: [u8; 32],
+    ) -> Option<Self> {
+        if bytes.len() != CANONICAL_BYTES || !bytes.starts_with(DOMAIN) {
+            return None;
+        }
+        let fields = &bytes[DOMAIN.len()..];
+        if fields[..32] != lineage
+            || fields[32..64] != challenge
+            || fields[64] != CONDITIONAL_FILL_BOUNDARY
+            || fields[65..97] == [0; 32]
+            || fields[97..105] == [0; 8]
+            || fields[105..137] == [0; 32]
+            || fields[137..145] == [0; 8]
+            || fields[145..177] == [0; 32]
+        {
+            return None;
+        }
+        Some(Self {
+            canonical: bytes.try_into().ok()?,
+            identity: ContentIdentityV1::calculate(bytes),
+        })
+    }
+
     pub(super) fn check<K: CompilerGeneratedKernelExpectationV1>(
         request: &WorkerV3VerificationRequestV1<'_, K>,
         refinement: &OwnedConditionalFillRefinementExecutionV1,
@@ -227,6 +257,7 @@ mod tests {
 
     #[test]
     fn conditional_subject_encoding_has_closed_stable_layout() {
+        assert_eq!(CONDITIONAL_FILL_BOUNDARY, fe2o3_functional_proof::FunctionalRefinementBoundaryV2::SemanticMirToGfx942FillDispatchConditional as u8);
         let bytes = roots().encode();
         assert_eq!(bytes, roots().encode());
         assert_eq!(&bytes[..DOMAIN.len()], DOMAIN);
@@ -240,6 +271,48 @@ mod tests {
         assert_eq!(&fields[105..137], &[4; 32]);
         assert_eq!(&fields[137..145], &[17, 18, 19, 20, 21, 22, 23, 24]);
         assert_eq!(&fields[145..], &[5; 32]);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn remote_subject_matches_closed_profile_without_importing_local_proof() {
+        let bytes = roots().encode();
+        let matched =
+            InertWorkerV3ConditionalFillSubjectV1::match_remote(&bytes, [1; 32], [2; 32]).unwrap();
+        assert_eq!(matched.canonical_bytes(), bytes);
+        assert!(!matched.grants_load_authority());
+        for at in 0..DOMAIN.len() + 65 {
+            let mut changed = bytes;
+            changed[at] ^= 1;
+            assert!(
+                InertWorkerV3ConditionalFillSubjectV1::match_remote(&changed, [1; 32], [2; 32])
+                    .is_none()
+            );
+        }
+        for range in [65..97, 97..105, 105..137, 137..145, 145..177] {
+            let mut changed = bytes;
+            changed[DOMAIN.len() + range.start..DOMAIN.len() + range.end].fill(0);
+            assert!(
+                InertWorkerV3ConditionalFillSubjectV1::match_remote(&changed, [1; 32], [2; 32])
+                    .is_none()
+            );
+        }
+        for length in 0..bytes.len() {
+            assert!(
+                InertWorkerV3ConditionalFillSubjectV1::match_remote(
+                    &bytes[..length],
+                    [1; 32],
+                    [2; 32]
+                )
+                .is_none()
+            );
+        }
+        let mut oversized = bytes.to_vec();
+        oversized.push(0);
+        assert!(
+            InertWorkerV3ConditionalFillSubjectV1::match_remote(&oversized, [1; 32], [2; 32])
+                .is_none()
+        );
     }
 
     #[test]

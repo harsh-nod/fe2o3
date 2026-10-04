@@ -1,20 +1,14 @@
 //! Application-first registration over the one inherited proof transport.
 
+use super::transport::check_deadline;
 use super::*;
-use std::io::{IoSlice, IoSliceMut};
-use std::mem::MaybeUninit;
 use std::time::{Duration, Instant};
 
 use fe2o3_process_identity::pidfd::ReceivedProcessPidfdV1;
 use fe2o3_runtime_protocol::{
-    WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1, WorkerV3ApplicationInputOccurrenceV1,
-    WorkerV3ApplicationRegistrationInputsV1, WorkerV3ApplicationSessionKindV1 as Kind,
-    WorkerV3ApplicationSessionMessageV1 as Message,
+    WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationRegistrationInputsV1,
+    WorkerV3ApplicationSessionKindV1 as Kind, WorkerV3ApplicationSessionMessageV1 as Message,
     WorkerV3ApplicationSessionTranscriptV1 as Transcript,
-};
-use rustix::net::{
-    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
-    SendFlags, recvmsg, sendmsg,
 };
 
 const MAX_STARTUP: Duration = Duration::from_secs(120);
@@ -65,7 +59,7 @@ impl RegisteredApplicationProofEndpointV1 {
     }
 }
 
-fn require_connected(endpoint: &RetainedApplicationProofEndpointV1) -> Result<()> {
+pub(super) fn require_connected(endpoint: &RetainedApplicationProofEndpointV1) -> Result<()> {
     let mut entry = libc::pollfd {
         fd: endpoint.peer.as_raw_fd(),
         events: libc::POLLRDHUP,
@@ -97,6 +91,30 @@ impl RetainedApplicationProofEndpointV1 {
         inputs: WorkerV3ApplicationRegistrationInputsV1,
         deadline: Instant,
     ) -> Result<RegisteredApplicationProofEndpointV1> {
+        let accepted = self.begin_registration(inputs, deadline)?;
+        let ready = receive(&accepted.endpoint, Some(&accepted.root), deadline)?;
+        if ready.message.kind() != Kind::Ready
+            || ready.sender != accepted.sender
+            || ready.message.transcript() != Some(accepted.transcript)
+        {
+            return Err(invalid("registration Ready sender or transcript mismatch"));
+        }
+        let registered = RegisteredApplicationProofEndpointV1 {
+            endpoint: accepted.endpoint,
+            root: accepted.root,
+            sender: accepted.sender,
+            transcript: accepted.transcript,
+        };
+        registered.revalidate()?;
+        check_deadline(deadline)?;
+        Ok(registered)
+    }
+
+    pub(super) fn begin_registration(
+        self,
+        inputs: WorkerV3ApplicationRegistrationInputsV1,
+        deadline: Instant,
+    ) -> Result<AcceptedRegistration> {
         check_deadline(deadline)?;
         if deadline.saturating_duration_since(Instant::now()) > MAX_STARTUP {
             return Err(invalid(
@@ -127,6 +145,7 @@ impl RetainedApplicationProofEndpointV1 {
             .registration()
             .ok_or_else(|| invalid("Challenge omitted registration binding"))?;
         let handoff = binding.compiler_handoff();
+        let envelope = binding.expectation().envelope();
         let (device, inode, mode) = self.snapshot.object;
         let proof_input =
             WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(4, device, inode, mode)
@@ -153,31 +172,22 @@ impl RetainedApplicationProofEndpointV1 {
             .transcript()
             .ok_or_else(|| invalid("Challenge omitted transcript"))?;
         send(&self, Some(&root), &Message::accept(transcript), deadline)?;
-        let ready = receive(&self, Some(&root), deadline)?;
-        if ready.message.kind() != Kind::Ready
-            || ready.sender != challenge.sender
-            || ready.message.transcript() != Some(transcript)
-        {
-            return Err(invalid("registration Ready sender or transcript mismatch"));
-        }
-        let registered = RegisteredApplicationProofEndpointV1 {
+        Ok(AcceptedRegistration {
             endpoint: self,
             root,
             sender: challenge.sender,
             transcript,
-        };
-        registered.revalidate()?;
-        check_deadline(deadline)?;
-        Ok(registered)
+            envelope,
+        })
     }
 }
 
-fn check_deadline(deadline: Instant) -> Result<()> {
-    if Instant::now() >= deadline {
-        Err(ApplicationProofChannelErrorV1::Timeout)
-    } else {
-        Ok(())
-    }
+pub(super) struct AcceptedRegistration {
+    pub(super) endpoint: RetainedApplicationProofEndpointV1,
+    pub(super) root: ReceivedProcessPidfdV1,
+    pub(super) sender: CompilerExecutionClientProcessIdentityV1,
+    pub(super) transcript: Transcript,
+    pub(super) envelope: fe2o3_runtime_protocol::WorkerV3LoadEnvelopeIdentityV1,
 }
 
 fn fresh_nonce(deadline: Instant) -> Result<[u8; 32]> {
@@ -203,154 +213,50 @@ fn fresh_nonce(deadline: Instant) -> Result<[u8; 32]> {
     }
 }
 
-fn revalidate(
-    endpoint: &RetainedApplicationProofEndpointV1,
-    root: Option<&ReceivedProcessPidfdV1>,
-    deadline: Instant,
-) -> Result<()> {
-    check_deadline(deadline)?;
-    endpoint.revalidate()?;
-    if let Some(root) = root {
-        root.revalidate()?;
-    }
-    check_deadline(deadline)
-}
-
-fn wait(
-    endpoint: &RetainedApplicationProofEndpointV1,
-    events: i16,
-    deadline: Instant,
-) -> Result<()> {
-    check_deadline(deadline)?;
-    let millis = deadline
-        .saturating_duration_since(Instant::now())
-        .as_millis()
-        .clamp(1, 100) as i32;
-    let mut entry = libc::pollfd {
-        fd: endpoint.peer.as_raw_fd(),
-        events,
-        revents: 0,
-    };
-    // SAFETY: one initialized pollfd for the retained endpoint; bounded timeout.
-    if unsafe { libc::poll(&mut entry, 1, millis) } < 0 {
-        let error = rustix::io::Errno::from_io_error(&io::Error::last_os_error())
-            .unwrap_or(rustix::io::Errno::IO);
-        if error != rustix::io::Errno::INTR {
-            return Err(error.into());
-        }
-    } else if entry.revents & (libc::POLLERR | libc::POLLNVAL | libc::POLLHUP) != 0 {
-        return Err(invalid(
-            "application registration endpoint closed or failed",
-        ));
-    }
-    check_deadline(deadline)
-}
-
 fn send(
     endpoint: &RetainedApplicationProofEndpointV1,
     root: Option<&ReceivedProcessPidfdV1>,
     message: &Message,
     deadline: Instant,
 ) -> Result<()> {
-    loop {
-        revalidate(endpoint, root, deadline)?;
-        let mut ancillary = SendAncillaryBuffer::new(&mut []);
-        match sendmsg(
-            &endpoint.peer,
-            &[IoSlice::new(message.canonical_bytes())],
-            &mut ancillary,
-            SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
-        ) {
-            Ok(count) if count == message.canonical_bytes().len() => {
-                return revalidate(endpoint, root, deadline);
-            }
-            Ok(_) => return Err(invalid("partial application registration packet send")),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                wait(endpoint, libc::POLLOUT, deadline)?;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
+    let processes = root.into_iter().collect::<Vec<_>>();
+    super::transport::send(
+        endpoint,
+        &processes,
+        message.canonical_bytes(),
+        &[],
+        deadline,
+    )
 }
 
-struct Received {
-    message: Message,
-    sender: CompilerExecutionClientProcessIdentityV1,
-    rights: Vec<OwnedFd>,
+pub(super) struct Received {
+    pub(super) message: Message,
+    pub(super) sender: CompilerExecutionClientProcessIdentityV1,
+    pub(super) rights: Vec<OwnedFd>,
 }
 
-fn receive(
+pub(super) fn receive(
     endpoint: &RetainedApplicationProofEndpointV1,
     root: Option<&ReceivedProcessPidfdV1>,
     deadline: Instant,
 ) -> Result<Received> {
-    loop {
-        revalidate(endpoint, root, deadline)?;
-        let mut bytes = [0; WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1];
-        let mut space =
-            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(1))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-        let received = match recvmsg(
-            &endpoint.peer,
-            &mut [IoSliceMut::new(&mut bytes)],
-            &mut ancillary,
-            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-        ) {
-            Ok(received) => received,
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                wait(endpoint, libc::POLLIN, deadline)?;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let mut credentials = None;
-        let mut rights = Vec::with_capacity(1);
-        let mut rights_messages = 0;
-        let mut invalid_ancillary = false;
-        for message in ancillary.drain() {
-            match message {
-                RecvAncillaryMessage::ScmCredentials(value) => {
-                    if credentials.replace(value).is_some() {
-                        invalid_ancillary = true;
-                    }
-                }
-                RecvAncillaryMessage::ScmRights(value) => {
-                    rights_messages += 1;
-                    rights.extend(value);
-                }
-                _ => invalid_ancillary = true,
-            }
-        }
-        if received.bytes == 0
-            || received.bytes > bytes.len()
-            || !(received.flags - ReturnFlags::CMSG_CLOEXEC).is_empty()
-            || invalid_ancillary
-            || rights.len() > 1
-            || rights_messages != usize::from(!rights.is_empty())
-        {
-            return Err(invalid(
-                "registration packet or ancillary roster is malformed",
-            ));
-        }
-        let credentials = credentials.ok_or_else(|| invalid("registration sender is absent"))?;
-        let sender = CompilerExecutionClientProcessIdentityV1::new(
-            credentials.pid.as_raw_nonzero().get() as u32,
-            credentials.uid.as_raw(),
-            credentials.gid.as_raw(),
-        )
-        .map_err(|_| invalid("invalid registration sender"))?;
-        let message = Message::decode(&bytes[..received.bytes])
-            .map_err(|_| invalid("noncanonical application registration packet"))?;
-        if rights.len() != message.rights() {
-            return Err(invalid("registration descriptor count differs from phase"));
-        }
-        revalidate(endpoint, root, deadline)?;
-        return Ok(Received {
-            message,
-            sender,
-            rights,
-        });
+    let processes = root.into_iter().collect::<Vec<_>>();
+    let received = super::transport::receive(
+        endpoint,
+        &processes,
+        super::transport::ReceiveProfile::Registration,
+        deadline,
+    )?;
+    let message = Message::decode(&received.bytes)
+        .map_err(|_| invalid("noncanonical application registration packet"))?;
+    if received.rights.len() != message.rights() {
+        return Err(invalid("registration descriptor count differs from phase"));
     }
+    Ok(Received {
+        message,
+        sender: received.sender,
+        rights: received.rights,
+    })
 }
 
 #[cfg(test)]

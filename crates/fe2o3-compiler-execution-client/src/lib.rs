@@ -27,8 +27,9 @@ mod supervisor_handoff;
 
 pub use application_channel::{
     ApplicationProofChannelErrorV1, ApplicationProofChildSetupV1, ApplicationProofTransferPeerV1,
-    PreparedApplicationProofChannelV1, RegisteredApplicationProofEndpointV1,
-    RetainedApplicationProofEndpointV1,
+    PreparedApplicationProofChannelV1, RegisteredApplicationCustodianV1,
+    RegisteredApplicationProofEndpointV1, RetainedApplicationProofEndpointV1,
+    RetainedApplicationProofV1,
 };
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,

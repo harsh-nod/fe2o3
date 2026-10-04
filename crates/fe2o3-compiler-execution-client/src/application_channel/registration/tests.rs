@@ -1,7 +1,15 @@
 use super::*;
+use rustix::net::{
+    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
+    SendFlags, recvmsg, sendmsg,
+};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
+use std::{
+    io::{IoSlice, IoSliceMut},
+    mem::MaybeUninit,
+};
 
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
@@ -20,6 +28,8 @@ const MODE: &str = "FE2O3_TEST_REGISTRATION_MODE";
 const CASE: &str = "FE2O3_TEST_REGISTRATION_CASE";
 const FD: &str = "FE2O3_TEST_REGISTRATION_FD";
 const PACKET: &str = "FE2O3_TEST_REGISTRATION_PACKET";
+
+mod custodian;
 
 fn signal(fd: &OwnedFd, signal: i32) {
     // SAFETY: the original fixture pidfd identifies only this campaign's retained process.
@@ -341,6 +351,14 @@ fn registration_helper() {
     // SAFETY: the fixture parent transfers exactly one descriptor to this subprocess.
     let fd = unsafe { OwnedFd::from_raw_fd(raw) };
     rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC).unwrap();
+    if mode == "custodian_controller" {
+        custodian::controller(fd, &case);
+        return;
+    }
+    if mode == "custodian_root" {
+        custodian::root_sender(fd);
+        return;
+    }
     if mode == "root_once" || mode == "foreign_ready" {
         let hex = std::env::var(PACKET).unwrap();
         let bytes: Vec<_> = (0..hex.len() / 2)
@@ -401,9 +419,23 @@ fn registration_helper() {
         let (occurrence, descriptors, expectation, challenge) =
             inputs(setup.descriptor(), prepared.setup.snapshot.object);
         let mut command = helper("app", &case, setup.descriptor());
+        let report = if case == "custodian_root_after" {
+            command.env(custodian::CONTROL, fd.as_raw_fd().to_string());
+            Some(fd.as_raw_fd())
+        } else {
+            None
+        };
         // SAFETY: the prepared owner remains retained while the fork child exposes its endpoint.
         unsafe {
-            command.pre_exec(move || setup.expose_before_exec());
+            command.pre_exec(move || {
+                setup.expose_before_exec()?;
+                if let Some(raw) = report
+                    && libc::fcntl(raw, libc::F_SETFD, 0) != 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
         }
         let mut app = ChildGuard(command.spawn().unwrap());
         let peer = prepared.after_spawn();
@@ -424,6 +456,10 @@ fn registration_helper() {
         return;
     }
     assert_eq!(mode, "app");
+    #[cfg(target_arch = "x86_64")]
+    if custodian::strict_allowlist() {
+        custodian::install_strict_allowlist();
+    }
     let endpoint = RetainedApplicationProofEndpointV1::admit_inherited(fd).unwrap();
     let (occurrence, descriptors, expectation, challenge) =
         inputs(endpoint.peer.as_raw_fd(), endpoint.descriptor_identity());
@@ -435,7 +471,13 @@ fn registration_helper() {
     )
     .unwrap();
     #[cfg(target_arch = "x86_64")]
-    deny_process_and_socket_creation();
+    if !custodian::strict_allowlist() {
+        deny_process_and_socket_creation();
+    }
+    if case.starts_with("custodian_") {
+        custodian::application(endpoint, inputs, &case);
+        return;
+    }
     let duration = if case == "timeout" {
         Duration::from_millis(80)
     } else {
@@ -487,10 +529,10 @@ fn registration_helper() {
                 Some("registration descriptor count differs from phase")
             }
             "extra_pidfd" | "extra_bytes" => {
-                Some("registration packet or ancillary roster is malformed")
+                Some("application packet or ancillary roster is malformed")
             }
             "short" => Some("noncanonical application registration packet"),
-            "wrong_ready" | "duplicate_challenge" | "foreign_ready" => {
+            "wrong_ready" | "duplicate_challenge" | "foreign_ready" | "proof_ready" => {
                 Some("registration Ready sender or transcript mismatch")
             }
             _ => None,
@@ -648,6 +690,7 @@ fn run_case(case: &str, root_campaign: bool) {
             | "duplicate_challenge"
             | "foreign_ready"
             | "live_root_closed_session"
+            | "proof_ready"
     ) {
         let (accept, rights) = receive_test(&peer);
         assert!(rights.is_empty());
@@ -666,6 +709,16 @@ fn run_case(case: &str, root_campaign: bool) {
         };
         let ready = if case == "duplicate_challenge" {
             challenge
+        } else if case == "proof_ready" {
+            Message::custodian_ready(
+                fe2o3_runtime_protocol::WorkerV3ApplicationProofSessionV1::new(
+                    transcript,
+                    [20; 32],
+                    [21; 32],
+                    (std::process::id(), 1001, 1001),
+                )
+                .unwrap(),
+            )
         } else {
             Message::ready(transcript)
         };
@@ -693,7 +746,7 @@ fn run_case(case: &str, root_campaign: bool) {
             cargo.wait();
             return;
         }
-        let rights = if matches!(case, "ready_rights" | "duplicate_challenge") {
+        let rights = if matches!(case, "ready_rights" | "duplicate_challenge" | "proof_ready") {
             vec![root_pidfd.as_fd()]
         } else {
             vec![]
@@ -755,6 +808,7 @@ fn root_registration_transport_campaign() {
         "root_death_ready",
         "separate_root_positive",
         "foreign_ready",
+        "proof_ready",
         "wrong_coordinate",
         "wrong_object",
     ] {

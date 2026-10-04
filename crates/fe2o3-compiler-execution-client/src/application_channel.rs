@@ -52,7 +52,10 @@ impl From<fe2o3_process_identity::pidfd::PidfdObservationErrorV1>
     }
 }
 
+mod custodian;
 mod registration;
+mod transport;
+pub use custodian::{RegisteredApplicationCustodianV1, RetainedApplicationProofV1};
 pub use registration::RegisteredApplicationProofEndpointV1;
 
 type Result<T> = std::result::Result<T, ApplicationProofChannelErrorV1>;
