@@ -140,8 +140,13 @@ impl CompilerExecutionClientProfileCapabilityV1 {
         )
         .map(File::from)
         .map_err(|error| format!("cannot open trusted client profile {profile_name:?}: {error}"))?;
-        let before =
-            validate_trusted_profile_file(&profile, expected_uid, expected_gid, profile_name)?;
+        let before = validate_trusted_file(
+            &profile,
+            expected_uid,
+            expected_gid,
+            profile_name,
+            COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
+        )?;
         let mut bytes = [0_u8; COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1];
         let mut offset = 0;
         while offset < bytes.len() {
@@ -153,8 +158,13 @@ impl CompilerExecutionClientProfileCapabilityV1 {
             }
             offset += read;
         }
-        let after =
-            validate_trusted_profile_file(&profile, expected_uid, expected_gid, profile_name)?;
+        let after = validate_trusted_file(
+            &profile,
+            expected_uid,
+            expected_gid,
+            profile_name,
+            COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
+        )?;
         if before != after {
             return Err("trusted client profile changed while it was read".to_owned());
         }
@@ -164,7 +174,7 @@ impl CompilerExecutionClientProfileCapabilityV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TrustedFileSnapshot {
+pub(super) struct TrustedFileSnapshot {
     device: u64,
     inode: u64,
     mode: u32,
@@ -178,7 +188,7 @@ struct TrustedFileSnapshot {
     changed_nanoseconds: i64,
 }
 
-fn validate_trusted_directory(
+pub(super) fn validate_trusted_directory(
     directory: &File,
     expected_uid: u32,
     expected_gid: u32,
@@ -207,11 +217,12 @@ fn validate_trusted_directory(
     require_absent_xattrs(directory, "trusted client-profile directory")
 }
 
-fn validate_trusted_profile_file(
+pub(super) fn validate_trusted_file(
     profile: &File,
     expected_uid: u32,
     expected_gid: u32,
     label: &str,
+    expected_len: usize,
 ) -> Result<TrustedFileSnapshot, String> {
     let descriptor_flags = rustix::io::fcntl_getfd(profile)
         .map_err(|error| format!("cannot inspect trusted client profile {label:?}: {error}"))?;
@@ -241,7 +252,7 @@ fn validate_trusted_profile_file(
         || snapshot.gid != expected_gid
         || snapshot.links != 1
         || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != TRUSTED_FILE_MODE
-        || snapshot.length != COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 as u64
+        || snapshot.length != expected_len as u64
     {
         return Err(format!(
             "trusted client profile {label:?} has invalid descriptor, type, owner, mode, link count, or length"

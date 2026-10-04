@@ -56,8 +56,12 @@ mod tests {
 
     impl Fixture {
         fn new(subject_seed: u8) -> Self {
-            let signing_key = SigningKey::from_bytes(&[0x51; 32]);
-            let anchor_signing_key = SigningKey::from_bytes(&[0x52; 32]);
+            Self::with_signing_seed(subject_seed, 0x51)
+        }
+
+        fn with_signing_seed(subject_seed: u8, signing_seed: u8) -> Self {
+            let signing_key = SigningKey::from_bytes(&[signing_seed; 32]);
+            let anchor_signing_key = SigningKey::from_bytes(&[signing_seed + 1; 32]);
             let policy = CompilerExecutionIssuerPolicyV1::new(
                 7,
                 CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
@@ -180,8 +184,44 @@ mod tests {
         let verified = attestation
             .verify(&fixture.policy, &fixture.carriage, verification_challenge)
             .unwrap();
-        WorkerV3CompilerCurrentRecordAuditV1 { verified }
+        WorkerV3CompilerCurrentRecordAuditV1::ordinary(verified)
     }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ordinary_and_canonical_audits_have_no_production_provenance() {
+        let fixture = Fixture::new(0x20);
+        let audit = direct_current_record_audit(&fixture, [0x91; 32]);
+        assert!(matches!(
+            audit.revalidate_production_deployment(),
+            Err(WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment)
+        ));
+        let bound = audit
+            .bind_exact_compiler_execution_v1(&fixture.subject, &fixture.carriage)
+            .unwrap();
+        assert!(matches!(
+            bound.revalidate_production_deployment(),
+            Err(WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment)
+        ));
+        let (verification, attestation) = canonical_current_record_evidence(&fixture, [0x92; 32]);
+        let imported = admit_worker_v3_compiler_current_record_evidence_v1(
+            &fixture.policy,
+            &fixture.subject,
+            &fixture.carriage,
+            [0x92; 32],
+            &verification,
+            &attestation,
+        )
+        .unwrap();
+        assert!(matches!(
+            imported.revalidate_production_deployment(),
+            Err(WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment)
+        ));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[path = "production.rs"]
+    mod production;
 
     fn canonical_current_record_evidence(
         fixture: &Fixture,

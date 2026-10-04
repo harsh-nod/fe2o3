@@ -1456,6 +1456,10 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         carriage: &CompilerExecutionReceiptCarriageV1,
         evidence: WorkerV3CompilerCurrentRecordAuditV1,
     ) -> Result<Self, WorkerV3CompilerExecutionEvidenceErrorV1> {
+        #[cfg(target_arch = "x86_64")]
+        evidence
+            .revalidate_optional_production_deployment()
+            .map_err(WorkerV3CompilerExecutionEvidenceErrorV1::ProductionDeployment)?;
         if carriage.request().subject() != subject {
             return Err(WorkerV3CompilerExecutionEvidenceErrorV1::RequestMismatch);
         }
@@ -1757,6 +1761,20 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         self.protected_policy_verification_sha256
     }
 
+    /// Rechecks original installed configuration custody, without another service exchange.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub fn revalidate_production_deployment(
+        &self,
+    ) -> Result<(), crate::WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        match &self._evidence {
+            WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence) => {
+                evidence.revalidate_production_deployment()
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            _ => Err(crate::WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment),
+        }
+    }
+
     pub const fn protected_worker_ledger_verification_sha256(&self) -> [u8; 32] {
         self.protected_worker_ledger_verification_sha256
     }
@@ -1812,6 +1830,7 @@ pub enum WorkerV3CompilerExecutionEvidenceErrorV1 {
     RequestMismatch,
     IdentityMismatch(&'static str),
     MissingAuthenticatedEvidence(&'static str),
+    ProductionDeployment(String),
 }
 
 /// Descriptive result returned by a reviewed V3 verifier.
@@ -4731,6 +4750,10 @@ impl fmt::Display for WorkerV3CompilerExecutionEvidenceErrorV1 {
                     "compiler current-record {field} evidence is missing"
                 )
             }
+            Self::ProductionDeployment(error) => write!(
+                formatter,
+                "compiler production deployment changed before evidence binding: {error}"
+            ),
         }
     }
 }

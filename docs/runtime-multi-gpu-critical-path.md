@@ -21,8 +21,13 @@ opcode coverage before clearing application admission.
    receipt. This proves the conditional projection, not native launch premises.
 3. The owned pending artifact now retains the original compiler/target/analyzer
    refinement, publication token, independently rechecked finalizer and fresh
-   exact compiler-current-record audit. Complete the protected compiler-deployment
-   and service-session join; signed test-key audit evidence alone is not that join.
+   exact compiler-current-record audit. Independently pinned production deployment
+   admission now retains fixed-path configuration provenance through that audit.
+   First supply bounded cross-UID compiler observation: the empty-capability issuer
+   cannot perform its current procfs/`pidfd_getfd` inspection of an ordinary compiler.
+   Keep signing unprivileged; do not relax the host's ptrace policy.
+   Qualify genuine compiler receipt acquisition and verification through the deployed
+   issuer and separate anchor; test-key responses do not complete that qualification.
    Preserve unconditional admission; never expose the pending state through existing
    unconditional executable/load APIs.
 4. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
@@ -44,6 +49,13 @@ treating copied signed records as original evidence custody.
 The [pending-admission checkpoint](evidence/dev-pending-fill-admission-2026-10-04/README.md)
 adds the concrete one-use service transaction under retained publication currentness.
 It remains distinct from production deployment approval and invocation authority.
+The [production-deployment checkpoint](evidence/dev-production-deployment-admission-2026-10-04/README.md)
+adds independently pinned configuration, namespace/path continuity and a concrete
+production auditor factory. Its 21 isolated cases use actual root-owned fixed paths
+but test-key responses, not a genuine deployed compiler/issuer campaign.
+A separate owned-process permission witness confirms that the current distinct-UID,
+empty-cap issuer profile lacks remote inspection permission. A narrowly scoped,
+authenticated observer handoff is the next production acquisition prerequisite.
 
 ## Reuse What Works
 
@@ -175,8 +187,9 @@ Its distinct boundary retains actual protected execution and strict signed impor
 The protected qualification includes six logical operand mutations and an
 equivalent alias rewrite, not merely fixed machine theorems with attached hashes.
 Owned pending custody and the concrete signed service transaction now pass native
-qualification. Complete the independently pinned production deployment association
-and consuming invocation transition next. Only then
+qualification. The independently pinned production factory is implemented; qualify
+it with the genuine deployed issuer and complete the consuming invocation transition
+next. Only then
 qualify admitted fill, tracked upload, native XGMI and readback on two GPUs in
 both directions.
 
@@ -186,12 +199,16 @@ bytes or holding self-referential borrowed views. Actual DATA pointers are patch
 queue-dispatch preparation layer, after host preparation. Discharge alignment,
 bounds, non-overflow and DATA/kernarg disjointness there before issue; a hash of the
 unpatched template is insufficient. Current-record audit evidence is also not
-protected compiler-key custody. Independently admit the fixed production client,
-supervisor and anchor configuration, verify their exact policy/UID/key links, and
-retain/recheck installed-path provenance around the exchange and later authorization.
-The existing hardened issuer already checks actual compiler occurrence, signing-key
-custody, ledger currentness and a live independent anchor before signing. Reuse that
-mechanism; do not trust the carriage's self-selected policy or mistake FD195 socket
+protected compiler-key custody. The production factory now admits the fixed client,
+supervisor and anchor configuration, verifies their exact policy/UID/key links, and
+retains/rechecks installed-path provenance around the exchange and evidence binding.
+Later invocation authorization must revalidate those original owners as well.
+The existing hardened issuer implements checks for actual compiler occurrence,
+signing-key custody, ledger currentness and a live independent anchor before signing.
+Its direct remote observation currently lacks the required cross-UID permission;
+that missing authority must be separated from signing and qualified before genuine
+acquisition can pass. Reuse the existing signing mechanism; do not trust the carriage's
+self-selected policy or mistake FD195 socket
 credentials for the transferred issuer's identity. No new signing protocol is needed
 for this trusted-local-root/kernel scope.
 

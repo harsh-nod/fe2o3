@@ -158,9 +158,17 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
         })
     }
 
+    /// Rechecks publication currentness only; production deployment is a separate fallible check.
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         self.admission
             .revalidate_retained_currentness_token(&self.current)
+    }
+    /// Rechecks retained production configuration without consuming another service connection.
+    #[cfg(target_arch = "x86_64")]
+    pub fn revalidate_production_deployment(
+        &self,
+    ) -> Result<(), WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        self.compiler_execution.revalidate_production_deployment()
     }
     pub fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.admission.lineage_identity()

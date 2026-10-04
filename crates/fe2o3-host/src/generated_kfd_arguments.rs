@@ -1091,7 +1091,7 @@ mod tests {
                 .unwrap();
         for argument_index in [0, 1] {
             let mut observation = packed.packing_observation().clone();
-            let mut duplicate = observation.buffers[0].clone();
+            let mut duplicate = observation.buffers[0];
             duplicate.argument_index = argument_index;
             observation.buffers.push(duplicate);
             observation.identity = packing_observation_identity(&observation).unwrap();

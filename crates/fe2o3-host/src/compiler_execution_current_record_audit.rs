@@ -5,6 +5,8 @@ use std::fmt;
 use std::time::Duration;
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
+#[cfg(target_arch = "x86_64")]
+use fe2o3_compiler_closure_capability::ProductionCompilerExecutionDeploymentV1;
 use fe2o3_compiler_execution_client::{
     CompilerExecutionClientErrorV1, CompilerExecutionClientV1,
     CompilerExecutionCurrentRecordChallengeV1,
@@ -116,10 +118,10 @@ impl<'evidence> WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence> {
 
 /// Move-only signed endpoint evidence for one exact Worker V3 compiler receipt.
 ///
-/// The evidence authenticates a fresh response under the receipt's pinned issuer key and a fresh
-/// signed recovery observation under the separately pinned external-anchor key. It remains
-/// non-authoritative because protected key custody and independently administered anchor deployment
-/// are separate production joins.
+/// The evidence authenticates a fresh response and external-anchor recovery observation. Ordinary
+/// admission uses the receipt's policy, which is not independent production trust. The production
+/// factory instead retains fixed-path deployment provenance and verifies against its policy.
+/// Neither result grants final verification, load or launch authority or continuous service liveness.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3CompilerCurrentRecordAuditV1;
@@ -129,9 +131,42 @@ impl<'evidence> WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence> {
 #[derive(Debug)]
 pub struct WorkerV3CompilerCurrentRecordAuditV1 {
     verified: VerifiedCompilerExecutionCurrentRecordV3,
+    #[cfg(target_arch = "x86_64")]
+    deployment: Option<ProductionCompilerExecutionDeploymentV1>,
 }
 
 impl WorkerV3CompilerCurrentRecordAuditV1 {
+    fn ordinary(verified: VerifiedCompilerExecutionCurrentRecordV3) -> Self {
+        Self {
+            verified,
+            #[cfg(target_arch = "x86_64")]
+            deployment: None,
+        }
+    }
+
+    /// Rechecks retained installed production configuration, not current service liveness.
+    ///
+    /// Ordinary audits and canonical-byte imports cannot acquire this provenance. This does not
+    /// perform a second fresh service exchange or grant verification, load or launch authority.
+    #[cfg(target_arch = "x86_64")]
+    pub fn revalidate_production_deployment(
+        &self,
+    ) -> Result<(), WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        self.deployment
+            .as_ref()
+            .ok_or(WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment)?
+            .revalidate()
+            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::ProductionDeployment)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn revalidate_optional_production_deployment(&self) -> Result<(), String> {
+        if let Some(deployment) = &self.deployment {
+            deployment.revalidate()?;
+        }
+        Ok(())
+    }
+
     /// Borrows the exact canonical records authenticated by this move-only audit.
     ///
     /// The returned view is authority-free and cannot outlive this owner. A downstream protected
@@ -199,8 +234,8 @@ impl WorkerV3CompilerCurrentRecordAuditV1 {
     ///
     /// Every V3 current-record coordinate is compared with the supplied subject and complete
     /// carriage before the signed attestation is retained. This transition still grants no final
-    /// verification, load, or launch authority; protected deployment trust and the remaining
-    /// refinement receipts must be joined by the crate-owned production verifier.
+    /// verification, load, or launch authority. Retained production deployment, when present, is
+    /// revalidated before binding; the remaining refinement and invocation obligations stay separate.
     pub fn bind_exact_compiler_execution_v1(
         self,
         subject: &InertCompilerExecutionSubjectV1,
@@ -270,7 +305,7 @@ pub(crate) fn admit_worker_v3_compiler_current_record_evidence_v1(
     WorkerV3CompilerExecutionVerificationV1::from_current_record_audit(
         subject,
         carriage,
-        WorkerV3CompilerCurrentRecordAuditV1 { verified },
+        WorkerV3CompilerCurrentRecordAuditV1::ordinary(verified),
     )
     .map_err(WorkerV3CompilerCurrentRecordEvidenceAdmissionErrorV1::Evidence)
 }
@@ -369,14 +404,20 @@ fn independently_recheck_current_record_v1(
 /// require_clone::<InheritedWorkerV3CompilerCurrentRecordAuditorV1>();
 /// ```
 pub struct InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
-    client: Option<CompilerExecutionClientV1>,
+    session: Option<CompilerCurrentRecordSessionV1>,
+}
+
+struct CompilerCurrentRecordSessionV1 {
+    client: CompilerExecutionClientV1,
+    #[cfg(target_arch = "x86_64")]
+    deployment: Option<ProductionCompilerExecutionDeploymentV1>,
 }
 
 impl fmt::Debug for InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("InheritedWorkerV3CompilerCurrentRecordAuditorV1")
-            .field("available", &self.client.is_some())
+            .field("available", &self.session.is_some())
             .field("authority", &"none")
             .finish()
     }
@@ -388,16 +429,39 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         CompilerExecutionClientV1::admit_inherited_child(
             WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
         )
-        .map(|client| Self {
-            client: Some(client),
-        })
+        .map(Self::from_client)
     }
 
-    #[cfg(test)]
     fn from_client(client: CompilerExecutionClientV1) -> Self {
         Self {
-            client: Some(client),
+            session: Some(CompilerCurrentRecordSessionV1 {
+                client,
+                #[cfg(target_arch = "x86_64")]
+                deployment: None,
+            }),
         }
+    }
+
+    /// Consumes FD195 and independently admits the fixed root-owned production deployment.
+    ///
+    /// No caller policy, path or sealed capability can supply production provenance. All failures
+    /// after FD admission close that endpoint; successful audit moves its original configuration
+    /// owners alongside the challenge-bound response. This is not a service-liveness lease.
+    #[cfg(target_arch = "x86_64")]
+    pub fn admit_production_application_service()
+    -> Result<Self, WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        let client = CompilerExecutionClientV1::admit_inherited_child(
+            WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
+        )
+        .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
+        let deployment = ProductionCompilerExecutionDeploymentV1::open()
+            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::ProductionDeployment)?;
+        Ok(Self {
+            session: Some(CompilerCurrentRecordSessionV1 {
+                client,
+                deployment: Some(deployment),
+            }),
+        })
     }
 
     /// Audits the exact compiler current record retained by one aggregate roster request.
@@ -462,17 +526,7 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         carriage: &CompilerExecutionReceiptCarriageV1,
     ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
     {
-        let client = self
-            .client
-            .take()
-            .ok_or(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)?;
-        if carriage.request().subject() != subject {
-            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch);
-        }
-        let verified = client
-            .verify_current_only(carriage.policy(), carriage.clone())
-            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
-        Ok(WorkerV3CompilerCurrentRecordAuditV1 { verified })
+        self.audit_exact_inner(subject, carriage, None)
     }
 
     fn audit_exact_with_challenge(
@@ -482,21 +536,50 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         expected_challenge: CompilerExecutionCurrentRecordChallengeV1,
     ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
     {
-        let client = self
-            .client
-            .take()
-            .ok_or(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)?;
+        self.audit_exact_inner(subject, carriage, Some(expected_challenge))
+    }
+
+    fn audit_exact_inner(
+        &mut self,
+        subject: &InertCompilerExecutionSubjectV1,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+        challenge: Option<CompilerExecutionCurrentRecordChallengeV1>,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    {
+        use WorkerV3CompilerCurrentRecordAuditErrorV1 as E;
+        let session = self.session.take().ok_or(E::AlreadyConsumed)?;
         if carriage.request().subject() != subject {
-            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch);
+            return Err(E::RequestMismatch);
         }
-        let verified = client
-            .verify_current_only_with_challenge(
-                carriage.policy(),
+        let policy = carriage.policy();
+        #[cfg(target_arch = "x86_64")]
+        let policy = if let Some(deployment) = &session.deployment {
+            deployment.revalidate().map_err(E::ProductionDeployment)?;
+            if deployment.policy() != policy {
+                return Err(E::PolicyMismatch);
+            }
+            deployment.policy()
+        } else {
+            policy
+        };
+        let transaction = match challenge {
+            Some(challenge) => session.client.verify_current_only_with_challenge(
+                policy,
                 carriage.clone(),
-                expected_challenge,
-            )
-            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
-        Ok(WorkerV3CompilerCurrentRecordAuditV1 { verified })
+                challenge,
+            ),
+            None => session.client.verify_current_only(policy, carriage.clone()),
+        };
+        // Revalidate even on a failed exchange, before reporting its transport/signature error.
+        #[cfg(target_arch = "x86_64")]
+        if let Some(deployment) = &session.deployment {
+            deployment.revalidate().map_err(E::ProductionDeployment)?;
+        }
+        Ok(WorkerV3CompilerCurrentRecordAuditV1 {
+            verified: transaction.map_err(E::Client)?,
+            #[cfg(target_arch = "x86_64")]
+            deployment: session.deployment,
+        })
     }
 }
 
@@ -522,6 +605,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3AuditorV1<K>
 pub enum WorkerV3CompilerCurrentRecordAuditErrorV1 {
     AlreadyConsumed,
     RequestMismatch,
+    PolicyMismatch,
+    MissingProductionDeployment,
+    ProductionDeployment(String),
     Client(CompilerExecutionClientErrorV1),
 }
 
@@ -597,6 +683,14 @@ impl fmt::Display for WorkerV3CompilerCurrentRecordAuditErrorV1 {
             Self::Client(error) => {
                 write!(formatter, "compiler current-record service failed: {error}")
             }
+            Self::PolicyMismatch => formatter
+                .write_str("compiler receipt policy differs from the installed production policy"),
+            Self::MissingProductionDeployment => formatter
+                .write_str("compiler audit has no installed production deployment provenance"),
+            Self::ProductionDeployment(error) => write!(
+                formatter,
+                "compiler production deployment changed or could not be admitted: {error}"
+            ),
         }
     }
 }
@@ -605,7 +699,11 @@ impl Error for WorkerV3CompilerCurrentRecordAuditErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
-            Self::AlreadyConsumed | Self::RequestMismatch => None,
+            Self::AlreadyConsumed
+            | Self::RequestMismatch
+            | Self::PolicyMismatch
+            | Self::MissingProductionDeployment
+            | Self::ProductionDeployment(_) => None,
         }
     }
 }
