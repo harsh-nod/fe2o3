@@ -60,6 +60,8 @@ files, deadlines and terminal failures. A separate component campaign installs
 Cargo's unmodified syscall allowlist after entering the test helper. It does not
 claim production pre-exec inheritance or initial-exec supervision.
 
+The [recorded campaign](evidence/dev-application-proof-client-2026-10-04/README.md)
+contains 53 isolated transport cases, CPU checks and their exact limits.
 Host CPU checks cover subject matching, existing admission regressions and opaque
 ownership. The new host constructor still needs a composed positive campaign with
 the observed manager handoff, actual controller proof and production FD195 audit.
