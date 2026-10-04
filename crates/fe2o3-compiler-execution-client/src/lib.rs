@@ -26,16 +26,15 @@ mod supervisor_handoff;
 
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
-    PendingCompilerExecutionChildChannelV1,
+    PendingCompilerExecutionChildChannelV1, RetainedCompilerExecutionChildV1,
 };
-pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
+pub use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientProcessIdentityV1,
+};
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,
 };
-
-/// Fixed rustc descriptor reserved for the compiler-execution service peer.
-pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
 
 /// Move-only caller-owned challenge for one terminal current-record verification.
 ///

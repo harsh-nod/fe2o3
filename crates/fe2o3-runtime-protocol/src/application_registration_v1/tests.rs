@@ -1,0 +1,303 @@
+use super::*;
+use crate::{
+    WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
+    WorkerV3LoadEnvelopeIdentityV1,
+};
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,
+    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionServiceLaunchManifestV1,
+};
+
+fn key(hex: &str) -> [u8; 32] {
+    std::array::from_fn(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+}
+
+fn fixture() -> WorkerV3ApplicationRegistrationBindingV1 {
+    let policy = CompilerExecutionIssuerPolicyV1::new(
+        1,
+        CompilerExecutionIssuerMeasurementV1::new([1; 32], 123).unwrap(),
+        CompilerExecutionIssuerMeasurementV1::new([2; 32], 456).unwrap(),
+        key("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
+        key("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"),
+    )
+    .unwrap();
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(
+        CompilerExecutionClientProcessIdentityV1::new(100, 1000, 1001).unwrap(),
+        CompilerExecutionServiceLaunchManifestV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(200, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6000, 7000).unwrap(),
+            &policy,
+        ),
+    )
+    .unwrap();
+    let occurrence = occurrence(&[1, 2, 3, 4], 10);
+    let expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+        WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(b"opaque envelope").unwrap(),
+        &occurrence,
+    );
+    WorkerV3ApplicationRegistrationBindingV1::new(
+        handoff,
+        occurrence,
+        WorkerV3ApplicationRegistrationDescriptorsV1::new(10, 11, 12, 13).unwrap(),
+        expectation,
+        WorkerV3ApplicationHandoffChallengeV1::from_bytes([11; 32]).unwrap(),
+    )
+    .unwrap()
+}
+
+fn occurrence(slots: &[u16], spawn: u8) -> WorkerV3ApplicationOccurrenceV1 {
+    WorkerV3ApplicationOccurrenceV1::new(
+        WorkerV3ApplicationIdentityV1::from_test_parts([3; 32], 1024),
+        [spawn; 32],
+        &slots
+            .iter()
+            .map(|&slot| WorkerV3ApplicationInputOccurrenceV1::new(slot, [slot as u8; 32]).unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+// Independent resealing permits semantic mutations to pass the outer integrity gate.
+fn reseal(bytes: &mut [u8]) {
+    let mut hash = Sha256::new();
+    hash.update(b"FE2O3/WORKER-V3/APPLICATION-REGISTRATION/V1\0");
+    hash.update(808u64.to_le_bytes());
+    hash.update(&bytes[..808]);
+    bytes[808..].copy_from_slice(&hash.finalize());
+}
+
+#[test]
+fn fixed_layout_round_trip_retains_full_original_binding() {
+    let value = fixture();
+    let bytes = value.canonical_bytes();
+    assert_eq!(bytes.len(), 840);
+    assert_eq!(
+        &bytes[..24],
+        b"F3AREG1\0\x01\0\0\0\x48\x03\0\0\0\0\0\0\0\0\0\0"
+    );
+    assert_eq!(&bytes[24..208], value.compiler_handoff().canonical_bytes());
+    assert_eq!(
+        &bytes[208..512],
+        value.occurrence().encode_canonical().unwrap()
+    );
+    assert_eq!(
+        &bytes[512..528],
+        &[10, 0, 0, 0, 11, 0, 0, 0, 12, 0, 0, 0, 13, 0, 0, 0]
+    );
+    assert_eq!(
+        &bytes[528..724],
+        value.expectation().encode_canonical().unwrap()
+    );
+    assert_eq!(
+        &bytes[724..808],
+        value.challenge().encode_canonical().unwrap()
+    );
+    assert_eq!(&bytes[808..], value.identity().as_bytes());
+    assert_eq!(
+        WorkerV3ApplicationRegistrationBindingV1::decode(bytes).unwrap(),
+        value
+    );
+    assert_eq!(value.descriptors().as_array(), [10, 11, 12, 13]);
+    assert_eq!(value.compiler_handoff().submitter().pid(), 100);
+    assert_eq!(
+        value.compiler_handoff().launch_manifest().client().pid(),
+        200
+    );
+}
+
+#[test]
+fn every_byte_mutation_and_nonexact_length_rejects() {
+    let value = fixture();
+    for index in 0..840 {
+        let mut bytes = *value.canonical_bytes();
+        bytes[index] ^= 1;
+        assert!(
+            WorkerV3ApplicationRegistrationBindingV1::decode(&bytes).is_err(),
+            "byte {index}"
+        );
+    }
+    for length in [0, 23, 184, 839, 841, 4096] {
+        assert_eq!(
+            WorkerV3ApplicationRegistrationBindingV1::decode(&vec![0; length]),
+            Err(WorkerV3ApplicationRegistrationErrorV1::Length)
+        );
+    }
+}
+
+#[test]
+fn exact_four_slot_profile_and_consistent_expectation_are_required() {
+    let value = fixture();
+    for slots in [
+        &[1, 2, 3][..],
+        &[1, 2, 3, 4, 5],
+        &[1, 2, 3, 5],
+        &[2, 3, 4, 5],
+    ] {
+        let occurrence = occurrence(slots, 10);
+        let expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+            value.expectation().envelope(),
+            &occurrence,
+        );
+        assert_eq!(
+            WorkerV3ApplicationRegistrationBindingV1::new(
+                value.handoff.clone(),
+                occurrence,
+                value.descriptors,
+                expectation,
+                value.challenge,
+            ),
+            Err(WorkerV3ApplicationRegistrationErrorV1::InputProfile)
+        );
+    }
+    assert_eq!(
+        WorkerV3ApplicationRegistrationBindingV1::new(
+            value.handoff.clone(),
+            occurrence(&[1, 2, 3, 4], 12),
+            value.descriptors,
+            value.expectation,
+            value.challenge,
+        ),
+        Err(WorkerV3ApplicationRegistrationErrorV1::ExpectationMismatch)
+    );
+}
+
+#[test]
+fn resealed_bad_coordinates_headers_and_nested_records_reject() {
+    let value = fixture();
+    for slot in 0..4 {
+        for invalid in [0, 1, 2, -1, i32::MIN, 195] {
+            let mut bytes = *value.canonical_bytes();
+            bytes[512 + slot * 4..516 + slot * 4].copy_from_slice(&invalid.to_le_bytes());
+            reseal(&mut bytes);
+            assert_eq!(
+                WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+                Err(WorkerV3ApplicationRegistrationErrorV1::Descriptors)
+            );
+        }
+        for other in 0..4 {
+            if slot == other {
+                continue;
+            }
+            let mut bytes = *value.canonical_bytes();
+            bytes[512 + slot * 4..516 + slot * 4]
+                .copy_from_slice(&(10 + i32::try_from(other).unwrap()).to_le_bytes());
+            reseal(&mut bytes);
+            assert_eq!(
+                WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+                Err(WorkerV3ApplicationRegistrationErrorV1::Descriptors)
+            );
+        }
+    }
+    assert!(WorkerV3ApplicationRegistrationDescriptorsV1::new(3, 4, 5, i32::MAX).is_ok());
+    for offset in [10, 11, 16, 23] {
+        let mut bytes = *value.canonical_bytes();
+        bytes[offset] = 1;
+        reseal(&mut bytes);
+        assert_eq!(
+            WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+            Err(WorkerV3ApplicationRegistrationErrorV1::Reserved)
+        );
+    }
+    for offset in [24, 208, 528, 724] {
+        let mut bytes = *value.canonical_bytes();
+        bytes[offset] ^= 1;
+        reseal(&mut bytes);
+        assert!(matches!(
+            WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+            Err(WorkerV3ApplicationRegistrationErrorV1::CompilerHandoff(_)
+                | WorkerV3ApplicationRegistrationErrorV1::ApplicationHandoff(_))
+        ));
+    }
+}
+
+#[test]
+fn valid_nested_substitution_cannot_break_cross_binding() {
+    let value = fixture();
+    let mut bytes = *value.canonical_bytes();
+    bytes[208..512].copy_from_slice(&occurrence(&[1, 2, 3, 4], 12).encode_canonical().unwrap());
+    reseal(&mut bytes);
+    assert_eq!(
+        WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+        Err(WorkerV3ApplicationRegistrationErrorV1::ExpectationMismatch)
+    );
+    let mut bytes = *value.canonical_bytes();
+    bytes[208..512].copy_from_slice(&occurrence(&[1, 2, 3, 5], 10).encode_canonical().unwrap());
+    reseal(&mut bytes);
+    assert_eq!(
+        WorkerV3ApplicationRegistrationBindingV1::decode(&bytes),
+        Err(WorkerV3ApplicationRegistrationErrorV1::InputProfile)
+    );
+}
+
+#[test]
+fn every_valid_binding_dimension_changes_identity_without_becoming_authority() {
+    let original = fixture();
+    for mutation in 0..7 {
+        let mut value = original.clone();
+        match mutation {
+            0 => {
+                value.handoff = CompilerExecutionSupervisorHandoffV1::new(
+                    CompilerExecutionClientProcessIdentityV1::new(101, 1000, 1001).unwrap(),
+                    value.handoff.launch_manifest().clone(),
+                )
+                .unwrap()
+            }
+            1 => value.occurrence = occurrence(&[1, 2, 3, 4], 12),
+            2 => {
+                value.descriptors =
+                    WorkerV3ApplicationRegistrationDescriptorsV1::new(10, 11, 12, 14).unwrap()
+            }
+            3 => {
+                value.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+                    WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(b"other envelope").unwrap(),
+                    &value.occurrence,
+                )
+            }
+            4 => {
+                value.challenge =
+                    WorkerV3ApplicationHandoffChallengeV1::from_bytes([12; 32]).unwrap()
+            }
+            5 | 6 => {
+                let mut inputs = value.occurrence.inputs().to_vec();
+                if mutation == 5 {
+                    inputs[3] = WorkerV3ApplicationInputOccurrenceV1::new(4, [99; 32]).unwrap();
+                }
+                value.occurrence = WorkerV3ApplicationOccurrenceV1::new(
+                    if mutation == 5 {
+                        value.occurrence.application()
+                    } else {
+                        WorkerV3ApplicationIdentityV1::from_test_parts([4; 32], 2048)
+                    },
+                    value.occurrence.spawn_identity(),
+                    &inputs,
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        value.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+            value.expectation.envelope(),
+            &value.occurrence,
+        );
+        let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+            value.handoff,
+            value.occurrence,
+            value.descriptors,
+            value.expectation,
+            value.challenge,
+        )
+        .unwrap();
+        assert_ne!(
+            changed.identity(),
+            original.identity(),
+            "dimension {mutation}"
+        );
+        assert_eq!(
+            WorkerV3ApplicationRegistrationBindingV1::decode(changed.canonical_bytes()).unwrap(),
+            changed
+        );
+        assert!(!changed.occurrence().authenticates_application_occurrence());
+        assert!(!changed.expectation().grants_launch_authority());
+    }
+}

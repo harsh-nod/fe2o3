@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
+mod application_registration_v1;
 mod static_application;
 mod worker_v3_load_envelope;
 mod worker_v3_load_envelope_v2;
@@ -21,6 +22,11 @@ pub use application_handoff_v3::{
     WorkerV3ApplicationHandoffProtocolErrorV1, WorkerV3ApplicationIdentityV1,
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceIdentityV1,
     WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1,
+};
+pub use application_registration_v1::{
+    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
+    WorkerV3ApplicationRegistrationDescriptorsV1, WorkerV3ApplicationRegistrationErrorV1,
+    WorkerV3ApplicationRegistrationIdentityV1,
 };
 pub use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,

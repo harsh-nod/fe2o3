@@ -290,7 +290,7 @@ impl WorkerV3ApplicationIdentityV1 {
     }
 
     #[cfg(test)]
-    const fn from_test_parts(sha256: [u8; IDENTITY_BYTES_V1], byte_len: u64) -> Self {
+    pub(super) const fn from_test_parts(sha256: [u8; IDENTITY_BYTES_V1], byte_len: u64) -> Self {
         Self { sha256, byte_len }
     }
 }

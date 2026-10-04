@@ -17,6 +17,9 @@ mod supervisor_handoff;
 mod supervisor_ready;
 mod worker_anchor_journal;
 
+/// Fixed child descriptor reserved for the compiler-execution service peer.
+pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
+
 /// Sole production runtime directory for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_V1: &str = "/run/fe2o3";
 

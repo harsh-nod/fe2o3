@@ -20,6 +20,12 @@ const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
 const TRANSFER_VERSION: u32 = 2;
 const TRANSFER_BYTES: usize = 24;
 
+mod retained_child;
+pub use retained_child::RetainedCompilerExecutionChildV1;
+
+#[cfg(test)]
+pub(crate) static RESERVED_CHILD_FD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Move-only service launch inputs bound to one still-live rustc child.
 ///
 /// The value grants no issuer, signing, compilation, publication, loading, or execution
@@ -188,13 +194,41 @@ impl PendingCompilerExecutionChildChannelV1 {
         }
         require_child_channel_deadline(deadline)?;
         let client_pidfd = open_pidfd(child_pid)?;
+        self.finish_with_pidfd(child_pid, client_pidfd, current_submitter()?, deadline)
+    }
+
+    /// Transfers a duplicate of the originally captured child pidfd, retaining cleanup custody.
+    pub fn finish_until_with_retained_child(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        require_child_channel_deadline(deadline)?;
+        let client_pidfd = child.clone_for_live_transfer()?;
+        let launch =
+            self.finish_with_pidfd(child.child_pid(), client_pidfd, child.submitter(), deadline)?;
+        child.validate_live_transfer()?;
+        require_child_channel_deadline(deadline)?;
+        Ok(launch)
+    }
+
+    fn finish_with_pidfd(
+        self,
+        child_pid: u32,
+        client_pidfd: OwnedFd,
+        submitter: CompilerExecutionClientProcessIdentityV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        if submitter != current_submitter()? {
+            return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
+        }
         wait_for_transfer(&self.receiver, &client_pidfd, deadline)?;
         let (service_peer, transferred_pid, transferred_parent_pid) =
             receive_service_peer(&self.receiver)?;
         if transferred_pid != child_pid {
             return Err(CompilerExecutionChildChannelErrorV1::ChildPidMismatch);
         }
-        if transferred_parent_pid != std::process::id() {
+        if transferred_parent_pid != submitter.pid() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentPidMismatch);
         }
         validate_seqpacket_peer(&service_peer)
@@ -206,12 +240,6 @@ impl PendingCompilerExecutionChildChannelV1 {
         }
         require_service_peer_live(&service_peer)?;
         require_pidfd_live(&client_pidfd)?;
-        let submitter = CompilerExecutionClientProcessIdentityV1::new(
-            transferred_parent_pid,
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw(),
-        )
-        .map_err(|_| CompilerExecutionChildChannelErrorV1::ParentPidMismatch)?;
         if submitter.uid() != client.uid() || submitter.gid() != client.gid() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
         }
@@ -223,6 +251,16 @@ impl PendingCompilerExecutionChildChannelV1 {
             submitter,
         })
     }
+}
+
+fn current_submitter()
+-> Result<CompilerExecutionClientProcessIdentityV1, CompilerExecutionChildChannelErrorV1> {
+    CompilerExecutionClientProcessIdentityV1::new(
+        std::process::id(),
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .map_err(|_| CompilerExecutionChildChannelErrorV1::ParentPidMismatch)
 }
 
 fn require_child_channel_deadline(
@@ -388,6 +426,8 @@ fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {
 }
 
 fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelErrorV1> {
+    #[cfg(test)]
+    PIDFD_OPEN_CALLS.set(PIDFD_OPEN_CALLS.get() + 1);
     // SAFETY: pidfd_open consumes one positive scalar PID and zero flags.
     let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0) };
     if descriptor < 0 {
@@ -404,6 +444,11 @@ fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelEr
     let pidfd = unsafe { OwnedFd::from_raw_fd(descriptor) };
     require_close_on_exec(&pidfd)?;
     Ok(pidfd)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PIDFD_OPEN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn wait_for_transfer(
@@ -604,6 +649,7 @@ pub enum CompilerExecutionChildChannelErrorV1 {
     ReservedDescriptorInUse,
     Descriptor(io::Error),
     Pidfd(io::Error),
+    ChildWait(io::Error),
     Poll(io::Error),
     Receive(io::Error),
     Timeout,
@@ -636,6 +682,7 @@ impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
                 write!(formatter, "rustc channel descriptor failed: {error}")
             }
             Self::Pidfd(error) => write!(formatter, "rustc child pidfd failed: {error}"),
+            Self::ChildWait(error) => write!(formatter, "original child is not waitable: {error}"),
             Self::Poll(error) => write!(formatter, "rustc channel poll failed: {error}"),
             Self::Receive(error) => write!(formatter, "rustc channel receive failed: {error}"),
             Self::Timeout => formatter.write_str("rustc channel absolute deadline expired"),
@@ -678,6 +725,7 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
         match self {
             Self::Descriptor(error)
             | Self::Pidfd(error)
+            | Self::ChildWait(error)
             | Self::Poll(error)
             | Self::Receive(error)
             | Self::PeerCredentials(error) => Some(error),

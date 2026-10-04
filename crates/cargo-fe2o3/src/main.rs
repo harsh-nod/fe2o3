@@ -2753,7 +2753,7 @@ fn run_application_with_handoff(
         }
     };
     let compiler_execution_readiness = match compiler_execution_boundary {
-        Some(boundary) => match boundary.finish(process.id()) {
+        Some(boundary) => match boundary.finish_application(spawned_ack.retained_child()) {
             Ok(readiness) => Some(readiness),
             Err(error) => {
                 drop(handoff);

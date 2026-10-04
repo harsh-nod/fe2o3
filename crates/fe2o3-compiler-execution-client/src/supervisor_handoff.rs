@@ -765,7 +765,6 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use rustix::net::{
@@ -775,9 +774,9 @@ mod tests {
 
     use super::*;
     use crate::PendingCompilerExecutionChildChannelV1;
+    use crate::child_channel::RESERVED_CHILD_FD_LOCK;
 
     static LISTENER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 
     struct NamedListener {
         root: PathBuf,

@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
-use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
+use fe2o3_compiler_execution_client::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, RetainedCompilerExecutionChildV1,
+};
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
     WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
@@ -853,7 +855,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                         .map_err(|error| format!("failed to encode V3 challenge: {error}"))?,
                 ),
             );
-        let protocol = Box::new(ApplicationHandoffExpectationV1 {
+        let custody = ApplicationHandoffCustodyV1::prepare(ApplicationHandoffExpectationV1 {
             occurrence,
             descriptors: [envelope_fd, artifact_directory_fd, ack_fd],
             expectation,
@@ -931,7 +933,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         Ok(PendingApplicationAck {
             read: ack_read,
             parent_write: Some(ack_write),
-            protocol,
+            custody,
             sandbox: Some(sandbox),
             reaper: Some(reaper),
             timeouts,
@@ -1059,7 +1061,7 @@ impl ApplicationHandoffFailure {
 pub(crate) struct PendingApplicationAck {
     read: File,
     parent_write: Option<File>,
-    protocol: Box<ApplicationHandoffExpectationV1>,
+    custody: Box<ApplicationHandoffCustodyV1>,
     sandbox: Option<PendingApplicationSandbox>,
     reaper: Option<ReaperReservation>,
     timeouts: ApplicationTimeouts,
@@ -1104,41 +1106,56 @@ impl ApplicationHandoffExpectationV1 {
     }
 }
 
+// Reserve both protocol and process storage before spawn; capture fills the existing allocation.
+struct ApplicationHandoffCustodyV1 {
+    child: Option<RetainedCompilerExecutionChildV1>,
+    protocol: ApplicationHandoffExpectationV1,
+}
+
+impl ApplicationHandoffCustodyV1 {
+    fn prepare(protocol: ApplicationHandoffExpectationV1) -> Box<Self> {
+        Box::new(Self {
+            child: None,
+            protocol,
+        })
+    }
+}
+
 struct OriginalApplicationHandoffV1 {
-    pidfd: OwnedFd,
-    pid: u32,
-    protocol: Box<ApplicationHandoffExpectationV1>,
+    custody: Box<ApplicationHandoffCustodyV1>,
 }
 
 impl OriginalApplicationHandoffV1 {
     fn capture(
         child: &Child,
-        protocol: Box<ApplicationHandoffExpectationV1>,
+        mut custody: Box<ApplicationHandoffCustodyV1>,
     ) -> Result<Self, String> {
-        // An exited but unreaped child is valid: a fast application can ACK and exit before
-        // the runner is scheduled. Unique Child custody prevents PID reuse during capture.
-        observe_leader_exit_without_reaping_until(child.id() as libc::pid_t, None)?;
-        let pid = rustix::process::Pid::from_raw(child.id() as libc::pid_t)
-            .ok_or_else(|| "invalid application child PID".to_string())?;
-        let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
-            .map_err(|error| format!("failed to retain original application pidfd: {error}"))?;
-        Ok(Self {
-            pidfd,
-            pid: child.id(),
-            protocol,
-        })
+        custody.child = Some(
+            RetainedCompilerExecutionChildV1::capture(child).map_err(|error| {
+                format!("failed to retain original application process: {error}")
+            })?,
+        );
+        Ok(Self { custody })
+    }
+
+    fn child(&self) -> &RetainedCompilerExecutionChildV1 {
+        self.custody
+            .child
+            .as_ref()
+            .expect("original handoff completed child capture")
+    }
+
+    fn protocol(&self) -> &ApplicationHandoffExpectationV1 {
+        &self.custody.protocol
     }
 
     fn validate_child(&self, child: &Child) -> Result<(), String> {
-        if self.pid != child.id() {
+        if self.child().child_pid() != child.id() {
             return Err("application ACK wait substituted the original child".to_string());
         }
-        let flags = rustix::io::fcntl_getfd(&self.pidfd)
-            .map_err(|error| format!("failed to inspect retained application pidfd: {error}"))?;
-        if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-            return Err("retained application pidfd lost CLOEXEC".to_string());
-        }
-        Ok(())
+        self.child()
+            .validate_custody()
+            .map_err(|error| format!("invalid retained application process: {error}"))
     }
 }
 
@@ -1170,7 +1187,7 @@ impl PendingApplicationAck {
             #[cfg(test)]
             test_hold: None,
         };
-        let application = OriginalApplicationHandoffV1::capture(child, self.protocol);
+        let application = OriginalApplicationHandoffV1::capture(child, self.custody);
         let sandbox = self
             .sandbox
             .take()
@@ -1214,6 +1231,14 @@ impl PendingApplicationAck {
 }
 
 impl SpawnedApplicationAck {
+    pub(crate) fn retained_child(&self) -> &RetainedCompilerExecutionChildV1 {
+        self.cleanup
+            .application
+            .as_ref()
+            .expect("spawned acknowledgment retains the original child")
+            .child()
+    }
+
     pub(crate) fn into_cleanup(self) -> ApplicationCleanup {
         self.cleanup
     }
@@ -1242,7 +1267,7 @@ impl SpawnedApplicationAck {
             self.ack_timeout,
             WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
         )
-        .and_then(|bytes| application.protocol.validate_ack(&bytes));
+        .and_then(|bytes| application.protocol().validate_ack(&bytes));
         match result {
             Ok(()) => Ok(ApplicationHandoffGuard {
                 cleanup: Some(self.cleanup),
@@ -2813,10 +2838,12 @@ mod tests {
         command.arg("30");
         let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
-        let application =
-            OriginalApplicationHandoffV1::capture(&child, Box::new(startup_tests::protocol()))
-                .unwrap();
-        let original_fd = application.pidfd.as_raw_fd();
+        let application = OriginalApplicationHandoffV1::capture(
+            &child,
+            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol()),
+        )
+        .unwrap();
+        let original_fd = application.child().test_child_pidfd().as_raw_fd();
         let timeout = Duration::from_millis(80);
         let started = Instant::now();
         let error = transfer_application_cleanup(
@@ -2850,13 +2877,16 @@ mod tests {
         {
             let jobs = supervisor.jobs.lock().unwrap();
             let application = jobs[0]._application.as_ref().unwrap();
-            assert_eq!(application.pidfd.as_raw_fd(), original_fd);
-            assert_eq!(application.pid, process_group as u32);
             assert_eq!(
-                application.protocol.occurrence,
+                application.child().test_child_pidfd().as_raw_fd(),
+                original_fd
+            );
+            assert_eq!(application.child().child_pid(), process_group as u32);
+            assert_eq!(
+                application.protocol().occurrence,
                 startup_tests::protocol().occurrence
             );
-            assert!(rustix::io::fcntl_getfd(&application.pidfd).is_ok());
+            assert!(rustix::io::fcntl_getfd(application.child().test_child_pidfd()).is_ok());
         }
 
         hold.store(false, Ordering::Release);
@@ -3082,10 +3112,12 @@ mod tests {
         command.arg("30");
         let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
-        let application =
-            OriginalApplicationHandoffV1::capture(&child, Box::new(startup_tests::protocol()))
-                .unwrap();
-        let original_fd = application.pidfd.as_raw_fd();
+        let application = OriginalApplicationHandoffV1::capture(
+            &child,
+            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol()),
+        )
+        .unwrap();
+        let original_fd = application.child().test_child_pidfd().as_raw_fd();
         let (completion, result) = mpsc::sync_channel(1);
         supervisor.panic_worker.store(true, Ordering::Release);
         supervisor.transfer(ReapJob {
@@ -3117,9 +3149,12 @@ mod tests {
         {
             let jobs = supervisor.jobs.lock().unwrap();
             let application = jobs[0]._application.as_ref().unwrap();
-            assert_eq!(application.pidfd.as_raw_fd(), original_fd);
-            assert_eq!(application.pid, process_group as u32);
-            assert!(rustix::io::fcntl_getfd(&application.pidfd).is_ok());
+            assert_eq!(
+                application.child().test_child_pidfd().as_raw_fd(),
+                original_fd
+            );
+            assert_eq!(application.child().child_pid(), process_group as u32);
+            assert!(rustix::io::fcntl_getfd(application.child().test_child_pidfd()).is_ok());
         }
 
         supervisor.finish_process().unwrap();

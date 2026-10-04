@@ -68,7 +68,7 @@ fn pending(child: &Child) -> PendingApplicationAck {
     PendingApplicationAck {
         read,
         parent_write: Some(write),
-        protocol: Box::new(protocol()),
+        custody: ApplicationHandoffCustodyV1::prepare(protocol()),
         sandbox: Some(PendingApplicationSandbox::test_reported_admission(Ok(
             child.id(),
         ))),
@@ -81,9 +81,10 @@ fn pending(child: &Child) -> PendingApplicationAck {
 
 fn queue_ack(pending: &mut PendingApplicationAck) {
     let bytes = pending
+        .custody
         .protocol
         .expectation
-        .acknowledgment(pending.protocol.challenge)
+        .acknowledgment(pending.custody.protocol.challenge)
         .encode_canonical()
         .unwrap();
     pending
@@ -103,10 +104,10 @@ fn spawned(pending: PendingApplicationAck, child: &Child) -> SpawnedApplicationA
 
 fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawFd) {
     let original = cleanup.application.as_ref().unwrap();
-    assert_eq!(original.pidfd.as_raw_fd(), descriptor);
-    assert_eq!(original.pid, child.id());
+    assert_eq!(original.child().test_child_pidfd().as_raw_fd(), descriptor);
+    assert_eq!(original.child().child_pid(), child.id());
     assert!(
-        rustix::io::fcntl_getfd(&original.pidfd)
+        rustix::io::fcntl_getfd(original.child().test_child_pidfd())
             .unwrap()
             .contains(rustix::io::FdFlags::CLOEXEC)
     );
@@ -117,10 +118,10 @@ fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawF
             .any(|line| line == format!("Pid:\t{}", child.id()))
     );
     let expected = protocol();
-    assert_eq!(original.protocol.occurrence, expected.occurrence);
-    assert_eq!(original.protocol.descriptors, expected.descriptors);
-    assert_eq!(original.protocol.expectation, expected.expectation);
-    assert_eq!(original.protocol.challenge, expected.challenge);
+    assert_eq!(original.protocol().occurrence, expected.occurrence);
+    assert_eq!(original.protocol().descriptors, expected.descriptors);
+    assert_eq!(original.protocol().expectation, expected.expectation);
+    assert_eq!(original.protocol().challenge, expected.challenge);
 }
 
 #[test]
@@ -132,13 +133,28 @@ fn startup_releases_ack_writers_before_service_wait() {
     ready_write.write_all(&[1]).unwrap();
     pending.test_ready_read = Some(ready_read);
     pending.test_ready_parent_write = Some(ready_write);
+    let allocation = std::ptr::from_ref(pending.custody.as_ref());
+    assert!(pending.custody.child.is_none());
     let mut spawned = spawned(pending, &child);
+    assert_eq!(
+        allocation,
+        std::ptr::from_ref(
+            spawned
+                .cleanup
+                .application
+                .as_ref()
+                .unwrap()
+                .custody
+                .as_ref()
+        )
+    );
     let original_fd = spawned
         .cleanup
         .application
         .as_ref()
         .unwrap()
-        .pidfd
+        .child()
+        .test_child_pidfd()
         .as_raw_fd();
     assert_original(&spawned.cleanup, &child, original_fd);
     let mut bytes = Vec::new();
@@ -150,7 +166,7 @@ fn startup_releases_ack_writers_before_service_wait() {
         .application
         .as_ref()
         .unwrap()
-        .protocol
+        .protocol()
         .validate_ack(&bytes)
         .unwrap();
     bytes.clear();
@@ -179,7 +195,8 @@ fn fast_ack_and_exit_retains_original_pidfd_through_active_handoff() {
         .application
         .as_ref()
         .unwrap()
-        .pidfd
+        .child()
+        .test_child_pidfd()
         .as_raw_fd();
     let active = match spawned.await_ack(&child) {
         Ok(active) => active,
@@ -198,13 +215,49 @@ fn fast_ack_and_exit_retains_original_pidfd_through_active_handoff() {
 }
 
 #[test]
+fn fast_exit_before_required_service_retains_original_cleanup() {
+    use crate::compiler_execution_boundary::{
+        CompilerExecutionBoundaryErrorV1, PreparedCompilerExecutionBoundaryV1,
+        tests::{client_profile, run_in_isolated_boundary_test_process},
+    };
+    use fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1;
+
+    if run_in_isolated_boundary_test_process(
+        "application_handoff::startup_tests::fast_exit_before_required_service_retains_original_cleanup",
+    ) {
+        return;
+    }
+    let profile = client_profile(8, 1_234);
+    let mut command = Command::new("/bin/true");
+    // SAFETY: only child-side session syscalls run before exec.
+    unsafe { command.pre_exec(establish_fresh_application_session) };
+    let boundary =
+        PreparedCompilerExecutionBoundaryV1::prepare_application_verifier(&profile, &mut command)
+            .unwrap();
+    let child = crate::process_execution::spawn(&mut command).unwrap();
+    wait_for_application_exit_without_reaping(&child).unwrap();
+    let mut pending = pending(&child);
+    queue_ack(&mut pending);
+    let spawned = spawned(pending, &child);
+    let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
+    assert!(matches!(
+        boundary.finish_application(spawned.retained_child()),
+        Err(CompilerExecutionBoundaryErrorV1::ChildChannel(
+            CompilerExecutionChildChannelErrorV1::ChildExited
+        ))
+    ));
+    assert_original(&spawned.cleanup, &child, original_fd);
+    terminate_application_group(child, spawned.into_cleanup()).unwrap();
+}
+
+#[test]
 fn missing_or_substituted_ack_keeps_original_cleanup_custody() {
     for changed in [false, true] {
         let child = exited_child();
         let mut pending = pending(&child);
         if changed {
             queue_ack(&mut pending);
-            pending.protocol.challenge =
+            pending.custody.protocol.challenge =
                 WorkerV3ApplicationHandoffChallengeV1::from_bytes([8; 32]).unwrap();
         }
         let spawned = spawned(pending, &child);
@@ -213,7 +266,8 @@ fn missing_or_substituted_ack_keeps_original_cleanup_custody() {
             .application
             .as_ref()
             .unwrap()
-            .pidfd
+            .child()
+            .test_child_pidfd()
             .as_raw_fd();
         let failure = match spawned.await_ack(&child) {
             Ok(_) => panic!("invalid ACK accepted"),
@@ -222,10 +276,19 @@ fn missing_or_substituted_ack_keeps_original_cleanup_custody() {
         let (message, cleanup) = failure.into_parts();
         assert!(message.contains("acknowledgment"), "{message}");
         assert_eq!(
-            cleanup.application.as_ref().unwrap().pidfd.as_raw_fd(),
+            cleanup
+                .application
+                .as_ref()
+                .unwrap()
+                .child()
+                .test_child_pidfd()
+                .as_raw_fd(),
             original_fd
         );
-        assert_eq!(cleanup.application.as_ref().unwrap().pid, child.id());
+        assert_eq!(
+            cleanup.application.as_ref().unwrap().child().child_pid(),
+            child.id()
+        );
         terminate_application_group(child, cleanup).unwrap();
     }
 }
@@ -240,7 +303,8 @@ fn substituted_child_rejects_without_losing_original_owner() {
         .application
         .as_ref()
         .unwrap()
-        .pidfd
+        .child()
+        .test_child_pidfd()
         .as_raw_fd();
     let failure = match spawned.await_ack(&other) {
         Ok(_) => panic!("substituted child accepted"),
@@ -272,7 +336,13 @@ fn sandbox_admission_failure_retains_captured_original_process() {
     let (message, cleanup) = failure.into_parts();
     assert!(message.contains("injected sandbox admission failure"));
     assert!(cleanup.sandbox.is_some());
-    let original_fd = cleanup.application.as_ref().unwrap().pidfd.as_raw_fd();
+    let original_fd = cleanup
+        .application
+        .as_ref()
+        .unwrap()
+        .child()
+        .test_child_pidfd()
+        .as_raw_fd();
     assert_original(&cleanup, &child, original_fd);
     terminate_application_group(child, cleanup).unwrap();
 }

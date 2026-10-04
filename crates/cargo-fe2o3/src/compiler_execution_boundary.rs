@@ -9,7 +9,7 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_compiler_execution_client::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionHandoffErrorV1,
     CompilerExecutionSupervisorCredentialsV1, MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1,
-    PendingCompilerExecutionChildChannelV1,
+    PendingCompilerExecutionChildChannelV1, RetainedCompilerExecutionChildV1,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionReceiptCarriageV1,
@@ -90,6 +90,21 @@ impl PreparedCompilerExecutionBoundaryV1 {
         self,
         child_pid: u32,
     ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
+        self.finish_inner(child_pid, None)
+    }
+
+    pub(crate) fn finish_application(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+    ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
+        self.finish_inner(child.child_pid(), Some(child))
+    }
+
+    fn finish_inner(
+        self,
+        child_pid: u32,
+        retained_child: Option<&RetainedCompilerExecutionChildV1>,
+    ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
         let Self {
             profile,
             policy,
@@ -98,9 +113,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         let deadline = Instant::now()
             .checked_add(COMPILER_EXECUTION_BOUNDARY_TIMEOUT)
             .ok_or(CompilerExecutionBoundaryErrorV1::DeadlineOverflow)?;
-        let launch = child_channel
-            .finish_until(child_pid, deadline)
-            .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        let launch = match retained_child {
+            Some(child) => child_channel.finish_until_with_retained_child(child, deadline),
+            None => child_channel.finish_until(child_pid, deadline),
+        }
+        .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
         let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
             profile.profile().supervisor_uid(),
             profile.profile().supervisor_gid(),
@@ -377,7 +394,7 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::os::unix::process::CommandExt;
 
     use ed25519_dalek::SigningKey;
@@ -393,7 +410,7 @@ mod tests {
 
     const ISOLATED_BOUNDARY_TEST_ENV: &str = "FE2O3_COMPILER_EXECUTION_BOUNDARY_ISOLATED_TEST_V1";
 
-    fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
+    pub(crate) fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
         match std::env::var_os(ISOLATED_BOUNDARY_TEST_ENV) {
             None => {}
             Some(value) if value == std::ffi::OsStr::new(test_name) => return false,
@@ -436,7 +453,10 @@ mod tests {
         .unwrap()
     }
 
-    fn client_profile(seed: u8, supervisor_uid: u32) -> CompilerExecutionClientProfileCapabilityV1 {
+    pub(crate) fn client_profile(
+        seed: u8,
+        supervisor_uid: u32,
+    ) -> CompilerExecutionClientProfileCapabilityV1 {
         CompilerExecutionClientProfileCapabilityV1::create(
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
                 supervisor_uid,
