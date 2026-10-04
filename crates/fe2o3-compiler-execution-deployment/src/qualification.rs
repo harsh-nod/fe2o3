@@ -242,6 +242,14 @@ pub(super) fn revalidate_prepared_qualification_with_parent_children(
     owner: (u32, u32),
     expected_parent_children: &[&str],
 ) -> Result<(), DeploymentVerificationErrorV1> {
+    reopen_prepared_qualification_parent(prepared, owner, expected_parent_children).map(drop)
+}
+
+pub(super) fn reopen_prepared_qualification_parent(
+    prepared: &PreparedCompilerExecutionQualificationV1,
+    owner: (u32, u32),
+    expected_parent_children: &[&str],
+) -> Result<File, DeploymentVerificationErrorV1> {
     revalidate_installed_deployment(&prepared.installed, owner)?;
     validate_sealed_base_image(&prepared.base)?;
     validate_directory_mode(
@@ -288,7 +296,7 @@ pub(super) fn revalidate_prepared_qualification_with_parent_children(
             "canonical qualification parent changed during enumeration",
         ));
     }
-    Ok(())
+    Ok(reopened)
 }
 
 fn open_qualification_parent(

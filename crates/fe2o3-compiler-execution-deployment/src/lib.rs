@@ -651,6 +651,17 @@ fn validate_directory_mode(
     expected_mode: u32,
     role: &'static str,
 ) -> Result<ObjectSnapshotV1, DeploymentVerificationErrorV1> {
+    let snapshot = validate_directory_metadata(directory, expected_owner, expected_mode, role)?;
+    require_no_xattrs(directory, role)?;
+    Ok(snapshot)
+}
+
+fn validate_directory_metadata(
+    directory: &File,
+    expected_owner: Option<(u32, u32)>,
+    expected_mode: u32,
+    role: &'static str,
+) -> Result<ObjectSnapshotV1, DeploymentVerificationErrorV1> {
     let descriptor_flags = rustix::io::fcntl_getfd(directory)
         .map_err(|source| io_error("inspect deployment directory descriptor flags", source))?;
     let status = rustix::fs::fcntl_getfl(directory)
@@ -677,7 +688,6 @@ fn validate_directory_mode(
             ),
         ));
     }
-    require_no_xattrs(directory, role)?;
     Ok(snapshot)
 }
 
@@ -2632,6 +2642,364 @@ mod tests {
             fs::read_dir(qualification_parent.path()).unwrap().count(),
             1
         );
+    }
+
+    fn staging_descriptor_inventory(
+        staged: &StagedCompilerExecutionQualificationV1,
+    ) -> Vec<(i32, ObjectSnapshotV1)> {
+        use std::os::fd::AsRawFd as _;
+        std::iter::once(staged.root_descriptor())
+            .chain(
+                ["base", "evidence", "root", "run", "state", "upper", "work"]
+                    .iter()
+                    .map(|name| staged.directory_descriptor(name)),
+            )
+            .map(|file| {
+                (
+                    file.as_raw_fd(),
+                    snapshot(&rustix::fs::fstat(file).unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn qualification_staging_refresh_preserves_exact_tree_and_cleanup() {
+        for explicit_cleanup in [false, true] {
+            let (prepared, parent, _base, _install) = prepared_for_staging();
+            let mut staged = staging::stage_compiler_execution_qualification_for_test_v1(
+                prepared,
+                current_owner(),
+            )
+            .unwrap();
+            let before = staging_descriptor_inventory(&staged);
+            let identities = (
+                staged.git_commit().to_owned(),
+                staged.manifest_sha256(),
+                staged.base_image_sha256(),
+            );
+            staging::refresh_mount_namespace_descriptors_for_test_v1(&mut staged, current_owner())
+                .unwrap();
+            let after = staging_descriptor_inventory(&staged);
+            assert_eq!(before.len(), 8);
+            for ((old_fd, old), (new_fd, new)) in before.iter().zip(&after) {
+                assert_ne!(old_fd, new_fd);
+                assert_eq!(old, new);
+            }
+            assert_eq!(
+                identities,
+                (
+                    staged.git_commit().to_owned(),
+                    staged.manifest_sha256(),
+                    staged.base_image_sha256()
+                )
+            );
+            if explicit_cleanup {
+                staged.cleanup().unwrap();
+            } else {
+                drop(staged);
+            }
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn qualification_staging_refresh_refuses_mutation_without_replacing_custody() {
+        for mutation in 0..5 {
+            let (prepared, parent, base, _install) = prepared_for_staging();
+            let mut staged = staging::stage_compiler_execution_qualification_for_test_v1(
+                prepared,
+                current_owner(),
+            )
+            .unwrap();
+            let before = staging_descriptor_inventory(&staged);
+            let root = parent.path().join(staged.run_name());
+            let expected = match mutation {
+                0 => {
+                    fs::set_permissions(root.join("upper"), fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    DeploymentVerificationErrorKindV1::InvalidMetadata
+                }
+                1 => {
+                    fs::write(root.join("evidence/unexpected"), b"hostile").unwrap();
+                    DeploymentVerificationErrorKindV1::InvalidInventory
+                }
+                2 => {
+                    fs::rename(root.join("base"), base.path().join("original-target")).unwrap();
+                    fs::create_dir(root.join("base")).unwrap();
+                    fs::set_permissions(root.join("base"), fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                    DeploymentVerificationErrorKindV1::InputChanged
+                }
+                3 => {
+                    fs::rename(&root, base.path().join("original-root")).unwrap();
+                    fs::create_dir(&root).unwrap();
+                    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+                    DeploymentVerificationErrorKindV1::InputChanged
+                }
+                4 => {
+                    fs::rename(parent.path(), base.path().join("original-parent")).unwrap();
+                    fs::create_dir(parent.path()).unwrap();
+                    fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
+                    DeploymentVerificationErrorKindV1::InputChanged
+                }
+                _ => unreachable!(),
+            };
+            let error = staging::refresh_mount_namespace_descriptors_for_test_v1(
+                &mut staged,
+                current_owner(),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), expected, "mutation {mutation}: {error}");
+            assert_eq!(
+                before.iter().map(|(fd, _)| *fd).collect::<Vec<_>>(),
+                staging_descriptor_inventory(&staged)
+                    .iter()
+                    .map(|(fd, _)| *fd)
+                    .collect::<Vec<_>>(),
+                "mutation {mutation} replaced custody",
+            );
+            if mutation == 3 {
+                fs::remove_dir(&root).unwrap();
+                fs::rename(base.path().join("original-root"), &root).unwrap();
+            }
+            if mutation == 4 {
+                fs::remove_dir(parent.path()).unwrap();
+                fs::rename(base.path().join("original-parent"), parent.path()).unwrap();
+            }
+            staged.cleanup().unwrap();
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a dedicated disposable user/mount/PID namespace with CAP_SYS_ADMIN"]
+    fn qualification_staging_refresh_attaches_only_current_namespace_targets() {
+        use rustix::mount::{
+            FsMountFlags, FsOpenFlags, MountAttrFlags, MountPropagationFlags, MoveMountFlags,
+            UnmountFlags, fsconfig_create, fsmount, fsopen, mount_change, move_mount, unmount,
+        };
+        assert_eq!(
+            std::env::var("FE2O3_PRIVATE_MOUNT_REGRESSION_V72").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let (prepared, parent, _base, _install) = prepared_for_staging();
+        let mut staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        let before = staging_descriptor_inventory(&staged);
+        let old_namespace = fs::metadata("/proc/thread-self/ns/mnt").unwrap();
+        rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS).unwrap();
+        mount_change(
+            "/",
+            MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+        )
+        .unwrap();
+        use std::os::unix::fs::MetadataExt as _;
+        assert_ne!(
+            old_namespace.ino(),
+            fs::metadata("/proc/thread-self/ns/mnt").unwrap().ino()
+        );
+        let context = fsopen("tmpfs", FsOpenFlags::FSOPEN_CLOEXEC).unwrap();
+        fsconfig_create(&context).unwrap();
+        let detached = fsmount(
+            &context,
+            FsMountFlags::FSMOUNT_CLOEXEC,
+            MountAttrFlags::MOUNT_ATTR_NODEV | MountAttrFlags::MOUNT_ATTR_NOSUID,
+        )
+        .unwrap();
+        let flags =
+            MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH | MoveMountFlags::MOVE_MOUNT_T_EMPTY_PATH;
+        assert_eq!(
+            move_mount(
+                &detached,
+                "",
+                staged.directory_descriptor("base"),
+                "",
+                flags
+            ),
+            Err(rustix::io::Errno::INVAL)
+        );
+        staging::refresh_mount_namespace_descriptors_for_test_v1(&mut staged, current_owner())
+            .unwrap();
+        for ((_, old), (_, new)) in before.iter().zip(staging_descriptor_inventory(&staged)) {
+            assert_eq!(*old, new);
+        }
+        let target = parent.path().join(staged.run_name()).join("base");
+        struct Attached(Option<std::path::PathBuf>);
+        impl Drop for Attached {
+            fn drop(&mut self) {
+                if let Some(path) = &self.0 {
+                    let _ = rustix::mount::unmount(path, rustix::mount::UnmountFlags::DETACH);
+                }
+            }
+        }
+        move_mount(
+            &detached,
+            "",
+            staged.directory_descriptor("base"),
+            "",
+            flags,
+        )
+        .unwrap();
+        let mut cleanup = Attached(Some(target.clone()));
+        drop(detached);
+        assert_eq!(rustix::fs::statfs(&target).unwrap().f_type, 0x0102_1994);
+        unmount(&target, UnmountFlags::empty()).unwrap();
+        cleanup.0 = None;
+        staged.cleanup().unwrap();
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires a dedicated disposable user/mount/PID namespace with CAP_SYS_ADMIN"]
+    fn qualification_mount_cleanup_preserves_external_borrower_failure_and_retry() {
+        use rustix::mount::{
+            FsMountFlags, FsOpenFlags, MountAttrFlags, MountPropagationFlags, MoveMountFlags,
+            fsconfig_create, fsmount, fsopen, mount_change, move_mount,
+        };
+        assert_eq!(
+            std::env::var("FE2O3_PRIVATE_MOUNT_REGRESSION_V72").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+        let (prepared, parent, _base, _install) = prepared_for_staging();
+        let mut staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS).unwrap();
+        mount_change(
+            "/",
+            MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+        )
+        .unwrap();
+        staging::refresh_mount_namespace_descriptors_for_test_v1(&mut staged, current_owner())
+            .unwrap();
+        for name in ["root", "base"] {
+            for partial_attachment in [false, true] {
+                let context = fsopen("tmpfs", FsOpenFlags::FSOPEN_CLOEXEC).unwrap();
+                fsconfig_create(&context).unwrap();
+                let detached = fsmount(
+                    &context,
+                    FsMountFlags::FSMOUNT_CLOEXEC,
+                    MountAttrFlags::MOUNT_ATTR_NODEV | MountAttrFlags::MOUNT_ATTR_NOSUID,
+                )
+                .unwrap();
+                let identity = mount::mount_identity_for_test_v1(&detached).unwrap();
+                let target = parent.path().join(staged.run_name()).join(name);
+                struct Attached(Option<std::path::PathBuf>);
+                impl Drop for Attached {
+                    fn drop(&mut self) {
+                        if let Some(path) = &self.0 {
+                            let _ =
+                                rustix::mount::unmount(path, rustix::mount::UnmountFlags::DETACH);
+                        }
+                    }
+                }
+                move_mount(
+                    &detached,
+                    "",
+                    staged.directory_descriptor(name),
+                    "",
+                    MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH
+                        | MoveMountFlags::MOVE_MOUNT_T_EMPTY_PATH,
+                )
+                .unwrap();
+                let mut cleanup = Attached(Some(target.clone()));
+                drop(detached);
+                let borrower = std::fs::File::open(&target).unwrap();
+                let mut retained = if partial_attachment {
+                    None
+                } else {
+                    Some(std::fs::File::open(&target).unwrap())
+                };
+                let mut wrong = identity;
+                wrong.inode ^= 1;
+                assert_eq!(
+                    mount::unmount_retained_child_for_test_v1(
+                        staged.root_descriptor(),
+                        staged.directory_descriptor(name),
+                        name,
+                        &mut retained,
+                        wrong
+                    )
+                    .unwrap_err()
+                    .kind(),
+                    DeploymentVerificationErrorKindV1::InputChanged
+                );
+                assert_eq!(retained.is_none(), partial_attachment);
+                let busy = mount::unmount_retained_child_for_test_v1(
+                    staged.root_descriptor(),
+                    staged.directory_descriptor(name),
+                    name,
+                    &mut retained,
+                    identity,
+                )
+                .unwrap_err();
+                assert_eq!(busy.kind(), DeploymentVerificationErrorKindV1::Io);
+                assert_eq!(
+                    busy.source.as_ref().unwrap().raw_os_error(),
+                    Some(rustix::io::Errno::BUSY.raw_os_error())
+                );
+                assert!(retained.is_none());
+                assert_eq!(rustix::fs::statfs(&target).unwrap().f_type, 0x0102_1994);
+                let still_mounted = mount::mount_identity_for_test_v1(&borrower).unwrap();
+                assert_eq!(still_mounted, identity);
+
+                // A bind replacement shares device/inode, but is not our mount instance.
+                rustix::mount::mount_bind(&target, &target).unwrap();
+                let mut replacement_cleanup = Attached(Some(target.clone()));
+                retained = Some(std::fs::File::open(&target).unwrap());
+                let replacement =
+                    mount::mount_identity_for_test_v1(retained.as_ref().unwrap()).unwrap();
+                assert_eq!(
+                    (replacement.device, replacement.inode),
+                    (identity.device, identity.inode)
+                );
+                assert_ne!(replacement.mount_id, identity.mount_id);
+                use std::os::fd::AsRawFd as _;
+                let replacement_fd = retained.as_ref().unwrap().as_raw_fd();
+                assert_eq!(
+                    mount::unmount_retained_child_for_test_v1(
+                        staged.root_descriptor(),
+                        staged.directory_descriptor(name),
+                        name,
+                        &mut retained,
+                        identity
+                    )
+                    .unwrap_err()
+                    .kind(),
+                    DeploymentVerificationErrorKindV1::InputChanged
+                );
+                assert_eq!(retained.as_ref().unwrap().as_raw_fd(), replacement_fd);
+                assert_eq!(
+                    mount::mount_identity_for_test_v1(std::fs::File::open(&target).unwrap())
+                        .unwrap(),
+                    replacement
+                );
+                drop(retained.take());
+                rustix::mount::unmount(&target, rustix::mount::UnmountFlags::empty()).unwrap();
+                replacement_cleanup.0 = None;
+                assert_eq!(
+                    mount::mount_identity_for_test_v1(std::fs::File::open(&target).unwrap())
+                        .unwrap(),
+                    identity
+                );
+                drop(borrower);
+                mount::unmount_retained_child_for_test_v1(
+                    staged.root_descriptor(),
+                    staged.directory_descriptor(name),
+                    name,
+                    &mut retained,
+                    identity,
+                )
+                .unwrap();
+                cleanup.0 = None;
+            }
+        }
+        staged.cleanup().unwrap();
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 
     #[test]

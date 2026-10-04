@@ -201,6 +201,12 @@ impl StagedCompilerExecutionQualificationV1 {
         [self.run_name.as_str()]
     }
 
+    pub(super) fn refresh_mount_namespace_descriptors(
+        &mut self,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        refresh_mount_namespace_descriptors(self, (0, 0))
+    }
+
     fn cleanup_or(
         &mut self,
         error: DeploymentVerificationErrorV1,
@@ -924,6 +930,63 @@ fn revalidate_staged_qualification(
         QUALIFICATION_STAGING_CHILDREN_V1,
         "qualification staging root",
     )
+}
+
+fn refresh_mount_namespace_descriptors(
+    staged: &mut StagedCompilerExecutionQualificationV1,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
+    revalidate_staged_qualification(staged, owner)?;
+    // Descriptors opened before NEWNS still name the old namespace's mount objects.
+    let parent = super::qualification::reopen_prepared_qualification_parent(
+        &staged.prepared,
+        owner,
+        &[staged.run_name.as_str()],
+    )?;
+    let root = open_staged_directory(&parent, &staged.run_name)?;
+    require_same_staged_directory(staged.root_descriptor(), &root)?;
+    let mut directories = Vec::with_capacity(QUALIFICATION_STAGING_CHILDREN_V1.len());
+    for retained in &staged.directories {
+        let file = open_staged_directory(&root, retained.name)?;
+        require_same_staged_directory(&retained.file, &file)?;
+        directories.push(StagedDirectoryV1 {
+            name: retained.name,
+            file,
+        });
+    }
+    // Keep original cleanup custody until the entire current-namespace tree is checked.
+    revalidate_staged_qualification(staged, owner)?;
+    staged.root = Some(root);
+    staged.directories = directories;
+    revalidate_staged_qualification(staged, owner)
+}
+
+fn require_same_staged_directory(
+    retained: &File,
+    reopened: &File,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let retained = snapshot(
+        &fstat(retained)
+            .map_err(|source| io_error("inspect retained staging mount target", source))?,
+    );
+    let reopened = snapshot(
+        &fstat(reopened)
+            .map_err(|source| io_error("inspect reopened staging mount target", source))?,
+    );
+    if retained != reopened {
+        return Err(changed(
+            "qualification staging mount-target identity changed",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn refresh_mount_namespace_descriptors_for_test_v1(
+    staged: &mut StagedCompilerExecutionQualificationV1,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
+    refresh_mount_namespace_descriptors(staged, owner)
 }
 
 fn open_staged_directory(parent: &File, name: &str) -> Result<File, DeploymentVerificationErrorV1> {
