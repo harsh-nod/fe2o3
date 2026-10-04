@@ -258,14 +258,13 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                                     "\n && ({{ let constant = byte_operation_{namespace}_{ordinal}_v30(MemoryStateV30 {{ pc: {block}, ..after }}, little_endian); constant.state.valid && constant.state.values[{target}] == after.values[{target}] && constant.observation.effect == MemoryOperationEffectV30::Pure && constant.state.memory == after.memory && constant.state.generations == after.generations && constant.state.frames == after.frames }})"
                                 );
                             }
-                            emit!(out, " && ({{ let compared = after.values[{target}]; ");
+                            emit!(out, " && ");
                             super::super::super::byte_function_v30::emit_value_type(
                                 output.definitions()[target].ty,
                                 width,
-                                "compared",
+                                format_args!("after.values[{target}]"),
                                 out,
                             )?;
-                            emit!(out, " }})");
                         }
                         for original in input_row.definitions.clone() {
                             if !available(
@@ -619,6 +618,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                 [Range<usize>; 2],
                 [Result<()>; 2],
                 Writer<'_, '_>,
+                [std::fmt::Arguments<'_>; 2],
             )>())?;
             let segments = PrefixSegmentsV49::derive(self, out)?;
             let original_allocations = self.view(AllocationSideV48::Original, out)?;
@@ -694,7 +694,16 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     .checked_add(function)
                     .ok_or(Resource::Arithmetic)?;
                 match emitted_prefix.as_mut() {
-                    Some(index) => index.emit(&after, prefix_namespace, out),
+                    Some(index) => match emitted_original {
+                        Some(original) if association.input == association.output => index
+                            .emit_after_parent_predecessor_v95(
+                                &after,
+                                prefix_namespace,
+                                original,
+                                out,
+                            ),
+                        _ => index.emit(&after, prefix_namespace, out),
+                    },
                     None => after.emit(prefix_namespace, out),
                 }
                 .map_err(|error| {

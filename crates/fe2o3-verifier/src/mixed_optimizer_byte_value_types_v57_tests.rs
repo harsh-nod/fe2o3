@@ -101,6 +101,90 @@ fn byte_value_type_shared_predicates_keep_every_shape_width_and_address_space() 
     }
 }
 
+#[test]
+fn byte_value_type_formatted_operands_preserve_every_predicate() {
+    for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+        let mut types: Vec<_> = value_type_cases_v57(width)
+            .into_iter()
+            .map(|(ty, _, _)| ty)
+            .collect();
+        types.push(Type::Unit);
+        for ty in types {
+            for index in [0, 17, usize::MAX] {
+                let expression = format!("after.values[{index}]");
+                let named = run(37, LIMIT, LIMIT, |out| {
+                    emit_value_type(&ty, width, expression.as_str(), out)
+                });
+                let formatted = run(37, LIMIT, LIMIT, |out| {
+                    emit_value_type(&ty, width, format_args!("after.values[{index}]"), out)
+                });
+                assert_eq!(formatted.0.unwrap(), named.0.unwrap());
+                assert_eq!((formatted.1, formatted.2), (named.1, named.2));
+            }
+        }
+    }
+}
+
+fn indexed_value_type_census_v96(work: usize, storage: usize) -> (Result<String>, usize, usize) {
+    let width = FormalIndexWidth::Bits64;
+    let cases = value_type_cases_v57(width);
+    run(37, work, storage, |out| {
+        emit!(
+            out,
+            "use vstd::prelude::*;\nverus! {{\n{}",
+            super::super::byte_memory_v30::BYTE_MEMORY_V30
+        );
+        for segment in 0..32 {
+            emit!(
+                out,
+                "spec fn value_type_segment_{segment}_v57(values: Seq<MemoryValueV30>) -> bool {{ values.len() == 64"
+            );
+            for definition in 0..64 {
+                emit!(out, "\n && ");
+                emit_value_type(
+                    &cases[definition % cases.len()].0,
+                    width,
+                    format_args!("values[{definition}]"),
+                    out,
+                )?;
+            }
+            emit!(out, " }}\n");
+        }
+        emit!(out, "}}\n");
+        Ok(())
+    })
+}
+
+#[test]
+fn byte_value_type_indexed_source_keeps_full_census_and_exact_budgets() {
+    let measured = indexed_value_type_census_v96(LIMIT, LIMIT);
+    let source = measured.0.unwrap();
+    let previous = value_type_census_v57(true, LIMIT, LIMIT).0.unwrap();
+    assert!(source.len() + 48 * 1024 < previous.len());
+    assert_eq!(source.matches("spec fn value_type_segment_").count(), 32);
+    let checks = &source[source.find("spec fn value_type_segment_0_v57").unwrap()..];
+    for definition in 0..64 {
+        assert_eq!(
+            checks.matches(&format!("(values[{definition}],")).count(),
+            32
+        );
+    }
+    assert!(!checks.contains("let value = values["));
+    let exact = indexed_value_type_census_v96(measured.1, measured.2);
+    assert_eq!(exact.0.unwrap(), source);
+    assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+    assert!(matches!(
+        indexed_value_type_census_v96(measured.1 - 1, measured.2).0,
+        Err(Error::Resource(Resource::Work(limit)))
+            if limit.limit() == measured.1 - 1 && limit.actual() == measured.1,
+    ));
+    assert!(matches!(
+        indexed_value_type_census_v96(measured.1, measured.2 - 1).0,
+        Err(Error::Resource(Resource::Storage(limit)))
+            if limit.limit() == measured.2 - 1 && limit.actual() == measured.2,
+    ));
+}
+
 fn value_type_census_v57(
     shared: bool,
     work: usize,
