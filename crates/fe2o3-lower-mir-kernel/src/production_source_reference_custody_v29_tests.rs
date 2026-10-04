@@ -1,6 +1,22 @@
 use super::*;
 use std::cell::Cell;
 
+fn checked_enum_read_header_shadow_v58() -> usize {
+    use std::mem::size_of;
+    #[allow(dead_code)]
+    struct Receipt {
+        site: SourceReferenceSiteV29,
+        source: usize,
+        local: SemanticLocalIdV1,
+        generation: u32,
+        ty: SemanticTypeIdV1,
+        variant: u32,
+        snapshot: usize,
+    }
+    3 * size_of::<Option<Receipt>>()
+        + size_of::<Result<Option<Receipt>, ProductionSemanticKirErrorV1>>()
+}
+
 fn holder_replacement_owner(
     plain_entry: bool,
     field: bool,
@@ -531,7 +547,8 @@ fn source_reference_large_aligned_result_prepays_both_live_slots() {
         + size_of::<Option<usize>>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Result<(), ArgumentResourceV1>>()
-        + size_of::<Result<(), ProductionSemanticKirErrorV1>>();
+        + size_of::<Result<(), ProductionSemanticKirErrorV1>>()
+        + checked_enum_read_header_shadow_v58();
     assert_eq!(
         source_reference_headers_v29::<Large<'_>>().unwrap(),
         expected
@@ -1104,7 +1121,8 @@ fn source_reference_fixed_header_exact_and_one_short_are_source_derived() {
         + size_of::<Option<usize>>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Result<(), ArgumentResourceV1>>()
-        + size_of::<Result<(), ProductionSemanticKirErrorV1>>();
+        + size_of::<Result<(), ProductionSemanticKirErrorV1>>()
+        + checked_enum_read_header_shadow_v58();
     assert_eq!(source_reference_headers_v29::<()>().unwrap(), expected);
     with_instances(|instances, _| {
         for short in [false, true] {

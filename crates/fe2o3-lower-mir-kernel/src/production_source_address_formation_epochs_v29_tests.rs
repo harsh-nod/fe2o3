@@ -89,6 +89,7 @@ fn cloned_address_epoch_access_v29(
         loan: row.loan,
         traversed: row.traversed.clone(),
         shared_path: row.shared_path,
+        checked_enum_read: row.checked_enum_read,
     }
 }
 

@@ -650,16 +650,114 @@ fn original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads() {
                         Ok(())
                     },
                 );
+            if unguarded {
+                // Both genuine identity calls preserve the original constructor
+                // snapshot. Its still-current tag is authority without a Switch.
+                result.0.unwrap();
+                assert!(reached.get());
+                continue;
+            }
             let error = result.0.unwrap_err();
-            let expected = if unguarded {
-                "enum downcast lacks an authenticated variant"
-            } else if inactive {
+            let expected = if inactive {
                 "source enum payload differs from its original guarded value"
             } else {
                 "source reference reads an uninitialized partial holder"
             };
             assert!(format!("{error:?}").contains(expected), "{error:?}");
             assert!(!reached.get(), "invalid source must not reach the callback");
+        }
+    }
+}
+
+#[test]
+fn original_enum_calls_refuse_stale_discriminants_and_post_guard_reassignment() {
+    for moved in [false, true] {
+        for after_guard in [false, true] {
+            let reached = std::cell::Cell::new(false);
+            let result =
+                super::super::super::super::super::invocations::tests::run_source_transform(
+                    LIMIT,
+                    LIMIT,
+                    |types, functions| {
+                        let enumeration = call_fixture(types, functions, moved);
+                        for root in 0..functions.len() - 1 {
+                            let old = &functions[root];
+                            let word = old.locals()[1].ty();
+                            let place = |local, ty| {
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(local),
+                                    vec![],
+                                    ty,
+                                )
+                                .unwrap()
+                            };
+                            let replacement = SemanticStatementV1::new(
+                                old.source(),
+                                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                                    place(4, enumeration),
+                                    SemanticRvalueV1::new(
+                                        enumeration,
+                                        SemanticRvalueKindV1::Aggregate(
+                                            SemanticAggregateRvalueV1::new(
+                                                SemanticAggregateKindV1::EnumVariant(
+                                                    1 - root as u32,
+                                                ),
+                                                vec![SemanticOperandV1::Copy(place(1, word))],
+                                            )
+                                            .unwrap(),
+                                        ),
+                                    ),
+                                )),
+                            );
+                            let mut blocks = old.blocks().to_vec();
+                            let selected = if after_guard { 3 } else { 2 };
+                            let block = &blocks[selected];
+                            let mut statements = block.statements().to_vec();
+                            if after_guard {
+                                statements.insert(0, replacement);
+                            } else {
+                                statements.push(replacement);
+                            }
+                            blocks[selected] = SemanticBasicBlockV1::new(
+                                block.identity(),
+                                block.source(),
+                                statements,
+                                block.terminator().clone(),
+                            )
+                            .unwrap();
+                            functions[root] = SemanticFunctionDeclV1::new(
+                                old.identity(),
+                                old.role(),
+                                old.item_definition_identity(),
+                                old.monomorphization_identity(),
+                                old.generic_type_arguments_identity(),
+                                old.const_generic_arguments_identity(),
+                                old.source(),
+                                old.abi().clone(),
+                                old.locals().to_vec(),
+                                old.entry(),
+                                blocks,
+                            )
+                            .unwrap()
+                            .with_kernel_entry(old.kernel_entry().unwrap().clone());
+                        }
+                    },
+                    |_, _| {
+                        reached.set(true);
+                        Ok(())
+                    },
+                );
+            let error = result.0.unwrap_err();
+            let detail = format!("{error:?}");
+            assert!(
+                detail.contains("source enum payload differs from its original guarded value")
+                    || detail.contains("source reference reads an uninitialized partial holder"),
+                "{error:?}"
+            );
+            assert!(
+                !reached.get(),
+                "an old tag cannot authenticate the reassigned enum"
+            );
         }
     }
 }

@@ -1,6 +1,7 @@
 // Exact source occurrences and normalized targets retained by the common owner.
 // Source addresses are private locators inside that immutable owner, not permits.
 include!("production_source_reference_raw_scalar_epochs_v29.rs");
+include!("production_source_enum_checked_read_v58.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceReferenceAccessKeyV29 {
     site: SourceReferenceSiteV29,
@@ -19,6 +20,7 @@ struct SourceReferenceAccessRecordV29 {
     loan: Option<usize>,
     traversed: std::ops::Range<usize>,
     shared_path: bool,
+    checked_enum_read: Option<source_enum_checked_read_v58::CheckedRead>,
 }
 
 type SourceReferenceAccessIndexKeyV29 = (usize, u32, Option<usize>, usize, u8);
@@ -184,6 +186,8 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 return Ok(());
             }
         }
+        let checked_enum_read =
+            source_enum_checked_read_v58::check(self, site, source, access, resolved, budget)?;
         let key = source_reference_access_key_v29(site, source, access);
         charge_execution_cfg_lookup_v29(self.plan.access_sites.len(), budget)?;
         if let Some(&index) = self.plan.access_sites.get(&key) {
@@ -228,6 +232,11 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 )?;
                 self.plan.accesses[index].generation = generation;
             }
+            self.plan.accesses[index].checked_enum_read = self.plan.checked_enum_reads.intersect(
+                self.plan.accesses[index].checked_enum_read,
+                checked_enum_read,
+                budget,
+            )?;
             return Ok(());
         }
         reserve_source_reference_access_index_v29(self.plan.access_sites.len(), budget)?;
@@ -242,6 +251,10 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             budget,
         )?;
         scoped_object_reserve_append_v29(&mut self.plan.accesses, budget)?;
+        let checked_enum_read = self
+            .plan
+            .checked_enum_reads
+            .append(checked_enum_read, budget)?;
         budget.charge_work(argument_sum_v1(&[
             1,
             resolved.projections.len(),
@@ -276,6 +289,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             loan: resolved.loan,
             traversed: first_loan..self.plan.access_loans.len(),
             shared_path: resolved.shared_path,
+            checked_enum_read,
         });
         entry.insert(index);
         Ok(())

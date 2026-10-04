@@ -1030,6 +1030,7 @@ fn allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and
                     loan: original.loan,
                     traversed: original.traversed.clone(),
                     shared_path: original.shared_path,
+                    checked_enum_read: original.checked_enum_read,
                 };
                 match fault {
                     0 => changed.key.source = 0,
