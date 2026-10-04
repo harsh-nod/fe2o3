@@ -1,71 +1,68 @@
-//! Exact V53 host readmission; signatures and content checks grant no execution authority.
+//! Exact V89 host readmission; signatures and content checks grant no execution authority.
 use fe2o3_compiler_lineage::{
-    MIXED_MIDDLE_END_WORKING_STORAGE_V50 as MIDDLE_END_WORKING_STORAGE,
-    MixedMiddleEndRefV50 as MiddleEndRef, read_mixed_middle_end_v50 as read_middle_end,
+    MIXED_MIDDLE_END_WORKING_STORAGE_V90 as MIDDLE_END_WORKING_STORAGE,
+    MixedMiddleEndRefV90 as MiddleEndRef, read_mixed_middle_end_v90 as read_middle_end,
 };
 use fe2o3_hsaco_finalize::{
-    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53 as NOMINAL_DESCRIPTOR_SCRATCH_STORAGE,
-    NominalDescriptorInspectionV53 as NominalDescriptorInspection,
-    derive_unfinalized_nominal_hsaco_on_budget_v53 as derive_unfinalized_nominal_hsaco_on_budget,
-    inspect_finalized_nominal_hsaco_v53 as inspect_finalized_nominal_hsaco,
+    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89 as NOMINAL_DESCRIPTOR_SCRATCH_STORAGE,
+    NominalDescriptorInspectionV89 as NominalDescriptorInspection,
+    derive_unfinalized_nominal_hsaco_on_budget_v89 as derive_unfinalized_nominal_hsaco_on_budget,
+    inspect_finalized_nominal_hsaco_v89 as inspect_finalized_nominal_hsaco,
 };
 use fe2o3_kernel_descriptor::{
-    CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V53 as CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
+    CANONICAL_CODE_OBJECT_DIGEST_OFFSET_V89 as CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
     CanonicalCodeObjectDigest,
-    MIXED_DESCRIPTOR_READER_STORAGE_V53 as MIXED_DESCRIPTOR_READER_STORAGE,
-    MixedDescriptorTableV53 as MixedDescriptorTable,
-    decode_mixed_descriptor_v53 as decode_mixed_descriptor,
-    mixed_conditional_v26::MIXED_CONTRACT_CODEC_STORAGE_V26 as CONTRACT_CODEC_STORAGE,
+    MIXED_DESCRIPTOR_READER_STORAGE_V89 as MIXED_DESCRIPTOR_READER_STORAGE,
+    MixedDescriptorTableV89 as MixedDescriptorTable,
+    decode_mixed_descriptor_v89 as decode_mixed_descriptor,
+    mixed_conditional_v86::MIXED_CONTRACT_CODEC_STORAGE_V86 as CONTRACT_CODEC_STORAGE,
 };
-use fe2o3_verifier::check_mixed_native_correspondence_v60 as check_native_correspondence;
+use fe2o3_verifier::check_mixed_native_correspondence_v89 as check_native_correspondence;
 use fe2o3_verifier::{
-    InertTypedSourceReceiptV53 as TypedSourceReceipt,
-    check_inert_typed_source_receipt_v53 as check_typed_source_receipt,
+    InertPredicatedTypedSourceReceiptV90 as TypedSourceReceipt,
+    check_inert_predicated_typed_source_receipt_v90 as check_typed_source_receipt,
 };
 fn typed_receipt_error(error: fe2o3_verifier::MixedOptimizerRelocationErrorV28) -> AdmissionError {
-    AdmissionError::MixedReceiptV53(error)
+    AdmissionError::MixedReceiptV90(error)
 }
-const DESCRIPTOR_SCHEMA: u16 = 53;
-const ROSTER_DEBUG_NAME: &str = "RecoveredMixedWorkerV53PinnedRoster";
-const LINEAGE_DOMAIN: &[u8] = b"fe2o3.host.worker-v3-mixed-descriptor-lineage.v53\0";
-const SCHEMA_REFUSAL: &str = "descriptor schema must be V53; no legacy retry";
-const TARGET_REFUSAL: &str = "unsupported inspected V53 target";
-const ABI_REFUSAL: &str = "mandatory V53 ABI/formal-memory equality";
+const DESCRIPTOR_SCHEMA: u16 = 89;
+const ROSTER_DEBUG_NAME: &str = "RecoveredMixedWorkerV89PinnedRoster";
+const LINEAGE_DOMAIN: &[u8] = b"fe2o3.host.worker-v3-mixed-descriptor-lineage.v89\0";
+const SCHEMA_REFUSAL: &str = "descriptor schema must be V89; no legacy retry";
+const TARGET_REFUSAL: &str = "unsupported inspected V89 target";
+const ABI_REFUSAL: &str = "mandatory V89 ABI/formal-memory equality";
 fn binding(detail: &'static str) -> AdmissionError {
-    AdmissionError::MixedV53(detail)
+    AdmissionError::MixedV89(detail)
 }
 fn codec_error(error: impl std::error::Error + Send + Sync + 'static) -> AdmissionError {
-    AdmissionError::MixedCodecV53(Box::new(error))
-}
-impl From<Resource> for AdmissionError {
-    fn from(error: Resource) -> Self {
-        codec_error(error)
-    }
+    AdmissionError::MixedCodecV89(Box::new(error))
 }
 
-#[path = "mixed_worker_v53_preparation.rs"]
+#[path = "mixed_worker_v89_preparation.rs"]
 mod preparation;
-#[cfg(target_os = "linux")]
-pub(crate) use preparation::execution;
-pub use preparation::{MixedWorkerV53PreparationError, PreparedMixedWorkerV53Invocation};
-#[path = "mixed_worker_v53_target_readmission.rs"]
+pub use preparation::{MixedWorkerV89PreparationError, PreparedMixedWorkerV89Invocation};
+#[path = "mixed_worker_v89_target_readmission.rs"]
 mod target_readmission;
 include!("mixed_worker_admission_family.rs");
-pub use MixedWorkerVerificationRequest as MixedWorkerV53VerificationRequest;
-/// Move-only exact current publication and source receipt association.
+pub use MixedWorkerVerificationRequest as MixedWorkerV89VerificationRequest;
+/// Move-only predicated publication; no clone, load, or legacy conversion.
 /// ```compile_fail
-/// use fe2o3_host::RecoveredMixedWorkerV53PinnedRoster;
-/// fn clone<R>(v: RecoveredMixedWorkerV53PinnedRoster<R>) { let _ = v.clone(); }
+/// use fe2o3_host::RecoveredMixedWorkerV89PinnedRoster;
+/// fn clone<R>(v: RecoveredMixedWorkerV89PinnedRoster<R>) { let _ = v.clone(); }
 /// ```
 /// ```compile_fail
-/// use fe2o3_host::RecoveredMixedWorkerV53PinnedRoster;
-/// fn load<R>(v: RecoveredMixedWorkerV53PinnedRoster<R>) { v.load(); }
+/// use fe2o3_host::RecoveredMixedWorkerV89PinnedRoster;
+/// fn load<R>(v: RecoveredMixedWorkerV89PinnedRoster<R>) { v.load(); }
 /// ```
-pub use RecoveredMixedWorkerPinnedRoster as RecoveredMixedWorkerV53PinnedRoster;
-pub use admit_recovered_mixed_worker_roster as admit_recovered_mixed_worker_v53_roster;
+/// ```compile_fail
+/// use fe2o3_host::{RecoveredMixedWorkerV89PinnedRoster, RecoveredMixedWorkerV53PinnedRoster};
+/// fn convert<R>(v: RecoveredMixedWorkerV89PinnedRoster<R>) -> RecoveredMixedWorkerV53PinnedRoster<R> { v }
+/// ```
+pub use RecoveredMixedWorkerPinnedRoster as RecoveredMixedWorkerV89PinnedRoster;
+pub use admit_recovered_mixed_worker_roster as admit_recovered_mixed_worker_v89_roster;
 
 #[cfg(test)]
-#[path = "mixed_worker_v53_native_lineage_v60_tests.rs"]
+#[path = "mixed_worker_v89_native_lineage_v89_tests.rs"]
 mod native_lineage_tests_v60;
 
 #[cfg(test)]
@@ -135,7 +132,7 @@ mod codec_tests_v53 {
         });
         assert!(matches!(
             error,
-            Err(AdmissionError::MixedV53("test codec refusal"))
+            Err(AdmissionError::MixedV89("test codec refusal"))
         ));
         assert_eq!((budget.work(), budget.storage()), (6, 19));
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

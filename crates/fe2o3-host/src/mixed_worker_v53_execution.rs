@@ -6,12 +6,14 @@ use crate::{
     WorkerV3CompilerExecutionVerificationV1, WorkerV3ProtectedSemanticMachineRefinementEvidenceV1,
 };
 use fe2o3_amd_target::{AmdTargetId, PRODUCTION_GFX942_DEVICE_TARGET_V1};
+use fe2o3_compiler_lineage::MIXED_MIDDLE_END_WORKING_STORAGE_V50;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkLedgerIdentityV1, VerifiedCanonicalKernelIrModuleV18};
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, WorkerV3Gfx942ExecutionAuthorityV1,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
+use fe2o3_verifier::InertTypedSourceReceiptV53;
 
 #[path = "mixed_worker_v53_native_evidence.rs"]
 mod evidence;

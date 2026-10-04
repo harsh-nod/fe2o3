@@ -244,6 +244,51 @@ where
     )
 }
 
+impl<R> WorkerV3ApplicationHandoffAdmissionV1 for crate::RecoveredMixedWorkerV89PinnedRoster<R> {
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        crate::RecoveredMixedWorkerV89PinnedRoster::revalidate_currentness(self)
+    }
+
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        crate::RecoveredMixedWorkerV89PinnedRoster::retain_application_descriptors(
+            self,
+            descriptors,
+        )
+    }
+}
+
+/// Consumes the protected handoff into the exact predicated descriptor roster.
+/// There is no legacy descriptor retry and no proof, load, or launch authority.
+///
+/// # Safety
+/// Call during cooperative single-threaded startup before handlers, descendants,
+/// or unrelated descriptor/environment mutation can race recovery. Transfer each
+/// inherited descriptor exactly once, including on refusal or unwind.
+pub unsafe fn consume_inherited_mixed_worker_v89_application_handoff<R>(
+    budget: &mut MixedReceiptBudgetV53<'_>,
+) -> Result<
+    crate::RecoveredMixedWorkerV89PinnedRoster<R>,
+    WorkerV3ApplicationDescriptorHandoffErrorV1,
+>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    // SAFETY: the caller transfers the exact startup custody required by the claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        |envelope| crate::admit_recovered_mixed_worker_v89_roster::<R>(envelope, budget),
+    )
+}
+
 struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
     envelope: OwnedFd,
     directory: OwnedFd,

@@ -4,8 +4,13 @@ use fe2o3_kernel_descriptor::KernelId;
 
 #[path = "production_mixed_application_v53.rs"]
 mod mixed_v53;
+#[path = "production_mixed_application_v89.rs"]
+mod mixed_v89;
 pub use mixed_v53::{
     ProductionMixedWorkerV53ApplicationError, prepare_inherited_mixed_worker_v53_application,
+};
+pub use mixed_v89::{
+    ProductionMixedWorkerV89ApplicationError, prepare_inherited_mixed_worker_v89_application,
 };
 
 use crate::{
