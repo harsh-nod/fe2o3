@@ -41,6 +41,20 @@ def fixture():
 
 
 class CurrentSimulation(unittest.TestCase):
+    def test_actual_command_binds_cpu_to_existing_complete_production_target(self):
+        import re
+        source = (ROOT / "crates/fe2o3-amd-target/src/lib.rs").read_text()
+        for cpu in ["gfx942", "gfx950"]:
+            name = f"PRODUCTION_{cpu.upper()}_DEVICE_TARGET_V1"
+            target, = re.findall(rf'pub const {name}: &str = "([^"]+)";', source)
+            command = sim.simulation_command("sim", "graph", "request", "output", cpu)
+            self.assertEqual(command, ["sim", "--diagnostic-kir-v18", "graph",
+                                      "--diagnostic-target", target, "--request", "request",
+                                      "--output", "output"])
+        for cpu in ["gfx999", "gfx942:xnack+", "gfx942:xnack-", "gfx950:xnack-", "gfx942 ", None]:
+            with self.assertRaises(ValueError):
+                sim.simulation_command("sim", "graph", "request", "output", cpu)
+
     def test_same_request_complete_bytes_and_target_pass(self):
         raw, reference, result, graph = fixture()
         checked = sim.compare(raw, reference, result, graph, "gfx942")

@@ -19,11 +19,21 @@ WIDTHS = {"u8": 1, "u16": 2, "bf16": 2, "u32": 4, "i32": 4, "f32": 4,
           "u64": 8, "i64": 8, "index": 8}
 NO_AUTHORITY = {"authority": False, "hardwareExecuted": False,
                 "grantsCompilerOrLaunchAuthority": False}
+DEVICE_TARGETS = {"gfx942": "gfx942:xnack-", "gfx950": "gfx950:xnack-"}
 
 
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def simulation_command(executable, graph, request, output, cpu):
+    # The census names a CPU; the simulator requires the corresponding complete
+    # ProductionAmdTargetProfileV1 target, including the fixed xnack state.
+    require(type(cpu) is str and cpu in DEVICE_TARGETS, "unsupported production census CPU")
+    return [str(executable), "--diagnostic-kir-v18", str(graph),
+            "--diagnostic-target", DEVICE_TARGETS[cpu], "--request", str(request),
+            "--output", str(output)]
 
 
 def strict_json(data):
@@ -209,6 +219,7 @@ def run_case(case, graph_directory, request_path, reference_executable, simulato
                if kernel["logical_name"] == request["kernel"]]
     require(len(matches) == 1, "request kernel must join one actual production root")
     row, kernel = matches[0]
+    require(row["target"] == case["fixture"]["target"], "simulation census CPU substitution")
     graph, length = row["graphs"][3]
     graph_id = digest_array(graph)
     path = graph_directory / (graph_id + ".kir-v18")
@@ -228,9 +239,8 @@ def run_case(case, graph_directory, request_path, reference_executable, simulato
     observations = []
     for ordinal in range(2):
         result_path = output / f"simulation-{ordinal}.json"
-        outcome = command_runner([str(simulator_executable), "--diagnostic-kir-v18", str(path),
-                                  "--diagnostic-target", case["fixture"]["target"],
-                                  "--request", str(request_path), "--output", str(result_path)],
+        outcome = command_runner(simulation_command(simulator_executable, path, request_path,
+                                                     result_path, row["target"]),
                                  cwd, environment, output / f"simulation-{ordinal}.log", timeout, MAX_DOCUMENT)
         require(command_passed(outcome), "actual V18 simulation failed")
         payload, pin = read_file(result_path)

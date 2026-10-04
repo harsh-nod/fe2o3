@@ -9,7 +9,7 @@ const FLOOR: usize = 97;
 fn explicit_v18_target_preserves_graph_and_executes_under_exact_profile() {
     let bytes = fixture::bytes(&fixture::module());
     let request = fixture::request(37);
-    for name in ["gfx942", "gfx950"] {
+    for name in ["gfx942:xnack-", "gfx950:xnack-"] {
         let target = SimulationTargetV1::amdgpu_from_device_target(name).unwrap();
         let mut work = CanonicalKernelIrWorkBudgetV1::new(fixture::BOUND);
         let mut budget = Budget::new(&mut work, fixture::BOUND);
@@ -64,7 +64,7 @@ fn explicit_v18_target_preserves_graph_and_executes_under_exact_profile() {
             "--request",
             "request",
             "--diagnostic-target",
-            "gfx942",
+            "gfx942:xnack-",
         ],
         vec![
             "--diagnostic-kir-v18",
@@ -80,9 +80,9 @@ fn explicit_v18_target_preserves_graph_and_executes_under_exact_profile() {
             "--request",
             "request",
             "--diagnostic-target",
-            "gfx942",
+            "gfx942:xnack-",
             "--diagnostic-target",
-            "gfx950",
+            "gfx950:xnack-",
         ],
         vec![
             "--diagnostic-kir-v18",
@@ -90,12 +90,35 @@ fn explicit_v18_target_preserves_graph_and_executes_under_exact_profile() {
             "--request",
             "request",
             "--diagnostic-target",
-            "gfx942",
+            "gfx942:xnack-",
             "--record-canonical-schedule",
             "schedule",
         ],
     ] {
         assert!(parse_options(args.into_iter().map(OsString::from)).is_err());
+    }
+    for rejected in [
+        "gfx942",
+        "gfx950",
+        "gfx942:xnack+",
+        "gfx950:xnack+",
+        "gfx942:sramecc+:xnack-",
+    ] {
+        assert!(
+            parse_options(
+                [
+                    "--diagnostic-kir-v18",
+                    "graph",
+                    "--request",
+                    "request",
+                    "--diagnostic-target",
+                    rejected,
+                ]
+                .into_iter()
+                .map(OsString::from)
+            )
+            .is_err()
+        );
     }
 }
 fn with_input<T>(
