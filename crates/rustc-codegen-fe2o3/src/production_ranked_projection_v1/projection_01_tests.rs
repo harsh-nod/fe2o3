@@ -1152,3 +1152,457 @@ fn actual_ranked_roster_conversion_does_not_hide_original_sticky_work_denial() {
                 if before.failed_work == Some(usize::MAX)
                     && after.failed_work == before.failed_work && after.storage == 0));
 }
+
+#[test]
+fn private_nominal_module_conversion_refuses_actual_raw_empty_and_drops_once() {
+    use retained_phase_v1::observation::{self, Event};
+    let (before, observed) = observation::observe(|| {
+        // Existing real semantic/SSA/KIR/Pliron fixture, not BF16 source authority.
+        let mut roster = neutral_ranked_program_v1()
+            .into_verified_roster_receipt()
+            .unwrap();
+        assert_eq!(
+            roster.materialized.helper_source_policy_v1(),
+            fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
+        );
+        let before = roster
+            .phase
+            .with_budget(|budget| {
+                Ok((
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ))
+            })
+            .unwrap();
+        assert!(
+            matches!(roster.into_private_bf16_module_verified_receipt_v1(),
+            Err(ProductionRankedVerificationErrorV1::Custody(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                    LocalHelperSourceConsumerUnavailable {
+                        consumer: "private nominal module conversion",
+                    },
+            )))
+        );
+        before
+    });
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseRetained(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+            .count(),
+        1
+    );
+    let Some(Event::PhaseDropped {
+        before: last,
+        after,
+        poisoned: false,
+    }) = observed.events.last()
+    else {
+        panic!("original phase was not the final clean drop");
+    };
+    // require_clean, the same phase loan and the policy check: exactly 3 units.
+    assert_eq!(last.work, before.0.checked_add(3).unwrap());
+    assert_eq!(
+        (
+            last.storage,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        ),
+        (before.1, before.2, before.3, before.4)
+    );
+    assert_eq!(after.storage, 0);
+    assert_eq!(
+        (
+            after.work,
+            after.peak_storage,
+            after.failed_work,
+            after.failed_storage
+        ),
+        (
+            last.work,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        )
+    );
+}
+
+#[test]
+fn private_nominal_module_conversion_preserves_original_denials_before_policy() {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use retained_phase_v1::observation::{self, Event};
+    for storage_failure in [false, true] {
+        let (before, observed) = observation::observe(|| {
+            let mut roster = neutral_ranked_program_v1()
+                .into_verified_roster_receipt()
+                .unwrap();
+            let before = roster
+                .phase
+                .with_budget(|budget| {
+                    if storage_failure {
+                        assert!(budget.reserve_storage(usize::MAX).is_err());
+                    } else {
+                        assert!(budget.charge_work(usize::MAX).is_err());
+                    }
+                    Ok((
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage(),
+                    ))
+                })
+                .unwrap();
+            let result = roster.into_private_bf16_module_verified_receipt_v1();
+            if storage_failure {
+                assert!(matches!(
+                    result,
+                    Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                        Resource::Storage(_)
+                    ))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                        Resource::Work(_)
+                    ))
+                ));
+            }
+            before
+        });
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseRetained(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+                .count(),
+            1
+        );
+        let Some(Event::PhaseDropped {
+            before: last,
+            after,
+            poisoned: false,
+        }) = observed.events.last()
+        else {
+            panic!("original denied phase was not the final drop");
+        };
+        assert_eq!(
+            (
+                last.work,
+                last.storage,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            ),
+            before
+        );
+        assert_eq!(after.storage, 0);
+        assert_eq!(
+            (
+                after.work,
+                after.peak_storage,
+                after.failed_work,
+                after.failed_storage
+            ),
+            (
+                last.work,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            )
+        );
+    }
+}
+
+#[test]
+fn private_nominal_lowerer_module_constructor_refuses_actual_raw_empty_on_same_phase() {
+    let program = neutral_ranked_program_v1();
+    // The actual projection account outlives both moved source and test roots.
+    let mut phase = program.phase;
+    let materialized = program.materialized;
+    drop(program.roots);
+    phase
+        .with_budget(|budget| {
+            let ledger = budget.work_ledger_identity_v1();
+            let before = (budget.work(), budget.storage(), budget.peak_storage());
+            let result = fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1::
+            from_private_bf16_projection_roster_with_budget_v1(
+                materialized, Vec::new().into_boxed_slice(), budget,
+            );
+            assert!(
+                matches!(result, Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+            LocalHelperSourceConsumerUnavailable { consumer: "private nominal module receipt" }))
+            );
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (before.0.checked_add(1).unwrap(), before.1, before.2)
+            );
+            assert!(budget.check_prior_denials_v1().is_ok());
+            Ok(())
+        })
+        .unwrap();
+    drop(phase);
+}
+
+#[test]
+fn private_nominal_module_revalidation_is_read_only_and_keeps_legacy_closed() {
+    let roster = neutral_ranked_program_v1()
+        .into_verified_roster_receipt()
+        .unwrap();
+    let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+    let roots = receipt.root_count();
+    verification
+        .phase
+        .with_budget(|budget| {
+            let ledger = budget.work_ledger_identity_v1();
+            let before = (budget.work(), budget.storage(), budget.peak_storage());
+            assert!(
+                matches!(receipt.verify_private_bf16_module_roster_with_budget_v1(
+            &[0; 32], SemanticFunctionIdV1::from_index(0), [0, 1, 2, 3], budget,
+        ), Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+            LocalHelperSourceConsumerUnavailable { consumer: "private nominal module receipt" }))
+            );
+            assert_eq!(receipt.root_count(), roots);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (before.0.checked_add(1).unwrap(), before.1, before.2)
+            );
+            assert!(budget.check_prior_denials_v1().is_ok());
+            Ok(())
+        })
+        .unwrap();
+    drop(receipt);
+    drop(verification);
+}
+
+#[test]
+fn roster_observer_failed_consuming_conversion_creates_no_paid_output() {
+    use retained_phase_v1::observation::{self, Event};
+    let (before, observed) = observation::observe(|| {
+        let mut program = neutral_ranked_program_v1();
+        program.roots[0].kernel_binding[0] ^= 1;
+        // Harness diagnostics are outside the selected paid observation domain.
+        let before = program
+            .phase
+            .with_budget(|budget| {
+                Ok((
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ))
+            })
+            .unwrap();
+        assert!(matches!(
+            bf16_nominal_owned_projection_v1::refuse_roster_observation_conversion_fixture_v1(
+                program
+            ),
+            Err(ProductionRankedVerificationErrorV1::RosterMetadata(
+                "substituted ranked root identity metadata"
+            ))
+        ));
+        before
+    });
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseRetained(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+            .count(),
+        1
+    );
+    let Some(Event::PhaseDropped {
+        before: last,
+        after,
+        poisoned: false,
+    }) = observed.events.last()
+    else {
+        panic!("original phase was not the final clean drop");
+    };
+    assert_eq!(last.work, before.0.checked_add(1).unwrap());
+    assert_eq!(
+        (
+            last.storage,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        ),
+        (before.1, before.2, before.3, before.4)
+    );
+    assert_eq!(after.storage, 0);
+    assert_eq!(
+        (
+            after.work,
+            after.peak_storage,
+            after.failed_work,
+            after.failed_storage
+        ),
+        (
+            last.work,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        )
+    );
+}
+
+#[test]
+fn module_observer_failed_consuming_conversion_creates_no_paid_output() {
+    use retained_phase_v1::observation::{self, Event};
+    let (before, observed) = observation::observe(|| {
+        let mut roster = neutral_ranked_program_v1()
+            .into_verified_roster_receipt()
+            .unwrap();
+        let before = roster
+            .phase
+            .with_budget(|budget| {
+                Ok((
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ))
+            })
+            .unwrap();
+        assert!(matches!(
+            bf16_nominal_module_receipt_v1::refuse_module_observation_conversion_fixture_v1(roster),
+            Err(ProductionRankedVerificationErrorV1::Custody(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                    LocalHelperSourceConsumerUnavailable {
+                        consumer: "private nominal module conversion",
+                    }
+            ))
+        ));
+        before
+    });
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseRetained(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+            .count(),
+        1
+    );
+    let Some(Event::PhaseDropped {
+        before: last,
+        after,
+        poisoned: false,
+    }) = observed.events.last()
+    else {
+        panic!("original phase was not the final clean drop");
+    };
+    assert_eq!(last.work, before.0.checked_add(3).unwrap());
+    assert_eq!(
+        (
+            last.storage,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        ),
+        (before.1, before.2, before.3, before.4)
+    );
+    assert_eq!(after.storage, 0);
+    assert_eq!(
+        (
+            after.work,
+            after.peak_storage,
+            after.failed_work,
+            after.failed_storage
+        ),
+        (
+            last.work,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        )
+    );
+}
+
+#[test]
+fn no_carry_module_revalidation_keeps_legacy_receipt_closed() {
+    let roster = neutral_ranked_program_v1()
+        .into_verified_roster_receipt()
+        .unwrap();
+    let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+    verification
+        .phase
+        .with_budget(|budget| {
+            let ledger = budget.work_ledger_identity_v1();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            assert!(
+                matches!(receipt.verify_private_bf16_module_retained_source_with_budget_v1(
+            SemanticFunctionIdV1::from_index(0), [0, 1, 2, 3], budget,
+        ), Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+            LocalHelperSourceConsumerUnavailable { consumer: "private nominal module receipt" }))
+            );
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                (
+                    before.0.checked_add(1).unwrap(),
+                    before.1,
+                    before.2,
+                    before.3,
+                    before.4
+                )
+            );
+            Ok(())
+        })
+        .unwrap();
+    drop(receipt);
+    drop(verification);
+}

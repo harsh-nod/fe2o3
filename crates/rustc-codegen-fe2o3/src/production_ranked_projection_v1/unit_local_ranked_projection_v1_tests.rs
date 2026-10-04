@@ -549,3 +549,54 @@ fn unit_local_ranked_production_two_roots_and_calls_are_independently_joined() {
         identity
     );
 }
+
+#[test]
+fn private_nominal_module_keeps_actual_unit_local_constructor_and_conversion_closed() {
+    for constructor in [false, true] {
+        let owner = materialized_unit_local_helper_v1();
+        assert_eq!(
+            owner.helper_source_policy_v1(),
+            fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::UnitLocal
+        );
+        let program = project_and_verify_ranked_materialized_semantic_mir_v1(
+            owner,
+            &[ranked_root_input_1d(A_NAME, 247, 64)],
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(vec![]),
+        )
+        .unwrap();
+        if constructor {
+            let mut phase = program.phase;
+            let materialized = program.materialized;
+            drop(program.roots);
+            phase.with_budget(|budget| {
+                let ledger = budget.work_ledger_identity_v1();
+                let floor = budget.storage();
+                let result = fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1::
+                    from_private_bf16_projection_roster_with_budget_v1(
+                        materialized, Vec::new().into_boxed_slice(), budget,
+                    );
+                assert!(matches!(result,
+                    Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                        LocalHelperSourceConsumerUnavailable {
+                            consumer: "private nominal module receipt",
+                        })));
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                assert_eq!(budget.storage(), floor);
+                assert!(budget.check_prior_denials_v1().is_ok());
+                Ok(())
+            }).unwrap();
+            drop(phase);
+        } else {
+            let roster = program.into_verified_roster_receipt().unwrap();
+            assert!(
+                matches!(roster.into_private_bf16_module_verified_receipt_v1(),
+                Err(ProductionRankedVerificationErrorV1::Custody(
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                        LocalHelperSourceConsumerUnavailable {
+                            consumer: "private nominal module conversion",
+                        },
+                )))
+            );
+        }
+    }
+}

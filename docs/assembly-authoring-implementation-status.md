@@ -11,6 +11,41 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Genuine private BF16 module receipt and failure-path lifetime repair — 2026-10-04
+
+The actual private BF16 program can now be consumed into a module receipt and
+authenticated module roster while retaining the original source and projection
+account. The conversion prepays its retained records and revalidates the actual
+root, source, ranked maps and requested Return permutation. This remains a
+private nominal path: ordinary attachment, formal/geometry consumers, LLVM
+emission and GPU qualification are not enabled by this checkpoint.
+
+A failure-path review also found that an observation record could outlive the
+original phase when a consuming conversion returned an error. Both first-roster
+and module observations now allocate their paid output only after successful
+consumption; no paid caller-local observation crosses that boundary. New
+negative controls check failed conversions, unchanged resource-denial state and
+the final original-account drop. Earlier successful first-roster observations
+did not establish these failure-path properties.
+
+The exact combined source passed 3,922 compiler library tests (226 ignored),
+73 extractor tests and two API tests in both debug and release, plus 2,059
+lowerer tests in each mode and 33 parent controls. A fresh release build and
+thirteen-process generated-candidate campaign passed, including 36 positive
+and 32 negative CPU requests. Separate fresh two-session owning, first-roster
+and module-roster runs passed for Identity and swapped-input source. The module
+observations retained the exact 9,728-byte module reservation and 56-byte
+observation reservation, then dropped the owning pair before outer postflight.
+
+The checkpoint-diagnostic private debugger separately completed its build and
+actual 18-type DWARF layout check: the measured logical reservation is 18,904
+bytes, within the unchanged 65,536-byte limit. Its new startup and physical
+capture remain unqualified; the earlier failed native attempt is not retried
+or relabelled by these results.
+
+No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Checkpoint-site debugger diagnostics — 2026-10-04
 
 The [disabled physical-v7 package](../tools/rocgdb-one-stop-native-adapters-v1/physical-v7/README.md)

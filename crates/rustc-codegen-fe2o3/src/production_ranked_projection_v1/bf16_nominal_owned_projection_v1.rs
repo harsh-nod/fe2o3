@@ -263,115 +263,136 @@ mod roster_observation {
     }
 
     impl ProductionRankedSemanticProgramV1 {
-        /// One test-only consuming observation. Tokens/pointers remain local
-        /// while the SAME move-only account/source are alive; none escapes as
-        /// authority. No UnitLocal, module receipt, attachment or ordinary route.
+        /// Initial source checks finish inside the live Program loan. No paid
+        /// observation survives the consuming conversion, including on Err.
         pub(crate) fn observe_private_nominal_roster_for_test_v1(
             mut self,
             requested: [u8; 4],
         ) -> Result<(), Error> {
             self.phase.require_clean_v1()?;
-            let before = self.phase.with_budget(|budget| {
+            self.phase.with_budget(|budget| {
                 budget
                     .check_prior_denials_v1()
                     .map_err(Error::ConditionalResource)?;
                 budget
-                    .reserve_storage(OBSERVATION_STORAGE)
+                    .reserve_storage(std::mem::size_of::<SourceJoin>())
                     .map_err(Error::ConditionalResource)?;
-                let [root] = self.roots.as_ref() else {
-                    return Err(Error::RosterMetadata(
-                        "roster observer requires one actual root",
-                    ));
-                };
-                let source = source_join(
-                    &self.materialized,
-                    root.semantic_root,
-                    &root.access_sources,
-                    &root.ranked_ir,
-                    budget,
-                )?;
-                require_same_source(&source, &source, requested)?;
-                Ok(Before {
-                    account: budget.work_ledger_identity_v1(),
-                    storage: budget.storage(),
-                    work: budget.work(),
-                    source,
-                })
+                {
+                    let [root] = self.roots.as_ref() else {
+                        return Err(Error::RosterMetadata(
+                            "roster observer requires one actual root",
+                        ));
+                    };
+                    let source = source_join(
+                        &self.materialized,
+                        root.semantic_root,
+                        &root.access_sources,
+                        &root.ranked_ir,
+                        budget,
+                    )?;
+                    require_same_source(&source, &source, requested)?;
+                }
+                budget
+                    .release_storage(std::mem::size_of::<SourceJoin>())
+                    .map_err(Error::ConditionalResource)?;
+                Ok(())
             })?;
-            // This is the actual shipping conversion, with all replay, source,
-            // middle-end, induction and functional checks left unchanged.
-            let mut roster = self.into_verified_roster_receipt()?;
-            roster.phase.require_clean_v1()?;
-            let materialized = &roster.materialized;
-            let roots = &roster.source_order_roots;
-            let observation = roster.phase.with_budget(|budget| {
-                require_same_account(&before, budget)?;
-                let [root] = roots.as_ref() else {
-                    return Err(Error::RosterMetadata(
-                        "converted roster changed actual root count",
-                    ));
-                };
-                let after = source_join(
+            consume_and_observe(self, requested)
+        }
+    }
+
+    pub(super) fn consume_and_observe(
+        program: ProductionRankedSemanticProgramV1,
+        requested: [u8; 4],
+    ) -> Result<(), Error> {
+        // This actual shipping conversion owns all source/account data. A
+        // refused conversion has no caller-local paid record left to destroy.
+        let mut roster = program.into_verified_roster_receipt()?;
+        roster.phase.require_clean_v1()?;
+        let materialized = &roster.materialized;
+        let roots = &roster.source_order_roots;
+        let observation = roster.phase.with_budget(|budget| {
+            budget
+                .check_prior_denials_v1()
+                .map_err(Error::ConditionalResource)?;
+            budget
+                .reserve_storage(OBSERVATION_STORAGE)
+                .map_err(Error::ConditionalResource)?;
+            let [root] = roots.as_ref() else {
+                return Err(Error::RosterMetadata(
+                    "converted roster changed actual root count",
+                ));
+            };
+            let before = Before {
+                account: budget.work_ledger_identity_v1(),
+                storage: budget.storage(),
+                work: budget.work(),
+                source: source_join(
                     materialized,
                     root.semantic_root,
                     &root.access_sources,
                     &root.ranked_ir,
                     budget,
-                )?;
-                require_same_source(&before.source, &after, requested)?;
-                // FRESH full validation of the returned owner and moved maps.
-                // The earlier projection report was dropped, never reused.
-                let validation = materialized
-                    .verify_private_bf16_nominal_candidate_translation_with_budget_v1(
-                        root.semantic_root,
-                        &root.lowering,
-                        &root.access_sources,
-                        &root.executable_effect_sources,
-                        budget,
-                    )
-                    .map_err(Error::Custody)?;
-                budget
-                    .charge_work(REPORT_JOIN_WORK)
-                    .map_err(Error::ConditionalResource)?;
-                if validation.semantic_sha256() != &after.semantic
-                    || validation.tensor_operations() != 1
-                    || validation.claims_indexed_address_equivalence()
-                    || validation.claims_complete_operational_equivalence()
-                    || validation.reconciled_projection_remains_trusted()
-                {
-                    return Err(Error::RosterMetadata(
-                        "converted roster fresh validation differs",
-                    ));
-                }
-                drop(validation);
-                require_same_account(&before, budget)?;
-                Ok(ValidatedObservation {
-                    work: budget.work(),
-                    storage: budget.storage(),
-                    peak: budget.peak_storage(),
-                })
-            })?;
-            // The non-Copy output is consumed after source/phase postflight,
-            // WHILE all exact observation storage is still reserved. It makes
-            // no completed-cleanup claim and never authorizes a consumer.
-            observation.emit(requested);
+                )?,
+            };
+            require_same_source(&before.source, &before.source, requested)?;
+            require_same_account(&before, budget)?;
+            // Fresh full validation on the actual moved source/maps. Compare
+            // snapshots before/after this call inside one surviving phase loan;
+            // none is reconstructed or carried across a consuming transition.
+            let validation = materialized
+                .verify_private_bf16_nominal_candidate_translation_with_budget_v1(
+                    root.semantic_root,
+                    &root.lowering,
+                    &root.access_sources,
+                    &root.executable_effect_sources,
+                    budget,
+                )
+                .map_err(Error::Custody)?;
+            let after = source_join(
+                materialized,
+                root.semantic_root,
+                &root.access_sources,
+                &root.ranked_ir,
+                budget,
+            )?;
+            require_same_source(&before.source, &after, requested)?;
+            budget
+                .charge_work(REPORT_JOIN_WORK)
+                .map_err(Error::ConditionalResource)?;
+            if validation.semantic_sha256() != &after.semantic
+                || validation.tensor_operations() != 1
+                || validation.claims_indexed_address_equivalence()
+                || validation.claims_complete_operational_equivalence()
+                || validation.reconciled_projection_remains_trusted()
+            {
+                return Err(Error::RosterMetadata(
+                    "converted roster fresh validation differs",
+                ));
+            }
+            drop(validation);
+            require_same_account(&before, budget)?;
             drop(before);
-            roster.phase.require_clean_v1()?;
-            roster.phase.with_budget(|budget| {
-                budget
-                    .check_prior_denials_v1()
-                    .map_err(Error::ConditionalResource)?;
-                budget
-                    .release_storage(OBSERVATION_STORAGE)
-                    .map_err(Error::ConditionalResource)
-            })?;
-            // Roster owns materialized source first, retained account last.
-            // The outer caller still owns the separate materialization account.
-            drop(roster);
-            // Existing outer owning-entry marker is emitted only after this
-            // actual drop and unchanged original materialization postflight.
-            Ok(())
-        }
+            Ok(ValidatedObservation {
+                work: budget.work(),
+                storage: budget.storage(),
+                peak: budget.peak_storage(),
+            })
+        })?;
+        observation.emit(requested);
+        roster.phase.require_clean_v1()?;
+        roster.phase.with_budget(|budget| {
+            budget
+                .check_prior_denials_v1()
+                .map_err(Error::ConditionalResource)?;
+            budget
+                .release_storage(OBSERVATION_STORAGE)
+                .map_err(Error::ConditionalResource)
+        })?;
+        drop(roster);
+        // The unchanged outer entry marker follows actual source/account drop
+        // and the caller's independent original materialization postflight.
+        Ok(())
     }
 
     #[test]
@@ -478,4 +499,11 @@ mod roster_observation {
             assert_eq!(budget.failed_storage(), Some(2));
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn refuse_roster_observation_conversion_fixture_v1(
+    program: ProductionRankedSemanticProgramV1,
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    roster_observation::consume_and_observe(program, [0, 1, 2, 3])
 }
