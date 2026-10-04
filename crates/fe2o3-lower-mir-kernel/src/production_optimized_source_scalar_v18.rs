@@ -492,7 +492,12 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                 operation: request.operation, operand: 1,
                             }, output, budget)?;
                         let actual = source_operation_row_v18(inventory, output, budget)?;
-                        if !matches!(&actual.operation.kind, OperationKind::Store { value: actual, .. } if *actual == value)
+                        let rhs_matches = matches!(&actual.operation.kind, OperationKind::Store { value: actual, .. } if *actual == value)
+                            || (matches!(actual.operation.kind, OperationKind::GuardedStore { .. })
+                                && optimized_source_guarded_scalar_input_v89(
+                                    relation, self.optimized, request, output, value, budget,
+                                )?);
+                        if !rhs_matches
                             || output.block.function != self.function.coordinate
                         {
                             return relation.source.missing("optimized source Store actual RHS or root changed").map_err(Into::into);
@@ -619,6 +624,147 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
             }))
         })())
     }
+}
+
+// This is scalar RHS transport only. No descriptor role, access condition,
+// initialization, formation, or native-memory obligation is discharged here.
+fn optimized_source_guarded_scalar_input_v89(
+    relation: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    request: &ProductionSourceScalarStoreV18<'_>,
+    output: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    value: ValueId,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<bool> {
+    let floor = budget.storage();
+    scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
+        type Frame<'a> = (
+            [&'a (); 16],
+            [usize; 8],
+            [ValueId; 8],
+            [fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1; 2],
+            [fe2o3_kernel_analysis::CanonicalKirOutputUseV1; 3],
+            [SourceOwnedResultV18<bool>; 3],
+        );
+        let header = argument_sum_v1(&[size_of::<Frame<'_>>(), std::mem::align_of::<Frame<'_>>()])?;
+        budget.reserve_storage(header)?;
+        budget.charge_work(48)?;
+        request.check(budget)?;
+        let input =
+            source_operation_row_v18(relation.inventory, request.operation, budget)?.operation;
+        let inventory = optimized.output_inventory(budget)?;
+        let actual = source_operation_row_v18(inventory, output, budget)?.operation;
+        let OperationKind::GuardedStore {
+            pointer: old_pointer,
+            predicate: old_predicate,
+            ..
+        } = input.kind
+        else {
+            budget.release_storage(header)?;
+            return Ok(false);
+        };
+        let role = matches!(
+            request.anchor.source,
+            Some(ScopedMemoryFrameV29 {
+                role: Some(ScopedMemoryRoleV29::IntrinsicWrite),
+                ..
+            })
+        );
+        let (pointer_use, pointer) = optimized_source_actual_operand_v18(
+            relation,
+            optimized,
+            fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                operation: request.operation,
+                operand: 0,
+            },
+            output,
+            budget,
+        )?;
+        let (predicate_use, predicate) = optimized_source_actual_operand_v18(
+            relation,
+            optimized,
+            fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                operation: request.operation,
+                operand: 2,
+            },
+            output,
+            budget,
+        )?;
+        let input_predicate = relation
+            .inventory
+            .definition_for_value(request.operation.block.function, old_predicate, budget)
+            .map_err(source_pointer_inventory_error_v18)?;
+        let output_predicate = inventory
+            .definition_for_value(output.block.function, predicate, budget)
+            .map_err(source_pointer_inventory_error_v18)?;
+        let (value_use, actual_value) = optimized_source_actual_operand_v18(
+            relation,
+            optimized,
+            fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                operation: request.operation,
+                operand: 1,
+            },
+            output,
+            budget,
+        )?;
+        let matched = actual_value == value
+            && [
+                pointer_use.coordinate,
+                value_use.coordinate,
+                predicate_use.coordinate,
+            ] == [0, 1, 2].map(|operand| {
+                fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                    operation: output,
+                    operand,
+                }
+            })
+            && input_predicate.is_some_and(|row| row.ty == &Type::BOOL)
+            && output_predicate.is_some_and(|row| row.ty == &Type::BOOL)
+            && optimized_guarded_scalar_shape_v89(
+                input,
+                actual,
+                role,
+                [old_pointer, request.value, old_predicate],
+                [pointer, value, predicate],
+            );
+        budget.release_storage(header)?;
+        Ok(matched)
+    })
+}
+
+fn optimized_guarded_scalar_shape_v89(
+    input: &fe2o3_kernel_ir::Operation,
+    output: &fe2o3_kernel_ir::Operation,
+    intrinsic_write: bool,
+    input_values: [ValueId; 3],
+    output_values: [ValueId; 3],
+) -> bool {
+    let OperationKind::GuardedStore {
+        pointer: a,
+        value: b,
+        predicate: c,
+        access,
+    } = input.kind
+    else {
+        return false;
+    };
+    let OperationKind::GuardedStore {
+        pointer: x,
+        value: y,
+        predicate: z,
+        access: actual,
+    } = output.kind
+    else {
+        return false;
+    };
+    intrinsic_write
+        && input.results.is_empty()
+        && output.results.is_empty()
+        && [a, b, c] == input_values
+        && [x, y, z] == output_values
+        && access == actual
+        && access.address_space == AddressSpace::Global
+        && !access.volatile
 }
 
 impl SourceScalarNormalizationV18 for OptimizedSourceScalarNormalizationV18<'_> {
