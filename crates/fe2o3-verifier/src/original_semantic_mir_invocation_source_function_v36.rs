@@ -67,6 +67,10 @@ pub(super) struct SourceCutHintsV85 {
 }
 
 impl SourceCutHintsV85 {
+    pub(super) fn has_write_normalization(&self) -> bool {
+        self.normalization.is_some()
+    }
+
     pub(super) fn emit_write_normalization(
         &self,
         root: usize,

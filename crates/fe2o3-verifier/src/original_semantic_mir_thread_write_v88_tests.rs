@@ -685,6 +685,7 @@ fn thread_write_normalization_uses_authentic_literals_without_new_step_premises(
                 assert!(header.contains("_heap_v85(source:"));
                 assert!(!header.contains("normalized_write"));
                 assert!(!header.contains("local_normal_form"));
+                assert!(body.starts_with(" hide(invocation_source_thread_write_v88);\n"));
                 assert!(body.contains(
                     " invocation_thread_write_local_normal_form_v93(source, normalized_write,"
                 ));
