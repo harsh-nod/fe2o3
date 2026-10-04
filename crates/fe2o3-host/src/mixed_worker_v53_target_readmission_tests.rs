@@ -149,7 +149,7 @@ fn descriptor(owner: &Owner, profile: ProductionAmdTargetProfileV1, mode: usize)
             match mode {
                 1 => subjects.output_graph_identity = [71; 32],
                 2 => subjects.source_semantic_identity = [72; 32],
-                3 => subjects.output_function = count as u32,
+                3 => subjects.output_function = (count + i) as u32,
                 4 => subjects.exact_grid = [64, 1, 1],
                 _ => {}
             }
