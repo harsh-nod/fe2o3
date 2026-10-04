@@ -41,6 +41,22 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The private V53 consuming execution adapter adds one unsafe backend trait and
+one private implementation of the existing gfx942 runtime authority. A safe
+content callback cannot establish protected compiler/proof provenance or native
+semantics, so the extension contract requires an independently approved provider
+for the exact retained source, graph, artifact and actual invocation. No provider
+is installed. The private implementation is constructed only after that contract,
+opaque current-record binding, complete V53 readmission, exact evidence-subject
+comparison and pre-/post-verification currentness checks. It retains the same
+prepared request, checked device, publication, proof artifacts and output borrows
+through the existing runtime completion boundary. Borrowed KFD inspection adds
+no unsafe operation or authority. Root and independent source review found no
+remaining scoped issue; content/accounting fixtures are not native qualification.
+Only this file's `impl: 1, trait: 1` entry is added to the inventory. The ordinary
+inventory gate and adapter compilation remain separate required qualification;
+this scoped update neither refreshes nor claims to audit unrelated allowances.
+
 The 2026-09-30 native-custody audit reconciles seventeen omitted or stale
 inventory entries. All seventeen source files are unchanged from the published
 `edd71e6762252d1990d10d84d10cc53b666d09b7` checkpoint; this is a review record,

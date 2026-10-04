@@ -834,6 +834,10 @@
     "block": 2,
     "function": 1
   },
+  "crates/fe2o3-host/src/mixed_worker_v53_execution.rs": {
+    "impl": 1,
+    "trait": 1
+  },
   "crates/fe2o3-host/src/prepared_launch.rs": {
     "block": 7,
     "function": 1
