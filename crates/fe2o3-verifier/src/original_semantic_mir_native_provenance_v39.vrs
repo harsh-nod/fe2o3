@@ -1,6 +1,16 @@
 // Native callers cannot mint an identity from any private allocation generation,
 // including one the kernel will create later. Dead, uninitialized fragments are
 // inert; neither a typed read nor a complete relocation can recover them.
+// Runtime allocation generations are u64 (ProvenanceV2 and native allocation
+// keys). Keep the mathematical overapproximation unbounded above, but do not
+// admit negative live generations that the source frame invariant rejects.
+spec fn invocation_native_live_allocation_v77(allocation: MemoryAllocationV30) -> bool {
+    match allocation {
+        MemoryAllocationV30::External { generation, .. } => 0 <= generation,
+        MemoryAllocationV30::Private { .. } => false,
+    }
+}
+
 spec fn invocation_native_value_provenance_v39(value: MemoryValueV30) -> bool {
     match value {
         MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
@@ -16,7 +26,7 @@ spec fn invocation_native_provenance_v39(memory: ByteMemoryV30,
     (forall|i: int| 0 <= i < arguments.len() ==>
         invocation_native_value_provenance_v39(arguments[i]))
     && (forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
-        !invocation_private_allocation_v36(allocation) && ({
+        invocation_native_live_allocation_v77(allocation) && ({
             let object = memory.live[allocation];
             (forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] ==>
                 match object.bytes[i] {

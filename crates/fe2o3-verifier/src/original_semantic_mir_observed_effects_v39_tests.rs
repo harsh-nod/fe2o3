@@ -127,7 +127,7 @@ fn original_mir_native_provenance_census_rejects_private_payloads_not_only_live_
         "MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation)",
         "MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation)",
         "0 <= i < arguments.len()",
-        "!invocation_private_allocation_v36(allocation)",
+        "invocation_native_live_allocation_v77(allocation)",
         "0 <= i < object.bytes.len() && object.initialized[i]",
         "MemoryByteV37::PointerFragment { pointer, .. }",
         "object.relocations.contains_key(at)",
@@ -147,6 +147,50 @@ fn original_mir_native_provenance_census_rejects_private_payloads_not_only_live_
     assert_eq!(laws.matches("proof fn ").count(), 6);
     assert!(!laws.contains("assume("));
     assert!(!laws.contains("external_body"));
+}
+
+#[test]
+fn original_mir_native_live_generation_domain_covers_unsigned_runtime_generations() {
+    let native = include_str!("original_semantic_mir_native_provenance_v39.vrs");
+    let function = native
+        .split_once("spec fn invocation_native_live_allocation_v77")
+        .unwrap()
+        .1
+        .split("spec fn ")
+        .next()
+        .unwrap();
+    assert!(
+        function.contains("MemoryAllocationV30::External { generation, .. } => 0 <= generation")
+    );
+    assert!(function.contains("MemoryAllocationV30::Private { .. } => false"));
+    assert!(!function.contains("frames"));
+    assert!(!function.contains("source_ready"));
+    assert!(!function.contains("generation <="));
+
+    let runtime = include_str!("../../fe2o3-kernel-ir/src/memory_safety_v2.rs");
+    let runtime = syn::parse_file(runtime).unwrap();
+    let declarations: Vec<_> = runtime
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "ProvenanceV2" => Some(item),
+            _ => None,
+        })
+        .collect();
+    let [parsed] = declarations.as_slice() else {
+        panic!("one runtime provenance definition");
+    };
+    let generation = parsed
+        .fields
+        .iter()
+        .find(|field| {
+            field
+                .ident
+                .as_ref()
+                .is_some_and(|name| name == "generation")
+        })
+        .unwrap();
+    assert!(matches!(&generation.ty, syn::Type::Path(ty) if ty.path.is_ident("u64")));
 }
 
 #[test]

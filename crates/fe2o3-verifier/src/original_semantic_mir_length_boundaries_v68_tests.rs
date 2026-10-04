@@ -66,7 +66,14 @@ fn original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_
         assert!(text.ends_with(&format!(
             "\nverus! {{\n{LENGTH_EQUATIONS_V68}\n{DESCRIPTOR_EFFECT_EQUATIONS_V68}\n}}\n"
         )));
-        assert_eq!(LENGTH_EQUATIONS_V68.matches("proof fn ").count(), 3);
+        assert_eq!(LENGTH_EQUATIONS_V68.matches("proof fn ").count(), 6);
+        for equation in [
+            "native_unsigned_external_generation_is_admitted_v77",
+            "native_negative_live_generation_is_rejected_v77",
+            "native_input_allocations_satisfy_frame_liveness_v77",
+        ] {
+            assert_eq!(text.matches(&format!("proof fn {equation}(")).count(), 1);
+        }
         assert_eq!(
             DESCRIPTOR_EFFECT_EQUATIONS_V68.matches("proof fn ").count(),
             5

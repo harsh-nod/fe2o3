@@ -19,3 +19,41 @@ proof fn logical_shape_rejects_negative_descriptor_origins_at_any_sequence_lengt
         logical.descriptor_references[local].loan.origin < 0,
     ensures !invocation_source_logical_well_formed_v38(logical, count as int),
 {}
+
+proof fn native_unsigned_external_generation_is_admitted_v77(identity: int, generation: u64)
+    ensures invocation_native_live_allocation_v77(
+        MemoryAllocationV30::External { identity, generation: generation as int }),
+{}
+
+proof fn native_negative_live_generation_is_rejected_v77(
+    memory: ByteMemoryV30, arguments: Seq<MemoryValueV30>, identity: int, generation: int,
+)
+    requires generation < 0,
+        memory.live.contains_key(MemoryAllocationV30::External { identity, generation }),
+    ensures !invocation_native_provenance_v39(memory, arguments),
+{
+    let allocation = MemoryAllocationV30::External { identity, generation };
+    assert(!invocation_native_live_allocation_v77(allocation));
+    if invocation_native_provenance_v39(memory, arguments) {
+        assert(invocation_native_live_allocation_v77(allocation));
+    }
+}
+
+proof fn native_input_allocations_satisfy_frame_liveness_v77(
+    memory: ByteMemoryV30, arguments: Seq<MemoryValueV30>, frames: MemoryFrameRuntimeV30,
+)
+    requires invocation_native_provenance_v39(memory, arguments),
+    ensures byte_private_frames_live_v30(memory, frames),
+{
+    assert forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) implies
+        match allocation {
+            MemoryAllocationV30::External { generation, .. } => 0 <= generation,
+            MemoryAllocationV30::Private { owner, invocation, site, generation } =>
+                0 <= owner && 0 <= invocation && 0 <= generation
+                && 0 <= site.function && 0 <= site.block && 0 <= site.operation
+                && exists|i: int| 0 <= i < frames.active.len()
+                    && frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),
+        } by {
+        assert(invocation_native_live_allocation_v77(allocation));
+    }
+}
