@@ -132,6 +132,55 @@ fn native_v18_target_llvm_ir_preserves_exact_owner_geometry_and_anchor_version_o
 }
 
 #[test]
+fn native_v18_target_llvm_ir_uses_exact_worker_layout_on_both_targets() {
+    let mut work = Work::new(1_000_000_000);
+    let mut budget = Budget::new(&mut work, 1_000_000_000);
+    let (owner, retained) = admit_v18(&module_v18(), &mut budget);
+    let expected = format!(
+        "target datalayout = \"{}\"",
+        fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
+    );
+    for llvm in [
+        lower_canonical_v18_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            &owner,
+        )
+        .unwrap(),
+        lower_canonical_v18_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            &owner,
+        )
+        .unwrap(),
+    ] {
+        assert_eq!(
+            llvm.lines()
+                .filter(|line| line.starts_with("target datalayout"))
+                .collect::<Vec<_>>(),
+            [expected.as_str()],
+        );
+        assert!(!llvm.contains(fe2o3_amd_target::PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1));
+    }
+    drop(owner);
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
+fn native_v18_worker_layout_selection_keeps_historical_renderer_unchanged() {
+    let module = module_v18();
+    let llvm = lower_compiler_module_to_gfx942_llvm_ir(&module).unwrap();
+    let expected = format!(
+        "target datalayout = \"{}\"",
+        fe2o3_amd_target::PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
+    );
+    assert_eq!(
+        llvm.lines()
+            .filter(|line| line.starts_with("target datalayout"))
+            .collect::<Vec<_>>(),
+        [expected.as_str()],
+    );
+    assert!(!llvm.contains(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1));
+}
+
+#[test]
 fn native_v18_target_llvm_ir_keeps_geometry_refusal_on_both_targets() {
     let mut module = module_v18();
     module.kernels[0].workgroup_size = None;
