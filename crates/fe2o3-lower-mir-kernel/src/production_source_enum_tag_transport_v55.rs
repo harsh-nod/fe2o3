@@ -224,7 +224,17 @@ fn merge_source_enum_tag_v55(
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     references.check(budget)?;
-    let plan = references.plan;
+    merge_source_enum_tag_plan_v59(references.plan, node, held, archived, budget)
+}
+
+fn merge_source_enum_tag_plan_v59(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    node: usize,
+    held: &SemanticValueBindingV1,
+    archived: &SemanticValueBindingV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
     let tag = source_enum_tag_type_v55(plan, node, budget)?;
     if let (SemanticValueBindingV1::SourceEnumTag(a), SemanticValueBindingV1::SourceEnumTag(b)) =
         (held, archived)

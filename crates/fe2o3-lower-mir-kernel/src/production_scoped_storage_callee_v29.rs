@@ -1,4 +1,4 @@
-// Movement-only correspondence for exact original typed storage. This
+// Movement-only correspondence for exact original and compiler typed storage. This
 // does not replace source effects, alias/currentness equations or final replay.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ScopedStorageChainV29 {
@@ -42,7 +42,7 @@ struct ScopedStorageSourceV29 {
     source: InstanceSpanSourceV1,
     offset: u32,
     call_offset: Option<u32>,
-    payload: ScopedObjectPayloadV29,
+    payload: ScopedStoragePayloadV59,
     inputs: [Option<(ValueId, ScopedStorageTypeV29)>; 2],
     result: Option<ScopedStorageTypeV29>,
     next: Option<usize>,
@@ -76,6 +76,8 @@ struct ScopedStorageActualV29<'a> {
 }
 
 type ScopedStorageSpanV29 = ((usize, BlockId, u32), usize, Option<u32>);
+
+include!("production_scoped_storage_compiler_enum_v59.rs");
 
 fn scoped_storage_span_index_v29(
     rows: &[InstanceMappedSpanV1],
@@ -145,11 +147,10 @@ fn scoped_storage_error_v29(error: ProductionSemanticKirErrorV1) -> CallInstance
     }
 }
 
-fn scoped_storage_actual_v29<'a>(
-    function: &'a Function,
+fn scoped_storage_count_v59(
+    function: &Function,
     budget: &mut ArgumentBudgetV1<'_>,
-    scratch: &mut usize,
-) -> Result<Vec<ScopedStorageActualV29<'a>>, CallInstanceEmissionErrorV1> {
+) -> Result<usize, CallInstanceEmissionErrorV1> {
     use CallInstanceEmissionErrorV1::StorageTransport as Refused;
     let body = function.body.as_ref().ok_or(Refused)?;
     let mut count = 0usize;
@@ -162,6 +163,17 @@ fn scoped_storage_actual_v29<'a>(
             }
         }
     }
+    Ok(count)
+}
+
+fn scoped_storage_actual_v29<'a>(
+    function: &'a Function,
+    budget: &mut ArgumentBudgetV1<'_>,
+    scratch: &mut usize,
+) -> Result<Vec<ScopedStorageActualV29<'a>>, CallInstanceEmissionErrorV1> {
+    use CallInstanceEmissionErrorV1::StorageTransport as Refused;
+    let count = scoped_storage_count_v59(function, budget)?;
+    let body = function.body.as_ref().ok_or(Refused)?;
     call_splice_charge_storage_v1(
         std::mem::size_of::<Vec<ScopedStorageActualV29<'_>>>(),
         budget,
@@ -506,11 +518,8 @@ impl ScopedStorageTransportV29 {
             let Some(lowered) = lowered else {
                 continue;
             };
-            let Some(anchors) = &lowered.scoped_memory_anchors else {
-                continue;
-            };
             count = count
-                .checked_add(anchors.objects.len())
+                .checked_add(scoped_storage_count_v59(&lowered.function, budget)?)
                 .ok_or_else(call_splice_arithmetic_v1)?;
         }
         call_splice_charge_storage_v1(std::mem::size_of::<Self>(), budget, scratch)?;
@@ -630,48 +639,77 @@ impl ScopedStorageTransportV29 {
                                 .instance(instance)
                                 .ok_or_else(scoped_object_error_v29)?
                                 .function()
-                        || actual.len() != anchors.objects.len()
                     {
                         return Err(scoped_object_error_v29());
                     }
                     let first = result.rows.len();
+                    let mut objects = 0usize;
                     budget.charge_work(anchors.rows.len())?;
                     for (anchor_index, anchor) in anchors.rows.iter().enumerate() {
-                        let ScopedMemoryAnchorKindV29::Object(_) = anchor.kind else {
+                        if !matches!(
+                            anchor.kind,
+                            ScopedMemoryAnchorKindV29::Object(_)
+                                | ScopedMemoryAnchorKindV29::Access { payload: None, .. }
+                        ) {
                             continue;
-                        };
-                        let payload = anchors.object_payload(anchor, budget)?;
-                        anchors.check_object_source(
-                            original,
-                            &occurrences,
-                            anchor_index,
-                            anchor,
-                            payload,
-                            budget,
-                        )?;
+                        }
                         let point = (
                             anchor.block,
                             u32::try_from(anchor.position)
                                 .map_err(|_| ArgumentResourceV1::Arithmetic)?,
                         );
                         budget.charge_work(call_splice_search_work_v1(actual.len()))?;
-                        let selected = actual
-                            .binary_search_by_key(&point, |row| row.point)
-                            .map_err(|_| scoped_object_error_v29())?;
+                        let selected = match actual.binary_search_by_key(&point, |row| row.point) {
+                            Ok(selected) => selected,
+                            Err(_)
+                                if matches!(
+                                    anchor.kind,
+                                    ScopedMemoryAnchorKindV29::Access { .. }
+                                ) =>
+                            {
+                                continue;
+                            }
+                            Err(_) => return Err(scoped_object_error_v29()),
+                        };
                         let row = &mut actual[selected];
                         if row.seen {
                             return Err(scoped_object_error_v29());
                         }
-                        payload.check_operation(row.operation, budget)?;
-                        let (inputs, output) = scoped_storage_operand_types_v29(
-                            references,
-                            anchors,
-                            payload,
-                            row.operation,
-                            &index,
-                            budget,
-                        )
-                        .map_err(source_address_call_error_v29)?;
+                        let (payload, inputs, output) =
+                            if matches!(anchor.kind, ScopedMemoryAnchorKindV29::Object(_)) {
+                                let payload = anchors.object_payload(anchor, budget)?;
+                                anchors.check_object_source(
+                                    original,
+                                    &occurrences,
+                                    anchor_index,
+                                    anchor,
+                                    payload,
+                                    budget,
+                                )?;
+                                payload.check_operation(row.operation, budget)?;
+                                let (inputs, output) = scoped_storage_operand_types_v29(
+                                    references,
+                                    anchors,
+                                    payload,
+                                    row.operation,
+                                    &index,
+                                    budget,
+                                )
+                                .map_err(source_address_call_error_v29)?;
+                                objects = argument_sum_v1(&[objects, 1])?;
+                                (ScopedStoragePayloadV59::Object(*payload), inputs, output)
+                            } else {
+                                let (payload, inputs) = scoped_storage_compiler_enum_v59(
+                                    references,
+                                    instance,
+                                    lowered,
+                                    anchor_index,
+                                    row.operation,
+                                    &index,
+                                    budget,
+                                )?;
+                                (payload, inputs, None)
+                            };
                         let key = (instance_index, point.0, point.1);
                         budget.charge_work(call_splice_search_work_v1(spans.len()))?;
                         let selected = spans
@@ -698,7 +736,7 @@ impl ScopedStorageTransportV29 {
                             source: mapped.source,
                             offset: point.1 - span.first,
                             call_offset: spans[selected].2,
-                            payload: *payload,
+                            payload,
                             inputs,
                             result: output,
                             next: None,
@@ -706,7 +744,7 @@ impl ScopedStorageTransportV29 {
                         row.seen = true;
                     }
                     budget.charge_work(actual.len())?;
-                    if actual.iter().any(|row| !row.seen) {
+                    if objects != anchors.objects.len() || actual.iter().any(|row| !row.seen) {
                         return Err(scoped_object_error_v29());
                     }
                     let end = result.rows.len();

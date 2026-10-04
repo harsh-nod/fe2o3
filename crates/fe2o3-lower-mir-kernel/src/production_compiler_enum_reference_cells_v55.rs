@@ -10,7 +10,23 @@ fn check_scoped_compiler_enum_reference_store_v55<'archive>(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Option<&'archive SemanticSourceReferenceBindingV29>, ProductionSemanticKirErrorV1> {
     references.check(budget)?;
-    let plan = references.plan;
+    check_scoped_compiler_enum_reference_plan_v59(
+        references.plan,
+        instance,
+        archive,
+        checked,
+        budget,
+    )
+}
+
+fn check_scoped_compiler_enum_reference_plan_v59<'archive>(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    archive: &'archive ExecutionArchiveV29,
+    checked: &CheckedScopedCompilerEnumAccessV55<'archive>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Option<&'archive SemanticSourceReferenceBindingV29>, ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
     archive.check_original_v29(plan.instances, instance, budget)?;
     let result = (|| {
         source_reference_owned_prepay_v29::<(
@@ -145,8 +161,8 @@ fn check_scoped_compiler_enum_reference_store_v55<'archive>(
             {
                 return Err(source_enum_tag_error_v55());
             }
-            merge_source_enum_tag_v55(
-                references,
+            merge_source_enum_tag_plan_v59(
+                plan,
                 demand.node,
                 checked.binding,
                 checked.binding,

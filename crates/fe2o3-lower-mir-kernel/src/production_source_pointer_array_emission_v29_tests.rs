@@ -43,7 +43,11 @@ fn observe_original_pointer_storage_transport_v29(
             if !matches!(ty, ScopedStorageTypeV29::OriginalPointer(..)) {
                 return None;
             }
-            let ScopedObjectOperationV29::ReadValue { .. } = row.payload.operation else {
+            let ScopedStoragePayloadV59::Object(ScopedObjectPayloadV29 {
+                operation: ScopedObjectOperationV29::ReadValue { .. },
+                ..
+            }) = row.payload
+            else {
                 panic!("original pointer result must be a value read");
             };
             let (block, operation) = scoped_storage_mapped_point_v29(

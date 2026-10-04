@@ -1,6 +1,8 @@
 use super::*;
 use std::mem::size_of;
 
+include!("production_scoped_storage_compiler_enum_v59_tests.rs");
+
 thread_local! {
     static STORAGE_OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -63,8 +65,18 @@ fn inspect_transport(
         .enumerate()
         .filter(|(ordinal, _)| *ordinal != root.index())
         .filter_map(|(_, lowered)| lowered.as_ref())
-        .filter_map(|lowered| lowered.scoped_memory_anchors.as_ref())
-        .map(|anchors| anchors.objects.len())
+        .map(|lowered| {
+            lowered
+                .function
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .filter(|operation| matches!(operation.kind, OperationKind::Storage(_)))
+                .count()
+        })
         .sum();
     assert_eq!(transport.rows.len(), expected);
     let root_lowered = emitted[root.index()].as_ref().unwrap();
