@@ -76,7 +76,7 @@ fn check_compiler_enum_role_mutations_v55(
                 10 => {
                     record.role = ScopedCompilerEnumRoleV55::Store {
                         site: ExecutionSiteV29::Terminator {
-                            block: SemanticBlockIdV1::from_index(0),
+                            block: SsaBlockIdV1::new(0),
                         },
                         value,
                         source: None,

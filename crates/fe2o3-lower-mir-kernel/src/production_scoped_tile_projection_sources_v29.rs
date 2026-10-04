@@ -605,6 +605,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                 objects,
                 object_components: _,
                 zero_objects,
+                compiler_enum: _,
             }) = &sidecar.scoped_memory_anchors
             else {
                 continue;

@@ -494,7 +494,16 @@ fn wave_reduction_census_reused_context_reference_authenticates_both_shared_cons
         64,
         SemanticSubgroupReductionKindV1::Sum,
     );
-    lowered.executable().revalidate().unwrap();
+    let (replayed, retained) = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
+        lowered.executable().module(),
+        &mut budget,
+    )
+    .unwrap();
+    budget.reserve_storage(retained.retained_storage()).unwrap();
+    assert_eq!(replayed.module(), lowered.executable().module());
+    assert_eq!(replayed.canonical(), lowered.executable().canonical());
+    drop(replayed);
+    budget.release_storage(retained.retained_storage()).unwrap();
     assert_eq!(budget.storage(), FLOOR);
 }
 
