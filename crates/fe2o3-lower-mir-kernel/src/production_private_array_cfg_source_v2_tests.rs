@@ -675,7 +675,7 @@ fn private_array_cfg_existing_production_translation_consumes_cross_block_initia
         .unwrap();
         assert!(lowering.all_mandatory_reports_are_clean());
         let result = validate_mir_pliron_translation_with_semantic_v1(
-            Some(owner.semantic_ssa().source_semantic()),
+            Some(owner.semantic_ssa()),
             owner.executable().module(),
             &owner.correspondence,
             "private_array_relation",
@@ -702,7 +702,7 @@ fn private_array_cfg_existing_production_translation_consumes_cross_block_initia
                 let extra_location = FunctionOperationLocation::new(last.id, last.operations.len());
                 last.operations.push(extra);
                 assert!(matches!(validate_mir_pliron_translation_with_semantic_v1(
-                    Some(owner.semantic_ssa().source_semantic()), &changed, &owner.correspondence,
+                    Some(owner.semantic_ssa()), &changed, &owner.correspondence,
                     "private_array_relation", &lowering, &sources, &[], 10_000),
                     Err(ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect { location })
                         if location == extra_location));
@@ -727,7 +727,7 @@ fn private_array_cfg_existing_production_translation_consumes_cross_block_initia
                     );
                 assert!(matches!(
                     validate_mir_pliron_translation_with_semantic_v1(
-                        Some(owner.semantic_ssa().source_semantic()),
+                        Some(owner.semantic_ssa()),
                         &changed,
                         &owner.correspondence,
                         "private_array_relation",
