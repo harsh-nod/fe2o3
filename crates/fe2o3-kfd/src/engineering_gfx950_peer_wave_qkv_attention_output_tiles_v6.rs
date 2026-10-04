@@ -183,7 +183,10 @@ fn run_resident(
     })
 }
 
-struct NativeResident<'a>(&'a mut Gfx950EngineeringPeerGroupV1);
+struct NativeResident<'a>(
+    &'a mut Gfx950EngineeringPeerGroupV1,
+    Option<Vec<Gfx950EngineeringRawTimestampObservationV1>>,
+);
 
 impl ResidentBackend for NativeResident<'_> {
     fn check(&mut self) -> Result<()> {
@@ -252,7 +255,11 @@ impl ResidentBackend for NativeResident<'_> {
         // SAFETY: run_resident brackets each initial/terminal pair with fresh
         // full group fences, retains this exclusive borrow, and never publishes
         // or marks Completed until the corresponding post-fence succeeds.
-        unsafe { super::wave_qkv_attention_output_tiles_state_v6::observe_within_resident_fence(self.0, state) }
+        unsafe {
+            super::wave_qkv_attention_output_tiles_state_v6::observe_within_resident_fence(
+                self.0, state,
+            )
+        }
     }
 
     fn submit_and_complete(
@@ -261,8 +268,47 @@ impl ResidentBackend for NativeResident<'_> {
     ) -> Result<Vec<u64>> {
         // SAFETY: the outer unsafe entry owes the exact reviewed V6 image/model
         // contracts. The unchanged publisher retains all allocations and queues.
-        unsafe { self.0.dispatch_round_unchecked(commands) }
+        if self.1.is_some() {
+            // Keep observations private until the unchanged coordinator has
+            // checked every terminal word and its final full fence.
+            let observations = unsafe {
+                self.0
+                    .dispatch_round_with_raw_timestamps_unchecked(commands)
+            }?;
+            let elapsed = observations
+                .iter()
+                .map(|value| value.host_elapsed_ns())
+                .collect();
+            self.1 = Some(observations);
+            Ok(elapsed)
+        } else {
+            unsafe { self.0.dispatch_round_unchecked(commands) }
+        }
     }
+}
+
+fn finish_timestamp_round(
+    round: Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+    observations: Vec<Gfx950EngineeringRawTimestampObservationV1>,
+) -> Result<(
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+    [Gfx950EngineeringRawTimestampObservationV1; 2],
+)> {
+    let raw: [Gfx950EngineeringRawTimestampObservationV1; 2] = observations
+        .try_into()
+        .map_err(|_| "prefix tiles timestamp paired census")?;
+    for (rank, value) in raw.iter().enumerate() {
+        profile::validate_final_state(round.final_states[rank])?;
+        if value.rank() != rank || value.host_elapsed_ns() != round.dispatch_elapsed_ns[rank] {
+            return Err("prefix tiles timestamp rank/host interval join".into());
+        }
+    }
+    if raw[0].group_incarnation() != raw[1].group_incarnation()
+        || raw[0].unique_id() == raw[1].unique_id()
+    {
+        return Err("prefix tiles timestamp group/device join".into());
+    }
+    Ok((round, raw))
 }
 
 impl Gfx950EngineeringPeerGroupV1 {
@@ -285,7 +331,35 @@ impl Gfx950EngineeringPeerGroupV1 {
         commands: [Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6<'_>; 2],
     ) -> Result<Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6> {
         self.require_active()?;
-        let result = run_resident(&mut NativeResident(self), commands);
+        let result = run_resident(&mut NativeResident(self, None), commands);
+        self.finish(result)
+    }
+
+    /// Same typed paired V6 launch with raw completion-signal ticks. All existing
+    /// state/ABI/alias checks are retained. Only fresh timestamp-enabled groups
+    /// accept this entry; it never toggles a queue or falls back to host timing.
+    /// Observations do not claim close, calibration or cross-device overlap.
+    /// # Safety
+    /// All obligations of `dispatch_wave_qkv_attention_output_tiles_round_v6`
+    /// apply unchanged, together with `open_raw_timestamps_unchecked`. Retain
+    /// observations private until successful group close; any failure is terminal.
+    pub unsafe fn dispatch_wave_qkv_attention_output_tiles_round_with_raw_timestamps_unchecked_v1(
+        &mut self,
+        commands: [Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6<'_>; 2],
+    ) -> Result<(
+        Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+        [Gfx950EngineeringRawTimestampObservationV1; 2],
+    )> {
+        self.require_active()?;
+        let result = (|| {
+            let mut backend = NativeResident(self, Some(Vec::new()));
+            let round = run_resident(&mut backend, commands)?;
+            let raw = backend
+                .1
+                .take()
+                .ok_or("missing prefix tiles timestamp capture")?;
+            finish_timestamp_round(round, raw)
+        })();
         self.finish(result)
     }
 }
@@ -293,3 +367,7 @@ impl Gfx950EngineeringPeerGroupV1 {
 #[cfg(test)]
 #[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_v6_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_timestamp_tests.rs"]
+mod timestamp_tests;

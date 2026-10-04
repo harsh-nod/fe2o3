@@ -503,17 +503,107 @@ fn resident_v6_rejects_aliases_even_readonly_and_wrong_physical_extents() {
 
 #[test]
 fn resident_v6_native_adapter_routes_to_private_guard_not_public_observer() {
-    let mut owner = group();
-    owner.shared_full_currentness = true;
+    for capture in [false, true] {
+        let mut owner = group();
+        owner.shared_full_currentness = true;
+        let mut states = make_states();
+        states[0].activation = Activation::Initialized;
+        // Both modes use the same private observation guard, which refuses
+        // this phase before a public fence could reach the empty native roster.
+        let raw = capture.then(Vec::new);
+        let error = NativeResident(&mut owner, raw)
+            .observe(&states[0])
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "prefix tiles V6 private resident observation activation"
+        );
+        assert!(owner.poisoned);
+        assert_eq!(
+            owner.require_active().unwrap_err(),
+            "peer group is closed or quarantined"
+        );
+    }
+}
+
+#[test]
+fn resident_v6_raw_entry_invalid_deadline_poison_blocks_both_modes_and_rearm() {
+    let kernels = kernels();
     let mut states = make_states();
-    states[0].activation = Activation::Initialized;
-    // The public observer would attempt a full fence over this empty context
-    // roster. The private adapter must reject the phase before any backend I/O.
-    let error = NativeResident(&mut owner).observe(&states[0]).unwrap_err();
-    assert_eq!(error, "prefix tiles V6 private resident observation activation");
+    let mut owner = group();
+    let mut invalid = commands(&kernels, &mut states);
+    invalid[0].timeout_ms = 0;
+    // SAFETY: the real entry rejects the malformed deadline before native I/O.
+    let error = unsafe {
+        owner.dispatch_wave_qkv_attention_output_tiles_round_with_raw_timestamps_unchecked_v1(
+            invalid,
+        )
+    }
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "prefix tiles V6 aggregate timeout outside 1..600000 ms"
+    );
+    assert!(
+        states
+            .iter()
+            .all(|state| state.activation == Activation::Ready)
+    );
+    assert!(owner.poisoned);
+    // SAFETY: every following public entry must refuse the quarantined group.
+    let raw_error = unsafe {
+        owner.dispatch_wave_qkv_attention_output_tiles_round_with_raw_timestamps_unchecked_v1(
+            commands(&kernels, &mut states),
+        )
+    }
+    .unwrap_err();
+    assert_eq!(raw_error, "peer group is closed or quarantined");
+    let ordinary_error = unsafe {
+        owner.dispatch_wave_qkv_attention_output_tiles_round_v6(commands(&kernels, &mut states))
+    }
+    .unwrap_err();
+    assert_eq!(ordinary_error, "peer group is closed or quarantined");
+    assert_eq!(
+        unsafe {
+            owner.rearm_wave_qkv_attention_output_tiles_state_v6(&mut states[0], &terminal())
+        }
+        .unwrap_err(),
+        "peer group is closed or quarantined"
+    );
+    assert_eq!(
+        owner.close().unwrap_err(),
+        "peer group is closed or quarantined"
+    );
+}
+
+#[test]
+fn resident_v6_raw_entry_routes_to_native_validation_before_activation() {
+    let kernels = kernels();
+    let mut states = make_states();
+    let mut owner = group();
+    // SAFETY: this real native adapter has no contexts; validation must refuse
+    // the missing rank without a mapping load or any queue publication.
+    let error = unsafe {
+        owner.dispatch_wave_qkv_attention_output_tiles_round_with_raw_timestamps_unchecked_v1(
+            commands(&kernels, &mut states),
+        )
+    }
+    .unwrap_err();
+    assert_eq!(error, "prefix tiles V6 missing rank");
+    assert!(
+        states
+            .iter()
+            .all(|state| state.activation == Activation::Ready)
+    );
     assert!(owner.poisoned);
     assert_eq!(
-        owner.require_active().unwrap_err(),
+        owner
+            .observe_wave_qkv_attention_output_tiles_state_v6(&states[0])
+            .unwrap_err(),
+        "peer group is closed or quarantined"
+    );
+    assert_eq!(
+        owner.close().unwrap_err(),
         "peer group is closed or quarantined"
     );
 }
