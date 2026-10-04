@@ -28,8 +28,19 @@ fn machine_stderr_pipe_is_bounded_nonblocking_and_retains_writer_mode() {
     capture.drain().unwrap();
     assert_eq!(capture.bytes, b"retained diagnostic\n");
     drop(writer);
-    capture.drain().unwrap();
-    assert!(capture.eof);
+    // Concurrent tests may fork before their exec closes this CLOEXEC writer.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !capture.eof {
+        capture.drain().unwrap();
+        assert_eq!(capture.bytes, b"retained diagnostic\n");
+        assert!(
+            capture.eof || Instant::now() < deadline,
+            "writer did not reach EOF"
+        );
+        if !capture.eof {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     capture.admitted_capacity += 1;
     assert!(
         capture
