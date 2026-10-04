@@ -569,20 +569,53 @@ fn proofs(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
         r#"spec fn invocation_paired_source_defined_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat) -> bool
  decreases fuel
 {{ source.machine.valid && (fuel == 0 || source.machine.pc < 0 || invocation_paired_source_defined_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, (fuel - 1) as nat)) }}
+#[verifier::spinoff_prover]
+proof fn invocation_paired_source_defined_prefix_{root}_v79(source: InvocationSourceByteStateV36, fuel: nat)
+ requires invocation_paired_source_defined_{root}_v36(source, fuel), fuel > 0,
+ ensures invocation_paired_source_defined_{root}_v36(source, 1),
+ !invocation_paired_source_step_{root}_v36(source).halted ==> invocation_paired_source_defined_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, (fuel - 1) as nat),
+{{
+ hide(invocation_paired_source_step_{root}_v36);
+ hide(invocation_source_block_runtime_{root}_v36);
+ hide(invocation_paired_source_defined_{root}_v36);
+ reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);
+ if source.machine.pc < 0 {{
+ reveal(invocation_paired_source_step_{root}_v36);
+ assert(invocation_paired_source_step_{root}_v36(source).halted);
+ }}
+}}
 proof fn invocation_paired_step_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30)
  requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),
  ensures invocation_paired_related_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),
  invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events),
  invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted,
- source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target)),
+source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target)),
 {{ }}
+#[verifier::spinoff_prover]
 proof fn invocation_paired_finite_trace_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30, fuel: nat)
  requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, fuel),
  ensures invocation_paired_observations_related_{root}_v39(cfg_trace_v26(|s: InvocationSourceByteStateV36| invocation_paired_source_step_{root}_v36(s), source, fuel).events, cfg_trace_v26(|s: MemoryStateV30| invocation_paired_actual_step_{root}_v36(s), target, fuel).events),
  cfg_trace_v26(|s: InvocationSourceByteStateV36| invocation_paired_source_step_{root}_v36(s), source, fuel).halted == cfg_trace_v26(|s: MemoryStateV30| invocation_paired_actual_step_{root}_v36(s), target, fuel).halted,
  invocation_paired_related_{root}_v36(cfg_trace_v26(|s: InvocationSourceByteStateV36| invocation_paired_source_step_{root}_v36(s), source, fuel).state, cfg_trace_v26(|s: MemoryStateV30| invocation_paired_actual_step_{root}_v36(s), target, fuel).state),
  decreases fuel,
-{{ if fuel > 0 {{ invocation_paired_step_{root}_v36(source, target);
+{{
+ hide(cfg_trace_v26);
+ hide(invocation_paired_related_{root}_v36);
+ hide(invocation_paired_observations_related_{root}_v39);
+ hide(invocation_paired_source_step_{root}_v36);
+ hide(invocation_paired_actual_step_{root}_v36);
+ hide(invocation_paired_control_values_{root}_v36);
+ hide(invocation_source_block_runtime_{root}_v36);
+ hide(invocation_byte_boundary_{root}_v36);
+ hide(invocation_paired_source_defined_{root}_v36);
+ reveal_with_fuel(cfg_trace_v26, 1);
+ if fuel == 0 {{
+ assert(invocation_paired_observations_related_{root}_v39(seq![], seq![])) by {{
+ reveal(invocation_paired_observations_related_{root}_v39);
+ }}
+ }} else {{
+ invocation_paired_source_defined_prefix_{root}_v79(source, fuel);
+ invocation_paired_step_{root}_v36(source, target);
  let original = invocation_paired_source_step_{root}_v36(source); let actual = invocation_paired_actual_step_{root}_v36(target);
  if !original.halted {{ invocation_paired_finite_trace_{root}_v36(original.state, actual.state, (fuel - 1) as nat);
  invocation_paired_observations_append_{root}_v39(original.events, actual.events,

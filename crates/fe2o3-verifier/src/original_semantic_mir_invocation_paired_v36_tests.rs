@@ -4,6 +4,83 @@ use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInt
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
+fn check_trace_induction(text: &str, roots: usize) {
+    for root in 0..roots {
+        let prefix_name = format!("invocation_paired_source_defined_prefix_{root}_v79");
+        let finite_name = format!("invocation_paired_finite_trace_{root}_v36");
+        for name in [&prefix_name, &finite_name] {
+            assert_eq!(
+                text.matches(&format!("#[verifier::spinoff_prover]\nproof fn {name}("))
+                    .count(),
+                1
+            );
+        }
+        let prefix = text
+            .split_once(&format!("proof fn {prefix_name}("))
+            .unwrap()
+            .1
+            .split("proof fn")
+            .next()
+            .unwrap();
+        let finite = text
+            .split_once(&format!("proof fn {finite_name}("))
+            .unwrap()
+            .1
+            .split("proof fn")
+            .next()
+            .unwrap();
+        let premise = |theorem: &str| {
+            theorem
+                .split_once(" requires ")
+                .unwrap()
+                .1
+                .split_once(" ensures ")
+                .unwrap()
+                .0
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(
+            premise(prefix),
+            format!("invocation_paired_source_defined_{root}_v36(source, fuel), fuel > 0,")
+        );
+        assert_eq!(
+            premise(finite),
+            format!(
+                "invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, fuel),"
+            )
+        );
+        assert!(prefix.contains(&format!(
+            "reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);"
+        )));
+        assert!(finite.contains(&format!("{prefix_name}(source, fuel);")));
+        assert!(finite.contains(&format!(
+            "{finite_name}(original.state, actual.state, (fuel - 1) as nat);"
+        )));
+        assert!(finite.contains("reveal_with_fuel(cfg_trace_v26, 1);"));
+        assert!(finite.contains("if fuel == 0"));
+        assert!(finite.contains(&format!(
+            "invocation_paired_observations_related_{root}_v39(seq![], seq![])"
+        )));
+        assert!(finite.contains(&format!(
+            "invocation_paired_step_{root}_v36(source, target);"
+        )));
+        assert!(finite.contains(&format!(
+            "invocation_paired_observations_append_{root}_v39(original.events, actual.events,"
+        )));
+        for forbidden in [
+            "assume(",
+            "admit(",
+            "external_body",
+            ".memory",
+            ".generations",
+        ] {
+            assert!(!prefix.contains(forbidden), "{prefix_name}: {forbidden}");
+            assert!(!finite.contains(forbidden), "{finite_name}: {forbidden}");
+        }
+    }
+}
+
 #[test]
 fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracle() {
     fn envelope<T>() -> usize {
@@ -58,6 +135,7 @@ fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracl
 fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation() {
     run(LIMIT, LIMIT, |paired, out| {
         paired.emit(out)?;
+        check_trace_induction(&out.text, paired.roots.len());
         for root in 0..paired.roots.len() {
             for required in [
                 format!("invocation_source_byte_map_valid_{root}_v36(source[i].before, target[i].before)"),
@@ -212,6 +290,7 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                 assert!(out.text.contains("MemoryOperationEffectV30::Allocate"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Read"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Write"));
+                check_trace_induction(&out.text, paired.roots.len());
                 assert!(out.text.contains("let head = byte_block_step_0_v30"));
                 assert!(
                     out.text
