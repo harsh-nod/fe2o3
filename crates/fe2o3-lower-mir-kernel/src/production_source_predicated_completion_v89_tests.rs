@@ -112,21 +112,34 @@ fn run_predicated_completion_v89(
                 let descriptor = mixed_source_contract_descriptor_v26(
                     &abi.roots[0],
                     if mode >= 16 { mode - 15 } else { 0 },
-                )
-                .unwrap();
+                );
+                if matches!(mode, 20..=22) {
+                    use fe2o3_kernel_descriptor::{
+                        DecodeError, DescriptorWireErrorV3, ValidationError,
+                    };
+                    let expected = if mode == 22 {
+                        ValidationError::InvalidArgument("source type and device layout disagree")
+                    } else {
+                        ValidationError::InvalidPhysicalAbi(
+                            "slice must be a global pointer immediately followed by a u64 length",
+                        )
+                    };
+                    assert!(
+                        matches!(descriptor,
+                        Err(DescriptorWireErrorV3::Decode(DecodeError::Validation(actual)))
+                            if actual == expected),
+                        "mode {mode}: exact encoder validation refusal"
+                    );
+                    return Err(ProductionSourceOwnedViewErrorV18::Binding(
+                        "hostile descriptor is malformed",
+                    ));
+                }
+                let descriptor = descriptor.unwrap();
                 let table = fe2o3_kernel_descriptor::decode_device_descriptor_table_v3(
                     &descriptor,
                     &mut |_| Ok::<(), ArgumentResourceV1>(()),
-                );
-                let table = match table {
-                    Ok(table) => table,
-                    Err(_) if mode >= 16 => {
-                        return Err(ProductionSourceOwnedViewErrorV18::Binding(
-                            "hostile descriptor is malformed",
-                        ));
-                    }
-                    Err(error) => panic!("{error:?}"),
-                };
+                )
+                .unwrap();
                 let mut bytes = vec![0; fe2o3_kernel_descriptor::mixed_conditional_v86::MAX_MIXED_CONTRACT_BYTES_V86];
                 let n = handoff.emit_predicated_contract_v89(
                     0,
