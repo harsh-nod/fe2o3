@@ -1066,7 +1066,7 @@ pub(super) use bf16_nominal_recipe_resources_v1::{
 mod prepared_control_flow_v1;
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use prepared_control_flow_v1::{
-    NominalPreparedControlFlowV1, with_nominal_prepared_control_flow_v1,
+    NominalCheckedViewV1, NominalPreparedControlFlowV1, with_nominal_prepared_control_flow_v1,
 };
 
 #[cfg(test)]

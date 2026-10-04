@@ -137,17 +137,32 @@ fn nominal_compile_invented_uniform_control_is_refused() {
         },
     );
     let mut pending = Pending::new();
-    let mut work = Work::new(10000);
-    let mut budget = Budget::new(&mut work, 10000);
+    // No operations: entry, complete closed control census, then block.
+    let required = 64usize
+        .checked_add(fixture_control_validation_work())
+        .unwrap()
+        .checked_add(32)
+        .unwrap();
+    assert_eq!(required, 25312);
+    let mut work = Work::new(required);
+    let mut budget = Budget::new(&mut work, size_of::<usize>());
     let mut owned = 0;
-    assert!(
-        validate_payload(
-            &out,
-            &mut pending,
-            &mut PreparationResourcesV1::new(&mut budget, &mut owned)
-        )
-        .is_err()
+    let result = validate_payload(
+        &out,
+        &mut pending,
+        &mut PreparationResourcesV1::new(&mut budget, &mut owned),
     );
+    assert!(matches!(result, Err(Error::Incomplete(reason))
+        if reason == "nominal verifier would invent uniform control"));
+    assert_eq!(budget.work(), required);
+    assert_eq!(budget.failed_work(), None);
+    assert_eq!(budget.failed_storage(), None);
+    assert_eq!(budget.storage(), owned);
+    assert_eq!(owned, size_of::<usize>());
+    drop(pending);
+    drop(out);
+    budget.release_storage(owned).unwrap();
+    assert_eq!(budget.storage(), 0);
 }
 fn engine(index: u64, a: Analysis) -> (Phase, Result<()>, bool) {
     let s = Snapshot::production_hard_ceiling();
@@ -226,25 +241,141 @@ fn nominal_compile_zero_analysis_has_actual_typed_resource_refusal() {
     assert!(consumed);
     assert_eq!(phase, Phase::Compiling);
 }
+// The one-block/four-operation fixture retains no checked-view sites, but
+// validating that absence still prepays the complete closed namespace scans.
+// Vec growth relocates zero existing rows and retains exactly one usize.
+fn fixture_control_validation_work() -> usize {
+    let namespace = 64usize
+        .checked_add(
+            MAX_BLOCKS
+                .checked_mul(MAX_BLOCKS)
+                .unwrap()
+                .checked_mul(24)
+                .unwrap(),
+        )
+        .unwrap();
+    let rows = 64usize
+        .checked_add(MAX_BLOCKS.checked_mul(16).unwrap())
+        .unwrap();
+    namespace.checked_add(rows).unwrap()
+}
+fn fixture_payload_validation_work() -> usize {
+    // Entry, namespace, block, four operations, and two access operands.
+    [64, fixture_control_validation_work(), 32, 4 * 32, 2 * 4]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .unwrap()
+}
+fn fixture_transformed_validation_work() -> usize {
+    // Entry, same closed namespace, and one operation-count comparison.
+    [32, fixture_control_validation_work(), 8]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .unwrap()
+}
+
+#[test]
+fn nominal_compile_payload_fixture_exact_and_one_short_preserve_original_account() {
+    let required = fixture_payload_validation_work();
+    assert_eq!(required, 25448);
+    for (available, succeeds) in [(required, true), (required - 1, false)] {
+        let out = fixture(0);
+        let mut pending = Pending::new();
+        let mut work = Work::new(11 + available);
+        let mut budget = Budget::new(&mut work, 7 + size_of::<usize>());
+        budget.charge_work(11).unwrap();
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        let result = validate_payload(
+            &out,
+            &mut pending,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        if succeeds {
+            result.unwrap();
+            assert_eq!(budget.work(), 11 + required);
+            assert_eq!(budget.failed_work(), None);
+        } else {
+            assert!(matches!(result,
+                Err(Error::CanonicalAssertions(
+                    crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))
+                )) if error.actual() == 11 + required && error.limit() == 11 + available
+            ));
+            assert_eq!(budget.work(), 11 + required - 8);
+            assert_eq!(budget.failed_work(), Some(11 + required));
+            assert!(budget.check_prior_denials_v1().is_err());
+        }
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(pending.operation_counts, [4]);
+        assert_eq!(owned, size_of::<usize>());
+        assert_eq!(budget.storage(), 7 + owned);
+        assert_eq!(budget.failed_storage(), None);
+        drop(pending);
+        drop(out);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 7);
+        assert_eq!(budget.failed_work(), (!succeeds).then_some(11 + required));
+    }
+}
+
 #[test]
 fn nominal_compile_transformed_coordinate_census_is_not_reported_boolean_authority() {
-    let out = fixture(0);
-    let mut pending = Pending::new();
-    let mut work = Work::new(10000);
-    let mut budget = Budget::new(&mut work, 10000);
-    let mut owned = 0;
-    let mut meter = PreparationResourcesV1::new(&mut budget, &mut owned);
-    validate_payload(&out, &mut pending, &mut meter).unwrap();
-    let kernel = ProductionRankedKernelV1::new(
-        "control",
-        1,
-        vec![ProductionRankedBlockV1::new(
-            vec![],
-            ProductionRankedTerminatorV1::Return,
-        )],
-    )
-    .unwrap();
-    assert!(check_transformed(&kernel, &out, &pending, &mut meter).is_err());
+    let required = fixture_payload_validation_work()
+        .checked_add(fixture_transformed_validation_work())
+        .unwrap();
+    assert_eq!(required, 50704);
+    for (available, reaches_coordinate_check) in [(required, true), (required - 1, false)] {
+        let out = fixture(0);
+        let mut pending = Pending::new();
+        let mut work = Work::new(available);
+        let mut budget = Budget::new(&mut work, size_of::<usize>());
+        let ledger = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        let kernel = ProductionRankedKernelV1::new(
+            "control",
+            1,
+            vec![ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let result = {
+            let mut meter = PreparationResourcesV1::new(&mut budget, &mut owned);
+            validate_payload(&out, &mut pending, &mut meter).unwrap();
+            check_transformed(&kernel, &out, &pending, &mut meter)
+        };
+        if reaches_coordinate_check {
+            // A work denial must never satisfy this semantic-refusal control.
+            assert!(matches!(result, Err(Error::Incomplete(reason))
+                if reason == "nominal constructor changed an operation coordinate"));
+            assert_eq!(budget.work(), required);
+            assert_eq!(budget.failed_work(), None);
+        } else {
+            assert!(matches!(result,
+                Err(Error::CanonicalAssertions(
+                    crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))
+                )) if error.actual() == required && error.limit() == available
+            ));
+            assert_eq!(budget.work(), required - 8);
+            assert_eq!(budget.failed_work(), Some(required));
+            assert!(budget.check_prior_denials_v1().is_err());
+        }
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), owned);
+        assert_eq!(owned, size_of::<usize>());
+        assert_eq!(budget.failed_storage(), None);
+        drop(kernel);
+        drop(pending);
+        drop(out);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 0);
+        assert_eq!(
+            budget.failed_work(),
+            (!reaches_coordinate_check).then_some(required)
+        );
+    }
 }
 #[test]
 fn nominal_compile_selected_genuine_two_case_profile_fits_existing_source_work_ceiling() {

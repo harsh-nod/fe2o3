@@ -17,6 +17,64 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 type Result<T> = std::result::Result<T, QueryError>;
 
+/// Private Copy projection derived only while the original lowerer loan lives.
+/// Source and canonical argument coordinates are deliberately separate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_ranked_projection_v1) struct NominalCheckedViewV1 {
+    source_block: u32,
+    parameter: u32,
+    source_local: u32,
+    source_argument: u32,
+    success: u32,
+    failure: u32,
+    required: u64,
+}
+impl NominalCheckedViewV1 {
+    // Component-test datum only; this cannot construct an authenticated source
+    // owner, prepared-flow loan, executable or normal-compilation authority.
+    #[cfg(test)]
+    pub(in crate::production_ranked_projection_v1) fn synthetic(
+        source_block: u32,
+        parameter: u32,
+        source_local: u32,
+        source_argument: u32,
+        success: u32,
+        failure: u32,
+        required: u64,
+    ) -> Self {
+        Self {
+            source_block,
+            parameter,
+            source_local,
+            source_argument,
+            success,
+            failure,
+            required,
+        }
+    }
+    pub(in crate::production_ranked_projection_v1) fn source_block(self) -> usize {
+        self.source_block as usize
+    }
+    pub(in crate::production_ranked_projection_v1) fn parameter(self) -> u32 {
+        self.parameter
+    }
+    pub(in crate::production_ranked_projection_v1) fn source_local(self) -> u32 {
+        self.source_local
+    }
+    pub(in crate::production_ranked_projection_v1) fn source_argument(self) -> u32 {
+        self.source_argument
+    }
+    pub(in crate::production_ranked_projection_v1) fn success(self) -> usize {
+        self.success as usize
+    }
+    pub(in crate::production_ranked_projection_v1) fn failure(self) -> usize {
+        self.failure as usize
+    }
+    pub(in crate::production_ranked_projection_v1) fn required(self) -> u64 {
+        self.required
+    }
+}
+
 /// Only the factory below constructs this source-bound lexical loan. The
 /// original tensor/effect/Return association stays alive; a copied row or a
 /// successful callback does not certify participation or normal admission.
@@ -24,6 +82,7 @@ pub(in crate::production_ranked_projection_v1) struct NominalPreparedControlFlow
     effects: &'a NominalPreparedTensorEffectsV1<'a, 'g>,
     assertions: &'a NominalRootAssertionSourceV1<'a>,
     terminators: &'a [ProjectedCfgTerminatorV1],
+    checked_views: &'a [Option<NominalCheckedViewV1>; 32],
 }
 impl<'a, 'g> NominalPreparedControlFlowV1<'a, 'g> {
     pub(in crate::production_ranked_projection_v1) fn effects(
@@ -35,6 +94,11 @@ impl<'a, 'g> NominalPreparedControlFlowV1<'a, 'g> {
         &self,
     ) -> &NominalRootAssertionSourceV1<'a> {
         self.assertions
+    }
+    pub(in crate::production_ranked_projection_v1) fn checked_views(
+        &self,
+    ) -> &[Option<NominalCheckedViewV1>; 32] {
+        self.checked_views
     }
     pub(in crate::production_ranked_projection_v1) fn terminators(
         &self,
@@ -70,7 +134,10 @@ fn times(a: usize, b: usize) -> Result<usize> {
     a.checked_mul(b).ok_or(Resource::Arithmetic.into())
 }
 fn frame<R>(callback: usize) -> Result<usize> {
-    let mut bytes = 8192usize;
+    let mut bytes = plus(
+        8192usize,
+        times(size_of::<[Option<NominalCheckedViewV1>; 32]>(), 4)?,
+    )?;
     for amount in [
         times(size_of::<Vec<ProjectedCfgTerminatorV1>>(), 4)?,
         times(
@@ -170,6 +237,7 @@ fn populate(
     facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
     owned: &mut usize,
     rows: &mut Vec<ProjectedCfgTerminatorV1>,
+    checked_views: &mut [Option<NominalCheckedViewV1>; 32],
 ) -> Result<()> {
     facts.charge_private_array_work(128).map_err(query_error)?;
     let candidate = effects.original().candidate();
@@ -187,7 +255,8 @@ fn populate(
                 .get(facts.semantic_function.index() as usize)
                 .is_some_and(|actual| std::ptr::eq(actual, function))
             && rows.is_empty()
-            && rows.capacity() == 0,
+            && rows.capacity() == 0
+            && checked_views.iter().all(Option::is_none),
         "nominal prepared CFG actual canonical facts or empty output differs",
     )?;
     let count = function.blocks().len();
@@ -230,6 +299,42 @@ fn populate(
             rows.push(ProjectedCfgTerminatorV1::AbsentMaterialized);
             continue;
         }
+        // Narrow same-owner query, separate from the ordinary predicate tables.
+        // Neither an unsupported view switch nor a denial becomes uniform.
+        let checked = if matches!(
+            function.blocks()[index].terminator().kind(),
+            SemanticTerminatorKindV1::SwitchInt { .. }
+        ) {
+            owner.with_checked_bf16_view_switch_v1(
+                candidate.inventory(),
+                facts.report,
+                facts.semantic_function,
+                effects.source_block(),
+                candidate.source_call(),
+                SemanticBlockIdV1::from_index(index as u32),
+                facts.budget,
+                |view, budget| {
+                    budget.charge_work(32)?;
+                    require(
+                        std::ptr::eq(view.source(), function)
+                            && view.source_block().index() as usize == index,
+                        "nominal checked-view source loan differs",
+                    )?;
+                    Ok(NominalCheckedViewV1 {
+                        source_block: view.source_block().index(),
+                        parameter: view.parameter(),
+                        source_local: view.source_local().index(),
+                        source_argument: view.source_argument(),
+                        success: view.success().index(),
+                        failure: view.failure().index(),
+                        required: view.required(),
+                    })
+                },
+            )?
+        } else {
+            None
+        };
+        checked_views[index] = checked;
         rows.push(
             root_cfg_terminator_resources_v1::project(
                 function,
@@ -273,6 +378,7 @@ where
     // The real physical owner is outside the facts callback, so all partial
     // row backing survives its postflight and drops before our own-only refund.
     let mut rows = Vec::new();
+    let mut checked_views = [None; 32];
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         budget.charge_work(128)?;
         let bytes = frame::<R>(size_of_val(&inspect))?;
@@ -287,7 +393,16 @@ where
             block,
             call,
             budget,
-            |facts| populate(effects, assertions, facts, &mut owned, &mut rows),
+            |facts| {
+                populate(
+                    effects,
+                    assertions,
+                    facts,
+                    &mut owned,
+                    &mut rows,
+                    &mut checked_views,
+                )
+            },
         )?;
         // The canonical facts and N1 postflights completed before this loan.
         // Enclosing original assertion/effects scopes still retain their own
@@ -300,6 +415,7 @@ where
             effects,
             assertions,
             terminators: &rows,
+            checked_views: &checked_views,
         };
         let result = inspect(&view, budget);
         drop(view);

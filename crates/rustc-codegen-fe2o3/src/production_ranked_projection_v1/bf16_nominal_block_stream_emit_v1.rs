@@ -10,6 +10,7 @@ pub(super) struct TensorSite {
 }
 pub(super) struct Emitted {
     pub(super) blocks: Vec<ProductionRankedBlockV1>,
+    pub(super) controls: checked_control::Controls,
     pub(super) sources: Vec<ProjectedAccessSourceV1>,
     pub(super) tensors: Vec<TensorSite>,
     operations: Vec<ProductionRankedOperationV1>,
@@ -23,6 +24,7 @@ impl Emitted {
     pub(super) const fn empty() -> Self {
         Self {
             blocks: Vec::new(),
+            controls: checked_control::Controls::empty(),
             sources: Vec::new(),
             tensors: Vec::new(),
             operations: Vec::new(),
@@ -499,6 +501,15 @@ pub(super) fn emit(
             } => {
                 let first = target(emitted, *first_block)?;
                 let second = target(emitted, *second_block)?;
+                if let Some(site) = emitted.controls.site(semantic) {
+                    resources.work(64)?;
+                    let term = checked_control::expected_terminator(site, &emitted.base)?;
+                    emitted
+                        .controls
+                        .record(semantic, ranked_block_id(current)?)?;
+                    push_block(emitted, current, term, resources)?;
+                    continue;
+                }
                 push_block(
                     emitted,
                     current,

@@ -132,6 +132,9 @@ fn validate_payload(
             "nominal verifier lacks one complete original stream",
         ));
     }
+    emitted
+        .controls
+        .validate(&emitted.blocks, &emitted.base, resources)?;
     resources.reserve(&mut pending.operation_counts, emitted.blocks.len())?;
     resources.reserve(&mut pending.tensors, emitted.tensors.len())?;
     let mut tensor_cursor = 0usize;
@@ -201,8 +204,21 @@ fn validate_payload(
         }
         match block.terminator() {
             ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. } => {
-                argument(*lhs)?;
-                argument(*rhs)?;
+                // Only a separately source-certified checked-view comparison
+                // may use dedicated length slots. Ordinary operands keep slot0.
+                resources.work(MAX_BLOCKS * 8)?;
+                if let Some(site) = emitted.controls.site_at_ranked(block_index) {
+                    if block.terminator()
+                        != &checked_control::expected_terminator(site, &emitted.base)?
+                    {
+                        return Err(Error::Incomplete(
+                            "nominal verifier checked-view branch differs",
+                        ));
+                    }
+                } else {
+                    argument(*lhs)?;
+                    argument(*rhs)?;
+                }
             }
             ProductionRankedTerminatorV1::AnalysisSplit {
                 control_dependencies,
@@ -238,7 +254,7 @@ fn check_transformed(
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<()> {
     resources.work(32)?;
-    if kernel.argument_count() != 1
+    if kernel.argument_count() != emitted.controls.argument_count()
         || kernel.blocks().len() != pending.operation_counts.len()
         || emitted.tensors.len() != pending.tensors.len()
     {
@@ -246,6 +262,9 @@ fn check_transformed(
             "nominal constructor changed the retained coordinate domain",
         ));
     }
+    emitted
+        .controls
+        .validate(kernel.blocks(), &emitted.base, resources)?;
     for (block, expected) in kernel.blocks().iter().zip(&pending.operation_counts) {
         resources.work(8)?;
         if block.operations().len() != *expected {
@@ -408,7 +427,8 @@ fn compile_payload(
     // Vec crosses the existing consuming constructor. Its checked transforms
     // perform their original position-preserving replay; no alternate engine.
     let blocks = std::mem::take(&mut emitted.blocks);
-    let kernel = ProductionRankedKernelV1::new(name, 1, blocks).map_err(Error::Recipe)?;
+    let kernel = ProductionRankedKernelV1::new(name, emitted.controls.argument_count(), blocks)
+        .map_err(Error::Recipe)?;
     check_transformed(&kernel, emitted, pending, resources)?;
     let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
         .map_err(Error::Construction)?;
@@ -450,6 +470,7 @@ impl<'a, 'g> ActualRootBlockStreamV1<'a, 'g> {
         snapshot: Snapshot,
     ) -> Result<Verified<'a>> {
         let Self {
+            flow,
             prefix,
             emitted,
             consumer,
@@ -470,6 +491,7 @@ impl<'a, 'g> ActualRootBlockStreamV1<'a, 'g> {
                     "nominal verifier cannot drop reference-effect obligations",
                 ));
             }
+            emitted.controls.rejoin(flow, resources)?;
             pay(consumer, analysis, snapshot, resources)?;
             validate_payload(emitted, consumer, resources)
         })?;
