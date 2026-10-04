@@ -1,0 +1,58 @@
+{
+  "head": "ae51934d4ea73364c751e6118ac1d4d1a40f25c6",
+  "tree": "44831c2cf0d948716ec1385b0a1a42198001843e",
+  "package": "fe2o3-verifier",
+  "filters": [
+    "original_complete_source_model_includes_operand_effect_acceptance_and_refusal_equations",
+    "original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_bodies",
+    "original_complete_source_model_length_equations_have_exact_and_one_short_resources",
+    "original_mir_effect_observations_retain_read_then_write_intermediate_source_states",
+    "original_mir_effect_projection_exhaustively_matches_the_shared_effect_enum",
+    "original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snapshots",
+    "original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards",
+    "original_mir_native_live_generation_domain_covers_unsigned_runtime_generations",
+    "original_mir_native_provenance_census_rejects_private_payloads_not_only_live_keys"
+  ],
+  "rows": [
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+      "name": "original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_bodies"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+      "name": "original_complete_source_model_includes_operand_effect_acceptance_and_refusal_equations"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+      "name": "original_complete_source_model_length_equations_have_exact_and_one_short_resources"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_effect_projection_exhaustively_matches_the_shared_effect_enum"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_effect_observations_retain_read_then_write_intermediate_source_states"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snapshots"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_native_provenance_census_rejects_private_payloads_not_only_live_keys"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_native_live_generation_domain_covers_unsigned_runtime_generations"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_observed_effects_v39_tests.rs",
+      "name": "original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards"
+    }
+  ],
+  "ignored_not_selected": [
+    "protected_complete_original_source_model_preserves_signed_length_boundaries"
+  ],
+  "scope": "Nine ordinary tests in the two changed Rust test modules. The protected complete-model parent remains excluded; appended proof equations receive no proof credit."
+}
