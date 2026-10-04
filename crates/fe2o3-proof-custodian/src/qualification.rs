@@ -143,6 +143,13 @@ fn root_production_launcher() {
             | "fifo"
             | "poison"
             | "scope-drop"
+            | "poll-pair"
+            | "poll-cancel-proof"
+            | "poll-cancel-gated"
+            | "poll-drop-gated"
+            | "poll-deadline"
+            | "poll-proof-deadline"
+            | "poll-probe-timeout"
     ));
     let output = path("FE2O3_CUSTODIAN_CAPTURE");
     fs::create_dir(&output).unwrap();
@@ -219,8 +226,18 @@ fn root_production_launcher() {
         .arg("400")
         .spawn()
         .unwrap();
-    let launched = installed.launch(&envelope, &payload, KernelId::from_bytes(kernel));
     let result = (|| -> io::Result<()> {
+        if case.starts_with("poll-") {
+            return qualify_polling(
+                installed,
+                &case,
+                &envelope,
+                &payload,
+                KernelId::from_bytes(kernel),
+                &output,
+            );
+        }
+        let launched = installed.launch(&envelope, &payload, KernelId::from_bytes(kernel));
         if matches!(case.as_str(), "worker" | "runtime") {
             let error = launched.err().expect("wrong resource measurement accepted");
             fs::write(output.join("rejection.txt"), error.to_string())?;
@@ -292,6 +309,197 @@ fn root_production_launcher() {
         b"controller reaped; owned scope absent; sibling survived\n",
     )
     .unwrap();
+}
+
+fn drive(mut poll: impl FnMut() -> io::Result<bool>) -> io::Result<usize> {
+    let deadline = Instant::now() + EXECUTION_TIMEOUT;
+    let mut count = 0;
+    loop {
+        count += 1;
+        if poll()? {
+            return Ok(count);
+        }
+        check_deadline(deadline)?;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn assert_reaped(pid: u32, pidfd: &OwnedFd) -> io::Result<()> {
+    wire::wait(
+        pidfd.as_fd(),
+        rustix::event::PollFlags::IN,
+        Instant::now() + Duration::from_secs(5),
+    )?;
+    require(
+        !PathBuf::from(format!("/proc/{pid}")).exists(),
+        "controller was not reaped",
+    )
+}
+
+fn qualify_polling(
+    installed: ProductionProofCustodianDeploymentV1,
+    case: &str,
+    envelope: &[u8],
+    payload: &[u8],
+    kernel: KernelId,
+    output: &std::path::Path,
+) -> io::Result<()> {
+    let mut first = installed.begin_launch(envelope, payload, kernel)?;
+    let original = first.controller.as_ref().unwrap();
+    let pid = original.child_pid();
+    let pidfd = original
+        .contained
+        .child()
+        .try_clone_pidfd()
+        .map_err(other)?;
+    fs::write(output.join("controller-pid.txt"), pid.to_string())?;
+    assert!(first.take_ready()?.is_none());
+    assert_eq!(scopes().len(), 1);
+    let mut counts = String::new();
+    if matches!(
+        case,
+        "poll-cancel-gated" | "poll-drop-gated" | "poll-deadline"
+    ) {
+        if case == "poll-deadline" {
+            first.controller.as_mut().unwrap().deadline = Instant::now() - Duration::from_secs(1);
+            assert_eq!(first.poll().unwrap_err().kind(), io::ErrorKind::TimedOut);
+            assert!(first.poll().is_err());
+            assert!(first.take_ready().is_err());
+            assert!(
+                first
+                    .controller
+                    .as_ref()
+                    .unwrap()
+                    .contained
+                    .child()
+                    .is_live()
+                    .map_err(other)?
+            );
+            assert_eq!(scopes().len(), 1);
+        }
+        if case == "poll-drop-gated" {
+            drop(first);
+        } else {
+            let n = drive(|| first.poll_cancel())?;
+            counts.push_str(&format!("gated cancellation polls: {n}\n"));
+            assert!(first.poll_cancel()?);
+            assert!(first.poll().is_err());
+            drop(first);
+        }
+        assert_reaped(pid, &pidfd)?;
+        fs::write(output.join("polls.txt"), counts)?;
+        return Ok(());
+    }
+    let mut second =
+        ProductionProofCustodianDeploymentV1::open()?.begin_launch(envelope, payload, kernel)?;
+    let second_original = second.controller.as_ref().unwrap();
+    let second_pid = second_original.child_pid();
+    let second_pidfd = second_original
+        .contained
+        .child()
+        .try_clone_pidfd()
+        .map_err(other)?;
+    assert_ne!(pid, second_pid);
+    assert_eq!(scopes().len(), 2);
+    fs::write(
+        output.join("second-controller-pid.txt"),
+        second_pid.to_string(),
+    )?;
+    let n = drive(|| {
+        let a = first.poll()?;
+        let b = second.poll()?;
+        assert_eq!(first.controller.as_ref().unwrap().child_pid(), pid);
+        assert_eq!(second.controller.as_ref().unwrap().child_pid(), second_pid);
+        Ok(a && b)
+    })?;
+    counts.push_str(&format!("alternating startup polls: {n}\n"));
+    let first_owner = first.take_ready()?.unwrap();
+    let second_owner = second.take_ready()?.unwrap();
+    assert!(first.poll_cancel().is_err());
+    assert!(second.poll_cancel().is_err());
+    first_owner.revalidate()?;
+    second_owner.revalidate()?;
+    assert!(first.take_ready().is_err());
+    assert!(second.poll().is_err());
+    let mut first_proof = first_owner.begin_proof();
+    let mut second_proof = second_owner.begin_proof();
+    assert!(first_proof.take_ready()?.is_none());
+    assert!(second_proof.take_ready()?.is_none());
+    if case == "poll-proof-deadline" {
+        second_proof.controller.as_mut().unwrap().deadline =
+            Instant::now() - Duration::from_secs(1);
+        assert_eq!(
+            second_proof.poll().unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(second_proof.poll().is_err());
+        assert!(second_proof.take_ready().is_err());
+    } else {
+        assert!(!second_proof.poll()?);
+    }
+    assert!(!first_proof.poll()?);
+    let cancel_second = matches!(case, "poll-cancel-proof" | "poll-proof-deadline");
+    if case == "poll-cancel-proof" {
+        let command = wait_for_verifier(second_proof.controller.as_ref().unwrap())?;
+        fs::write(output.join("verifier-command.bin"), command)?;
+    }
+    let n = drive(|| {
+        let a = first_proof.poll()?;
+        let b = if cancel_second {
+            second_proof.poll_cancel()?
+        } else {
+            second_proof.poll()?
+        };
+        Ok(a && b)
+    })?;
+    counts.push_str(&format!("alternating proof/cancellation polls: {n}\n"));
+    // Only completed proof custody survives the old execution deadline.
+    first_proof.controller.as_mut().unwrap().deadline = Instant::now() - Duration::from_secs(1);
+    assert!(first_proof.poll()?);
+    let mut a = first_proof.take_ready()?.unwrap();
+    assert!(first_proof.poll_cancel().is_err());
+    a.controller.revalidate()?;
+    assert_eq!(a.child_pid(), pid);
+    assert!(first_proof.take_ready().is_err());
+    fs::write(output.join("subject.bin"), a.subject_bytes())?;
+    a.probe()?;
+    if cancel_second {
+        assert!(second_proof.poll_cancel()?);
+        assert!(second_proof.take_ready().is_err());
+        assert_reaped(second_pid, &second_pidfd)?;
+        assert_eq!(scopes().len(), 1);
+        a.probe()?;
+        a.release()?;
+    } else {
+        let mut b = second_proof.take_ready()?.unwrap();
+        fs::write(output.join("second-subject.bin"), b.subject_bytes())?;
+        // Independent executions have fresh analyzer/proof roots. Each probe must
+        // match its own original subject, not another run's serialized identity.
+        b.probe()?;
+        if case == "poll-probe-timeout" {
+            // Send a genuine Probe, then force the wait to expire. Its reply must
+            // never be reused as a response to another transaction.
+            a.controller.send(wire::PROBE)?;
+            a.controller.deadline = Instant::now() - Duration::from_secs(1);
+            assert_eq!(
+                a.controller.receive().unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            assert!(a.probe().is_err());
+            let n = drive(|| a.controller.poll_cancel())?;
+            counts.push_str(&format!("poisoned cancellation polls: {n}\n"));
+        } else {
+            a.release()?;
+        }
+        assert_reaped(pid, &pidfd)?;
+        assert_eq!(scopes().len(), 1);
+        b.probe()?;
+        b.release()?;
+        assert_reaped(second_pid, &second_pidfd)?;
+    }
+    assert_reaped(pid, &pidfd)?;
+    fs::write(output.join("polls.txt"), counts)?;
+    Ok(())
 }
 
 fn wait_for_verifier(controller: &RootManagedProofControllerV1) -> io::Result<Vec<u8>> {

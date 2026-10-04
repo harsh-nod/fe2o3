@@ -138,6 +138,21 @@ pub(crate) fn send(
     body: &[u8],
     deadline: Instant,
 ) -> io::Result<()> {
+    loop {
+        wait(fd, rustix::event::PollFlags::OUT, deadline)?;
+        if try_send(fd, nonce, kind, body)? {
+            return Ok(());
+        }
+    }
+}
+
+/// One send attempt: backpressure and interruption preserve the complete frame.
+pub(crate) fn try_send(
+    fd: BorrowedFd<'_>,
+    nonce: [u8; 32],
+    kind: u8,
+    body: &[u8],
+) -> io::Result<bool> {
     require(
         (READY..=REJECTED).contains(&kind) && nonce != [0; 32] && body.len() <= MAX_BODY,
         "invalid outgoing controller frame",
@@ -148,17 +163,17 @@ pub(crate) fn send(
     bytes[16..48].copy_from_slice(&nonce);
     bytes[48..52].copy_from_slice(&(body.len() as u32).to_le_bytes());
     bytes[HEADER..].copy_from_slice(body);
-    loop {
-        wait(fd, rustix::event::PollFlags::OUT, deadline)?;
-        match net::send(
-            fd,
-            &bytes,
-            net::SendFlags::DONTWAIT | net::SendFlags::NOSIGNAL,
-        ) {
-            Ok(n) => return require(n == bytes.len(), "partial controller frame"),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => (),
-            Err(e) => return Err(e.into()),
+    match net::send(
+        fd,
+        &bytes,
+        net::SendFlags::DONTWAIT | net::SendFlags::NOSIGNAL,
+    ) {
+        Ok(n) => {
+            require(n == bytes.len(), "partial controller frame")?;
+            Ok(true)
         }
+        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -187,43 +202,52 @@ pub(crate) fn receive(
 ) -> io::Result<(u8, Vec<u8>)> {
     loop {
         wait(fd, rustix::event::PollFlags::IN, deadline)?;
-        let mut bytes = [0; HEADER + MAX_BODY];
-        let mut space =
-            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(1))];
-        let mut ancillary = net::RecvAncillaryBuffer::new(&mut space);
-        let message = match net::recvmsg(
-            fd,
-            &mut [IoSliceMut::new(&mut bytes)],
-            &mut ancillary,
-            net::RecvFlags::DONTWAIT | net::RecvFlags::CMSG_CLOEXEC,
-        ) {
-            Ok(m) => m,
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => continue,
-            Err(e) => return Err(e.into()),
-        };
-        require(
-            message.bytes > 0
-                && message.bytes <= bytes.len()
-                && (message.flags - net::ReturnFlags::CMSG_CLOEXEC).is_empty(),
-            "closed or truncated controller packet",
-        )?;
-        let mut credentials = None;
-        for item in ancillary.drain() {
-            match item {
-                net::RecvAncillaryMessage::ScmCredentials(c) if credentials.is_none() => {
-                    credentials = Some(c)
-                }
-                _ => return Err(io::Error::other("unexpected controller ancillary data")),
-            }
+        if let Some(packet) = try_receive(fd, sender, nonce)? {
+            return Ok(packet);
         }
-        let c =
-            credentials.ok_or_else(|| io::Error::other("missing controller sender credentials"))?;
-        require(
-            (c.pid.as_raw_pid(), c.uid.as_raw(), c.gid.as_raw()) == sender,
-            "controller sender mismatch",
-        )?;
-        return decode(&bytes[..message.bytes], nonce);
     }
+}
+
+/// At most one recvmsg, including on EINTR. No deadline or readiness wait is hidden here.
+pub(crate) fn try_receive(
+    fd: BorrowedFd<'_>,
+    sender: (i32, u32, u32),
+    nonce: [u8; 32],
+) -> io::Result<Option<(u8, Vec<u8>)>> {
+    let mut bytes = [0; HEADER + MAX_BODY];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(1))];
+    let mut ancillary = net::RecvAncillaryBuffer::new(&mut space);
+    let message = match net::recvmsg(
+        fd,
+        &mut [IoSliceMut::new(&mut bytes)],
+        &mut ancillary,
+        net::RecvFlags::DONTWAIT | net::RecvFlags::CMSG_CLOEXEC,
+    ) {
+        Ok(m) => m,
+        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    require(
+        message.bytes > 0
+            && message.bytes <= bytes.len()
+            && (message.flags - net::ReturnFlags::CMSG_CLOEXEC).is_empty(),
+        "closed or truncated controller packet",
+    )?;
+    let mut credentials = None;
+    for item in ancillary.drain() {
+        match item {
+            net::RecvAncillaryMessage::ScmCredentials(c) if credentials.is_none() => {
+                credentials = Some(c)
+            }
+            _ => return Err(io::Error::other("unexpected controller ancillary data")),
+        }
+    }
+    let c = credentials.ok_or_else(|| io::Error::other("missing controller sender credentials"))?;
+    require(
+        (c.pid.as_raw_pid(), c.uid.as_raw(), c.gid.as_raw()) == sender,
+        "controller sender mismatch",
+    )?;
+    decode(&bytes[..message.bytes], nonce).map(Some)
 }
 
 fn control_addresses(fd: BorrowedFd<'_>) -> io::Result<(net::SocketAddrUnix, net::SocketAddrUnix)> {
@@ -445,5 +469,37 @@ mod tests {
         net::sockopt::set_socket_passcred(&a, false).unwrap();
         assert!(a.revalidate().is_err());
         assert!(!net::sockopt::socket_passcred(&a).unwrap());
+    }
+
+    #[test]
+    fn polling_distinguishes_no_packet_from_eof_and_preserves_backpressured_frames() {
+        let (a, b) = control_pair().unwrap();
+        let sender = (
+            std::process::id() as i32,
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+        );
+        assert!(try_receive(b.as_fd(), sender, [1; 32]).unwrap().is_none());
+        net::sockopt::set_socket_send_buffer_size(&a, 4096).unwrap();
+        let mut sent = 0_u32;
+        while try_send(a.as_fd(), [1; 32], PROBE, &sent.to_le_bytes()).unwrap() {
+            sent += 1;
+            assert!(sent < 4096, "bounded socket never applied backpressure");
+        }
+        assert!(sent > 0);
+        for expected in 0..sent {
+            assert_eq!(
+                try_receive(b.as_fd(), sender, [1; 32]).unwrap(),
+                Some((PROBE, expected.to_le_bytes().to_vec()))
+            );
+        }
+        assert!(try_receive(b.as_fd(), sender, [1; 32]).unwrap().is_none());
+        assert!(try_send(a.as_fd(), [1; 32], PROBE, &sent.to_le_bytes()).unwrap());
+        assert_eq!(
+            try_receive(b.as_fd(), sender, [1; 32]).unwrap(),
+            Some((PROBE, sent.to_le_bytes().to_vec()))
+        );
+        drop(a);
+        assert!(try_receive(b.as_fd(), sender, [1; 32]).is_err());
     }
 }

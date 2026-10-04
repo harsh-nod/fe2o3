@@ -259,6 +259,7 @@ fn parent_death_matrix(roles: &[&str]) {
             let mut custody = RootOwnedProtectedServiceChildV1 {
                 pid: rustix::process::Pid::from_raw(pid).unwrap(),
                 pidfd: Some(pidfd),
+                reaping_ownership_lost: false,
             };
             if *role == "locked-static" {
                 wait_readable(custody.pidfd().as_fd());

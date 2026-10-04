@@ -261,6 +261,14 @@ impl Scope {
         self.revalidate()?;
         self.remove_original_empty()
     }
+    fn try_remove_empty(&mut self) -> io::Result<bool> {
+        self.revalidate()?;
+        if populated(&read_control(self.scope(), "cgroup.events")?)? {
+            return Ok(false);
+        }
+        self.remove_original_empty()?;
+        Ok(true)
+    }
     fn remove_original_empty(&mut self) -> io::Result<()> {
         let expected = self
             .scope_identity
@@ -299,12 +307,18 @@ impl Drop for Scope {
 pub(crate) struct ContainedChild {
     pub(crate) child: Option<RootOwnedProofControllerChildV1>,
     scope: Option<Scope>,
+    empty_deadline: Option<Instant>,
+    kill_sent: bool,
+    stop_failed: bool,
 }
 impl ContainedChild {
     pub(crate) fn new(scope: Scope) -> Self {
         Self {
             child: None,
             scope: Some(scope),
+            empty_deadline: None,
+            kill_sent: false,
+            stop_failed: false,
         }
     }
     pub(crate) fn install(&mut self, child: RootOwnedProofControllerChildV1) {
@@ -317,6 +331,17 @@ impl ContainedChild {
         self.scope.as_ref().unwrap().attach(self.child())
     }
     pub(crate) fn stop(&mut self) -> io::Result<()> {
+        require(
+            !self.stop_failed,
+            "controller cancellation previously failed",
+        )?;
+        let result = self.stop_inner();
+        if result.is_err() {
+            self.stop_failed = true;
+        }
+        result
+    }
+    fn stop_inner(&mut self) -> io::Result<()> {
         if let Some(scope) = &self.scope {
             scope.kill()?;
         }
@@ -330,12 +355,49 @@ impl ContainedChild {
         self.scope = None;
         Ok(())
     }
+    pub(crate) fn poll_stop(&mut self) -> io::Result<bool> {
+        require(
+            !self.stop_failed,
+            "controller cancellation previously failed",
+        )?;
+        let result = self.poll_stop_inner();
+        if result.is_err() {
+            self.stop_failed = true;
+        }
+        result
+    }
+    fn poll_stop_inner(&mut self) -> io::Result<bool> {
+        if !self.kill_sent {
+            if let Some(scope) = &self.scope {
+                scope.kill()?;
+            }
+            self.kill_sent = true;
+        }
+        if let Some(child) = &mut self.child {
+            if !child.poll_cancel_and_reap().map_err(other)? {
+                return Ok(false);
+            }
+            self.child = None;
+        }
+        let deadline = *self
+            .empty_deadline
+            .get_or_insert_with(|| Instant::now() + CLEANUP_TIMEOUT);
+        if let Some(scope) = &mut self.scope
+            && !scope.try_remove_empty()?
+        {
+            require(Instant::now() < deadline, "cgroup failed to become empty")?;
+            return Ok(false);
+        }
+        self.scope = None;
+        self.empty_deadline = None;
+        Ok(true)
+    }
 }
 impl Drop for ContainedChild {
     fn drop(&mut self) {
         // Never return from Drop while releasing deployment owners with an uncontained tree.
         // The independently deployed manager must additionally use whole-cgroup kill on death.
-        if self.stop().is_err() {
+        if self.stop_inner().is_err() {
             std::process::abort();
         }
     }
@@ -344,6 +406,21 @@ impl Drop for ContainedChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancellation_failure_cannot_be_bypassed_by_blocking_cleanup() {
+        let mut owner = ContainedChild {
+            child: None,
+            scope: None,
+            empty_deadline: None,
+            kill_sent: true,
+            stop_failed: true,
+        };
+        assert!(owner.poll_stop().is_err());
+        assert!(owner.stop().is_err());
+        assert!(owner.poll_stop().is_err());
+        // Drop may contain remaining resources but cannot return a success witness.
+        drop(owner);
+    }
     #[test]
     fn membership_is_exact_and_cannot_escape_root() {
         assert_eq!(relative_path(b"0::/\n").unwrap(), ".");

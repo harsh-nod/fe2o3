@@ -152,4 +152,11 @@ impl RootOwnedProofControllerChildV1 {
     pub fn cancel_and_reap(&mut self) -> Result<(), ProtectedServiceSpawnErrorV1> {
         self.inner.cancel_and_reap().map_err(map_reap_error)
     }
+
+    /// Sends SIGKILL via the original pidfd and makes one nonblocking reap attempt.
+    /// False retains exclusive child custody for a later poll. True is idempotent.
+    /// Neither result establishes descendant containment or GPU settlement.
+    pub fn poll_cancel_and_reap(&mut self) -> Result<bool, ProtectedServiceSpawnErrorV1> {
+        self.inner.poll_cancel_and_reap().map_err(map_reap_error)
+    }
 }

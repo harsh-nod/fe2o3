@@ -17,7 +17,10 @@ mod wire;
 mod worker;
 
 pub use deployment::{ProductionProofCustodianDeploymentV1, ProofCustodianDeploymentV1};
-pub use launch::{RootManagedProofControllerV1, RootRetainedConditionalFillProofV1};
+pub use launch::{
+    PendingRootConditionalFillProofV1, PendingRootProofControllerLaunchV1,
+    RootManagedProofControllerV1, RootRetainedConditionalFillProofV1,
+};
 pub use worker::run_inherited_conditional_fill_proof_controller_v1;
 
 use std::io;

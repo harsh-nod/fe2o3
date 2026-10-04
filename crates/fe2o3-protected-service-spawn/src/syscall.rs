@@ -358,6 +358,7 @@ pub(crate) fn spawn(
     let mut child = RootOwnedProtectedServiceChildV1 {
         pid,
         pidfd: Some(pidfd),
+        reaping_ownership_lost: false,
     };
     if let Err(error) = signals.restore() {
         child.contain();
@@ -380,6 +381,7 @@ pub(crate) fn spawn(
 pub(crate) struct RootOwnedProtectedServiceChildV1 {
     pid: rustix::process::Pid,
     pidfd: Option<OwnedFd>,
+    reaping_ownership_lost: bool,
 }
 
 impl RootOwnedProtectedServiceChildV1 {
@@ -406,6 +408,7 @@ impl RootOwnedProtectedServiceChildV1 {
         Ok(Self {
             pid,
             pidfd: Some(pidfd),
+            reaping_ownership_lost: false,
         })
     }
 
@@ -447,6 +450,9 @@ impl RootOwnedProtectedServiceChildV1 {
     }
 
     pub(crate) fn cancel_and_reap(&mut self) -> Result<(), ReapErrorV1> {
+        if self.reaping_ownership_lost {
+            return Err(ReapErrorV1::OwnershipLost);
+        }
         let Some(pidfd) = self.pidfd.as_ref() else {
             return Ok(());
         };
@@ -477,9 +483,39 @@ impl RootOwnedProtectedServiceChildV1 {
             }
             Err(ReapErrorV1::OwnershipLost) => {
                 self.pidfd.take();
+                self.reaping_ownership_lost = true;
                 Err(ReapErrorV1::OwnershipLost)
             }
             Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn poll_cancel_and_reap(&mut self) -> Result<bool, ReapErrorV1> {
+        if self.reaping_ownership_lost {
+            return Err(ReapErrorV1::OwnershipLost);
+        }
+        let Some(pidfd) = self.pidfd.as_ref() else {
+            return Ok(true);
+        };
+        match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => (),
+            Err(error) => return Err(ReapErrorV1::Io(error.into())),
+        }
+        match rustix::process::waitid(
+            rustix::process::WaitId::PidFd(pidfd.as_fd()),
+            rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
+        ) {
+            Ok(None) | Err(rustix::io::Errno::INTR) => Ok(false),
+            Ok(Some(_)) => {
+                self.pidfd.take();
+                Ok(true)
+            }
+            Err(rustix::io::Errno::CHILD) => {
+                self.pidfd.take();
+                self.reaping_ownership_lost = true;
+                Err(ReapErrorV1::OwnershipLost)
+            }
+            Err(error) => Err(ReapErrorV1::Io(error.into())),
         }
     }
 }

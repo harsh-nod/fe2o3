@@ -18,6 +18,53 @@ use std::{
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(300);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn check_deadline(deadline: Instant) -> io::Result<()> {
+    if Instant::now() < deadline {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "proof-controller deadline",
+        ))
+    }
+}
+
+fn try_read_byte(fd: &OwnedFd) -> io::Result<Option<(usize, u8)>> {
+    let mut byte = [0];
+    match rustix::io::read(fd, &mut byte) {
+        Ok(n) => Ok(Some((n, byte[0]))),
+        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LaunchPhase {
+    Profile,
+    Gate,
+    Exec,
+    Resources,
+    Ready,
+}
+
+/// Borrowed polling keeps original custody on every error. Call `poll_cancel`
+/// until complete before discarding a failed reactor session. Drop is a blocking
+/// containment backstop, not a reactor operation. Admission and bounded filesystem
+/// reads remain synchronous; polling never waits for child progress.
+///
+/// ```compile_fail
+/// use fe2o3_proof_custodian::PendingRootProofControllerLaunchV1;
+/// fn sendable<T: Send>() {}
+/// sendable::<PendingRootProofControllerLaunchV1>();
+/// ```
+pub struct PendingRootProofControllerLaunchV1 {
+    controller: Option<RootManagedProofControllerV1>,
+    ready_read: OwnedFd,
+    gate_write: Option<OwnedFd>,
+    status_read: OwnedFd,
+    phase: LaunchPhase,
+}
+
 #[cfg(test)]
 #[path = "qualification.rs"]
 mod qualification;
@@ -59,6 +106,23 @@ impl ProductionProofCustodianDeploymentV1 {
         payload: &[u8],
         kernel: KernelId,
     ) -> io::Result<RootManagedProofControllerV1> {
+        let mut pending = self.begin_launch(envelope, payload, kernel)?;
+        while !pending.poll()? {
+            pending.wait_for_progress()?;
+        }
+        pending
+            .take_ready()?
+            .ok_or_else(|| io::Error::other("controller not ready"))
+    }
+
+    /// Stages and spawns the fixed child without waiting for profile/exec/resource
+    /// readiness. Use the returned owner on the originating root thread only.
+    pub fn begin_launch(
+        self,
+        envelope: &[u8],
+        payload: &[u8],
+        kernel: KernelId,
+    ) -> io::Result<PendingRootProofControllerLaunchV1> {
         self.revalidate()?;
         let deadline = Instant::now() + EXECUTION_TIMEOUT;
         let request = wire::Request {
@@ -84,6 +148,11 @@ impl ProductionProofCustodianDeploymentV1 {
             rustix::net::SocketFlags::CLOEXEC,
             None,
         )?;
+        // Only parent endpoints are nonblocking; the gated child must still wait.
+        for fd in [&ready_read, &gate_write, &status_read] {
+            let flags = rustix::fs::fcntl_getfl(fd)?;
+            rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK)?;
+        }
         let bindings = [
             (config.as_fd(), 3),
             (request_file.as_fd(), 4),
@@ -107,29 +176,8 @@ impl ProductionProofCustodianDeploymentV1 {
         self.revalidate()?;
         contained.install(staged.spawn(credentials).map_err(other)?);
         drop((staged, child_end, ready_write, gate_read, status_write));
-        wire::wait(ready_read.as_fd(), rustix::event::PollFlags::IN, deadline)?;
-        let mut byte = [0];
-        require(
-            rustix::io::read(&ready_read, &mut byte)? == 1
-                && byte[0] == PROTECTED_SERVICE_PROFILE_READY_V1,
-            "controller failed pre-exec profile",
-        )?;
-        validate_proof_controller_process_v1(credentials, contained.child().pid())
-            .map_err(other)?;
-        contained.attach()?;
-        self.revalidate()?;
-        require(
-            rustix::io::write(&gate_write, &[PROTECTED_SERVICE_GATE_RELEASE_V1])? == 1,
-            "controller gate write",
-        )?;
-        drop(gate_write);
-        wire::wait(status_read.as_fd(), rustix::event::PollFlags::IN, deadline)?;
-        require(
-            rustix::io::read(&status_read, &mut byte)? == 0,
-            "controller exec failed",
-        )?;
         let pid = contained.child().pid().as_raw_pid() as u32;
-        let mut controller = RootManagedProofControllerV1 {
+        let controller = RootManagedProofControllerV1 {
             contained,
             deployment: self,
             control: parent,
@@ -138,13 +186,122 @@ impl ProductionProofCustodianDeploymentV1 {
             deadline,
             poisoned: false,
         };
-        let (kind, body) = controller.receive()?;
-        require(
-            kind == wire::READY && body == controller.deployment.config.identity(),
-            "controller resources not ready",
-        )?;
-        controller.revalidate()?;
-        Ok(controller)
+        Ok(PendingRootProofControllerLaunchV1 {
+            controller: Some(controller),
+            ready_read,
+            gate_write: Some(gate_write),
+            status_read,
+            phase: LaunchPhase::Profile,
+        })
+    }
+}
+
+impl PendingRootProofControllerLaunchV1 {
+    /// Advances at most one phase. False also covers EINTR and backpressure.
+    /// Errors poison the session but do not drop, reap or relinquish its owners.
+    pub fn poll(&mut self) -> io::Result<bool> {
+        let result = self.poll_inner();
+        if result.is_err()
+            && let Some(controller) = &mut self.controller
+        {
+            controller.poisoned = true;
+        }
+        result
+    }
+    fn poll_inner(&mut self) -> io::Result<bool> {
+        let controller = self
+            .controller
+            .as_mut()
+            .ok_or_else(|| io::Error::other("controller already taken"))?;
+        require(!controller.poisoned, "controller channel poisoned")?;
+        check_deadline(controller.deadline)?;
+        controller.deployment.revalidate()?;
+        controller.control.revalidate()?;
+        match self.phase {
+            LaunchPhase::Profile => {
+                let Some((n, byte)) = try_read_byte(&self.ready_read)? else {
+                    return Ok(false);
+                };
+                require(
+                    n == 1 && byte == PROTECTED_SERVICE_PROFILE_READY_V1,
+                    "controller failed pre-exec profile",
+                )?;
+                controller.revalidate()?;
+                controller.contained.attach()?;
+                self.phase = LaunchPhase::Gate;
+            }
+            LaunchPhase::Gate => {
+                controller.revalidate()?;
+                match rustix::io::write(
+                    self.gate_write.as_ref().unwrap(),
+                    &[PROTECTED_SERVICE_GATE_RELEASE_V1],
+                ) {
+                    Ok(1) => (),
+                    Ok(_) => return Err(io::Error::other("controller gate write")),
+                    Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => return Ok(false),
+                    Err(error) => return Err(error.into()),
+                }
+                self.gate_write = None;
+                self.phase = LaunchPhase::Exec;
+            }
+            LaunchPhase::Exec => {
+                let Some((n, _)) = try_read_byte(&self.status_read)? else {
+                    return Ok(false);
+                };
+                require(n == 0, "controller exec failed")?;
+                self.phase = LaunchPhase::Resources;
+            }
+            LaunchPhase::Resources => {
+                let Some((kind, body)) = controller.try_receive()? else {
+                    return Ok(false);
+                };
+                require(
+                    kind == wire::READY && body == controller.deployment.config.identity(),
+                    "controller resources not ready",
+                )?;
+                self.phase = LaunchPhase::Ready;
+            }
+            LaunchPhase::Ready => controller.revalidate()?,
+        }
+        Ok(self.phase == LaunchPhase::Ready)
+    }
+    /// Moves the original ready owner out once. Not-ready and error paths retain
+    /// it here; callers can continue polling or cancel without blocking cleanup.
+    pub fn take_ready(&mut self) -> io::Result<Option<RootManagedProofControllerV1>> {
+        let controller = self
+            .controller
+            .as_mut()
+            .ok_or_else(|| io::Error::other("controller already taken"))?;
+        require(!controller.poisoned, "controller channel poisoned")?;
+        if self.phase != LaunchPhase::Ready {
+            return Ok(None);
+        }
+        if let Err(error) =
+            check_deadline(controller.deadline).and_then(|()| controller.revalidate())
+        {
+            controller.poisoned = true;
+            return Err(error);
+        }
+        Ok(self.controller.take())
+    }
+    /// True requires original-child reap and aggregate-empty scope removal.
+    pub fn poll_cancel(&mut self) -> io::Result<bool> {
+        match &mut self.controller {
+            Some(controller) => controller.poll_cancel(),
+            None => Err(io::Error::other("controller already taken")),
+        }
+    }
+    fn wait_for_progress(&self) -> io::Result<()> {
+        use rustix::event::PollFlags;
+        let controller = self.controller.as_ref().unwrap();
+        let (fd, event) = match self.phase {
+            LaunchPhase::Profile => (self.ready_read.as_fd(), PollFlags::IN),
+            LaunchPhase::Gate => (self.gate_write.as_ref().unwrap().as_fd(), PollFlags::OUT),
+            LaunchPhase::Exec => (self.status_read.as_fd(), PollFlags::IN),
+            LaunchPhase::Resources => (controller.control.as_fd(), PollFlags::IN),
+            LaunchPhase::Ready => return Ok(()),
+        };
+        wire::wait(fd, event, controller.deadline)
     }
 }
 
@@ -175,9 +332,26 @@ impl RootManagedProofControllerV1 {
         self.control.revalidate()
     }
     fn receive(&mut self) -> io::Result<(u8, Vec<u8>)> {
+        let result = (|| loop {
+            self.revalidate()?;
+            wire::wait(
+                self.control.as_fd(),
+                rustix::event::PollFlags::IN,
+                self.deadline,
+            )?;
+            if let Some(packet) = self.try_receive()? {
+                return Ok(packet);
+            }
+        })();
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+    fn try_receive(&mut self) -> io::Result<Option<(u8, Vec<u8>)>> {
         self.revalidate()?;
         let credentials = self.deployment.config.credentials()?;
-        let result = wire::receive(
+        let result = wire::try_receive(
             self.control.as_fd(),
             (
                 self.child_pid() as i32,
@@ -185,20 +359,22 @@ impl RootManagedProofControllerV1 {
                 credentials.gid(),
             ),
             self.nonce,
-            self.deadline,
         );
         match result {
-            Ok((wire::REJECTED, detail)) => {
+            Ok(Some((wire::REJECTED, detail))) => {
                 self.poisoned = true;
                 Err(io::Error::other(format!(
                     "proof controller rejected: {}",
                     String::from_utf8_lossy(&detail)
                 )))
             }
-            Ok(packet) => {
-                self.revalidate()?;
-                Ok(packet)
-            }
+            Ok(packet) => match self.revalidate() {
+                Ok(()) => Ok(packet),
+                Err(error) => {
+                    self.poisoned = true;
+                    Err(error)
+                }
+            },
             Err(error) => {
                 self.poisoned = true;
                 Err(error)
@@ -215,23 +391,128 @@ impl RootManagedProofControllerV1 {
     }
     /// Executes the one supplied closed fill and retains the same controller/proof owner.
     /// It does not authenticate an application or consume FD195 compiler currentness.
-    pub fn prove(mut self) -> io::Result<RootRetainedConditionalFillProofV1> {
-        self.send(wire::START)?;
-        let (kind, subject) = self.receive()?;
-        require(
-            kind == wire::PROVED && !subject.is_empty(),
-            "missing retained proof subject",
-        )?;
-        Ok(RootRetainedConditionalFillProofV1 {
-            controller: self,
-            subject,
-        })
+    pub fn prove(self) -> io::Result<RootRetainedConditionalFillProofV1> {
+        let mut pending = self.begin_proof();
+        while !pending.poll()? {
+            pending.wait_for_progress()?;
+        }
+        pending
+            .take_ready()?
+            .ok_or_else(|| io::Error::other("proof not ready"))
+    }
+    /// Begins a borrowed-polling operation without sending Start or waiting.
+    pub fn begin_proof(self) -> PendingRootConditionalFillProofV1 {
+        PendingRootConditionalFillProofV1 {
+            controller: Some(self),
+            started: false,
+            subject: None,
+        }
     }
     /// Contains the entire proof process tree. This says nothing about GPU settlement.
     /// On error this borrowed owner keeps its child/scope and deployment custody.
     pub fn cancel(&mut self) -> io::Result<()> {
         self.poisoned = true;
         self.contained.stop()
+    }
+    /// One cancellation step; false preserves all remaining custody. Only true
+    /// establishes direct-child reap and aggregate-empty original scope removal.
+    /// The direct child may remain pending indefinitely; no GPU settlement follows.
+    /// An error is terminal for polling and must not be treated as successful cleanup.
+    pub fn poll_cancel(&mut self) -> io::Result<bool> {
+        self.poisoned = true;
+        self.contained.poll_stop()
+    }
+}
+
+/// Original controller custody while proof execution progresses. Like pending
+/// launch, errors retain ownership and Drop is a blocking containment backstop.
+///
+/// ```compile_fail
+/// use fe2o3_proof_custodian::PendingRootConditionalFillProofV1;
+/// fn sendable<T: Send>() {}
+/// sendable::<PendingRootConditionalFillProofV1>();
+/// ```
+pub struct PendingRootConditionalFillProofV1 {
+    controller: Option<RootManagedProofControllerV1>,
+    started: bool,
+    subject: Option<Vec<u8>>,
+}
+impl PendingRootConditionalFillProofV1 {
+    /// One nonblocking send or receive attempt. Completion is authenticated by
+    /// the original live controller and does not create application authority.
+    pub fn poll(&mut self) -> io::Result<bool> {
+        let result = self.poll_inner();
+        if result.is_err()
+            && let Some(controller) = &mut self.controller
+        {
+            controller.poisoned = true;
+        }
+        result
+    }
+    fn poll_inner(&mut self) -> io::Result<bool> {
+        let controller = self
+            .controller
+            .as_mut()
+            .ok_or_else(|| io::Error::other("proof already taken"))?;
+        controller.revalidate()?;
+        // A genuinely completed proof is retained beyond its execution deadline.
+        if self.subject.is_some() {
+            return Ok(true);
+        }
+        check_deadline(controller.deadline)?;
+        if !self.started {
+            self.started = wire::try_send(
+                controller.control.as_fd(),
+                controller.nonce,
+                wire::START,
+                &[],
+            )?;
+            controller.revalidate()?;
+            return Ok(false);
+        }
+        let Some((kind, subject)) = controller.try_receive()? else {
+            return Ok(false);
+        };
+        require(
+            kind == wire::PROVED && !subject.is_empty(),
+            "missing retained proof subject",
+        )?;
+        self.subject = Some(subject);
+        Ok(true)
+    }
+    /// Moves the original proof/controller owner out once, retaining it here on
+    /// error or before readiness. Subject bytes alone never construct this owner.
+    pub fn take_ready(&mut self) -> io::Result<Option<RootRetainedConditionalFillProofV1>> {
+        let controller = self
+            .controller
+            .as_mut()
+            .ok_or_else(|| io::Error::other("proof already taken"))?;
+        if let Err(error) = controller.revalidate() {
+            controller.poisoned = true;
+            return Err(error);
+        }
+        let Some(subject) = self.subject.take() else {
+            return Ok(None);
+        };
+        Ok(Some(RootRetainedConditionalFillProofV1 {
+            controller: self.controller.take().unwrap(),
+            subject,
+        }))
+    }
+    pub fn poll_cancel(&mut self) -> io::Result<bool> {
+        match &mut self.controller {
+            Some(controller) => controller.poll_cancel(),
+            None => Err(io::Error::other("proof already taken")),
+        }
+    }
+    fn wait_for_progress(&self) -> io::Result<()> {
+        let controller = self.controller.as_ref().unwrap();
+        let event = if self.started {
+            rustix::event::PollFlags::IN
+        } else {
+            rustix::event::PollFlags::OUT
+        };
+        wire::wait(controller.control.as_fd(), event, controller.deadline)
     }
 }
 
@@ -253,10 +534,14 @@ impl RootRetainedConditionalFillProofV1 {
         self.controller.deadline = Instant::now() + CONTROL_TIMEOUT;
         self.controller.send(wire::PROBE)?;
         let (kind, body) = self.controller.receive()?;
-        require(
+        let result = require(
             kind == wire::RETAINED && body == self.subject,
             "retained proof subject changed",
-        )
+        );
+        if result.is_err() {
+            self.controller.poisoned = true;
+        }
+        result
     }
     /// Releases this root-only proof session and verifies whole-tree cleanup.
     /// Applications cannot call this as native settlement: no application lease exists here.

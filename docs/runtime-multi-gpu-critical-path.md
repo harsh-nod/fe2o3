@@ -18,6 +18,16 @@ now passes real post-exec analysis/proof, retained-owner probing, three mismatch
 controls and live-Verus cancellation. Do not substitute another isolated identity
 or routing checkpoint for those two production joins.
 
+The independently installed root launcher is now implemented in
+`fe2o3-proof-custodian`: it opens the fixed controller, analyzer and Verus runtime,
+retains original process custody and contains each proof tree in a fresh cgroup.
+Its [pollable lifecycle](runtime-proof-custodian-polling-v1.md) supports cooperative
+startup, proof execution and cancellation on the originating root thread. This is
+the manager's lifecycle prerequisite, not the deployed manager or application
+handoff. Next implement one staged application session in the independent manager,
+then the remote conditional owner and existing per-device native invocation join.
+Keep general performance work and additional GPU counts out of this critical path.
+
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
    request. The native current-publication audit passes, including substitution
