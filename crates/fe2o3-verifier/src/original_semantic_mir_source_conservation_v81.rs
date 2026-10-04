@@ -78,6 +78,20 @@ pub(super) fn derive(
             }
         }
     }
+    structural_fuels(functions, out).map(Some)
+}
+
+pub(super) fn structural_fuels(
+    functions: &[Option<SourceByteFunction<'_, '_, '_>>],
+    out: &mut Writer<'_, '_>,
+) -> Result<Vec<usize>> {
+    out.budget.reserve_storage(
+        size_of::<Vec<usize>>()
+            + 2 * size_of::<Result<Vec<usize>>>()
+            + size_of::<std::slice::Iter<'_, Option<SourceByteFunction<'_, '_, '_>>>>()
+            + size_of::<std::slice::Iter<'_, BodyBlock>>()
+            + 4 * size_of::<usize>(),
+    )?;
     let mut fuels = vector(functions.len(), out)?;
     for function in functions {
         out.budget.charge_work(1)?;
@@ -90,7 +104,7 @@ pub(super) fn derive(
         }
         fuels.push(fuel);
     }
-    Ok(Some(fuels))
+    Ok(fuels)
 }
 
 fn headers() -> usize {

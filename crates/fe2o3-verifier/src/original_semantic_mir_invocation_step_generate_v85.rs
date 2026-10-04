@@ -3,6 +3,9 @@
 use super::*;
 use std::fmt::Write as _;
 
+pub(super) const WRITING_SHARED: &str =
+    include_str!("original_semantic_mir_scalar_store_laws_v92.vrs");
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
@@ -46,13 +49,32 @@ pub(super) fn emit(
     if hints.fuels.len() != row.instances.len() || hints.entries.len() != row.instances.len() {
         return Err(mismatch());
     }
+    if !hints.conserves_heap {
+        emit!(
+            out,
+            r#"proof fn invocation_paired_source_defined_step_valid_{root}_v92(source: InvocationSourceByteStateV36)
+ requires invocation_paired_source_defined_{root}_v36(source, 1),
+ ensures invocation_paired_source_step_{root}_v36(source).state.machine.valid,
+{{
+ hide(invocation_paired_source_step_{root}_v36);
+ hide(invocation_source_block_runtime_{root}_v36);
+ hide(invocation_paired_source_defined_{root}_v36);
+ reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);
+ if source.machine.pc < 0 {{
+ reveal(invocation_paired_source_step_{root}_v36);
+ }}
+}}
+"#
+        );
+    }
     header(root, None, Goal::All, out)?;
     emit!(out, "}}\n");
     for cut in row.cuts.iter().flatten() {
         out.budget.charge_work(1)?;
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
-        if let Some((call, entry)) = constructor {
+        let partition = constructor.is_some() || !hints.conserves_heap;
+        if partition {
             for goal in [
                 Goal::Map,
                 Goal::Heap,
@@ -71,7 +93,7 @@ pub(super) fn emit(
                         }
                     }
                     _ => {
-                        if matches!(goal, Goal::Map) {
+                        if constructor.is_some() && matches!(goal, Goal::Map) {
                             emit!(
                                 out,
                                 " hide(invocation_source_byte_state_well_formed_v36);\n"
@@ -85,10 +107,12 @@ pub(super) fn emit(
                             matches!(goal, Goal::Observations),
                             out,
                         )?;
-                        if matches!(goal, Goal::Map) {
-                            enter(root, hint, call, entry, out)?;
-                        } else if matches!(goal, Goal::Control) {
-                            control_values(model, root, cut, call, out)?;
+                        if let Some((call, entry)) = constructor {
+                            if matches!(goal, Goal::Map) {
+                                enter(root, hint, call, entry, out)?;
+                            } else if matches!(goal, Goal::Control) {
+                                control_values(model, root, cut, call, out)?;
+                            }
                         }
                     }
                 }
@@ -96,7 +120,7 @@ pub(super) fn emit(
             }
         }
         header(root, Some(cut.source), Goal::All, out)?;
-        if constructor.is_some() {
+        if partition {
             for goal in [
                 Goal::Relation,
                 Goal::Observations,
@@ -148,18 +172,18 @@ fn constructor<'a>(
     let End::Call(child) = cut.end else {
         return Ok(None);
     };
-    let call = hint.call.as_ref().ok_or_else(mismatch)?;
+    let Some(call) = hint.call.as_ref() else {
+        return Ok(None);
+    };
     let child = child
         .checked_sub(row.instances.start)
         .ok_or_else(mismatch)?;
     if child != call.child {
         return Err(mismatch());
     }
-    let entry = hints
-        .entries
-        .get(child)
-        .and_then(Option::as_ref)
-        .ok_or_else(mismatch)?;
+    let Some(entry) = hints.entries.get(child).and_then(Option::as_ref) else {
+        return Ok(None);
+    };
     out.budget.charge_work(2)?;
     if entry.arguments.len() != call.arguments.len() || hint.operands != call.arguments.len() {
         return Err(mismatch());
@@ -271,10 +295,17 @@ fn unfold(
             add(cut.statements, 1)?
         );
     }
-    emit!(
-        out,
-        " invocation_paired_source_preserved_{root}_v77(source, target);\n"
-    );
+    if hints.conserves_heap {
+        emit!(
+            out,
+            " invocation_paired_source_preserved_{root}_v77(source, target);\n"
+        );
+    } else {
+        emit!(
+            out,
+            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n invocation_scalar_store_facts_v92();\n"
+        );
+    }
     Ok(())
 }
 
@@ -401,6 +432,7 @@ pub(super) fn dispatch(root: usize, row: &Root, out: &mut Writer<'_, '_>) -> Res
 
 fn headers() -> usize {
     size_of::<Goal>()
+        + 2 * size_of::<bool>()
         + size_of::<Option<usize>>()
         + size_of::<Result<&'static SourceCutHintsV85>>()
         + size_of::<Result<Option<(&'static SourceCallHintsV85, &'static SourceEntryHintsV85)>>>()

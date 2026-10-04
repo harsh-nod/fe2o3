@@ -59,6 +59,7 @@ pub(super) struct SourceCutHintsV85 {
 }
 
 pub(super) struct SourceStepHintsV85 {
+    pub(super) conserves_heap: bool,
     pub(super) fuels: Vec<usize>,
     pub(super) entries: Vec<Option<SourceEntryHintsV85>>,
     pub(super) cuts: Vec<SourceCutHintsV85>,
