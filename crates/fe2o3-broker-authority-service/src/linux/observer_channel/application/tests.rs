@@ -92,9 +92,97 @@ fn gate_rejects_wrong_role_flags_and_dead_original_root() {
     assert!(gate.await_observation(Instant::now() + TIMEOUT).is_err());
 }
 
-fn install(fixture: &Fixture) -> (ApplicationSession, PendingApplicationObservationGateV1) {
+#[test]
+fn publication_writer_checks_role_identity_deadline_and_commits_exact_eof() {
+    for scenario in [
+        "positive",
+        "wrong_role",
+        "alias",
+        "changed_flags",
+        "expired",
+        "closed",
+    ] {
+        let (gate, gate_writer) = gate();
+        let (reader, writer) = rustix::pipe::pipe_with(
+            rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+        )
+        .unwrap();
+        if scenario == "wrong_role" {
+            assert!(
+                ApplicationPublication::admit(
+                    reader,
+                    current_identity().unwrap(),
+                    [1; 32],
+                    [2; 32],
+                    gate.object
+                )
+                .is_err()
+            );
+            continue;
+        }
+        if scenario == "alias" {
+            assert!(
+                ApplicationPublication::admit(
+                    gate_writer,
+                    current_identity().unwrap(),
+                    [1; 32],
+                    [2; 32],
+                    gate.object
+                )
+                .is_err()
+            );
+            continue;
+        }
+        let publication = ApplicationPublication::admit(
+            writer,
+            current_identity().unwrap(),
+            [1; 32],
+            [2; 32],
+            gate.object,
+        )
+        .unwrap();
+        let reader = if scenario == "closed" {
+            drop(reader);
+            None
+        } else {
+            Some(reader)
+        };
+        if scenario == "changed_flags" {
+            rustix::fs::fcntl_setfl(&publication.writer, OFlags::empty()).unwrap();
+        }
+        let deadline = if scenario == "expired" {
+            Instant::now()
+        } else {
+            Instant::now() + TIMEOUT
+        };
+        assert_eq!(
+            publication.publish(deadline).is_ok(),
+            scenario == "positive",
+            "{scenario}"
+        );
+        if let Some(reader) = reader {
+            let mut bytes = [0; GATE_BYTES + 1];
+            let count = rustix::io::read(&reader, &mut bytes).unwrap();
+            if scenario == "positive" {
+                assert_eq!(count, GATE_BYTES);
+                assert_eq!(&bytes[..count], publication_record(&[1; 32], &[2; 32]));
+                assert_eq!(rustix::io::read(&reader, &mut bytes).unwrap(), 0);
+            } else {
+                assert_eq!(count, 0);
+            }
+        }
+    }
+}
+
+fn install(
+    fixture: &Fixture,
+) -> (
+    ApplicationSession,
+    PendingApplicationObservationGateV1,
+    ApplicationPublication,
+) {
     let binding = fixture.registration();
-    let (session, reader) = ApplicationSession::install(
+    let (session, [reader, writer]) = ApplicationSession::install(
         fixture.application_identity(),
         fixture.parent_identity(),
         fixture.proof_peer(),
@@ -109,7 +197,15 @@ fn install(fixture: &Fixture) -> (ApplicationSession, PendingApplicationObservat
         [32; 32],
     )
     .unwrap();
-    (session, gate)
+    let publication = ApplicationPublication::admit(
+        writer,
+        current_identity().unwrap(),
+        *binding.identity().as_bytes(),
+        [32; 32],
+        gate.object,
+    )
+    .unwrap();
+    (session, gate, publication)
 }
 
 fn hello(binding: &WorkerV3ApplicationRegistrationBindingV1) -> Message {
@@ -149,7 +245,7 @@ fn root_application_session_campaign() {
     let build = tempfile::tempdir().unwrap();
     let helper = build_helper(build.path());
     let mut fixture = Fixture::spawn(&helper, true);
-    let (mut session, gate) = install(&fixture);
+    let (mut session, gate, publication) = install(&fixture);
     assert!(!step(&mut session).unwrap());
     fixture.send_session(hello(&fixture.registration()).canonical_bytes(), false);
     assert!(
@@ -179,6 +275,13 @@ fn root_application_session_campaign() {
     session.issuer_bound();
     assert!(step(&mut session).unwrap());
     gate.await_observation(Instant::now() + TIMEOUT).unwrap();
+    assert!(
+        !step(&mut session).unwrap(),
+        "observation alone must not release app Ready"
+    );
+    publication.publish(Instant::now() + TIMEOUT).unwrap();
+    assert!(step(&mut session).unwrap());
+    assert!(step(&mut session).unwrap());
     assert!(step(&mut session).unwrap());
     let (ready, rights) = fixture.receive_session();
     assert_eq!(rights, 0);
@@ -191,7 +294,7 @@ fn root_application_session_campaign() {
     drop(session);
     fixture.exit();
     println!(
-        "PASS: authenticated pre-ACK handshake, bound-only gate-before-Ready, normal EOF without signal"
+        "PASS: authenticated pre-ACK handshake, publication-before-Ready, normal EOF without signal"
     );
 
     for scenario in [
@@ -204,7 +307,8 @@ fn root_application_session_campaign() {
         "duplicate_accept",
     ] {
         let mut fixture = Fixture::spawn(&helper, true);
-        let (mut session, gate) = install(&fixture);
+        let (mut session, gate, publication) = install(&fixture);
+        let mut publication = Some(publication);
         match scenario {
             "early_eof" => fixture.command(b't'),
             "timeout" => session.deadline = Instant::now(),
@@ -243,6 +347,13 @@ fn root_application_session_campaign() {
                         assert!(step(&mut session).unwrap());
                         session.issuer_bound();
                         assert!(step(&mut session).unwrap());
+                        publication
+                            .take()
+                            .unwrap()
+                            .publish(Instant::now() + TIMEOUT)
+                            .unwrap();
+                        assert!(step(&mut session).unwrap());
+                        assert!(step(&mut session).unwrap());
                         assert!(step(&mut session).unwrap());
                         fixture.receive_session();
                         fixture.send_session(Message::accept(accepted).canonical_bytes(), false);
@@ -256,5 +367,65 @@ fn root_application_session_campaign() {
             assert!(gate.await_observation(Instant::now() + TIMEOUT).is_err());
         }
         println!("PASS: {scenario} rejects and contains exact original application");
+    }
+
+    for scenario in [
+        "empty",
+        "short",
+        "trailing",
+        "wrong_binding",
+        "wrong_session",
+        "observation_record",
+        "missing_eof",
+        "timeout",
+    ] {
+        let mut fixture = Fixture::spawn(&helper, true);
+        let (mut session, gate, publication) = install(&fixture);
+        fixture.send_session(hello(&fixture.registration()).canonical_bytes(), false);
+        assert!(step(&mut session).unwrap());
+        assert!(step(&mut session).unwrap());
+        let (bytes, _) = fixture.receive_session();
+        let transcript = Message::decode(&bytes).unwrap().transcript().unwrap();
+        fixture.send_session(Message::accept(transcript).canonical_bytes(), false);
+        assert!(step(&mut session).unwrap());
+        session.issuer_bound();
+        assert!(step(&mut session).unwrap());
+        gate.await_observation(Instant::now() + TIMEOUT).unwrap();
+        let mut bytes = publication.expected.to_vec();
+        match scenario {
+            "empty" | "timeout" => bytes.clear(),
+            "short" => {
+                bytes.pop();
+            }
+            "trailing" => bytes.push(0),
+            "wrong_binding" => bytes[8] ^= 1,
+            "wrong_session" => bytes[40] ^= 1,
+            "observation_record" => bytes[..8].copy_from_slice(GATE_MAGIC),
+            _ => {}
+        }
+        if !bytes.is_empty() {
+            rustix::io::write(&publication.writer, &bytes).unwrap();
+        }
+        let retained = if matches!(scenario, "missing_eof" | "timeout") {
+            Some(publication)
+        } else {
+            drop(publication);
+            None
+        };
+        if scenario == "missing_eof" {
+            assert!(step(&mut session).unwrap());
+            assert!(!step(&mut session).unwrap());
+        }
+        if retained.is_some() {
+            session.deadline = Instant::now();
+        }
+        if !matches!(scenario, "empty" | "trailing" | "missing_eof" | "timeout") {
+            assert!(step(&mut session).unwrap());
+        }
+        assert!(step(&mut session).is_err(), "publication {scenario}");
+        assert!(!matches!(session.state, State::Registered));
+        drain(&mut session);
+        drop(retained);
+        println!("PASS: publication {scenario} withholds Ready and contains original application");
     }
 }

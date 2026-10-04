@@ -442,7 +442,28 @@ fn registration_helper() {
         Duration::from_secs(5)
     };
     let result = endpoint.register_pre_ack(inputs, Instant::now() + duration);
-    if case == "positive" || case == "separate_root_positive" {
+    if case == "live_root_closed_session" {
+        let owner = result.unwrap();
+        owner.revalidate().unwrap();
+        transmit(&owner.endpoint.peer, b"fixture-owner-retained", &[]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match owner.revalidate() {
+                Err(ApplicationProofChannelErrorV1::Invalid("registered root session closed")) => {
+                    break;
+                }
+                Ok(()) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "registered session closure was not detected"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => panic!("wrong post-Ready continuity result: {other:?}"),
+            }
+        }
+        owner.root.revalidate().unwrap();
+    } else if case == "positive" || case == "separate_root_positive" {
         let owner = result.unwrap();
         owner.revalidate().unwrap();
         assert_ne!(owner.transcript().binding(), [0; 32]);
@@ -626,6 +647,7 @@ fn run_case(case: &str, root_campaign: bool) {
             | "ready_eof"
             | "duplicate_challenge"
             | "foreign_ready"
+            | "live_root_closed_session"
     ) {
         let (accept, rights) = receive_test(&peer);
         assert!(rights.is_empty());
@@ -676,6 +698,16 @@ fn run_case(case: &str, root_campaign: bool) {
         } else {
             vec![]
         };
+        if case == "live_root_closed_session" {
+            transmit(&peer, ready.canonical_bytes(), &rights);
+            let (marker, rights) = receive_test(&peer);
+            assert_eq!(marker, b"fixture-owner-retained");
+            assert!(rights.is_empty());
+            drop(peer);
+            // This actual Challenge/Ready sender remains alive throughout the rejection.
+            cargo.wait();
+            return;
+        }
         transmit(&peer, ready.canonical_bytes(), &rights);
     }
     cargo.wait();
@@ -703,6 +735,7 @@ fn root_registration_transport_campaign() {
     assert_eq!(rustix::process::geteuid().as_raw(), 0);
     for case in [
         "positive",
+        "live_root_closed_session",
         "wrong_pidfd",
         "ordinary_fd",
         "missing_pidfd",

@@ -609,6 +609,11 @@ impl ReadyProtectedIssuerV1 {
             observed.as_ref(),
             deadline,
         )?;
+        if let Some(observed) = observed {
+            observed
+                .confirm_publication(deadline)
+                .map_err(ProtectedIssuerLaunchErrorV1::ApplicationObservation)?;
+        }
         let Self {
             process,
             control,

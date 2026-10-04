@@ -64,15 +64,57 @@ fn exited_child() -> Child {
     child
 }
 
+pub(crate) fn inert_registration_inputs() -> WorkerV3ApplicationRegistrationInputsV1 {
+    let mut protocol = protocol();
+    let mut inputs = protocol.occurrence.inputs().to_vec();
+    inputs.push(WorkerV3ApplicationInputOccurrenceV1::new(4, [4; 32]).unwrap());
+    protocol.occurrence = WorkerV3ApplicationOccurrenceV1::new(
+        protocol.occurrence.application(),
+        protocol.occurrence.spawn_identity(),
+        &inputs,
+    )
+    .unwrap();
+    protocol.proof_descriptor = Some(13);
+    protocol.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+        protocol.expectation.envelope(),
+        &protocol.occurrence,
+    );
+    protocol.registration_inputs().unwrap()
+}
+
 fn pending(child: &Child) -> PendingApplicationAck {
     let (read, write) = cloexec_pipe().unwrap();
+    let proof = PreparedApplicationProofChannelV1::prepare().unwrap();
+    let mut protocol = protocol();
+    let setup = proof.child_setup();
+    let (device, inode, mode) = setup.descriptor_identity();
+    let mut inputs = protocol.occurrence.inputs().to_vec();
+    inputs.push(
+        WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(4, device, inode, mode)
+            .unwrap(),
+    );
+    protocol.occurrence = WorkerV3ApplicationOccurrenceV1::new(
+        protocol.occurrence.application(),
+        protocol.occurrence.spawn_identity(),
+        &inputs,
+    )
+    .unwrap();
+    // Historical fixture coordinates need only be distinct; the transfer transport independently
+    // checks the exact slot-four object before a real supervisor send.
+    protocol.descriptors = [
+        setup.descriptor() + 1000,
+        setup.descriptor() + 1001,
+        setup.descriptor() + 1002,
+    ];
+    protocol.proof_descriptor = Some(setup.descriptor());
+    protocol.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+        protocol.expectation.envelope(),
+        &protocol.occurrence,
+    );
     PendingApplicationAck {
         read,
         parent_write: Some(write),
-        custody: ApplicationHandoffCustodyV1::prepare(
-            protocol(),
-            Some(PreparedApplicationProofChannelV1::prepare().unwrap()),
-        ),
+        custody: ApplicationHandoffCustodyV1::prepare(protocol, Some(proof)),
         sandbox: Some(PendingApplicationSandbox::test_reported_admission(Ok(
             child.id(),
         ))),
@@ -108,14 +150,12 @@ fn spawned(pending: PendingApplicationAck, child: &Child) -> SpawnedApplicationA
 
 fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawFd) {
     let original = cleanup.application.as_ref().unwrap();
-    assert!(original.custody.prepared_proof.is_none());
-    original
-        .custody
-        .proof
-        .as_ref()
-        .unwrap()
-        .revalidate()
-        .unwrap();
+    match &original.custody.proof {
+        ApplicationProofCustodyV1::Retained(proof) => proof.revalidate().unwrap(),
+        ApplicationProofCustodyV1::Transferred => {}
+        _ => panic!("startup did not retain or transfer proof custody"),
+    }
+    original.custody.validate().unwrap();
     assert_eq!(original.child().test_child_pidfd().as_raw_fd(), descriptor);
     assert_eq!(original.child().child_pid(), child.id());
     assert!(
@@ -130,9 +170,18 @@ fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawF
             .any(|line| line == format!("Pid:\t{}", child.id()))
     );
     let expected = protocol();
-    assert_eq!(original.protocol().occurrence, expected.occurrence);
-    assert_eq!(original.protocol().descriptors, expected.descriptors);
-    assert_eq!(original.protocol().expectation, expected.expectation);
+    assert_eq!(
+        original.protocol().occurrence.application(),
+        expected.occurrence.application()
+    );
+    assert_eq!(
+        &original.protocol().occurrence.inputs()[..3],
+        expected.occurrence.inputs()
+    );
+    assert_eq!(
+        original.protocol().expectation.envelope(),
+        expected.expectation.envelope()
+    );
     assert_eq!(original.protocol().challenge, expected.challenge);
 }
 
@@ -147,12 +196,10 @@ fn startup_releases_ack_writers_before_service_wait() {
     pending.test_ready_parent_write = Some(ready_write);
     let allocation = std::ptr::from_ref(pending.custody.as_ref());
     assert!(pending.custody.child.is_none());
-    let proof_setup = pending
-        .custody
-        .prepared_proof
-        .as_ref()
-        .unwrap()
-        .child_setup();
+    let ApplicationProofCustodyV1::Prepared(proof) = &pending.custody.proof else {
+        panic!("expected prepared proof")
+    };
+    let proof_setup = proof.child_setup();
     let mut spawned = spawned(pending, &child);
     // Original pidfd capture may reuse the closed number, but never the socket object.
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -269,16 +316,83 @@ fn fast_exit_before_required_service_retains_original_cleanup() {
     wait_for_application_exit_without_reaping(&child).unwrap();
     let mut pending = pending(&child);
     queue_ack(&mut pending);
-    let spawned = spawned(pending, &child);
+    let mut spawned = spawned(pending, &child);
     let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
+    let (proof, inputs) = spawned.take_registration_transfer().unwrap();
     assert!(matches!(
-        boundary.finish_application(spawned.retained_child()),
+        boundary.finish_application(spawned.retained_child(), proof, inputs, spawned.deadline()),
         Err(CompilerExecutionBoundaryErrorV1::ChildChannel(
             CompilerExecutionChildChannelErrorV1::ChildExited
         ))
     ));
     assert_original(&spawned.cleanup, &child, original_fd);
     terminate_application_group(child, spawned.into_cleanup()).unwrap();
+}
+
+#[test]
+fn registration_transfer_is_single_use_and_preserves_cleanup() {
+    let child = exited_child();
+    let mut spawned = spawned(pending(&child), &child);
+    let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
+    let protocol = &mut spawned
+        .cleanup
+        .application
+        .as_mut()
+        .unwrap()
+        .custody
+        .protocol;
+    let original = protocol.proof_descriptor;
+    protocol.proof_descriptor = Some(protocol.descriptors[0]);
+    assert!(spawned.take_registration_transfer().is_err());
+    assert!(matches!(
+        spawned.cleanup.application.as_ref().unwrap().custody.proof,
+        ApplicationProofCustodyV1::Retained(_)
+    ));
+    spawned
+        .cleanup
+        .application
+        .as_mut()
+        .unwrap()
+        .custody
+        .protocol
+        .proof_descriptor = original;
+    let (proof, inputs) = spawned.take_registration_transfer().unwrap();
+    assert_eq!(inputs.canonical_bytes().len(), 600);
+    assert!(spawned.take_registration_transfer().is_err());
+    assert_original(&spawned.cleanup, &child, original_fd);
+    drop(proof);
+    terminate_application_group(child, spawned.into_cleanup()).unwrap();
+}
+
+#[test]
+fn expired_startup_cannot_accept_a_buffered_ack_or_start_registration() {
+    let child = exited_child();
+    let mut pending = pending(&child);
+    queue_ack(&mut pending);
+    let mut spawned = spawned(pending, &child);
+    let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
+    spawned.deadline = Instant::now();
+    assert!(spawned.take_registration_transfer().is_err());
+    let failure = match spawned.await_ack(&child) {
+        Err(failure) => failure,
+        Ok(_) => panic!("buffered ACK extended expired startup"),
+    };
+    let (_, cleanup) = failure.into_parts();
+    assert_original(&cleanup, &child, original_fd);
+    terminate_application_group(child, cleanup).unwrap();
+}
+
+#[test]
+fn proof_custody_requires_the_matching_slot_profile() {
+    let mut absent = ApplicationHandoffCustodyV1::prepare(protocol(), None);
+    absent.validate().unwrap();
+    absent.protocol.proof_descriptor = Some(13);
+    assert!(absent.validate().is_err());
+    let prepared = ApplicationHandoffCustodyV1::prepare(
+        protocol(),
+        Some(PreparedApplicationProofChannelV1::prepare().unwrap()),
+    );
+    assert!(prepared.validate().is_err());
 }
 
 #[test]

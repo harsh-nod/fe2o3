@@ -2744,7 +2744,7 @@ fn run_application_with_handoff(
     )?;
     let process = process_execution::spawn(child.as_command_mut())
         .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
-    let spawned_ack = match pending_ack.after_spawn(&process) {
+    let mut spawned_ack = match pending_ack.after_spawn(&process) {
         Ok(spawned_ack) => spawned_ack,
         Err(failure) => {
             let (error, cleanup) = failure.into_parts();
@@ -2753,17 +2753,30 @@ fn run_application_with_handoff(
         }
     };
     let compiler_execution_readiness = match compiler_execution_boundary {
-        Some(boundary) => match boundary.finish_application(spawned_ack.retained_child()) {
-            Ok(readiness) => Some(readiness),
-            Err(error) => {
-                drop(handoff);
-                return terminate_application_with_error(
-                    process,
-                    spawned_ack.into_cleanup(),
-                    error.to_string(),
-                );
+        Some(boundary) => {
+            match spawned_ack
+                .take_registration_transfer()
+                .and_then(|(proof, inputs)| {
+                    boundary
+                        .finish_application(
+                            spawned_ack.retained_child(),
+                            proof,
+                            inputs,
+                            spawned_ack.deadline(),
+                        )
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok(readiness) => Some(readiness),
+                Err(error) => {
+                    drop(handoff);
+                    return terminate_application_with_error(
+                        process,
+                        spawned_ack.into_cleanup(),
+                        error.to_string(),
+                    );
+                }
             }
-        },
+        }
         None => None,
     };
     let active_handoff = match spawned_ack.await_ack(&process) {

@@ -7,6 +7,7 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionClientProfileCapabilityV1, CompilerExecutionPolicyCapabilityV1,
 };
 use fe2o3_compiler_execution_client::{
+    ApplicationProofTransferPeerV1, ApplicationSupervisorHandoffErrorV1,
     CompilerExecutionChildChannelErrorV1, CompilerExecutionHandoffErrorV1,
     CompilerExecutionSupervisorCredentialsV1, MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1,
     PendingCompilerExecutionChildChannelV1, RetainedCompilerExecutionChildV1,
@@ -14,7 +15,11 @@ use fe2o3_compiler_execution_client::{
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionServiceLaunchManifestV1,
-    CompilerExecutionServiceReadyV1,
+    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
+};
+use fe2o3_runtime_protocol::{
+    WorkerV3ApplicationRegistrationBindingV1, WorkerV3ApplicationRegistrationInputsV1,
+    WorkerV3ApplicationSupervisorReadyV1,
 };
 
 const COMPILER_EXECUTION_BOUNDARY_TIMEOUT: Duration =
@@ -90,21 +95,6 @@ impl PreparedCompilerExecutionBoundaryV1 {
         self,
         child_pid: u32,
     ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
-        self.finish_inner(child_pid, None)
-    }
-
-    pub(crate) fn finish_application(
-        self,
-        child: &RetainedCompilerExecutionChildV1,
-    ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
-        self.finish_inner(child.child_pid(), Some(child))
-    }
-
-    fn finish_inner(
-        self,
-        child_pid: u32,
-        retained_child: Option<&RetainedCompilerExecutionChildV1>,
-    ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
         let Self {
             profile,
             policy,
@@ -113,11 +103,9 @@ impl PreparedCompilerExecutionBoundaryV1 {
         let deadline = Instant::now()
             .checked_add(COMPILER_EXECUTION_BOUNDARY_TIMEOUT)
             .ok_or(CompilerExecutionBoundaryErrorV1::DeadlineOverflow)?;
-        let launch = match retained_child {
-            Some(child) => child_channel.finish_until_with_retained_child(child, deadline),
-            None => child_channel.finish_until(child_pid, deadline),
-        }
-        .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        let launch = child_channel
+            .finish_until(child_pid, deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
         let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
             profile.profile().supervisor_uid(),
             profile.profile().supervisor_gid(),
@@ -134,6 +122,89 @@ impl PreparedCompilerExecutionBoundaryV1 {
         ParentCompilerExecutionReadinessCustodyV1::admit(
             profile, policy, supervisor, child_pid, manifest, readiness,
         )
+    }
+
+    pub(crate) fn finish_application(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        proof: ApplicationProofTransferPeerV1,
+        inputs: WorkerV3ApplicationRegistrationInputsV1,
+        deadline: Instant,
+    ) -> Result<ParentApplicationSupervisorReadinessCustodyV1, CompilerExecutionBoundaryErrorV1>
+    {
+        let Self {
+            profile,
+            policy,
+            child_channel,
+        } = self;
+        let launch = child_channel
+            .finish_application_until(child, deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
+            profile.profile().supervisor_uid(),
+            profile.profile().supervisor_gid(),
+        )
+        .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
+        let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            launch.client(),
+            profile.profile().external_anchor_service(),
+            policy.policy(),
+        );
+        let handoff =
+            CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest.clone())
+                .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        let binding = inputs
+            .bind(handoff)
+            .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        let pending = launch
+            .transfer_to_supervisor_until(proof, binding.clone(), profile.profile(), deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?;
+        let readiness = pending
+            .await_readiness_until(profile.profile(), deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?;
+        let compiler = ParentCompilerExecutionReadinessCustodyV1::admit(
+            profile,
+            policy,
+            supervisor,
+            child.child_pid(),
+            manifest,
+            readiness.compiler_readiness().clone(),
+        )?;
+        let custody = ParentApplicationSupervisorReadinessCustodyV1 {
+            compiler,
+            binding,
+            readiness,
+        };
+        custody.revalidate()?;
+        Ok(custody)
+    }
+}
+
+/// Application-only inert readiness. No conversion to compiler receipt admission is exposed.
+pub(crate) struct ParentApplicationSupervisorReadinessCustodyV1 {
+    compiler: ParentCompilerExecutionReadinessCustodyV1,
+    binding: WorkerV3ApplicationRegistrationBindingV1,
+    readiness: WorkerV3ApplicationSupervisorReadyV1,
+}
+
+impl ParentApplicationSupervisorReadinessCustodyV1 {
+    pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        self.compiler.revalidate()?;
+        let canonical =
+            WorkerV3ApplicationSupervisorReadyV1::decode(self.readiness.canonical_bytes())
+                .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        if canonical != self.readiness
+            || self.binding.compiler_handoff().launch_manifest() != &self.compiler.manifest
+            || self.readiness.compiler_readiness() != &self.compiler.readiness
+            || !self
+                .readiness
+                .matches_binding(&self.binding, self.compiler.policy.policy())
+        {
+            return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                "application readiness differs from retained registration".to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -342,6 +413,8 @@ pub(crate) enum CompilerExecutionBoundaryErrorV1 {
     SupervisorCredentials(CompilerExecutionHandoffErrorV1),
     SupervisorTransfer(CompilerExecutionHandoffErrorV1),
     SupervisorReadiness(CompilerExecutionHandoffErrorV1),
+    ApplicationTransfer(ApplicationSupervisorHandoffErrorV1),
+    ApplicationReadiness(ApplicationSupervisorHandoffErrorV1),
     Receipt(CompilerExecutionReceiptPublicationErrorV1),
     Evidence(String),
 }
@@ -356,6 +429,8 @@ impl CompilerExecutionBoundaryErrorV1 {
             Self::SupervisorCredentials(_) => "supervisor credential admission",
             Self::SupervisorTransfer(_) => "fixed supervisor transfer",
             Self::SupervisorReadiness(_) => "supervisor readiness",
+            Self::ApplicationTransfer(_) => "application supervisor transfer",
+            Self::ApplicationReadiness(_) => "application supervisor readiness",
             Self::Receipt(_) => "compiler receipt admission",
             Self::Evidence(_) => "readiness evidence admission",
         }
@@ -375,6 +450,9 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => error.fmt(formatter),
             Self::Receipt(error) => error.fmt(formatter),
+            Self::ApplicationTransfer(error) | Self::ApplicationReadiness(error) => {
+                error.fmt(formatter)
+            }
         }
     }
 }
@@ -388,6 +466,7 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => Some(error),
             Self::Receipt(error) => Some(error),
+            Self::ApplicationTransfer(error) | Self::ApplicationReadiness(error) => Some(error),
             Self::Profile(_) | Self::Policy(_) | Self::Evidence(_) => None,
         }
     }
@@ -514,6 +593,37 @@ pub(crate) mod tests {
         custody.revalidate().unwrap();
         assert!(!custody.grants_compiler_authority());
         assert_ne!(custody.profile_identity().as_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn application_readiness_retains_exact_registration_and_issuer() {
+        use fe2o3_runtime_protocol::WorkerV3ApplicationHandoffChallengeV1;
+        let compiler = admit(client_profile(7, 1_234), 8_765, 1_000).unwrap();
+        let inputs = crate::application_handoff::startup_tests::inert_registration_inputs();
+        let handoff = CompilerExecutionSupervisorHandoffV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(8_000, 1_000, 1_000).unwrap(),
+            compiler.manifest.clone(),
+        )
+        .unwrap();
+        let binding = inputs.bind(handoff).unwrap();
+        let readiness =
+            WorkerV3ApplicationSupervisorReadyV1::new(&binding, compiler.readiness.clone())
+                .unwrap();
+        let mut custody = ParentApplicationSupervisorReadinessCustodyV1 {
+            compiler,
+            binding,
+            readiness,
+        };
+        custody.revalidate().unwrap();
+        custody.binding = WorkerV3ApplicationRegistrationBindingV1::new(
+            custody.binding.compiler_handoff().clone(),
+            custody.binding.occurrence().clone(),
+            custody.binding.descriptors(),
+            custody.binding.expectation(),
+            WorkerV3ApplicationHandoffChallengeV1::from_bytes([8; 32]).unwrap(),
+        )
+        .unwrap();
+        assert!(custody.revalidate().is_err());
     }
 
     #[test]

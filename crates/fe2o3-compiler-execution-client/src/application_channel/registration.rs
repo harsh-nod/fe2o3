@@ -45,12 +45,14 @@ pub struct RegisteredApplicationProofEndpointV1 {
 impl RegisteredApplicationProofEndpointV1 {
     pub fn revalidate(&self) -> Result<()> {
         self.endpoint.revalidate()?;
+        require_connected(&self.endpoint)?;
         self.root.revalidate()?;
         if self.sender.pid() != self.root.pid() || self.sender.uid() != 0 || self.sender.gid() != 0
         {
             return Err(invalid("registered root process association changed"));
         }
-        self.endpoint.revalidate()
+        self.endpoint.revalidate()?;
+        require_connected(&self.endpoint)
     }
 
     pub const fn descriptor_identity(&self) -> (u64, u64, u32) {
@@ -61,6 +63,26 @@ impl RegisteredApplicationProofEndpointV1 {
     pub const fn transcript(&self) -> Transcript {
         self.transcript
     }
+}
+
+fn require_connected(endpoint: &RetainedApplicationProofEndpointV1) -> Result<()> {
+    let mut entry = libc::pollfd {
+        fd: endpoint.peer.as_raw_fd(),
+        events: libc::POLLRDHUP,
+        revents: 0,
+    };
+    // A live root process may retire this session without exiting. Observe, never consume.
+    if unsafe { libc::poll(&mut entry, 1, 0) } < 0 {
+        return Err(
+            rustix::io::Errno::from_io_error(&io::Error::last_os_error())
+                .unwrap_or(rustix::io::Errno::IO)
+                .into(),
+        );
+    }
+    if entry.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL | libc::POLLRDHUP) != 0 {
+        return Err(invalid("registered root session closed"));
+    }
+    Ok(())
 }
 
 impl RetainedApplicationProofEndpointV1 {

@@ -32,7 +32,9 @@ use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, WorkerV3ApplicationHandoffAckV1,
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffExpectationV1,
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3ApplicationRegistrationDescriptorsV1,
+    WorkerV3ApplicationRegistrationInputsV1, WorkerV3LoadEnvelopeIdentityV1,
+    WorkerV3LoadEnvelopeWireV2,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -71,8 +73,6 @@ const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const WORKER_V3_PRODUCTION_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
-#[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
-const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApplicationCompilerServiceExposureV1 {
@@ -1099,7 +1099,7 @@ struct ApplicationHandoffExpectationV1 {
 }
 
 impl ApplicationHandoffExpectationV1 {
-    fn validate_ack(&self, bytes: &[u8]) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         let values = [
             self.descriptors[0],
             self.descriptors[1],
@@ -1126,6 +1126,32 @@ impl ApplicationHandoffExpectationV1 {
         {
             return Err("inconsistent retained application handoff binding".to_string());
         }
+        Ok(())
+    }
+
+    fn registration_inputs(&self) -> Result<WorkerV3ApplicationRegistrationInputsV1, String> {
+        self.validate()?;
+        let proof = self
+            .proof_descriptor
+            .ok_or("application registration requires the proof slot")?;
+        let descriptors = WorkerV3ApplicationRegistrationDescriptorsV1::new(
+            self.descriptors[0],
+            self.descriptors[1],
+            self.descriptors[2],
+            proof,
+        )
+        .map_err(|error| error.to_string())?;
+        WorkerV3ApplicationRegistrationInputsV1::new(
+            self.occurrence.clone(),
+            descriptors,
+            self.expectation,
+            self.challenge,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn validate_ack(&self, bytes: &[u8]) -> Result<(), String> {
+        self.validate()?;
         WorkerV3ApplicationHandoffAckV1::decode_canonical(bytes)
             .map_err(|error| format!("invalid Worker V3 application acknowledgment: {error}"))?
             .validate(self.expectation, self.challenge)
@@ -1137,8 +1163,16 @@ impl ApplicationHandoffExpectationV1 {
 struct ApplicationHandoffCustodyV1 {
     child: Option<RetainedCompilerExecutionChildV1>,
     protocol: ApplicationHandoffExpectationV1,
-    prepared_proof: Option<PreparedApplicationProofChannelV1>,
-    proof: Option<ApplicationProofTransferPeerV1>,
+    proof: ApplicationProofCustodyV1,
+}
+
+// The enclosing custody box is allocated once before spawn; keep every state inline.
+#[allow(clippy::large_enum_variant)]
+enum ApplicationProofCustodyV1 {
+    AbsentCompatibility,
+    Prepared(PreparedApplicationProofChannelV1),
+    Retained(ApplicationProofTransferPeerV1),
+    Transferred,
 }
 
 impl ApplicationHandoffCustodyV1 {
@@ -1149,9 +1183,20 @@ impl ApplicationHandoffCustodyV1 {
         Box::new(Self {
             child: None,
             protocol,
-            prepared_proof,
-            proof: None,
+            proof: match prepared_proof {
+                Some(proof) => ApplicationProofCustodyV1::Prepared(proof),
+                None => ApplicationProofCustodyV1::AbsentCompatibility,
+            },
         })
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        self.protocol.validate()?;
+        let absent = matches!(self.proof, ApplicationProofCustodyV1::AbsentCompatibility);
+        if absent != self.protocol.proof_descriptor.is_none() {
+            return Err("application proof custody differs from retained handoff slots".into());
+        }
+        Ok(())
     }
 }
 
@@ -1184,6 +1229,7 @@ impl OriginalApplicationHandoffV1 {
     }
 
     fn validate_child(&self, child: &Child) -> Result<(), String> {
+        self.custody.validate()?;
         if self.child().child_pid() != child.id() {
             return Err("application ACK wait substituted the original child".to_string());
         }
@@ -1196,7 +1242,7 @@ impl OriginalApplicationHandoffV1 {
 pub(crate) struct SpawnedApplicationAck {
     read: File,
     cleanup: ApplicationCleanup,
-    ack_timeout: Duration,
+    deadline: Instant,
     #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     test_ready_read: Option<File>,
 }
@@ -1207,12 +1253,17 @@ impl PendingApplicationAck {
         mut self,
         child: &Child,
     ) -> Result<SpawnedApplicationAck, ApplicationHandoffFailure> {
+        let deadline = Instant::now().checked_add(self.timeouts.ack);
         drop(self.parent_write.take());
-        self.custody.proof = self
-            .custody
-            .prepared_proof
-            .take()
-            .map(PreparedApplicationProofChannelV1::after_spawn);
+        self.custody.proof = match std::mem::replace(
+            &mut self.custody.proof,
+            ApplicationProofCustodyV1::AbsentCompatibility,
+        ) {
+            ApplicationProofCustodyV1::Prepared(proof) => {
+                ApplicationProofCustodyV1::Retained(proof.after_spawn())
+            }
+            other => other,
+        };
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         drop(self.test_ready_parent_write.take());
         let mut cleanup = ApplicationCleanup {
@@ -1259,10 +1310,23 @@ impl PendingApplicationAck {
                 cleanup: Some(cleanup),
             });
         }
+        let validation = cleanup.application.as_ref().unwrap().custody.validate();
+        if let Err(message) = validation {
+            return Err(ApplicationHandoffFailure {
+                message,
+                cleanup: Some(cleanup),
+            });
+        }
+        let Some(deadline) = deadline else {
+            return Err(ApplicationHandoffFailure {
+                message: "application startup deadline overflowed".into(),
+                cleanup: Some(cleanup),
+            });
+        };
         Ok(SpawnedApplicationAck {
             read: self.read,
             cleanup,
-            ack_timeout: self.timeouts.ack,
+            deadline,
             #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
             test_ready_read: self.test_ready_read,
         })
@@ -1270,6 +1334,45 @@ impl PendingApplicationAck {
 }
 
 impl SpawnedApplicationAck {
+    pub(crate) const fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    pub(crate) fn take_registration_transfer(
+        &mut self,
+    ) -> Result<
+        (
+            ApplicationProofTransferPeerV1,
+            WorkerV3ApplicationRegistrationInputsV1,
+        ),
+        String,
+    > {
+        if Instant::now() >= self.deadline {
+            return Err("application startup deadline expired before registration".into());
+        }
+        let custody = &mut self.cleanup.application.as_mut().unwrap().custody;
+        custody
+            .child
+            .as_ref()
+            .unwrap()
+            .validate_custody()
+            .map_err(|error| error.to_string())?;
+        custody.validate()?;
+        let inputs = custody.protocol.registration_inputs()?;
+        match &custody.proof {
+            ApplicationProofCustodyV1::Retained(proof) => {
+                proof.revalidate().map_err(|error| error.to_string())?
+            }
+            _ => return Err("application proof peer is unavailable or already transferred".into()),
+        }
+        let ApplicationProofCustodyV1::Retained(proof) =
+            std::mem::replace(&mut custody.proof, ApplicationProofCustodyV1::Transferred)
+        else {
+            unreachable!("validated retained proof custody")
+        };
+        Ok((proof, inputs))
+    }
+
     pub(crate) fn retained_child(&self) -> &RetainedCompilerExecutionChildV1 {
         self.cleanup
             .application
@@ -1296,17 +1399,24 @@ impl SpawnedApplicationAck {
         }
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         if let Some(mut ready) = self.test_ready_read.take()
-            && let Err(message) = read_test_ack_ready(&mut ready)
+            && let Err(message) = read_test_ack_ready(&mut ready, self.deadline)
         {
             return Err(self.failure(message));
         }
         let result = read_application_handoff_ack(
             &mut self.read,
             child,
-            self.ack_timeout,
+            self.deadline,
             WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
         )
-        .and_then(|bytes| application.protocol().validate_ack(&bytes));
+        .and_then(|bytes| application.protocol().validate_ack(&bytes))
+        .and_then(|()| {
+            if Instant::now() >= self.deadline {
+                Err("application handoff acknowledgment timed out".to_string())
+            } else {
+                Ok(())
+            }
+        });
         match result {
             Ok(()) => Ok(ApplicationHandoffGuard {
                 cleanup: Some(self.cleanup),
@@ -1326,12 +1436,9 @@ impl SpawnedApplicationAck {
 fn read_application_handoff_ack(
     read: &mut File,
     child: &Child,
-    timeout: Duration,
+    deadline: Instant,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, String> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| "application handoff acknowledgment deadline overflowed".to_string())?;
     let mut bytes = Vec::with_capacity(maximum_bytes + 1);
     loop {
         poll_readable(read.as_raw_fd(), deadline)?;
@@ -1359,13 +1466,10 @@ fn read_application_handoff_ack(
 }
 
 #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
-fn read_test_ack_ready(read: &mut File) -> Result<(), String> {
-    let deadline = Instant::now()
-        .checked_add(TEST_ACK_STARTUP_TIMEOUT)
-        .ok_or_else(|| "test ACK startup deadline overflowed".to_string())?;
+fn read_test_ack_ready(read: &mut File, deadline: Instant) -> Result<(), String> {
     loop {
         poll_readable(read.as_raw_fd(), deadline).map_err(|error| {
-            format!("test ACK readiness failed before ACK timing began: {error}")
+            format!("test ACK readiness failed within the startup deadline: {error}")
         })?;
         let mut byte = [0_u8; 1];
         match read.read(&mut byte) {
@@ -1905,7 +2009,7 @@ fn validate_envelope_stat(
 
 #[cfg(test)]
 #[path = "application_handoff/startup_tests.rs"]
-mod startup_tests;
+pub(crate) mod startup_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2485,7 +2589,7 @@ mod tests {
         let bytes = read_application_handoff_ack(
             &mut ack_read,
             &application,
-            Duration::from_secs(1),
+            Instant::now() + Duration::from_secs(1),
             WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
         )
         .unwrap();
@@ -2709,7 +2813,7 @@ mod tests {
             read_application_handoff_ack(
                 &mut ack_read,
                 &child,
-                Duration::from_secs(1),
+                Instant::now() + Duration::from_secs(1),
                 WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
             )
             .unwrap()

@@ -1587,6 +1587,43 @@ fn strict_v3_host_consumer_rejects_substituted_commitment() {
 }
 
 #[test]
+fn strict_v3_production_consumers_do_not_fall_back_without_root_registration() {
+    for control in [
+        "--fe2o3-test-register-application",
+        "--fe2o3-test-register-roster",
+    ] {
+        let fixture = prepared_v3_application_fixture();
+        let report = fixture.directory.0.join("registration-required.json");
+        let rejected = v3_application_runner_command_for_context(
+            &fixture,
+            static_host_consumer_application_fixture(),
+            "3-test-fast-failures",
+        )
+        .arg(&fixture.kernel)
+        .arg("gfx942:xnack-")
+        .arg(&report)
+        .arg(control)
+        .output()
+        .unwrap();
+        assert!(
+            !rejected.status.success(),
+            "unregistered {control} was accepted"
+        );
+        let stderr = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            stderr.contains("application handoff acknowledgment timed out"),
+            "{control}: {stderr}"
+        );
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["admitted"], false);
+        // The real static app ran under Cargo's permanent filter, but never received root Ready.
+        let recovered =
+            recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+        assert_eq!(recovered.receipt(), fixture.readiness);
+    }
+}
+
+#[test]
 fn strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn() {
     use std::os::unix::fs::symlink;
 
@@ -1605,7 +1642,10 @@ fn strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn() {
 #[test]
 fn strict_v3_host_consumer_rejects_mixed_or_substituted_proof_inputs() {
     for (control, diagnostic) in [
-        ("--fe2o3-test-missing-proof", "occurrence differs"),
+        (
+            "--fe2o3-test-missing-proof",
+            "missing Worker V3 application handoff environment",
+        ),
         ("--fe2o3-test-aliased-proof", "descriptors alias"),
         (
             "--fe2o3-test-reserved-proof",

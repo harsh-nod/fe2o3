@@ -276,6 +276,13 @@ fn session_round_trip_has_exact_phase_lengths_rights_and_transcript() {
             .unwrap();
     assert_eq!(inputs.canonical_bytes().len(), 600);
     assert!(inputs.matches_binding(&binding));
+    assert_eq!(
+        inputs
+            .clone()
+            .bind(binding.compiler_handoff().clone())
+            .unwrap(),
+        binding
+    );
     let hello = WorkerV3ApplicationSessionMessageV1::hello(inputs.clone(), [31; 32]).unwrap();
     let challenge =
         WorkerV3ApplicationSessionMessageV1::challenge(binding.clone(), [31; 32], [32; 32])

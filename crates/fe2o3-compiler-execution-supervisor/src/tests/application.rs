@@ -194,6 +194,7 @@ fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures()
     };
     for scenario in [
         "positive",
+        "issuer_exit_after_publication",
         "wrong",
         "short",
         "trailing",
@@ -201,6 +202,7 @@ fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures()
         "timeout",
         "original_deadline",
         "closed_control",
+        "publication_closed",
         "root_endpoint_closed",
         "issuer_exit",
         "cancel",
@@ -232,8 +234,14 @@ fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures()
         rustix::io::write(&writer, readiness.canonical_bytes()).unwrap();
         drop(writer);
         let ready = launched.await_readiness(Duration::from_secs(1)).unwrap();
-        let (registration, root_peer, gate_writer, record) =
+        let (registration, root_peer, gate_writer, record, publication_reader) =
             RegisteredApplicationObserverV1::local_fixture_for_test(app.binding.clone()).unwrap();
+        let mut publication_reader = if scenario == "publication_closed" {
+            drop(publication_reader);
+            None
+        } else {
+            Some(publication_reader)
+        };
         let deadline = if scenario == "original_deadline" {
             Instant::now()
         } else {
@@ -278,12 +286,54 @@ fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures()
                 std::thread::yield_now();
             }
         }
+        let fast_exit = if scenario == "issuer_exit_after_publication" {
+            let reader = publication_reader.take().unwrap();
+            Some(std::thread::spawn(move || {
+                let mut expected = record;
+                expected[..8].copy_from_slice(b"F3APUB1\0");
+                read_exact_nonblocking(&reader, &expected);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    match rustix::io::read(&reader, &mut [0_u8; 1]) {
+                        Ok(0) => break,
+                        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                            assert!(Instant::now() < deadline);
+                            std::thread::yield_now();
+                        }
+                        other => panic!("invalid publication EOF: {other:?}"),
+                    }
+                }
+                // Model immediate terminal issuer work while Cargo has not read readiness yet.
+                // Its original child owner remains unreaped, so this PID cannot be reused.
+                rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
+                loop {
+                    if rustix::process::waitid(
+                        rustix::process::WaitId::Pid(pid),
+                        rustix::process::WaitIdOptions::EXITED
+                            | rustix::process::WaitIdOptions::NOHANG
+                            | rustix::process::WaitIdOptions::NOWAIT,
+                    )
+                    .unwrap()
+                    .is_some()
+                    {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+            }))
+        } else {
+            None
+        };
         if scenario == "cancel" {
             ready.cancel().unwrap();
         } else {
             let result = ready.publish_readiness(Duration::from_millis(50));
-            if scenario == "positive" {
+            if matches!(scenario, "positive" | "issuer_exit_after_publication") {
                 let serving = result.unwrap();
+                if let Some(fast_exit) = fast_exit {
+                    fast_exit.join().unwrap();
+                }
                 let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
                 let (count, _) =
                     recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT).unwrap();
@@ -294,6 +344,33 @@ fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures()
                 serving.cancel().unwrap();
             } else {
                 assert!(result.is_err(), "accepted {scenario}");
+                if scenario == "publication_closed" {
+                    let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
+                    let (count, _) =
+                        recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT).unwrap();
+                    assert_eq!(
+                        count,
+                        bytes.len(),
+                        "reverse publication must follow Cargo send"
+                    );
+                    assert!(
+                        WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
+                            .unwrap()
+                            .matches_binding(&app.binding, supervisor.policy())
+                    );
+                }
+            }
+        }
+        if let Some(reader) = publication_reader {
+            let mut bytes = [0; 73];
+            let count = rustix::io::read(&reader, &mut bytes).unwrap();
+            if scenario == "positive" {
+                assert_eq!(count, 72);
+                assert_eq!(&bytes[..8], b"F3APUB1\0");
+                assert_eq!(&bytes[8..72], &record[8..]);
+                assert_eq!(rustix::io::read(&reader, &mut bytes).unwrap(), 0);
+            } else {
+                assert_eq!(count, 0, "unexpected app release for {scenario}");
             }
         }
         if let Some(sender) = sender {

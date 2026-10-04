@@ -356,7 +356,7 @@ fn root_application_registry_transitions() {
         let installed = registry.pending.take().unwrap();
         registry.validate_pending(&installed).unwrap();
         assert_eq!(installed.packet.kind, RegistryKind::ApplicationInstalled);
-        assert_eq!(installed.rights.len(), 1);
+        assert_eq!(installed.rights.len(), 2);
         let mut bytes = [0; 72];
         assert_eq!(
             rustix::io::read(&installed.rights[0], &mut bytes),

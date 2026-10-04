@@ -1,6 +1,6 @@
 //! Authenticated root/supervisor registration, separate from the occurrence protocol.
 
-use super::application::{ApplicationSession, MAX_APPLICATIONS};
+use super::application::{ApplicationPublication, ApplicationSession, MAX_APPLICATIONS};
 use super::*;
 use fe2o3_compiler_execution_protocol::CompilerExecutionExternalAnchorServiceIdentityV1;
 use fe2o3_runtime_protocol::{
@@ -105,8 +105,9 @@ impl RegistryPacket {
             | RegistryKind::Registered
             | RegistryKind::RegisterApplication
             | RegistryKind::RegisteredApplication
-            | RegistryKind::AttachApplication => 2,
-            RegistryKind::Bind | RegistryKind::ApplicationInstalled => 1,
+            | RegistryKind::AttachApplication
+            | RegistryKind::ApplicationInstalled => 2,
+            RegistryKind::Bind => 1,
             RegistryKind::Bound => 0,
         }
     }
@@ -583,7 +584,7 @@ impl RootCompilerObserverRegistryV1 {
                 body,
                 ..packet
             },
-            rights: vec![gate],
+            rights: Vec::from(gate),
             deadline: Instant::now() + TIMEOUT,
         });
         Ok(())
@@ -873,7 +874,7 @@ impl SupervisorCompilerObserverRegistryV1 {
             if packet.body[..32] != binding.identity().as_bytes()[..] {
                 return Err(invalid("installed application binding mismatch"));
             }
-            let [reader]: [OwnedFd; 1] = rights
+            let [reader, publication_writer]: [OwnedFd; 2] = rights
                 .try_into()
                 .map_err(|_| invalid("application gate descriptors"))?;
             let gate = PendingApplicationObservationGateV1::admit(
@@ -882,6 +883,13 @@ impl SupervisorCompilerObserverRegistryV1 {
                 *binding.identity().as_bytes(),
                 packet.body[32..].try_into().unwrap(),
             )?;
+            let publication = ApplicationPublication::admit(
+                publication_writer,
+                self.root.try_clone()?,
+                *binding.identity().as_bytes(),
+                packet.body[32..].try_into().unwrap(),
+                gate.object,
+            )?;
             registered.revalidate()?;
             self.validate_continuity()?;
             require_deadline(deadline)?;
@@ -889,6 +897,7 @@ impl SupervisorCompilerObserverRegistryV1 {
                 compiler: registered,
                 binding: binding.clone(),
                 gate,
+                publication,
             })
         })();
         if result.is_err() {
@@ -1094,6 +1103,7 @@ pub struct RegisteredApplicationObserverV1 {
     compiler: RegisteredCompilerObserverV1,
     binding: WorkerV3ApplicationRegistrationBindingV1,
     gate: PendingApplicationObservationGateV1,
+    publication: ApplicationPublication,
 }
 
 impl RegisteredApplicationObserverV1 {
@@ -1102,7 +1112,7 @@ impl RegisteredApplicationObserverV1 {
     #[cfg(feature = "test-support")]
     pub fn local_fixture_for_test(
         binding: WorkerV3ApplicationRegistrationBindingV1,
-    ) -> Result<(Self, OwnedFd, OwnedFd, [u8; 72])> {
+    ) -> Result<(Self, OwnedFd, OwnedFd, [u8; 72], OwnedFd)> {
         let (peer, counterpart) = observer_pair()?;
         let endpoint = Endpoint::admit(peer)?;
         let root = current_identity()?;
@@ -1115,6 +1125,16 @@ impl RegisteredApplicationObserverV1 {
             root.try_clone()?,
             *binding.identity().as_bytes(),
             session,
+        )?;
+        let (publication_reader, publication_writer) = rustix::pipe::pipe_with(
+            rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+        )?;
+        let publication = ApplicationPublication::admit(
+            publication_writer,
+            root.try_clone()?,
+            *binding.identity().as_bytes(),
+            session,
+            gate.object,
         )?;
         let mut record = [0; 72];
         record[..8].copy_from_slice(b"F3AOBS1\0");
@@ -1132,10 +1152,12 @@ impl RegisteredApplicationObserverV1 {
                 compiler,
                 binding,
                 gate,
+                publication,
             },
             counterpart,
             writer,
             record,
+            publication_reader,
         ))
     }
 
@@ -1146,7 +1168,8 @@ impl RegisteredApplicationObserverV1 {
 
     fn revalidate(&self) -> Result<()> {
         self.compiler.revalidate()?;
-        self.gate.revalidate()
+        self.gate.revalidate()?;
+        self.publication.revalidate()
     }
 
     /// Duplicates only the two fixed issuer observer inputs, never the gate or proof peer.
@@ -1166,6 +1189,7 @@ impl RegisteredApplicationObserverV1 {
         Ok(ObservedApplicationRegistrationV1 {
             compiler: self.compiler,
             binding: self.binding,
+            publication: self.publication,
         })
     }
 }
@@ -1174,6 +1198,7 @@ impl RegisteredApplicationObserverV1 {
 pub struct ObservedApplicationRegistrationV1 {
     compiler: RegisteredCompilerObserverV1,
     binding: WorkerV3ApplicationRegistrationBindingV1,
+    publication: ApplicationPublication,
 }
 
 impl ObservedApplicationRegistrationV1 {
@@ -1184,7 +1209,16 @@ impl ObservedApplicationRegistrationV1 {
 
     /// Rechecks the original root and registration endpoint before readiness publication.
     pub fn revalidate(&self) -> Result<()> {
-        self.compiler.revalidate()
+        self.compiler.revalidate()?;
+        self.publication.revalidate()
+    }
+
+    /// Releases app Ready only after the supervisor successfully publishes Cargo readiness.
+    /// Consumes the original reverse gate. No issuer/application liveness check may follow
+    /// its successful commit, because the application is then allowed to finish immediately.
+    pub fn confirm_publication(self, deadline: Instant) -> Result<()> {
+        self.revalidate()?;
+        self.publication.publish(deadline)
     }
 }
 

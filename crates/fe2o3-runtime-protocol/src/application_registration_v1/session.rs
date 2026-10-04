@@ -102,6 +102,20 @@ impl WorkerV3ApplicationRegistrationInputsV1 {
         &self.bytes
     }
 
+    /// Adds the original post-spawn process description; this remains inert equality data.
+    pub fn bind(
+        self,
+        compiler_handoff: CompilerExecutionSupervisorHandoffV1,
+    ) -> Result<WorkerV3ApplicationRegistrationBindingV1> {
+        WorkerV3ApplicationRegistrationBindingV1::new(
+            compiler_handoff,
+            self.occurrence,
+            self.descriptors,
+            self.expectation,
+            self.challenge,
+        )
+    }
+
     pub fn matches_binding(&self, binding: &WorkerV3ApplicationRegistrationBindingV1) -> bool {
         self.bytes == binding.canonical_bytes()[OCCURRENCE_OFFSET..IDENTITY_OFFSET]
     }

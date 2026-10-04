@@ -10,6 +10,7 @@ use fe2o3_runtime_protocol::{
 
 const GATE_BYTES: usize = 72;
 const GATE_MAGIC: &[u8; 8] = b"F3AOBS1\0";
+const PUBLICATION_MAGIC: &[u8; 8] = b"F3APUB1\0";
 pub(super) const MAX_APPLICATIONS: usize = 16;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -21,6 +22,11 @@ enum State {
     ChallengePending(Message),
     AwaitAccept(Transcript),
     GatePending(Transcript),
+    AwaitPublication {
+        transcript: Transcript,
+        bytes: [u8; GATE_BYTES + 1],
+        used: usize,
+    },
     ReadyPending(Message),
     Registered,
     Retired,
@@ -34,6 +40,7 @@ pub(super) struct ApplicationSession {
     parent: LiveClientPidfdIdentityV1,
     endpoint: Endpoint,
     writer: Option<OwnedFd>,
+    publication: Option<OwnedFd>,
     observation: Option<RetainedWorkerV3ApplicationObservationV1>,
     state: State,
     deadline: Instant,
@@ -48,7 +55,7 @@ impl ApplicationSession {
         peer: OwnedFd,
         binding: WorkerV3ApplicationRegistrationBindingV1,
         id: [u8; 32],
-    ) -> Result<(Self, OwnedFd)> {
+    ) -> Result<(Self, [OwnedFd; 2])> {
         application.validate_parent(&parent)?;
         let endpoint = Endpoint::admit(peer)?;
         if endpoint.creator != parent.expected_client.credentials() || id == [0; 32] {
@@ -59,6 +66,9 @@ impl ApplicationSession {
         let (reader, writer) = rustix::pipe::pipe_with(
             rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
         )?;
+        let (publication, publication_writer) = rustix::pipe::pipe_with(
+            rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+        )?;
         Ok((
             Self {
                 id,
@@ -67,13 +77,14 @@ impl ApplicationSession {
                 parent,
                 endpoint,
                 writer: Some(writer),
+                publication: Some(publication),
                 observation: None,
                 state: State::AwaitHello,
                 deadline: Instant::now() + STARTUP_TIMEOUT,
                 containing: false,
                 issuer_bound: false,
             },
-            reader,
+            [reader, publication_writer],
         ))
     }
 
@@ -236,10 +247,54 @@ impl ApplicationSession {
                 {
                     Ok(GATE_BYTES) => {
                         self.writer = None;
-                        self.state = State::ReadyPending(Message::ready(*transcript));
+                        self.state = State::AwaitPublication {
+                            transcript: *transcript,
+                            bytes: [0; GATE_BYTES + 1],
+                            used: 0,
+                        };
                         return Ok(true);
                     }
                     Ok(_) => return Err(invalid("partial application gate write")),
+                    Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            State::AwaitPublication { .. } => {
+                self.revalidate_observation()?;
+                let State::AwaitPublication {
+                    transcript,
+                    bytes,
+                    used,
+                } = &mut self.state
+                else {
+                    unreachable!()
+                };
+                match rustix::io::read(
+                    self.publication
+                        .as_ref()
+                        .expect("pending publication reader"),
+                    &mut bytes[*used..],
+                ) {
+                    Ok(0) => {
+                        if *used != GATE_BYTES
+                            || bytes[..GATE_BYTES]
+                                != publication_record(self.binding.identity().as_bytes(), &self.id)
+                        {
+                            return Err(invalid(
+                                "incomplete or mismatched application publication",
+                            ));
+                        }
+                        self.publication = None;
+                        self.state = State::ReadyPending(Message::ready(*transcript));
+                        return Ok(true);
+                    }
+                    Ok(count) => {
+                        *used += count;
+                        if *used > GATE_BYTES {
+                            return Err(invalid("trailing application publication data"));
+                        }
+                        return Ok(true);
+                    }
                     Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
                     Err(error) => return Err(error.into()),
                 }
@@ -276,6 +331,7 @@ impl ApplicationSession {
         }
         self.containing = true;
         self.writer = None;
+        self.publication = None;
         self.endpoint.close();
         let _ = self.contain();
     }
@@ -299,6 +355,7 @@ impl ApplicationSession {
 
     fn retire_observation_only(&mut self) {
         self.writer = None;
+        self.publication = None;
         self.observation = None;
         self.containing = false;
         self.state = State::Retired;
@@ -326,6 +383,85 @@ fn gate_record(binding: &[u8; 32], session: &[u8; 32]) -> [u8; GATE_BYTES] {
     bytes[8..40].copy_from_slice(binding);
     bytes[40..72].copy_from_slice(session);
     bytes
+}
+
+fn publication_record(binding: &[u8; 32], session: &[u8; 32]) -> [u8; GATE_BYTES] {
+    let mut bytes = gate_record(binding, session);
+    bytes[..8].copy_from_slice(PUBLICATION_MAGIC);
+    bytes
+}
+
+/// Private reverse gate: only the registered supervisor owns this writer, never the issuer.
+pub(super) struct ApplicationPublication {
+    writer: OwnedFd,
+    root: LiveClientPidfdIdentityV1,
+    object: ObjectIdentityV1,
+    expected: [u8; GATE_BYTES],
+}
+
+impl ApplicationPublication {
+    pub(super) fn admit(
+        writer: OwnedFd,
+        root: LiveClientPidfdIdentityV1,
+        binding: [u8; 32],
+        session: [u8; 32],
+        observation: ObjectIdentityV1,
+    ) -> Result<Self> {
+        let object = ObjectIdentityV1::inspect(
+            &writer,
+            AdmissionErrorKindV1::InspectPeer,
+            "application publication",
+        )?;
+        if object == observation || binding == [0; 32] || session == [0; 32] {
+            return Err(invalid("aliased or unbound application publication gate"));
+        }
+        let value = Self {
+            writer,
+            root,
+            object,
+            expected: publication_record(&binding, &session),
+        };
+        value.revalidate()?;
+        Ok(value)
+    }
+
+    pub(super) fn revalidate(&self) -> Result<()> {
+        self.root.validate_liveness()?;
+        let flags = rustix::fs::fcntl_getfl(&self.writer)?;
+        if rustix::io::fcntl_getfd(&self.writer)? != rustix::io::FdFlags::CLOEXEC
+            || flags & OFlags::ACCMODE != OFlags::WRONLY
+            || !flags.contains(OFlags::NONBLOCK)
+            || flags.intersects(OFlags::PATH | OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT)
+            || self.object.mode & libc::S_IFMT != libc::S_IFIFO
+            || self.object.uid != self.root.expected_client.uid
+            || ObjectIdentityV1::inspect(
+                &self.writer,
+                AdmissionErrorKindV1::InspectPeer,
+                "application publication",
+            )? != self.object
+        {
+            return Err(invalid("root application publication gate changed"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn publish(self, deadline: Instant) -> Result<()> {
+        loop {
+            require_deadline(deadline)?;
+            self.revalidate()?;
+            require_deadline(deadline)?;
+            match rustix::io::write(&self.writer, &self.expected) {
+                // Closing this writer commits release. No fallible checks may follow the write:
+                // after EOF the app may legitimately finish and close its issuer connection.
+                Ok(GATE_BYTES) => return Ok(()),
+                Ok(_) => return Err(invalid("partial application publication write")),
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
 }
 
 fn readable(fd: &OwnedFd) -> Result<bool> {
@@ -366,7 +502,7 @@ fn ready(fd: &OwnedFd, events: i16) -> Result<bool> {
 pub struct PendingApplicationObservationGateV1 {
     reader: OwnedFd,
     root: LiveClientPidfdIdentityV1,
-    object: ObjectIdentityV1,
+    pub(super) object: ObjectIdentityV1,
     expected: [u8; GATE_BYTES],
 }
 

@@ -42,6 +42,11 @@ mod worker_v3_verification_admission;
 #[cfg(feature = "hardware-test-hooks")]
 #[doc(hidden)]
 pub mod __hardware_test {
+    #[cfg(target_os = "linux")]
+    pub use crate::application_descriptor_handoff::{
+        consume_inherited_worker_v3_envelope_only_fixture_v1,
+        consume_inherited_worker_v3_envelope_only_roster_fixture_v1,
+    };
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
     use crate::{
