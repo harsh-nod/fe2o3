@@ -41,6 +41,31 @@ opcode coverage before clearing application admission.
    -> PUBLIC XGMI -> full guarded readback in both directions, including N=65
    with G=128. A second write-only fill does not prove consumption of peer input.
 
+Ordinary application admission also needs a reviewed initialization design.
+`cargo-fe2o3` installs the permanent no-fork application filter in `pre_exec`,
+before the first application instruction, not after its descriptor ACK. There
+is no existing pre-ACK proof initialization hook. Local Worker/Verus execution
+cannot run inside that profile. The production auditor's missing credential,
+filesystem and sealed-capability operations now have narrow syscall admission:
+filesystem ID setters admit only the nonmutating query and memfd creation admits
+only the existing sealed-image producer's flags. No process creation, socket
+creation or additional exec is admitted. Actual installed production auditing
+under this filter remains a separate qualification gate. Preserve
+the sandbox and original proof custody; neither an arbitrary initializer nor
+imported signed proof bytes solve this boundary. Genuine receipt/current-record
+qualification outside that application profile remains intermediate CPU evidence,
+not completion of the ordinary two-GPU application gate.
+There is no existing parent-to-application transfer for the concrete owned proof.
+The next proof change needs an independently authenticated retained-proof
+custodian and a private move-only remote owner binding the exact artifact,
+obligation, original process occurrence and fresh session challenge. Keep FD195
+exclusive to compiler-currentness auditing. Custody must outlive both selected
+devices' invocation settlement; receipt serialization alone is insufficient.
+The first small guarded-buffer pipeline can reuse direct context polling or the
+existing current-thread engine. This does not qualify larger or threaded variants:
+shared-memory initialization/verification at 64 MiB or above can spawn scoped
+workers, and the threaded async engines also conflict with the current profile.
+
 Protected compiler-origin/currentness and native entry/storage/completion
 associations remain required. Test-signed carriage and an analyzer/model match
 cannot replace them. Defer general optimizer proofs, additional opcodes, more
@@ -146,6 +171,16 @@ to the supervisor suite and private distinct-UID root launch cases, including
 negative namespace probes. It is not full systemd unit startup or the measured
 static deployment campaign. Those remain required before genuine compiler receipt
 acquisition, followed by exact invocation admission and two-GPU application testing.
+
+Measured deployment startup has now been attempted locally. It found and fixed
+two real integration defects: the SquashFS no-xattrs bit and the missing read-only
+superblock context before opening the read-only loop device. The WSL kernel has
+SquashFS but not its zstd decompressor, so the pinned production base still cannot
+mount there. The read-only mount mechanism is separately testable with a gzip
+fixture, which production admission explicitly rejects. Do not change the pinned
+base or treat that mechanism test as deployed compiler evidence. MI300X advertises
+SquashFS zstd support but the current SSH account has no noninteractive root path.
+No shared GPU resources were allocated for these startup checks.
 
 ## Reuse What Works
 

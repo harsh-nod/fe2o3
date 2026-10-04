@@ -4,10 +4,14 @@ Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
 implemented. Private-namespace mount composition, descriptor-pinned isolated
 systemd boot, and the non-root production-client transaction are implemented
-but have not yet run under host root. The static probe, exact high-level
+but have not completed live qualification. The static probe, exact high-level
 qualification harness, closed 28-point transaction fault
 set, and aggregate campaign are implemented. Live root execution, distinct-UID
 service execution, and privileged lifecycle fault qualification remain open.
+The [measured startup attempts](evidence/dev-multi-gpu-admission-unblocking-2026-10-04/README.md)
+found and fixed image-flag and read-only-superblock defects. Local WSL lacks
+SquashFS zstd support; its successful gzip-only mount-mechanism test is not
+production-base or systemd qualification.
 
 ## Purpose
 
@@ -132,7 +136,9 @@ complete kernel `loop_info64`. The deployment crate itself continues to deny
 unsafe Rust.
 
 Mount creation uses upstream kernel `fsopen`, `fsconfig`, `fsmount`, and
-`move_mount` APIs. SquashFS is detached-created read-only, nodev, and nosuid,
+`move_mount` APIs. The SquashFS filesystem context is explicitly read-only before
+superblock creation, so the kernel never requests write access to the retained
+read-only loop device. Its detached mount is also read-only, nodev, and nosuid,
 then attached to the exact retained `base` mount point. OverlayFS is
 detached-created nodev and nosuid with this fixed lower order:
 
