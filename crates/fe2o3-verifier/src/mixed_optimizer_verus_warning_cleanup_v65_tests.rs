@@ -77,10 +77,15 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
 fn generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped() {
     let source = include_str!("original_semantic_mir_invocation_source_bytes_v36.rs");
     let marker = "enum InvocationSourceByteEventV36 {";
-    assert_eq!(
-        warning_definition_v65(source, marker),
-        warning_definition_v65(WARNING_REFERENCE_V65, marker)
+    let prior = warning_definition_v65(WARNING_REFERENCE_V65, marker);
+    let descriptor = "    Descriptor(InvocationSourceDescriptorEventV51),\n";
+    assert_eq!(prior.matches(descriptor).count(), 1);
+    let expected = prior.replacen(
+        descriptor,
+        "    Descriptor(InvocationSourceDescriptorEventV51),\n    ThreadWrite(InvocationSourceThreadWriteV88),\n",
+        1,
     );
+    assert_eq!(warning_definition_v65(source, marker), expected);
     assert_eq!(source.matches("#[allow(inconsistent_fields)]").count(), 1);
     assert!(source.contains("#[allow(inconsistent_fields)]\nenum InvocationSourceByteEventV36 {"));
     for forbidden in ["#![allow(", "allow(warnings)", "allow(deprecated)"] {

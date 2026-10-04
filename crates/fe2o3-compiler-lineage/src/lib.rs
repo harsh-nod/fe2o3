@@ -9,6 +9,7 @@ mod capsule_v5;
 mod error;
 mod mixed_middle_end_v29;
 mod mixed_middle_end_v50;
+mod mixed_middle_end_v90;
 mod mixed_target_selection_family;
 mod mixed_target_selection_v53;
 mod mixed_target_selection_v89;
@@ -44,6 +45,7 @@ pub use capsule_v5::*;
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
 pub use mixed_middle_end_v29::*;
 pub use mixed_middle_end_v50::*;
+pub use mixed_middle_end_v90::*;
 pub use mixed_target_selection_v53::*;
 pub use mixed_target_selection_v89::*;
 pub use multi_root_correspondence_payload_v2::{

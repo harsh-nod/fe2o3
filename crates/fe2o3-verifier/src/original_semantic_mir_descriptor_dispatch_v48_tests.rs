@@ -355,6 +355,16 @@ fn capture_element(
     budget: &mut Budget<'_>,
     element: DescriptorScalar,
 ) -> Result<ProductionPreparedSourceV18> {
+    capture_element_with_access(owner, launch, budget, element, AccessMode::ReadWrite)
+}
+
+fn capture_element_with_access(
+    owner: ProductionSemanticSsaOwnerV1,
+    launch: ProductionSourceLaunchRosterV1,
+    budget: &mut Budget<'_>,
+    element: DescriptorScalar,
+    access: AccessMode,
+) -> Result<ProductionPreparedSourceV18> {
     let original = owner.source_semantic();
     let mut bindings = Vec::new();
     let mut exports = Vec::new();
@@ -384,7 +394,7 @@ fn capture_element(
                         name,
                         &source,
                         &layout,
-                        AccessMode::ReadWrite,
+                        access,
                         8,
                     )
                     .unwrap(),

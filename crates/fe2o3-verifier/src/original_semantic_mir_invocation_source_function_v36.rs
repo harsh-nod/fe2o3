@@ -26,6 +26,8 @@ mod descriptor_calls;
 mod descriptor_indices;
 #[path = "original_semantic_mir_invocation_source_index_v37.rs"]
 mod index_calls;
+#[path = "original_semantic_mir_source_thread_write_v88.rs"]
+mod thread_write;
 
 #[path = "original_semantic_mir_source_assert_control_v40.rs"]
 mod assertions;
@@ -78,6 +80,7 @@ enum End {
     Index(index_calls::IndexCall),
     Descriptor(descriptor_calls::DescriptorCall),
     DescriptorIndex(descriptor_indices::DescriptorIndexCall),
+    ThreadWrite(thread_write::ThreadWriteCall),
     Assert(assertions::SourceAssertControlV40),
     Return,
 }
@@ -146,7 +149,11 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         let row = function.control.get(block).ok_or_else(mismatch)?;
         Ok(matches!(
             row.end,
-            End::Index(_) | End::Descriptor(_) | End::DescriptorIndex(_) | End::Abort
+            End::Index(_)
+                | End::Descriptor(_)
+                | End::DescriptorIndex(_)
+                | End::ThreadWrite(_)
+                | End::Abort
         ))
     }
 
@@ -485,6 +492,18 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         if source_trap_call_v55(call, semantic.callables(), semantic.types(), out)?
                         {
                             End::Abort
+                        } else if let Some(write) = thread_write::ThreadWriteCall::derive(
+                            slots,
+                            plan,
+                            &body,
+                            root,
+                            instance,
+                            block,
+                            call,
+                            &semantic.callables()[call.callee().index() as usize],
+                            out,
+                        )? {
+                            End::ThreadWrite(write)
                         } else if let Some(descriptor) = descriptor_calls::DescriptorCall::derive(
                             slots,
                             plan,
@@ -657,6 +676,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 End::Index(call) => call.emit(out)?,
                 End::Descriptor(call) => call.emit(out)?,
                 End::DescriptorIndex(call) => call.emit(out)?,
+                End::ThreadWrite(call) => call.emit(r, i, block, out)?,
                 End::Assert(assertion) => assertion.emit(r, i, block, out)?,
                 End::Abort => {
                     write!(out, " let source = invocation_source_byte_trap_v40(cursor.source);\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
