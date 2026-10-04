@@ -61,6 +61,14 @@ impl std::error::Error for ProductionMixedSourceHandoffErrorV26 {}
 // completion contract. Instantiate nominal owners, never erase policy identity.
 macro_rules! mixed_source_handoff_v26 {
     ($handoff:ident, $policy:ident, $output:ident) => {
+        mixed_source_handoff_v26!(
+            $handoff,
+            $policy,
+            $output,
+            ProductionMixedRuntimeOccurrenceV26
+        );
+    };
+    ($handoff:ident, $policy:ident, $output:ident, $occurrence:ident) => {
         /// Move-only actual fixed-policy output, inseparable from its source-bound runtime
         /// premise roster. Concrete allocation, initialization, cross-argument
         /// non-overlap and launch/width binding are mandatory downstream conditions.
@@ -69,7 +77,7 @@ macro_rules! mixed_source_handoff_v26 {
         pub struct $handoff<'view, 'source> {
             owned: SourceOutputHandoffV18<'view, 'source, $policy>,
             premises: Vec<ProductionMixedSliceRuntimePremiseV26>,
-            occurrences: Vec<ProductionMixedRuntimeOccurrenceV26>,
+            occurrences: Vec<$occurrence>,
             launches: &'view [fe2o3_kernel_ir::ExplicitLaunchExtent],
             width: fe2o3_kernel_ir::FormalIndexWidth,
         }
@@ -126,7 +134,7 @@ macro_rules! mixed_source_handoff_v26 {
             pub fn runtime_occurrences(
                 &self,
                 budget: &ArgumentBudgetV1<'_>,
-            ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]> {
+            ) -> SourceOwnedResultV18<&[$occurrence]> {
                 self.owned.check(budget)?;
                 Ok(&self.occurrences)
             }
@@ -173,15 +181,17 @@ macro_rules! mixed_source_handoff_v26 {
     };
 }
 
-fn mixed_source_completion_headers_v26() -> Result<usize, ArgumentResourceV1> {
+macro_rules! mixed_source_completion_family_v89 {
+    ($headers:ident, $complete:ident, $occurrence:ident, $checked:ident, $native_method:ident, $subject:ident) => {
+fn $headers() -> Result<usize, ArgumentResourceV1> {
     type Frame<'a> = (
         ProductionMixedSourceCheckErrorV26,
         ProductionMixedSourceHandoffErrorV26,
         Vec<ProductionMixedSliceRuntimePremiseV26>,
-        Vec<ProductionMixedRuntimeOccurrenceV26>,
-        ProductionMixedRuntimeOccurrenceV26,
+        Vec<$occurrence>,
+        $occurrence,
         ProductionMixedSliceRuntimePremiseV26,
-        &'a ProductionMixedMemoryCheckedNativePoliciesV26<'a, 'a>,
+        &'a $checked<'a, 'a>,
         Option<&'a fe2o3_pliron::CanonicalMixedPipelineReportV26>,
         Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>,
         &'a [fe2o3_kernel_ir::ExplicitLaunchExtent],
@@ -200,7 +210,7 @@ fn mixed_source_completion_headers_v26() -> Result<usize, ArgumentResourceV1> {
     ])
 }
 
-fn with_mixed_source_completion_v26<'work, F>(
+fn $complete<'work, F>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
@@ -210,7 +220,7 @@ fn with_mixed_source_completion_v26<'work, F>(
 ) -> Result<(), ProductionMixedSourceCheckErrorV26>
 where
     F: for<'scope, 'owner> FnMut(
-        &ProductionMixedMemoryCheckedNativePoliciesV26<'scope, 'owner>,
+        &$checked<'scope, 'owner>,
         &mut ArgumentBudgetV1<'work>,
     ) -> Result<(), ProductionSourceNativeLifecycleErrorV18>,
 {
@@ -245,11 +255,11 @@ where
             max_cells: output.definitions().len(),
         };
         let result = with_checked_canonical_ranked_view_v18(output, &metadata, &candidate, budget, |checked, budget| {
-            Ok::<_, CanonicalRankedViewErrorV1>(optimized.with_mixed_memory_native_policies_v26(
+            Ok::<_, CanonicalRankedViewErrorV1>(optimized.$native_method(
                 checked, layouts, limits, launches, width, budget,
                 |request, budget| complete_private_source_root_v20(original, optimized, &index, request, budget),
                 |native, budget| {
-                    native.check_source_subject_v26(original, optimized, budget)?;
+                    native.$subject(original, optimized, budget)?;
                     let count = native.function_count(budget)?;
                     if count != output.functions().len() { return Err(original.source.missing::<()>("mixed source native function census differs").unwrap_err().into()); }
                     for (ordinal, function) in output.functions().iter().enumerate() {
@@ -280,8 +290,30 @@ where
     })
 }
 
+    };
+}
+mixed_source_completion_family_v89!(
+    mixed_source_completion_headers_v26,
+    with_mixed_source_completion_v26,
+    ProductionMixedRuntimeOccurrenceV26,
+    ProductionMixedMemoryCheckedNativePoliciesV26,
+    with_mixed_memory_native_policies_v26,
+    check_source_subject_v26
+);
+mixed_source_completion_family_v89!(
+    predicated_source_completion_headers_v89,
+    with_predicated_source_completion_v89,
+    ProductionMixedRuntimeOccurrenceV89,
+    ProductionPredicatedMemoryCheckedNativePoliciesV89,
+    with_predicated_memory_native_policies_v89,
+    check_source_subject_v89
+);
+
 macro_rules! mixed_source_completion_v26 {
     ($method:ident, $handoff:ident, $policy:ident) => {
+        mixed_source_completion_v26!($method, $handoff, $policy, ProductionMixedRuntimeOccurrenceV26, mixed_source_completion_headers_v26, with_mixed_source_completion_v26);
+    };
+    ($method:ident, $handoff:ident, $policy:ident, $occurrence:ident, $headers:ident, $complete:ident) => {
 impl<'source> ProductionSourceOwnedViewV18<'source> {
     /// Runs the nominal fixed policy and performs complete source/native mixed
     /// conjunction inside the consuming output-adoption callback. The returned
@@ -305,9 +337,9 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
             floor,
             |budget| {
                 self.require_kernel_argument_abi_v18(abi, budget)?;
-                let headers = mixed_source_completion_headers_v26()?;
+                let headers = $headers()?;
                 self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
-                let result = self.with_retained_checked_optimization_policy_v18::<$policy, (Vec<ProductionMixedSliceRuntimePremiseV26>, Vec<ProductionMixedRuntimeOccurrenceV26>), ProductionMixedSourceCheckErrorV26, _>(budget, |original, optimized, budget| {
+                let result = self.with_retained_checked_optimization_policy_v18::<$policy, (Vec<ProductionMixedSliceRuntimePremiseV26>, Vec<$occurrence>), ProductionMixedSourceCheckErrorV26, _>(budget, |original, optimized, budget| {
                 let callback_floor = budget.storage();
                 scoped_source_attempt_v29(original.source.cleanup, budget, callback_floor, |budget| {
                 let payload_floor = budget.storage();
@@ -320,7 +352,7 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
                 let mut premises = source_reference_emission_vec_v29(capacity, budget).map_err(source_argument_error_v18)?;
                 let mut occurrences = source_reference_emission_vec_v29(output.operations().len(), budget).map_err(source_argument_error_v18)?;
                 let backing = budget.storage().checked_sub(payload_floor).ok_or(ArgumentResourceV1::Accounting)?;
-                with_mixed_source_completion_v26(original, optimized, launches, width, budget, &mut |native, budget| {
+                $complete(original, optimized, launches, width, budget, &mut |native, budget| {
                     if !premises.is_empty() { return Err(original.source.missing::<()>("mixed runtime premise callback repeated").unwrap_err().into()); }
                     for premise in native.runtime_premises(budget)? {
                         original.retain_query(budget.charge_work(1).map_err(Into::into))?;
@@ -401,6 +433,21 @@ mixed_source_completion_v26!(
     conditional_mixed_fixedpoint_output_v29,
     ProductionConditionalMixedFixedpointOutputHandoffV29,
     MixedFixedpointSourceOptimizerV18
+);
+
+mixed_source_handoff_v26!(
+    ProductionConditionalPredicatedFixedpointOutputHandoffV89,
+    MixedFixedpointSourceOptimizerV18,
+    CheckedNeutralKernelIrOwnerMixedFixedpointV18,
+    ProductionMixedRuntimeOccurrenceV89
+);
+mixed_source_completion_v26!(
+    conditional_predicated_fixedpoint_output_v89,
+    ProductionConditionalPredicatedFixedpointOutputHandoffV89,
+    MixedFixedpointSourceOptimizerV18,
+    ProductionMixedRuntimeOccurrenceV89,
+    predicated_source_completion_headers_v89,
+    with_predicated_source_completion_v89
 );
 
 include!("production_source_mixed_prefix_v29.rs");

@@ -245,11 +245,24 @@ pending_conditional_owner_v30!(
     Legacy,
     Globals
 );
+
+// These mutually exclusive adapters each hold one borrowed core. The existing
+// adapter slot in the shared header covers the new typed variant as well.
+const _: () = assert!(
+    size_of::<PendingCanonicalPredicatedMemoryPoliciesV89<'_, '_>>()
+        == size_of::<PendingCanonicalMixedMemoryPoliciesV26<'_, '_>>()
+);
 pending_conditional_owner_v30!(
     PendingCanonicalSelectedMemoryPoliciesV30,
     selected_domains,
     Selected,
     Selected
+);
+pending_conditional_owner_v30!(
+    PendingCanonicalPredicatedMemoryPoliciesV89,
+    conditional_globals,
+    PredicatedV89,
+    Globals
 );
 
 fn mixed_pending_headers_v26<T>(capture: usize, alignment: usize) -> Result<usize, Failure> {
@@ -331,6 +344,54 @@ fn mixed_pending_headers_v26<T>(capture: usize, alignment: usize) -> Result<usiz
 }
 
 impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
+    /// Runs the same native stages while retaining an explicitly predicated
+    /// whole-domain owner. Original source and runtime joins remain mandatory.
+    pub fn with_predicated_memory_observations_v89<'w, T>(
+        &mut self,
+        physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
+        globals: &Globals<'_, '_>,
+        budget: &mut Budget<'w>,
+        callback: impl for<'s> FnOnce(
+            &PendingCanonicalPredicatedMemoryPoliciesV89<'s, 'g>,
+            &mut Budget<'w>,
+        ) -> Result<T, Failure>,
+    ) -> Result<T, CanonicalRankedPolicyChecksErrorV1> {
+        self.with_predicated_memory_limits_v89(
+            physical,
+            globals,
+            Limits::production_hard_ceiling(),
+            budget,
+            callback,
+        )
+    }
+
+    pub(super) fn with_predicated_memory_limits_v89<'w, T>(
+        &mut self,
+        physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
+        globals: &Globals<'_, '_>,
+        limits: Limits,
+        budget: &mut Budget<'w>,
+        callback: impl for<'s> FnOnce(
+            &PendingCanonicalPredicatedMemoryPoliciesV89<'s, 'g>,
+            &mut Budget<'w>,
+        ) -> Result<T, Failure>,
+    ) -> Result<T, CanonicalRankedPolicyChecksErrorV1> {
+        let capture = ConditionalOwnerCaptureV30 { callback };
+        self.with_conditional_memory_limits_v30(
+            physical,
+            Domains::PredicatedV89(globals),
+            limits,
+            budget,
+            move |core, budget| {
+                let ConditionalOwnerCaptureV30 { callback } = capture;
+                callback(
+                    &PendingCanonicalPredicatedMemoryPoliciesV89 { core },
+                    budget,
+                )
+            },
+        )
+    }
+
     /// Runs the fixed nine stages with distinct private/global effect coverage
     /// on every actual definition. The callback retains all source/runtime
     /// premises; report cleanliness cannot discharge them.
@@ -508,13 +569,23 @@ impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
                     }
                 }
                 let guard = Guard::new(budget);
-                let native = PendingCanonicalGlobalAccessesV18::after_mixed_census_v26(
-                    self.owner,
-                    self.graph,
-                    self.epoch,
-                    &guard,
-                    self.refund_denied,
-                );
+                let native = if globals.permits_predicated_stores_v89() {
+                    PendingCanonicalGlobalAccessesV18::after_predicated_mixed_census_v89(
+                        self.owner,
+                        self.graph,
+                        self.epoch,
+                        &guard,
+                        self.refund_denied,
+                    )
+                } else {
+                    PendingCanonicalGlobalAccessesV18::after_mixed_census_v26(
+                        self.owner,
+                        self.graph,
+                        self.epoch,
+                        &guard,
+                        self.refund_denied,
+                    )
+                };
                 let view = PendingConditionalMemoryCoreV30 {
                     owner: self.owner,
                     reports: &reports,

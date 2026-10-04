@@ -50,6 +50,19 @@ impl<'s, 'g> PendingCanonicalGlobalAccessesV18<'s, 'g> {
             guarded_stores_v87: false,
         }
     }
+
+    pub(super) fn after_predicated_mixed_census_v89(
+        owner: &'g VerifiedCanonicalKernelIrModuleV18,
+        graph: &'s crate::KirPlironGraphV18<'g>,
+        epoch: u64,
+        guard: &'s Guard,
+        refund_denied: &'s Cell<bool>,
+    ) -> Self {
+        Self {
+            guarded_stores_v87: true,
+            ..Self::after_mixed_census_v26(owner, graph, epoch, guard, refund_denied)
+        }
+    }
 }
 
 impl PendingCanonicalGlobalAccessesV18<'_, '_> {

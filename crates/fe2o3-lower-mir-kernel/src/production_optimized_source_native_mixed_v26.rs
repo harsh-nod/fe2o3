@@ -1,182 +1,10 @@
 // Mixed completion keeps source-private proof, exact global source roles and
 // runtime premises distinct while joining one authentic native census.
 use slice_view_v1::{
-    CompletedGlobalSourcesV26, ProductionMixedRuntimeOccurrenceV26,
-    ProductionMixedSliceRuntimePremiseV26,
+    CompletedGlobalSourcesV26, CompletedGlobalSourcesV89, ProductionMixedRuntimeOccurrenceV26,
+    ProductionMixedRuntimeOccurrenceV89, ProductionMixedSliceRuntimePremiseV26,
 };
 
-/// Scoped conjunction of exact original source roles, private currentness,
-/// conditional globals, and every definition's genuine mixed native pipeline.
-/// Runtime premises remain mandatory and no executable authority is granted.
-pub struct ProductionMixedMemoryCheckedNativePoliciesV26<'scope, 'owner> {
-    recipes: &'scope ProductionOptimizedExecutionRecipesV18<'scope>,
-    private: &'scope PrivateSourceCompletionV18<'scope>,
-    globals: &'scope CompletedGlobalSourcesV26<'scope, 'owner>,
-    native: &'scope fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'scope, 'owner>,
-    obligations: &'scope [CanonicalRankedSourceObligationV18],
-    intrinsic_count: usize,
-    trap_count: usize,
-}
-
-impl ProductionMixedMemoryCheckedNativePoliciesV26<'_, '_> {
-    fn check(&self, budget: &mut ArgumentBudgetV1<'_>) -> NativeResult {
-        if let Err(error) = self.private.observe_custody(budget) {
-            self.native.refuse_retained_custody();
-            return Err(error.into());
-        }
-        self.private.check(budget)?;
-        self.globals
-            .check_source_subject(self.private.original, self.private.optimized, budget)?;
-        self.recipes.check(budget)?;
-        let owner = self
-            .native
-            .owner(budget)
-            .map_err(|error| self.recipes.pending_error(error))?;
-        self.recipes.check_owner(owner, budget)?;
-        budget
-            .charge_work(1)
-            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
-        if !std::ptr::eq(
-            self.native
-                .obligations(budget)
-                .map_err(|error| self.recipes.pending_error(error))?,
-            self.obligations,
-        ) {
-            return Err(self
-                .recipes
-                .source_failure("mixed native obligation owner differs"));
-        }
-        Ok(())
-    }
-    /// Rejoins both exact original and optimized owners under current budget custody.
-    pub fn check_source_subject_v26(
-        &self,
-        original: &ProductionSourceCorrespondenceV18<'_>,
-        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> NativeResult {
-        self.check(budget)?;
-        self.private
-            .physical
-            .check_native_source_subject_v18(original, optimized, budget)?;
-        self.globals
-            .check_source_subject(original, optimized, budget)?;
-        Ok(())
-    }
-    // Internal stage transport borrows the completed source evidence only after
-    // replaying the same owner and current-account checks as every public query.
-    pub(in crate::production_semantic_kir_v1) fn source_obligations_v30(
-        &self,
-        original: &ProductionSourceCorrespondenceV18<'_>,
-        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<&[CanonicalRankedSourceObligationV18], NativeError> {
-        self.check_source_subject_v26(original, optimized, budget)?;
-        Ok(self.obligations)
-    }
-
-    pub(in crate::production_semantic_kir_v1) fn completed_globals_v30(
-        &self,
-        original: &ProductionSourceCorrespondenceV18<'_>,
-        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<&CompletedGlobalSourcesV26<'_, '_>, NativeError> {
-        self.check_source_subject_v26(original, optimized, budget)?;
-        Ok(self.globals)
-    }
-    /// Returns the complete output function roster, including external declarations.
-    pub fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize, NativeError> {
-        self.check(budget)?;
-        self.native
-            .function_count(budget)
-            .map_err(|error| self.recipes.pending_error(error))
-    }
-    /// Borrows all nine typed native stage joins; declarations have no report.
-    /// An out-of-range ordinal records a sticky refusal.
-    pub fn report(
-        &self,
-        function: usize,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<Option<&fe2o3_pliron::CanonicalMixedPipelineReportV26>, NativeError> {
-        self.check(budget)?;
-        self.native
-            .report(function, budget)
-            .map_err(|error| self.recipes.pending_error(error))
-    }
-    /// Returns the real native policy history for a definition, or None for a declaration.
-    pub fn history(
-        &self,
-        function: usize,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>, NativeError> {
-        self.check(budget)?;
-        self.native
-            .history(function, budget)
-            .map_err(|error| self.recipes.pending_error(error))
-    }
-    /// Returns metered native resource observations, not admission evidence by themselves.
-    pub fn observation(
-        &self,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<fe2o3_pliron::CanonicalRankedPolicyResourceObservationV1, NativeError> {
-        self.check(budget)?;
-        self.native
-            .observation(budget)
-            .map_err(|error| self.recipes.pending_error(error))
-    }
-    /// Original roots, private effects, private aliases, global source roles,
-    /// original-source intrinsic occurrences, and terminal failures, respectively.
-    pub fn source_census(
-        &self,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<[usize; 6], NativeError> {
-        self.check(budget)?;
-        let (roots, globals) = self.globals.census(budget)?;
-        Ok([
-            roots,
-            self.private.memory,
-            self.private.aliases,
-            globals,
-            self.intrinsic_count,
-            self.trap_count,
-        ])
-    }
-    /// Borrows source-bound argument premises that runtime must still discharge.
-    pub fn runtime_premises(
-        &self,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<&[ProductionMixedSliceRuntimePremiseV26], NativeError> {
-        self.check(budget)?;
-        Ok(self.globals.runtime_premises(budget)?)
-    }
-    /// Borrows exact access and address-formation rows in producer occurrence order.
-    pub fn runtime_occurrences(
-        &self,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<&[ProductionMixedRuntimeOccurrenceV26], NativeError> {
-        self.check(budget)?;
-        Ok(self.globals.runtime_occurrences(budget)?)
-    }
-    /// Always true for this closed view: every pending source role has been joined.
-    pub const fn source_roles_are_complete(&self) -> bool {
-        true
-    }
-    /// Always false: this compiler scope has no concrete runtime allocation facts.
-    pub const fn runtime_requirements_are_discharged(&self) -> bool {
-        false
-    }
-    /// Always false: conditional native/source completion is not final admission.
-    pub const fn ranked_verification_is_complete(&self) -> bool {
-        false
-    }
-    /// Always false: authenticated downstream contract composition is required.
-    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
-        false
-    }
-}
-
-// Only an exact original active-instance recipe can populate this dense map.
-// No opcode/count-only producer is exposed to a caller.
 fn mixed_source_intrinsics_v26(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
@@ -437,13 +265,189 @@ fn mixed_source_traps_v26(
 #[path = "production_source_synthetic_traps_v26.rs"]
 mod synthetic_traps_v26;
 
-fn join_mixed_source_obligations_v26(
+// Closed monomorphized families share custody, resource settlement, and the
+// complete source partition. Their native/occurrence types never interconvert.
+macro_rules! mixed_source_family_v89 {
+    ($checked:ident, $native:ident, $globals:ident, $occurrence:ident, $check_subject:ident, $join:ident, $headers:ident, $method:ident, $scope:ident, $stores:ident, $domains:ident, $observe:ident, $collect:ident) => {
+/// Scoped conjunction of exact original source roles, private currentness,
+/// conditional globals, and every definition's genuine mixed native pipeline.
+/// Runtime premises remain mandatory and no executable authority is granted.
+pub struct $checked<'scope, 'owner> {
+    recipes: &'scope ProductionOptimizedExecutionRecipesV18<'scope>,
+    private: &'scope PrivateSourceCompletionV18<'scope>,
+    globals: &'scope $globals<'scope, 'owner>,
+    native: &'scope fe2o3_pliron::$native<'scope, 'owner>,
+    obligations: &'scope [CanonicalRankedSourceObligationV18],
+    intrinsic_count: usize,
+    trap_count: usize,
+}
+
+impl $checked<'_, '_> {
+    fn check(&self, budget: &mut ArgumentBudgetV1<'_>) -> NativeResult {
+        if let Err(error) = self.private.observe_custody(budget) {
+            self.native.refuse_retained_custody();
+            return Err(error.into());
+        }
+        self.private.check(budget)?;
+        self.globals
+            .check_source_subject(self.private.original, self.private.optimized, budget)?;
+        self.recipes.check(budget)?;
+        let owner = self
+            .native
+            .owner(budget)
+            .map_err(|error| self.recipes.pending_error(error))?;
+        self.recipes.check_owner(owner, budget)?;
+        budget
+            .charge_work(1)
+            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+        if !std::ptr::eq(
+            self.native
+                .obligations(budget)
+                .map_err(|error| self.recipes.pending_error(error))?,
+            self.obligations,
+        ) {
+            return Err(self
+                .recipes
+                .source_failure("mixed native obligation owner differs"));
+        }
+        Ok(())
+    }
+    /// Rejoins both exact original and optimized owners under current budget custody.
+    pub fn $check_subject(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> NativeResult {
+        self.check(budget)?;
+        self.private
+            .physical
+            .check_native_source_subject_v18(original, optimized, budget)?;
+        self.globals
+            .check_source_subject(original, optimized, budget)?;
+        Ok(())
+    }
+    // Internal stage transport borrows the completed source evidence only after
+    // replaying the same owner and current-account checks as every public query.
+    pub(in crate::production_semantic_kir_v1) fn source_obligations_v30(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&[CanonicalRankedSourceObligationV18], NativeError> {
+        self.$check_subject(original, optimized, budget)?;
+        Ok(self.obligations)
+    }
+
+    pub(in crate::production_semantic_kir_v1) fn completed_globals_v30(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&$globals<'_, '_>, NativeError> {
+        self.$check_subject(original, optimized, budget)?;
+        Ok(self.globals)
+    }
+    /// Returns the complete output function roster, including external declarations.
+    pub fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize, NativeError> {
+        self.check(budget)?;
+        self.native
+            .function_count(budget)
+            .map_err(|error| self.recipes.pending_error(error))
+    }
+    /// Borrows all nine typed native stage joins; declarations have no report.
+    /// An out-of-range ordinal records a sticky refusal.
+    pub fn report(
+        &self,
+        function: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<&fe2o3_pliron::CanonicalMixedPipelineReportV26>, NativeError> {
+        self.check(budget)?;
+        self.native
+            .report(function, budget)
+            .map_err(|error| self.recipes.pending_error(error))
+    }
+    /// Returns the real native policy history for a definition, or None for a declaration.
+    pub fn history(
+        &self,
+        function: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>, NativeError> {
+        self.check(budget)?;
+        self.native
+            .history(function, budget)
+            .map_err(|error| self.recipes.pending_error(error))
+    }
+    /// Returns metered native resource observations, not admission evidence by themselves.
+    pub fn observation(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<fe2o3_pliron::CanonicalRankedPolicyResourceObservationV1, NativeError> {
+        self.check(budget)?;
+        self.native
+            .observation(budget)
+            .map_err(|error| self.recipes.pending_error(error))
+    }
+    /// Original roots, private effects, private aliases, global source roles,
+    /// original-source intrinsic occurrences, and terminal failures, respectively.
+    pub fn source_census(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<[usize; 6], NativeError> {
+        self.check(budget)?;
+        let (roots, globals) = self.globals.census(budget)?;
+        Ok([
+            roots,
+            self.private.memory,
+            self.private.aliases,
+            globals,
+            self.intrinsic_count,
+            self.trap_count,
+        ])
+    }
+    /// Borrows source-bound argument premises that runtime must still discharge.
+    pub fn runtime_premises(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&[ProductionMixedSliceRuntimePremiseV26], NativeError> {
+        self.check(budget)?;
+        Ok(self.globals.runtime_premises(budget)?)
+    }
+    /// Borrows exact access and address-formation rows in producer occurrence order.
+    pub fn runtime_occurrences(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&[$occurrence], NativeError> {
+        self.check(budget)?;
+        Ok(self.globals.runtime_occurrences(budget)?)
+    }
+    /// Always true for this closed view: every pending source role has been joined.
+    pub const fn source_roles_are_complete(&self) -> bool {
+        true
+    }
+    /// Always false: this compiler scope has no concrete runtime allocation facts.
+    pub const fn runtime_requirements_are_discharged(&self) -> bool {
+        false
+    }
+    /// Always false: conditional native/source completion is not final admission.
+    pub const fn ranked_verification_is_complete(&self) -> bool {
+        false
+    }
+    /// Always false: authenticated downstream contract composition is required.
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+// Only an exact original active-instance recipe can populate this dense map.
+// No opcode/count-only producer is exposed to a caller.
+fn $join(
     recipes: &ProductionOptimizedExecutionRecipesV18<'_>,
     private: &PrivateSourceCompletionV18<'_>,
-    globals: &CompletedGlobalSourcesV26<'_, '_>,
+    globals: &$globals<'_, '_>,
     intrinsic: &[bool],
     traps: &[bool],
-    pending: &fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'_, '_>,
+    pending: &fe2o3_pliron::$native<'_, '_>,
     rows: &PrivateNativeRowsV18,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(usize, usize), NativeError> {
@@ -562,15 +566,15 @@ fn join_mixed_source_obligations_v26(
     Ok((intrinsic_count, trap_count))
 }
 
-fn mixed_source_headers_v26<E>() -> Result<usize, ArgumentResourceV1> {
+fn $headers<E>() -> Result<usize, ArgumentResourceV1> {
     type Frame<'a, E> = (
-        ProductionMixedMemoryCheckedNativePoliciesV26<'a, 'a>,
+        $checked<'a, 'a>,
         Vec<bool>,
         Vec<bool>,
         Vec<bool>,
         Vec<fe2o3_kernel_ir::ExplicitLaunchExtent>,
-        &'a CompletedGlobalSourcesV26<'a, 'a>,
-        &'a fe2o3_pliron::PendingCanonicalMixedMemoryPoliciesV26<'a, 'a>,
+        &'a $globals<'a, 'a>,
+        &'a fe2o3_pliron::$native<'a, 'a>,
         &'a fe2o3_kernel_ir::CheckedCanonicalConditionalSliceDomainsV26<'a, 'a>,
         &'a PrivateSourceCompletionV18<'a>,
         &'a PrivateNativeRowsV18,
@@ -612,7 +616,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
     /// Executes every original-source completion and the genuine fixed native
     /// mixed pipeline on this output. Launch/width are retained conditions,
     /// never concrete runtime authority or a caller-selected completion roster.
-    pub fn with_mixed_memory_native_policies_v26<'work, E>(
+    pub fn $method<'work, E>(
         &self,
         checked: &mut fe2o3_kernel_analysis::CheckedCanonicalRankedViewV18<'_, '_, '_, '_>,
         layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
@@ -625,7 +629,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), E>,
         consume: impl for<'scope, 'owner> FnOnce(
-            &ProductionMixedMemoryCheckedNativePoliciesV26<'scope, 'owner>,
+            &$checked<'scope, 'owner>,
             &mut ArgumentBudgetV1<'work>,
         ) -> NativeResult,
     ) -> Result<Result<(), E>, NativeError>
@@ -641,7 +645,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         let mut caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.query(budget)?;
             let headers = argument_sum_v1(&[
-                mixed_source_headers_v26::<E>()?,
+                $headers::<E>()?,
                 source_reference_cleanup_headers_v29()?,
                 source_owned_finish_preflight_v26::<Result<(), E>, NativeError>(budget)
                     .map_err(ProductionSourceOwnedViewErrorV18::from)?,
@@ -711,7 +715,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                                         analysis.with_memory_versions(
                                             budget,
                                             |input_memory, output_memory, budget| {
-                                                with_mixed_native_source_scope_v26(
+                                                $scope(
                                                     recipes,
                                                     physical,
                                                     input_memory,
@@ -839,7 +843,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn with_mixed_native_source_scope_v26<'work, E>(
+fn $scope<'work, E>(
     recipes: &ProductionOptimizedExecutionRecipesV18<'_>,
     physical: &CheckedSourcePrivatePhysicalV18<'_>,
     input_memory: &fe2o3_kernel_analysis::CanonicalKirMemorySsaV18<'_, '_>,
@@ -854,7 +858,7 @@ fn with_mixed_native_source_scope_v26<'work, E>(
         &mut ArgumentBudgetV1<'work>,
     ) -> Result<(), E>,
     consume: impl for<'scope, 'owner> FnOnce(
-        &ProductionMixedMemoryCheckedNativePoliciesV26<'scope, 'owner>,
+        &$checked<'scope, 'owner>,
         &mut ArgumentBudgetV1<'work>,
     ) -> NativeResult,
 ) -> Result<(), PrivateNativeFlowV18<E>>
@@ -870,7 +874,7 @@ where
     let mut consume = Some(consume);
     let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let headers = argument_sum_v1(&[
-            mixed_source_headers_v26::<E>()?,
+            $headers::<E>()?,
             source_reference_cleanup_headers_v29()?,
             source_owned_finish_preflight_v26::<(), PrivateNativeFlowV18<E>>(budget)?,
             argument_product_v1(2, std::mem::size_of_val(&check_root))?,
@@ -960,14 +964,14 @@ where
         let proof = physical.native_physical_v18(budget)?;
         let family = fe2o3_kernel_ir::with_canonical_guarded_global_reads_v18(
             optimized.checked.output().owner(), Default::default(), budget, |reads, budget| {
-                fe2o3_kernel_ir::with_canonical_guarded_global_stores_v24(
+                fe2o3_kernel_ir::$stores(
                     optimized.checked.output().owner(), Default::default(), budget, |stores, budget| {
-                        fe2o3_kernel_ir::with_canonical_conditional_slice_domains_v26(reads, stores, &function_launches, width, budget, |globals, budget| {
+                        fe2o3_kernel_ir::$domains(reads, stores, &function_launches, width, budget, |globals, budget| {
                             let private_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| with_private_source_completion_scope_v26(
                                 recipes, physical, input_memory, output_memory, pending, budget,
                                 check_root.take().ok_or(ArgumentResourceV1::Accounting)?,
                                 |completion, rows, pending, budget| {
-                                    let observed = pending.with_mixed_memory_observations_v26(proof, globals, budget, |native, budget| {
+                                    let observed = pending.$observe(proof, globals, budget, |native, budget| {
                                         let observation = native.observation(budget)?;
                                         let mut last_invocation = None;
                                         for function in 0..native.function_count(budget)? {
@@ -979,10 +983,10 @@ where
                                             budget.charge_work(obligations.len().checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?)?;
                                             if obligations != rows.obligations.as_slice() { return Err(recipes.source_failure("mixed imported obligation roster differs").into()); }
                                             let mut result = None;
-                                            slice_view_v1::with_completed_global_sources_v26(original, optimized, native, reads, stores, launches, width, budget, &mut |global_sources, budget| {
+                                            slice_view_v1::$collect(original, optimized, native, reads, stores, launches, width, budget, &mut |global_sources, budget| {
                                                 result = Some((|| -> NativeResult {
-                                                    let (intrinsic_count, trap_count) = join_mixed_source_obligations_v26(recipes, completion, global_sources, &intrinsic, &traps, native, rows, budget)?;
-                                                    let view = ProductionMixedMemoryCheckedNativePoliciesV26 { recipes, private: completion, globals: global_sources, native, obligations, intrinsic_count, trap_count };
+                                                    let (intrinsic_count, trap_count) = $join(recipes, completion, global_sources, &intrinsic, &traps, native, rows, budget)?;
+                                                    let view = $checked { recipes, private: completion, globals: global_sources, native, obligations, intrinsic_count, trap_count };
                                                     view.check(budget)?;
                                                     let consumed = consume.take().ok_or_else(|| recipes.source_failure("mixed source callback repeated"))?(&view, budget);
                                                     view.check(budget)?;
@@ -1051,3 +1055,37 @@ where
         storage,
     )
 }
+
+    };
+}
+
+mixed_source_family_v89!(
+    ProductionMixedMemoryCheckedNativePoliciesV26,
+    PendingCanonicalMixedMemoryPoliciesV26,
+    CompletedGlobalSourcesV26,
+    ProductionMixedRuntimeOccurrenceV26,
+    check_source_subject_v26,
+    join_mixed_source_obligations_v26,
+    mixed_source_headers_v26,
+    with_mixed_memory_native_policies_v26,
+    with_mixed_native_source_scope_v26,
+    with_canonical_guarded_global_stores_v24,
+    with_canonical_conditional_slice_domains_v26,
+    with_mixed_memory_observations_v26,
+    with_completed_global_sources_v26
+);
+mixed_source_family_v89!(
+    ProductionPredicatedMemoryCheckedNativePoliciesV89,
+    PendingCanonicalPredicatedMemoryPoliciesV89,
+    CompletedGlobalSourcesV89,
+    ProductionMixedRuntimeOccurrenceV89,
+    check_source_subject_v89,
+    join_predicated_source_obligations_v89,
+    predicated_source_headers_v89,
+    with_predicated_memory_native_policies_v89,
+    with_predicated_native_source_scope_v89,
+    with_canonical_predicated_global_stores_v84,
+    with_canonical_predicated_conditional_slice_domains_v85,
+    with_predicated_memory_observations_v89,
+    with_completed_global_sources_v89
+);

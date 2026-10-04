@@ -8,6 +8,7 @@ mod census;
 mod native;
 pub use native::{
     ProductionLifecycleCheckedNativePoliciesV18, ProductionMixedMemoryCheckedNativePoliciesV26,
+    ProductionPredicatedMemoryCheckedNativePoliciesV89,
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
 };

@@ -217,6 +217,24 @@ impl NativePrivateInputV1 for NativeCanonicalMixedAdmissionV26<'_> {
                     )
             }
             Some(Kind::ConditionalGlobalWriteV26) => {
+                if self.globals.permits_predicated_stores_v89()
+                    && self
+                        .private
+                        .coordinates
+                        .get(&pointer)
+                        .is_some_and(|coordinate| {
+                            self.private.ordinal_for(*coordinate).is_some_and(|index| {
+                                matches!(
+                                    self.private.inventory().operations()[index].operation.kind,
+                                    OperationKind::GuardedStore { .. }
+                                )
+                            })
+                        })
+                {
+                    return dialect == "gpu"
+                        && key == "gpu_preserved_operation_kind"
+                        && name == "preserved_operation_kind";
+                }
                 dialect == "gpu"
                     && matches!(
                         (key, name),
@@ -332,6 +350,22 @@ fn mixed_rows_v26(
                         pointer, access, ..
                     },
                 ) if checked_pointer == *pointer
+                    && matches!(
+                        access.address_space,
+                        fe2o3_kernel_ir::AddressSpace::Global
+                            | fe2o3_kernel_ir::AddressSpace::Generic
+                    )
+                    && !access.volatile =>
+                {
+                    Some(Kind::ConditionalGlobalWriteV26)
+                }
+                (
+                    (true, checked_pointer),
+                    OperationKind::GuardedStore {
+                        pointer, access, ..
+                    },
+                ) if globals.permits_predicated_stores_v89()
+                    && checked_pointer == *pointer
                     && matches!(
                         access.address_space,
                         fe2o3_kernel_ir::AddressSpace::Global
@@ -617,6 +651,10 @@ impl KirPlironGraphV18<'_> {
         self.require_mixed_snapshot_v26(layouts, epoch, structural, budget)?;
         let kinds = mixed_rows_v26(physical, globals, budget)?;
         self.check_pending_global_carriers_v18(self.profile.owner(), epoch, budget)?;
+        if globals.permits_predicated_stores_v89() {
+            budget.reserve_storage(Self::pending_guarded_scan_headers_v87()?)?;
+            self.check_pending_guarded_carriers_v87(self.profile.owner(), epoch, budget)?;
+        }
         budget.charge_work(
             self.session
                 .operations

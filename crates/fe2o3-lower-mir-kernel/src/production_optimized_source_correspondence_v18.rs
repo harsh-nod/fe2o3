@@ -35,6 +35,7 @@ pub use control::ProductionOptimizedSourceEffectsV18;
 pub use execution::{
     ProductionLifecycleCheckedNativePoliciesV18, ProductionMixedMemoryCheckedNativePoliciesV26,
     ProductionOptimizedExecutionKindV18, ProductionOptimizedExecutionRecipesV18,
+    ProductionPredicatedMemoryCheckedNativePoliciesV89,
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
 };

@@ -429,10 +429,10 @@ mod storage;
 pub use storage::{
     CanonicalRankedSourceObligationV18, CanonicalRankedSourceRequirementV18,
     CheckedCanonicalRankedPoliciesV18, PendingCanonicalGlobalAccessesV18,
-    PendingCanonicalMixedMemoryPoliciesV26, PendingCanonicalPrivateMemoryPoliciesV18,
-    PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
-    PendingCanonicalSelectedMemoryPoliciesV30, with_canonical_ranked_policy_checks_v18,
-    with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalMixedMemoryPoliciesV26, PendingCanonicalPredicatedMemoryPoliciesV89,
+    PendingCanonicalPrivateMemoryPoliciesV18, PendingCanonicalRankedPoliciesV18,
+    PendingCanonicalRankedSourceRolesV18, PendingCanonicalSelectedMemoryPoliciesV30,
+    with_canonical_ranked_policy_checks_v18, with_pending_canonical_ranked_source_roles_v18,
 };
 
 #[path = "canonical_private_admission_v1.rs"]

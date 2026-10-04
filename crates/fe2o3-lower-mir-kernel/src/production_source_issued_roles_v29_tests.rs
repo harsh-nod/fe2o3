@@ -132,6 +132,30 @@ pub(in super::super) fn run_issued_role_source_v87<
         &mut ArgumentBudgetV1<'work>,
     ) -> Result<(), E>,
 ) -> (Result<(), E>, usize, usize) {
+    run_issued_role_source_abi_v89(
+        owner,
+        descriptor_access,
+        work_limit,
+        storage_limit,
+        retained_floor,
+        |source, _, budget| consume(source, budget),
+    )
+}
+
+pub(in super::super) fn run_issued_role_source_abi_v89<
+    E: From<ProductionSourceOwnedViewErrorV18> + std::fmt::Debug,
+>(
+    owner: ProductionSemanticSsaOwnerV1,
+    descriptor_access: fe2o3_kernel_descriptor::AccessMode,
+    work_limit: usize,
+    storage_limit: usize,
+    retained_floor: &std::cell::Cell<Option<usize>>,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceOwnedViewV18<'scope>,
+        ProductionKernelArgumentAbiInputV18<'_>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), E>,
+) -> (Result<(), E>, usize, usize) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
@@ -229,7 +253,13 @@ pub(in super::super) fn run_issued_role_source_v87<
                 ProductionSemanticKirLimitsV1::default(),
                 &mut budget,
             )?;
-        prepared.with_source_consumer_v18(&mut budget, consume)
+        prepared.with_source_consumer_v18(&mut budget, |source, budget| {
+            consume(
+                source,
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )
+        })
     })();
     assert_eq!(
         budget.storage(),

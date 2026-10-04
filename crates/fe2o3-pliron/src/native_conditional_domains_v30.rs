@@ -43,10 +43,14 @@ pub(crate) fn conditional_query_headers_v30() -> std::result::Result<usize, Reso
 #[derive(Clone, Copy)]
 pub(crate) enum NativeConditionalDomainsV30<'a> {
     Legacy(&'a Single<'a, 'a>),
+    PredicatedV89(&'a Single<'a, 'a>),
     Selected(&'a Selected<'a, 'a>),
 }
 
 impl<'a> NativeConditionalDomainsV30<'a> {
+    pub(crate) const fn permits_predicated_stores_v89(self) -> bool {
+        matches!(self, Self::PredicatedV89(_))
+    }
     pub(crate) const fn runtime_requirements_are_discharged(self) -> bool {
         false
     }
@@ -55,13 +59,13 @@ impl<'a> NativeConditionalDomainsV30<'a> {
     }
     pub(crate) fn owner(self, budget: &mut Budget<'_>) -> Result<&'a Owner> {
         match self {
-            Self::Legacy(rows) => rows.owner(budget),
+            Self::Legacy(rows) | Self::PredicatedV89(rows) => rows.owner(budget),
             Self::Selected(rows) => rows.owner(budget),
         }
     }
     pub(crate) fn refuse_retained_custody(self) -> Error {
         match self {
-            Self::Legacy(rows) => rows.refuse_retained_custody(),
+            Self::Legacy(rows) | Self::PredicatedV89(rows) => rows.refuse_retained_custody(),
             Self::Selected(rows) => rows.refuse_retained_custody(),
         }
     }
@@ -71,7 +75,9 @@ impl<'a> NativeConditionalDomainsV30<'a> {
         budget: &mut Budget<'_>,
     ) -> Result<Option<(ExplicitLaunchExtent, FormalIndexWidth, usize, usize)>> {
         match self {
-            Self::Legacy(rows) => rows.function_conditions(function, budget),
+            Self::Legacy(rows) | Self::PredicatedV89(rows) => {
+                rows.function_conditions(function, budget)
+            }
             Self::Selected(rows) => rows.function_conditions(function, budget).map(Some),
         }
     }
@@ -81,14 +87,12 @@ impl<'a> NativeConditionalDomainsV30<'a> {
         budget: &mut Budget<'_>,
     ) -> Result<Option<(bool, ValueId)>> {
         match self {
-            Self::Legacy(rows) => {
-                Ok(rows
-                    .access_at(operation, budget)?
-                    .map(|row| match row.domain() {
-                        Domain::Read(domain) => (false, domain.pointer()),
-                        Domain::Store(domain) => (true, domain.pointer()),
-                    }))
-            }
+            Self::Legacy(rows) | Self::PredicatedV89(rows) => Ok(rows
+                .access_at(operation, budget)?
+                .map(|row| match row.domain() {
+                    Domain::Read(domain) => (false, domain.pointer()),
+                    Domain::Store(domain) => (true, domain.pointer()),
+                })),
             Self::Selected(rows) => Ok(rows
                 .access_at(operation, budget)?
                 .map(|row| (row.writing(), row.pointer()))),
@@ -96,7 +100,7 @@ impl<'a> NativeConditionalDomainsV30<'a> {
     }
     pub(crate) fn access_count(self, budget: &mut Budget<'_>) -> Result<usize> {
         match self {
-            Self::Legacy(rows) => rows.access_count(budget),
+            Self::Legacy(rows) | Self::PredicatedV89(rows) => rows.access_count(budget),
             Self::Selected(rows) => {
                 let mut count = 0usize;
                 for function in 0..rows.function_count(budget)? {
