@@ -2,12 +2,14 @@
 
 use super::{
     CompilerGeneratedKernelExpectationV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationRequestV1, validate_request_target_lineage,
+    WorkerV3VerificationRequestV1, validate_artifact_target_lineage,
 };
 use fe2o3_amd_target::{AmdTargetId, PRODUCTION_GFX942_DEVICE_TARGET_V1};
-use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;
-use fe2o3_hsaco_finalize::ContentIdentityV1;
+use fe2o3_compiler_ffi::{CompilerDescriptorSourceV1, InertSemanticCompilerModuleHandoffV3};
+use fe2o3_hsaco::{CodeObjectVersion, KernelDescriptorBinding};
+use fe2o3_hsaco_finalize::{ContentIdentityV1, RevalidatedProtectedWorkerV3FinalizerDerivationV1};
 use fe2o3_kernel_analysis::CheckedGfx942FillAnalysisV1;
+use fe2o3_kernel_descriptor::KernelDescriptorV1;
 use fe2o3_verifier::CheckedConditionalFillProgramV1;
 use std::{error::Error, fmt};
 
@@ -101,6 +103,61 @@ impl<'admission, K: CompilerGeneratedKernelExpectationV1>
         CheckedWorkerV3ConditionalFillAssociationV1<'check, 'admission, K>,
         WorkerV3ConditionalFillAssociationErrorV1,
     > {
+        let generated_host_contract =
+            ConditionalFillArtifactView::from_request(self).check(program, machine)?;
+        Ok(CheckedWorkerV3ConditionalFillAssociationV1 {
+            request: self,
+            program,
+            machine,
+            generated_host_contract,
+        })
+    }
+}
+
+/// Common immutable inputs; neither construction path manufactures publication custody.
+struct ConditionalFillArtifactView<'evidence> {
+    handoff: &'evidence InertSemanticCompilerModuleHandoffV3,
+    finalizer: &'evidence RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    finalized: &'evidence [u8],
+    descriptor: &'evidence KernelDescriptorV1,
+    binding: KernelDescriptorBinding,
+    target: AmdTargetId,
+    code_object_version: CodeObjectVersion,
+}
+
+impl<'evidence> ConditionalFillArtifactView<'evidence> {
+    fn from_request<K: CompilerGeneratedKernelExpectationV1>(
+        request: &'evidence WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Self {
+        Self {
+            handoff: request.handoff,
+            finalizer: request.finalizer_derivation(),
+            finalized: request.finalized_hsaco_bytes(),
+            descriptor: request.descriptor(),
+            binding: request.descriptor_binding(),
+            target: request.target(),
+            code_object_version: request.code_object_version(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_closure(closure: &'evidence crate::CheckedWorkerV3CompilerClosureV1<'_>) -> Self {
+        Self {
+            handoff: closure.semantic_compiler_handoff(),
+            finalizer: closure.finalizer_derivation(),
+            finalized: closure.finalized_hsaco_bytes(),
+            descriptor: closure.descriptor(),
+            binding: closure.descriptor_binding(),
+            target: closure.target(),
+            code_object_version: closure.code_object_version(),
+        }
+    }
+
+    fn check(
+        &self,
+        program: &CheckedConditionalFillProgramV1<'_>,
+        machine: &CheckedGfx942FillAnalysisV1<'_>,
+    ) -> Result<[u8; 32], WorkerV3ConditionalFillAssociationErrorV1> {
         use WorkerV3ConditionalFillAssociationErrorV1 as E;
         let receipts = self.handoff.capsule().receipts();
         let inputs = program.inputs();
@@ -152,7 +209,7 @@ impl<'admission, K: CompilerGeneratedKernelExpectationV1>
         let [descriptor] = source.table().kernels() else {
             return Err(E::CompilerInputs("singleton compiler descriptor"));
         };
-        if descriptor != self.descriptor() {
+        if descriptor != self.descriptor {
             return Err(E::CompilerInputs("selected compiler descriptor"));
         }
         let semantic = inputs.semantic_mir();
@@ -167,7 +224,14 @@ impl<'admission, K: CompilerGeneratedKernelExpectationV1>
         if entry.kernel_binding_identity().as_bytes() != descriptor.kernel_id().as_bytes() {
             return Err(E::CompilerInputs("semantic kernel binding"));
         }
-        validate_request_target_lineage(self, program.lineage()).map_err(E::TargetLineage)?;
+        validate_artifact_target_lineage(
+            self.handoff,
+            self.finalizer,
+            self.descriptor,
+            self.code_object_version,
+            program.lineage(),
+        )
+        .map_err(E::TargetLineage)?;
         let target = program
             .lineage()
             .target_binding()
@@ -175,37 +239,28 @@ impl<'admission, K: CompilerGeneratedKernelExpectationV1>
             .map_err(|_| E::Target)?;
         let expected = AmdTargetId::parse(PRODUCTION_GFX942_DEVICE_TARGET_V1)
             .expect("the production gfx942 target is valid");
-        if self.target() != expected
+        if self.target != expected
             || target.configured_target != PRODUCTION_GFX942_DEVICE_TARGET_V1
             || target.wave_width_bits != 64
         {
             return Err(E::Target);
         }
         let bytes = machine.kernel().code_object();
-        if bytes != self.finalized_hsaco_bytes() {
+        if bytes != self.finalized {
             return Err(E::Machine("finalized payload"));
         }
-        if ContentIdentityV1::calculate(bytes)
-            != self.finalizer_derivation().finalized_hsaco_identity()
-        {
+        if ContentIdentityV1::calculate(bytes) != self.finalizer.finalized_hsaco_identity() {
             return Err(E::Machine("finalizer identity"));
         }
-        if machine.kernel().binding() != self.descriptor_binding() {
+        if machine.kernel().binding() != self.binding {
             return Err(E::Machine("selected descriptor"));
         }
-        if program.function_symbol() != self.descriptor().entry_name().as_str()
+        if program.function_symbol() != self.descriptor.entry_name().as_str()
             || machine.entry_symbol() != program.function_symbol()
         {
             return Err(E::Machine("entry symbol"));
         }
-        let generated_host_contract =
-            derive_worker_v3_conditional_fill_host_contract_v1(program, &source)?;
-        Ok(CheckedWorkerV3ConditionalFillAssociationV1 {
-            request: self,
-            program,
-            machine,
-            generated_host_contract,
-        })
+        derive_worker_v3_conditional_fill_host_contract_v1(program, &source)
     }
 }
 

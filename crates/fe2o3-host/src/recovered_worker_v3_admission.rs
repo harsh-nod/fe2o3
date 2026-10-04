@@ -22,7 +22,7 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_runtime_protocol::{
     CompilerExecutionReceiptCarriageV1, RecoveredWorkerV3LoadEnvelopeV2,
-    WorkerV3LoadEnvelopeErrorV2,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeWireV2,
 };
 use sha2::{Digest, Sha256};
 
@@ -34,6 +34,9 @@ use crate::{
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
 const WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-roster-lineage.v1\0";
+
+mod compiler_closure;
+pub use compiler_closure::{CheckedWorkerV3CompilerClosureV1, check_worker_v3_compiler_closure_v1};
 
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
@@ -131,7 +134,7 @@ impl RecoveredWorkerV3ArtifactStateV1 {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
         }
         validate_finalizer_derivation_association(
-            &self.envelope,
+            self.envelope.wire(),
             current.exact_artifact_bytes(),
             &self.finalizer_derivation,
         )?;
@@ -510,6 +513,12 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         self.artifact.finalizer_replay()
     }
 
+    pub(crate) fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.artifact.load_envelope_evidence_view()
+    }
+
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.artifact.target()
     }
@@ -648,44 +657,19 @@ fn admit_recovered_worker_v3_artifact_v1(
         .revalidate_locked_currentness()
         .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
 
-    let finalizer_derivation = revalidate_protected_worker_v3_finalizer_derivation_v1(
-        envelope
-            .wire()
-            .replay()
-            .publication_intent_record()
-            .attempt(),
-        envelope.wire().replay().outer_handoff(),
-        envelope.wire().replay().external_provider_payloads(),
-        envelope.wire().replay().transcript(),
-        current.exact_artifact_bytes(),
-    )
-    .map_err(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivation)?;
-    validate_finalizer_derivation_association(
-        &envelope,
-        current.exact_artifact_bytes(),
-        &finalizer_derivation,
-    )?;
-
-    let inspection = validate_finalized_identity(
-        envelope.wire().replay().publication_intent_record(),
-        current.exact_artifact_bytes(),
-    )?;
-    let outer =
-        InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().replay().outer_handoff())
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
-    let compiler_execution_subject = envelope
-        .wire()
-        .reconstructed_compiler_execution_subject_v1()
-        .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
-    validate_compiler_source_and_exports(&outer, &inspection)?;
-    validate_target_and_code_object(&outer, &inspection)?;
+    let compiler_closure::CompilerClosureValidation {
+        finalizer_derivation,
+        compiler_execution_subject,
+        outer_handoff,
+        inspection,
+    } = compiler_closure::validate(envelope.wire(), current.exact_artifact_bytes())?;
 
     Ok((
         RecoveredWorkerV3ArtifactStateV1 {
             envelope,
             finalizer_derivation,
             compiler_execution_subject,
-            outer_handoff: outer,
+            outer_handoff,
             inspection,
             #[cfg(target_os = "linux")]
             application_descriptors: None,
@@ -698,20 +682,34 @@ fn select_entrypoint(
     artifact: &RecoveredWorkerV3ArtifactStateV1,
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3AdmissionErrorV1> {
-    let (descriptor_index, physical_kernel_index) =
-        select_exact_kernel(&artifact.outer_handoff, &artifact.inspection, kernel_id)?;
-    let lineage = derive_host_lineage_identity(
+    select_entrypoint_from_evidence(
+        artifact.envelope.wire(),
         &artifact.outer_handoff,
-        artifact
-            .envelope
-            .wire()
-            .replay()
-            .publication_intent_record(),
         &artifact.inspection,
-        kernel_id,
         &artifact.compiler_execution_subject,
-        artifact.envelope.wire().compiler_execution_receipt(),
         &artifact.finalizer_derivation,
+        kernel_id,
+    )
+}
+
+fn select_entrypoint_from_evidence(
+    wire: &WorkerV3LoadEnvelopeWireV2,
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    inspection: &FinalizedDescriptorInspection,
+    compiler_execution_subject: &InertCompilerExecutionSubjectV1,
+    finalizer_derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    kernel_id: KernelId,
+) -> Result<RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3AdmissionErrorV1> {
+    let (descriptor_index, physical_kernel_index) =
+        select_exact_kernel(outer, inspection, kernel_id)?;
+    let lineage = derive_host_lineage_identity(
+        outer,
+        wire.replay().publication_intent_record(),
+        inspection,
+        kernel_id,
+        compiler_execution_subject,
+        wire.compiler_execution_receipt(),
+        finalizer_derivation,
     );
     Ok(RecoveredWorkerV3EntrypointV1 {
         ordinal: descriptor_index,
@@ -867,11 +865,11 @@ fn update_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
 }
 
 fn validate_finalizer_derivation_association(
-    envelope: &RecoveredWorkerV3LoadEnvelopeV2,
+    wire: &WorkerV3LoadEnvelopeWireV2,
     finalized: &[u8],
     derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
 ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-    let record = envelope.wire().replay().publication_intent_record();
+    let record = wire.replay().publication_intent_record();
     if !derivation.finalized_hsaco_identity().matches(finalized)
         || derivation.finalized_hsaco_identity().sha256() != &record.output_sha256()
         || derivation.finalized_hsaco_identity().byte_len()

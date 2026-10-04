@@ -1,5 +1,9 @@
 use super::super::{CompilerGeneratedKernelExpectationV1, WorkerV3VerificationRequestV1};
-use super::WorkerV3ConditionalFillPendingErrorV1;
+use super::{ConditionalFillArtifactView, WorkerV3ConditionalFillPendingErrorV1};
+use crate::{
+    CheckedWorkerV3CompilerClosureV1, WorkerV3HostLineageIdentityV1,
+    WorkerV3VerificationChallengeIdentityV1,
+};
 use fe2o3_hsaco_finalize::ContentIdentityV1;
 use fe2o3_kernel_analysis::check_gfx942_fill_analysis_v1;
 use fe2o3_verifier::{
@@ -10,12 +14,12 @@ use std::fmt;
 const DOMAIN: &[u8] = b"FE2O3/WORKER-V3-CONDITIONAL-FILL-SUBJECT/V1\0";
 const CANONICAL_BYTES: usize = DOMAIN.len() + 32 + 32 + 1 + 40 + 40 + 32;
 
-/// Identifies an exact successful host association and its original executed refinement.
+/// Identifies an exact checked compiler/proof association and its executed refinement.
 ///
 /// This is inert matching data, not retained proof custody, a fresh nonce,
 /// publication currentness, protected compiler-origin evidence or launch authority.
 /// Copying these bytes cannot transfer any of those properties. The pending
-/// artifact retains all original owners independently of this value.
+/// artifact or proof custodian must retain all original owners independently of this value.
 /// Equal canonical evidence may have the same subject; original object and process
 /// occurrences must be authenticated separately.
 ///
@@ -23,7 +27,7 @@ const CANONICAL_BYTES: usize = DOMAIN.len() + 32 + 32 + 1 + 40 + 40 + 32;
 /// request challenge (32), refinement boundary (u8), obligation identity and signed
 /// receipt identity (each SHA-256 then little-endian u64 length), and receipt key (32).
 /// The lineage/challenge commit the compiler, publication, finalizer and generated
-/// marker contract. The original obligation commits the compiler/analyzer inputs,
+/// host contract. The original obligation commits the compiler/analyzer inputs,
 /// generated proof source and recipes; no projected receipt schema is duplicated.
 ///
 /// ```
@@ -98,19 +102,31 @@ impl InertWorkerV3ConditionalFillSubjectV1 {
         {
             return Err(E::Marker("generated host contract"));
         }
+        Ok(Self::from_checked_roots(
+            request.lineage_identity(),
+            request.challenge_identity(),
+            refinement,
+        ))
+    }
+
+    fn from_checked_roots(
+        lineage: WorkerV3HostLineageIdentityV1,
+        challenge: WorkerV3VerificationChallengeIdentityV1,
+        refinement: &OwnedConditionalFillRefinementExecutionV1,
+    ) -> Self {
         let canonical = SubjectRoots {
-            lineage: *request.lineage_identity().as_bytes(),
-            challenge: *request.challenge_identity().as_bytes(),
+            lineage: *lineage.as_bytes(),
+            challenge: *challenge.as_bytes(),
             boundary: refinement.boundary() as u8,
             obligation: ContentIdentityV1::calculate(refinement.obligation_preimage()),
             receipt: ContentIdentityV1::calculate(refinement.signed_receipt_wire()),
             key: *refinement.receipt_verifying_key(),
         }
         .encode();
-        Ok(Self {
+        Self {
             identity: ContentIdentityV1::calculate(&canonical),
             canonical,
-        })
+        }
     }
 
     pub const fn canonical_bytes(&self) -> &[u8] {
@@ -124,6 +140,39 @@ impl InertWorkerV3ConditionalFillSubjectV1 {
     }
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+}
+
+impl CheckedWorkerV3CompilerClosureV1<'_> {
+    /// Independently joins a retained executed proof to the complete checked closure.
+    ///
+    /// Derives the closed fill's contract and deterministic matching challenge without a
+    /// generated marker or application-supplied contract digest. This neither acquires a
+    /// publication token nor consumes FD195. The result is inert: the caller must retain
+    /// the original proof and separately authenticate application occurrence, session,
+    /// compiler deployment and publication currentness before any invocation admission.
+    pub fn check_conditional_fill_refinement_v1(
+        &self,
+        refinement: &OwnedConditionalFillRefinementExecutionV1,
+    ) -> Result<InertWorkerV3ConditionalFillSubjectV1, WorkerV3ConditionalFillPendingErrorV1> {
+        use WorkerV3ConditionalFillPendingErrorV1 as E;
+        let program = check_conditional_fill_program_v1(refinement.inputs(), refinement.lineage())
+            .map_err(E::Program)?;
+        let machine = check_gfx942_fill_analysis_v1(
+            refinement.analysis_execution(),
+            program.function_symbol(),
+        )
+        .map_err(E::Machine)?;
+        let contract = ConditionalFillArtifactView::from_closure(self)
+            .check(&program, &machine)
+            .map_err(E::Association)?;
+        let challenge =
+            super::super::derive_challenge(self.lineage_identity(), self.descriptor(), contract);
+        Ok(InertWorkerV3ConditionalFillSubjectV1::from_checked_roots(
+            self.lineage_identity(),
+            challenge,
+            refinement,
+        ))
     }
 }
 

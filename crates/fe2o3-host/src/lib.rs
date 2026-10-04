@@ -282,10 +282,11 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v3_admission::{
-    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3EntrypointV1,
-    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
-    WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
-    admit_recovered_worker_v3_roster_v1,
+    CheckedWorkerV3CompilerClosureV1, RecoveredWorkerV3AdmissionErrorV1,
+    RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3PinnedDescriptorV1,
+    RecoveredWorkerV3PinnedRosterV1, WorkerV3HostLineageIdentityV1,
+    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
+    check_worker_v3_compiler_closure_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use tile_interop::{

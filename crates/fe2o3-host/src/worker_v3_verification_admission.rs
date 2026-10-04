@@ -137,6 +137,7 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     lineage: WorkerV3HostLineageEvidenceV1,
     finalizer_derivation: &'admission RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     finalizer_replay: &'admission WorkerV3LoadEnvelopeWireV1,
+    envelope_evidence: fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'admission>,
     compiler_execution_subject: &'admission InertCompilerExecutionSubjectV1,
     compiler_execution_receipt: &'admission CompilerExecutionReceiptCarriageV1,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
@@ -151,6 +152,14 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, K> {
+    /// Borrows the original V2 envelope while this request retains its current artifact bytes.
+    /// Copying these bytes does not transfer the admission's publication or occurrence custody.
+    pub const fn load_envelope_evidence_view(
+        &self,
+    ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        &self.envelope_evidence
+    }
+
     pub const fn challenge_identity(&self) -> WorkerV3VerificationChallengeIdentityV1 {
         self.challenge
     }
@@ -4226,12 +4235,17 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
     if generated_host_contract == [0; 32] {
         return Err(WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile);
     }
-    let challenge = derive_challenge::<K>(lineage.identity(), generated_host_contract);
+    let challenge = derive_challenge(
+        lineage.identity(),
+        admission.descriptor(),
+        generated_host_contract,
+    );
     Ok(WorkerV3VerificationRequestV1 {
         challenge,
         lineage,
         finalizer_derivation: admission.finalizer_derivation(),
         finalizer_replay: admission.finalizer_replay(),
+        envelope_evidence: admission.load_envelope_evidence_view(),
         compiler_execution_subject: admission.compiler_execution_subject(),
         compiler_execution_receipt: admission.compiler_execution_receipt(),
         handoff: admission.outer_handoff(),
@@ -4270,26 +4284,29 @@ fn generated_host_contract<K: CompilerGeneratedKernelExpectationV1>() -> [u8; 32
     K::PROFILE.generated_host_contract_identity()
 }
 
-fn derive_challenge<K: CompilerGeneratedKernelExpectationV1>(
+fn derive_challenge(
     lineage: WorkerV3HostLineageIdentityV1,
+    descriptor: &KernelDescriptorV1,
     generated_host_contract: [u8; 32],
 ) -> WorkerV3VerificationChallengeIdentityV1 {
+    let logical_name = descriptor.logical_name().as_str();
+    let export_name = descriptor.entry_name().as_str();
     let mut digest = Sha256::new();
     digest.update(WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1);
     digest.update(lineage.as_bytes());
-    digest.update(K::KERNEL_BINDING_ID_V1);
+    digest.update(descriptor.kernel_id().as_bytes());
     digest.update(
-        u64::try_from(K::LOGICAL_NAME.len())
+        u64::try_from(logical_name.len())
             .expect("generated marker name length fits u64")
             .to_le_bytes(),
     );
-    digest.update(K::LOGICAL_NAME.as_bytes());
+    digest.update(logical_name.as_bytes());
     digest.update(
-        u64::try_from(K::EXPORT_NAME.len())
+        u64::try_from(export_name.len())
             .expect("generated export name length fits u64")
             .to_le_bytes(),
     );
-    digest.update(K::EXPORT_NAME.as_bytes());
+    digest.update(export_name.as_bytes());
     digest.update(generated_host_contract);
     WorkerV3VerificationChallengeIdentityV1(digest.finalize().into())
 }
@@ -4560,10 +4577,26 @@ fn validate_request_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
     request: &WorkerV3VerificationRequestV1<'_, K>,
     lineage: &ValidatedCompilerTargetLineageV1,
 ) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
-    let capsule = request.handoff.capsule();
+    validate_artifact_target_lineage(
+        request.handoff,
+        request.finalizer_derivation,
+        request.descriptor(),
+        request.code_object_version(),
+        lineage,
+    )
+}
+
+fn validate_artifact_target_lineage(
+    handoff: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    finalizer: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    descriptor: &KernelDescriptorV1,
+    code_object_version: CodeObjectVersion,
+    lineage: &ValidatedCompilerTargetLineageV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    let capsule = handoff.capsule();
     let receipts = capsule.receipts();
-    let module = request.handoff.module_handoff().module_identity();
-    let finalizer_module = request.finalizer_derivation.compiler_module_identity();
+    let module = handoff.module_handoff().module_identity();
+    let finalizer_module = finalizer.compiler_module_identity();
     let final_llvm = lineage.final_llvm_identity();
     let target_binding = lineage.target_binding_receipt_identity();
     let data_layout = lineage.data_layout_receipt_identity();
@@ -4574,7 +4607,7 @@ fn validate_request_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
             "target-binding transcript inputs",
         )
     })?;
-    let descriptor_workgroup = match request.descriptor().launch().block_size() {
+    let descriptor_workgroup = match descriptor.launch().block_size() {
         BlockSizeV1::Exact(dimensions) => [dimensions.x(), dimensions.y(), dimensions.z()],
         BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
             return Err(WorkerV3VerificationDecisionErrorV1::TargetLineageMismatch(
@@ -4644,7 +4677,7 @@ fn validate_request_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
             "final compiler-module commitment",
         ),
         (
-            target_inputs.code_object_version == u16::from(request.code_object_version().number()),
+            target_inputs.code_object_version == u16::from(code_object_version.number()),
             "code-object version",
         ),
         (

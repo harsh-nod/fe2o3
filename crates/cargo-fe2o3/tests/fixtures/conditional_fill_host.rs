@@ -159,6 +159,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3AuditorV1<K> for FillAudit
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<Self::Evidence, Self::Error> {
         self.calls += 1;
+        let _closure = super::compiler_closure::check_request(request);
         assert!(request.validate_compiler_proof_inputs_v4().is_err());
         let receipts = request.semantic_compiler_handoff().capsule().receipts();
         let inputs = validate_conditional_compiler_proof_inputs_v1(

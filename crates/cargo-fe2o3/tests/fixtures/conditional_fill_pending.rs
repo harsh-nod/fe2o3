@@ -44,12 +44,14 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
         OwnedConditionalFillRefinementExecutionV1,
         CompilerExecutionReceiptCarriageV1,
         WorkerV3VerificationChallengeIdentityV1,
+        Option<fe2o3_host::InertWorkerV3ConditionalFillSubjectV1>,
     );
 
     fn audit(
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, GeneratedFillMarker>,
     ) -> Result<Self::Evidence, Self::Error> {
+        let closure = super::compiler_closure::check_request(request);
         let receipts = request.semantic_compiler_handoff().capsule().receipts();
         let inputs = validate_conditional_compiler_proof_inputs_v1(
             receipts.proof_binding(),
@@ -79,6 +81,16 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
                 .find(|byte| **byte != 0)
                 .unwrap();
             *byte ^= 1;
+            assert!(
+                fe2o3_host::check_worker_v3_compiler_closure_v1(
+                    request
+                        .load_envelope_evidence_view()
+                        .exact_canonical_bytes(),
+                    &payload,
+                    request.descriptor().kernel_id(),
+                )
+                .is_err()
+            );
         }
         let analysis = self
             .worker
@@ -102,10 +114,23 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
             180,
         )
         .unwrap();
+        let independent_subject = closure.check_conditional_fill_refinement_v1(&refinement);
+        let independent_subject = if self.change_payload {
+            assert!(matches!(
+                independent_subject,
+                Err(WorkerV3ConditionalFillPendingErrorV1::Association(
+                    WorkerV3ConditionalFillAssociationErrorV1::Machine("finalized payload")
+                ))
+            ));
+            None
+        } else {
+            Some(independent_subject.unwrap())
+        };
         Ok((
             refinement,
             request.compiler_execution_receipt_carriage().clone(),
             request.challenge_identity(),
+            independent_subject,
         ))
     }
 }
@@ -168,11 +193,12 @@ fn run_case(case: Case) {
         .unwrap(),
         change_payload: matches!(case, Case::Payload),
     };
-    let (refinement, carriage, host_challenge) = audit_recovered_worker_v3_verification_v1::<
-        GeneratedFillMarker,
-        _,
-    >(&admission, &mut proof_auditor)
-    .unwrap();
+    let (refinement, carriage, host_challenge, independent_subject) =
+        audit_recovered_worker_v3_verification_v1::<GeneratedFillMarker, _>(
+            &admission,
+            &mut proof_auditor,
+        )
+        .unwrap();
     drop(proof_auditor);
     let source_pointer = refinement.generated_source().as_ptr();
     let analysis_pointer = refinement
@@ -192,6 +218,12 @@ fn run_case(case: Case) {
         expected_subject.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     }
     expected_subject.extend_from_slice(refinement.receipt_verifying_key());
+    if let Some(subject) = &independent_subject {
+        assert_eq!(subject.canonical_bytes(), expected_subject);
+        assert!(!subject.grants_load_authority());
+        assert!(!subject.grants_launch_authority());
+        capture(case, "independent-subject.bin", subject.canonical_bytes());
+    }
     capture(case, "proof.rs", refinement.generated_source());
     capture(case, "obligation.bin", refinement.obligation_preimage());
     capture(case, "proof.receipt", refinement.signed_receipt_wire());
@@ -307,6 +339,7 @@ fn run_case(case: Case) {
             ));
         } else {
             let pending = result.unwrap();
+            assert_eq!(Some(pending.subject()), independent_subject.as_ref());
             assert_eq!(pending.subject().canonical_bytes(), expected_subject);
             assert_eq!(
                 pending.subject().identity(),

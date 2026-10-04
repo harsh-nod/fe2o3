@@ -73,6 +73,9 @@ mod conditional_fill_host;
 #[path = "fixtures/conditional_fill_pending.rs"]
 mod conditional_fill_pending;
 
+#[path = "fixtures/compiler_closure.rs"]
+mod compiler_closure;
+
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
 const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
@@ -358,6 +361,7 @@ where
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<Self::Evidence, Self::Error> {
+        let _closure = compiler_closure::check_request(request);
         let finalized_sha256: [u8; 32] = Sha256::digest(request.finalized_hsaco_bytes()).into();
         assert_eq!(finalized_sha256, request.finalized_hsaco_sha256());
         assert_eq!(
