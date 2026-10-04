@@ -6,6 +6,19 @@ fn compiler_reference_currentness_fixture_v55(
     storage_limit: usize,
 ) -> (Result<(), ProductionSemanticKirErrorV1>, usize, usize) {
     let schema = fe2o3_kernel_ir::StorageLayoutIdV1(0);
+    let holder = fe2o3_kernel_ir::StorageLayoutIdV1(1);
+    let storage = CompilerEnumPointerStorageV57 {
+        schema: holder,
+        pointer: fe2o3_kernel_ir::StoragePointerV1 {
+            pointee: schema,
+            value_space: AddressSpace::Private,
+            encoded_space: AddressSpace::Generic,
+            access: AccessMode::ReadOnly,
+            stored_bits: 64,
+        },
+        size: 8,
+        alignment: 8,
+    };
     let instance = ProductionCallInstanceIdV1(0);
     let source_ty = SemanticTypeIdV1::from_index(0);
     let local = SemanticLocalIdV1::from_index(0);
@@ -36,7 +49,7 @@ fn compiler_reference_currentness_fixture_v55(
     let mut block = BasicBlock::new(block_id);
     block.operations = vec![
         alloca(referent, element, 4),
-        alloca(cell, pointer.clone(), 8),
+        alloca(cell, Type::StorageObject(holder), 8),
         Operation::effect_free(
             ValueDef::new(alias, pointer.clone()),
             OperationKind::Cast {
@@ -47,18 +60,18 @@ fn compiler_reference_currentness_fixture_v55(
         ),
         Operation::new(
             vec![],
-            OperationKind::Store {
-                pointer: cell,
+            OperationKind::Storage(ScopedObjectOperationV29::WriteValue {
+                address: cell,
                 value: alias,
                 access: MemoryAccess::new(AddressSpace::Private, 8),
-            },
+            }),
         ),
     ];
     block.terminator = Some(Terminator::Return { values: vec![] });
     if fault == 6 {
         block.operations.push(block.operations[3].clone());
     }
-    let function = Function::internal_helper(
+    let mut function = Function::internal_helper(
         "compiler-reference-currentness",
         Signature::new(vec![], vec![]),
         vec![],
@@ -110,7 +123,7 @@ fn compiler_reference_currentness_fixture_v55(
         slot: usize::from(fault == 4),
         backing: SourceCompilerEnumReferenceBackingV55::Object(schema),
     };
-    let pending = PendingCompilerEnumMemoryV55 {
+    let mut pending = PendingCompilerEnumMemoryV55 {
         allocations: vec![SourceEnumSpillRowV48 {
             instance: 0,
             origin: ExecutionEnumSpillV48 {
@@ -123,6 +136,7 @@ fn compiler_reference_currentness_fixture_v55(
                 emitted_block: block_id,
                 emitted_operation: 1,
                 pointer: cell,
+                storage: Some(storage),
                 element: pointer,
                 alignment: 8,
             },
@@ -159,11 +173,62 @@ fn compiler_reference_currentness_fixture_v55(
             },
         }],
     };
-    let layouts = [fe2o3_kernel_ir::StorageLayoutV1 {
-        size: 4,
-        alignment: 4,
-        kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
-    }];
+    let mut layouts = vec![
+        fe2o3_kernel_ir::StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+        },
+        fe2o3_kernel_ir::StorageLayoutV1 {
+            size: storage.size,
+            alignment: storage.alignment,
+            kind: fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(storage.pointer),
+        },
+    ];
+    if (8..=12).contains(&fault) {
+        let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = &mut layouts[1].kind else {
+            unreachable!()
+        };
+        match fault {
+            8 => pointer.pointee = holder,
+            9 => pointer.access = AccessMode::ReadWrite,
+            10 => pointer.value_space = AddressSpace::Global,
+            11 => pointer.encoded_space = AddressSpace::Private,
+            12 => pointer.stored_bits = 32,
+            _ => unreachable!(),
+        }
+    }
+    let block = &mut function.body.as_mut().unwrap().blocks[0];
+    match fault {
+        13 => layouts[1].alignment = 16,
+        14 => {
+            layouts.push(layouts[1].clone());
+            block.operations[1] = alloca(
+                cell,
+                Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(2)),
+                8,
+            );
+        }
+        15 => {
+            let OperationKind::Storage(ScopedObjectOperationV29::WriteValue { address, .. }) =
+                &mut block.operations[3].kind
+            else {
+                unreachable!()
+            };
+            *address = referent;
+        }
+        16 => {
+            block.operations[3].kind = OperationKind::Store {
+                pointer: cell,
+                value: alias,
+                access: MemoryAccess::new(AddressSpace::Private, 8),
+            }
+        }
+        17 => pending.allocations[0].origin.storage = None,
+        18 => layouts.truncate(1),
+        19 => block.terminator = Some(Terminator::Return { values: vec![cell] }),
+        _ => {}
+    }
     let mut lifetimes = Vec::new();
     if (1..=3).contains(&fault) || fault == 7 {
         lifetimes.push(SourceAddressLifetimeV29 {
@@ -187,7 +252,7 @@ fn compiler_reference_currentness_fixture_v55(
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     budget.reserve_storage(37).unwrap();
     let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
-        let checked = check_compiler_enum_closed_memory_v55(&function, &pending, budget)?;
+        let checked = check_compiler_enum_closed_memory_v55(&function, &layouts, &pending, budget)?;
         let graph = SourceAddressMemoryV29::prepare_with_compiler(
             &function,
             &[slot],
@@ -213,6 +278,27 @@ fn compiler_reference_currentness_fixture_v55(
     });
     assert_eq!(budget.storage(), 37);
     (result, budget.work(), budget.peak_storage())
+}
+
+#[test]
+fn compiler_typed_reference_spill_rejects_layout_substitution_and_source_aliases() {
+    for fault in 8..20 {
+        let result = compiler_reference_currentness_fixture_v55(fault, usize::MAX, usize::MAX).0;
+        assert!(
+            matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported { .. })
+            ),
+            "typed spill fault {fault}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn compiler_typed_reference_spill_allows_a_current_value_before_referent_end() {
+    compiler_reference_currentness_fixture_v55(7, usize::MAX, usize::MAX)
+        .0
+        .unwrap();
 }
 
 #[test]

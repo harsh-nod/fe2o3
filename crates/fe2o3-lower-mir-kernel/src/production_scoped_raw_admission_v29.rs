@@ -1241,8 +1241,13 @@ fn check_immutable_source_memory_v29(
             "compiler memory function",
         ))?
         .function;
-    let checked_compiler = check_compiler_enum_closed_memory_v55(function, &compiler_enum, budget)
-        .map_err(immutable_memory_error_v29)?;
+    let checked_compiler = check_compiler_enum_closed_memory_v55(
+        function,
+        &correspondence.inventory.owner().module().storage_layouts,
+        &compiler_enum,
+        budget,
+    )
+    .map_err(immutable_memory_error_v29)?;
     let prepared = SourceAddressMemoryV29::prepare_inventory_with_compiler(
         correspondence.inventory,
         fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
@@ -2147,8 +2152,26 @@ fn check_expanded_source_memory_inner_v29(
     let source_index = SourceAddressSourceIndexV29::new(instances, pending, budget)?;
     let compiler_enum =
         pending_compiler_enum_memory_v55(instances, references, slots, &source_index, budget)?;
-    let checked_compiler =
-        check_compiler_enum_closed_memory_v55(&pending.function, &compiler_enum, budget)?;
+    let layout_rows = if compiler_enum.has_typed_allocations_v57(budget)? {
+        Some(
+            references
+                .plan
+                .storage_root
+                .as_ref()
+                .ok_or_else(source_raw_physical_error_v29)?
+                .source_layouts(instances, budget)?
+                .rows(instances.owner(), budget)?,
+        )
+    } else {
+        None
+    };
+    let checked_compiler = check_compiler_enum_closed_memory_v55(
+        &pending.function,
+        layout_rows.as_ref().map_or(&[][..], |rows| rows.as_slice()),
+        &compiler_enum,
+        budget,
+    )?;
+    drop(layout_rows);
     // Validate every object payload even when no physical value access is
     // retained. Diagnostic reads are joined to their own history stream below.
     for sidecar in &pending.sidecars.rows {

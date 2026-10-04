@@ -149,6 +149,17 @@ trait SemanticEmissionBudgetV1 {
             .inspect_err(|error| source_reference_record_failure_v29(plan, error))
     }
 
+    fn source_enum_spill_storage_v57(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        payload: &Type,
+    ) -> Result<Option<CompilerEnumPointerStorageV57>, ProductionSemanticKirErrorV1> {
+        let _ = (ty, payload);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
     fn source_object_reference_value_v44<'binding>(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,
@@ -219,6 +230,16 @@ trait SemanticEmissionBudgetV1 {
 }
 
 impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn source_enum_spill_storage_v57(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        ty: SemanticTypeIdV1,
+        payload: &Type,
+    ) -> Result<Option<CompilerEnumPointerStorageV57>, ProductionSemanticKirErrorV1> {
+        source_enum_spill_storage_v57(plan, ty, payload, self)
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
     fn source_object_reference_value_v44<'binding>(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,

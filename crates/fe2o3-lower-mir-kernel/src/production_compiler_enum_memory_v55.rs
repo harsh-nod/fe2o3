@@ -84,6 +84,17 @@ include!("production_compiler_enum_memory_v55_tests.rs");
 include!("production_compiler_enum_reference_memory_v55_tests.rs");
 
 impl PendingCompilerEnumMemoryV55 {
+    fn has_typed_allocations_v57(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        budget.charge_work(self.allocations.len())?;
+        Ok(self
+            .allocations
+            .iter()
+            .any(|row| row.origin.storage.is_some()))
+    }
+
     fn retained_storage(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -321,6 +332,7 @@ fn pending_compiler_enum_memory_v55(
 
 fn check_compiler_enum_closed_memory_v55<'a>(
     function: &'a Function,
+    layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
     pending: &'a PendingCompilerEnumMemoryV55,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<CheckedCompilerEnumMemoryV55<'a>, ProductionSemanticKirErrorV1> {
@@ -364,6 +376,7 @@ fn check_compiler_enum_closed_memory_v55<'a>(
                         return Err(scoped_compiler_enum_error_v55());
                     }
                     compiler_enum_element_owned_storage_v55(&row.origin.element)?;
+                    check_enum_spill_layout_v57(&row.origin, layouts, budget)?;
                     check_enum_spill_alloca_v55(&row.origin, operation, budget)?;
                     allocations = argument_sum_v1(&[allocations, 1])?;
                 }
@@ -409,9 +422,7 @@ fn check_compiler_enum_closed_memory_v55<'a>(
                             access.record.field,
                             access.record.component as usize,
                         )
-                    || !operation.results.is_empty()
-                    || !matches!(operation.kind, OperationKind::Store { pointer, value: actual, access: actual_access }
-                        if pointer == access.record.pointer && actual == value && actual_access == MemoryAccess::new(AddressSpace::Private, row.origin.alignment))
+                    || !enum_spill_store_matches_v57(&row.origin, operation, value)
                 {
                     return Err(scoped_compiler_enum_error_v55());
                 }

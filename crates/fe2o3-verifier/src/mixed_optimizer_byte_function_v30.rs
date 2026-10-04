@@ -160,6 +160,21 @@ pub(super) fn value_type(ty: &Type) -> Result<()> {
     }
 }
 
+pub(super) fn emit_pointer_value_type(
+    address_space: fe2o3_kernel_ir::AddressSpace,
+    width: FormalIndexWidth,
+    value: &str,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    emit!(
+        out,
+        "match {value} {{ MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p, {}, {}), _ => false }}",
+        pointer_space(address_space)?,
+        scalar_bytes(ScalarType::Index, width)?
+    );
+    Ok(())
+}
+
 pub(super) fn emit_value_type(
     ty: &Type,
     width: FormalIndexWidth,
@@ -190,12 +205,9 @@ pub(super) fn emit_value_type(
             vector.lanes,
             scalar_bytes(vector.element, width)?
         ),
-        Type::Pointer(pointer) => emit!(
-            out,
-            "match {value} {{ MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p, {}, {}), _ => false }}",
-            pointer_space(pointer.address_space)?,
-            scalar_bytes(ScalarType::Index, width)?
-        ),
+        Type::Pointer(pointer) => {
+            emit_pointer_value_type(pointer.address_space, width, value, out)?
+        }
         Type::Slice(slice) => emit!(
             out,
             "match {value} {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}) && byte_pointer_type_v30(slice.pointer, {}, {}), _ => false }}",

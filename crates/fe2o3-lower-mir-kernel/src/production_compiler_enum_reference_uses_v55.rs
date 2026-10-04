@@ -23,7 +23,8 @@ impl SourceAddressMemoryV29<'_> {
         };
         let row = self.compiler_references[index];
         budget.charge_work(4)?;
-        if !matches!(operation.kind, OperationKind::Store { value, .. } if value == row.value)
+        if !matches!(operation.kind, OperationKind::Store { value, .. }
+            | OperationKind::Storage(ScopedObjectOperationV29::WriteValue { value, .. }) if value == row.value)
             || self.exact(row.value, budget)? != Some(row.custody.slot)
             || row.custody.loan.carrier != ProductionSourceReferenceCarrierV38::MemoryPointer
         {

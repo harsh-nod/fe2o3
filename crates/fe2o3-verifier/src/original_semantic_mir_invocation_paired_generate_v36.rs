@@ -1,7 +1,7 @@
 //! Mandatory byte/value/control obligations over actual block execution.
 //! No proof assumption is constructed from a locator or a successful census.
 
-use super::super::super::super::byte_function_v30::emit_value_type;
+use super::super::super::super::byte_function_v30::{emit_pointer_value_type, emit_value_type};
 use super::*;
 use std::fmt::Write as _;
 
@@ -243,8 +243,13 @@ fn enum_payload_binding(
                     else {
                         return Err(mismatch());
                     };
-                    let pointer_payload =
-                        matches!(pointer.pointee.as_ref(), fe2o3_kernel_ir::Type::Pointer(_));
+                    let storage = enum_bindings::spill_pointer_v57(
+                        &pointer.pointee,
+                        &inventory.owner().module().storage_layouts,
+                        out,
+                    )?;
+                    let pointer_payload = storage.is_some()
+                        || matches!(pointer.pointee.as_ref(), fe2o3_kernel_ir::Type::Pointer(_));
                     let operation = spill.operation;
                     emit!(
                         out,
@@ -255,7 +260,11 @@ fn enum_payload_binding(
                         operation.block.block,
                         operation.operation
                     );
-                    emit_value_type(&pointer.pointee, model.width, "actual", out)?;
+                    if let Some(storage) = storage {
+                        emit_pointer_value_type(storage.value_space, model.width, "actual", out)?;
+                    } else {
+                        emit_value_type(&pointer.pointee, model.width, "actual", out)?;
+                    }
                     emit!(
                         out,
                         " && invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory) }}, None => false }}"

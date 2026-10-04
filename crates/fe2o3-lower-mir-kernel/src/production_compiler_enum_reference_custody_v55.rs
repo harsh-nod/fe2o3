@@ -82,10 +82,12 @@ fn retain_compiler_enum_reference_v55(
         }
         let (slot, backing) = match cell.kind {
             SourceBackingKindV29::Scalar => {
-                if !matches!(
-                    pointer.address_space,
-                    AddressSpace::Private | AddressSpace::Generic
-                ) || !matches!(*pointer.pointee, Type::Scalar(_))
+                if checked.spill.storage.is_some()
+                    || !matches!(
+                        pointer.address_space,
+                        AddressSpace::Private | AddressSpace::Generic
+                    )
+                    || !matches!(*pointer.pointee, Type::Scalar(_))
                 {
                     return Err(source_enum_tag_error_v55());
                 }
@@ -113,6 +115,11 @@ fn retain_compiler_enum_reference_v55(
                 (slot, SourceCompilerEnumReferenceBackingV55::Scalar)
             }
             SourceBackingKindV29::Object(schema) => {
+                let storage = checked
+                    .spill
+                    .storage
+                    .ok_or_else(source_enum_tag_error_v55)?;
+                source_object_reference_value_v44(plan, original, storage.schema, budget)?;
                 if pointer.address_space != AddressSpace::Private
                     || pointer.pointee.as_ref() != &Type::StorageObject(schema)
                 {
@@ -136,6 +143,7 @@ fn retain_compiler_enum_reference_v55(
                     .source_layouts(plan.instances, budget)?;
                 layouts.check_selected_schema(owner, cell.ty, schema, budget)?;
                 let layouts = layouts.rows(owner, budget)?;
+                check_enum_spill_layout_v57(checked.spill, &layouts, budget)?;
                 let layout = layouts
                     .get(schema.0 as usize)
                     .ok_or_else(source_enum_tag_error_v55)?;
