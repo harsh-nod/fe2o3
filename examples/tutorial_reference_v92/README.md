@@ -7,6 +7,12 @@ bytes and returns independent CPU results bound to their SHA-256. The three
 registered negative aggregate inputs intentionally have no positive adapter.
 
 Most adapters call the existing examples' independent CPU reference functions.
+The host executable imports those reference source files directly, without
+depending on the examples' device modules or changing the typed-kernel macro
+policy. Shared dimension constants and reference equations remain single-source.
+The imported references' own unit tests run alongside the corpus tests. The only
+device API dependency supplies the existing scalar `Bf16` representation; this
+executable contains no attributed kernel or device execution route.
 Component adapters express the corresponding host equations and never interpret
 the original or optimized Kernel IR. Every writable buffer is returned in full,
 including untouched padding. Corpus profiles fix launch and buffer extents;

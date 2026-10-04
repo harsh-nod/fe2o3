@@ -133,7 +133,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
         "fill" => {
             let mut v = r.f32s(0)?;
             for (i, value) in v.iter_mut().take(r.grid[0] as usize).enumerate() {
-                fe2o3_fill::fill_reference(i, value);
+                crate::host_cpu::fill::fill_reference(i, value);
             }
             Ok(vec![Output::f32s(0, &v, 0.0)])
         }
@@ -147,7 +147,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
             0.0,
         )]),
         "scalar_gemm_v1" => {
-            use fe2o3_scalar_gemm_v1::harness::{Shape, scalar_gemm_oracle};
+            use crate::host_cpu::scalar_gemm::{Shape, scalar_gemm_oracle};
             let shape = Shape::checked(
                 r.scalar(3, "u32")?,
                 r.scalar(4, "u32")?,
@@ -170,7 +170,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
             )])
         }
         "moe_top2_route_f32_t8_e4_k2_c4_v1" => {
-            use fe2o3_moe_top2_v1::oracle::{RoutingOutputsV1, moe_top2_oracle_v1};
+            use crate::host_cpu::moe_top2::oracle::{RoutingOutputsV1, moe_top2_oracle_v1};
             let mut v = RoutingOutputsV1::filled(0);
             moe_top2_oracle_v1(&r.f32s(0)?, &mut v).map_err(|e| format!("{e:?}"))?;
             Ok(vec![
@@ -185,7 +185,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
         }
         "wave64_collectives_v1" => {
             let (mut reduce, mut inclusive, mut exclusive) = ([0.0; 64], [0.0; 64], [0.0; 64]);
-            fe2o3_wave64_collectives_v1::oracle::wave64_collectives_oracle_v1(
+            crate::host_cpu::wave64::oracle::wave64_collectives_oracle_v1(
                 &r.f32s(0)?,
                 r.scalar64(1, "u64")?,
                 &mut reduce,
@@ -200,7 +200,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
             ])
         }
         "lds_publish_read_reduce_i32_v1" => {
-            use fe2o3_workgroup_sync_v1::contract::{
+            use crate::host_cpu::workgroup::contract::{
                 canonical_reduction_trace_v1, lds_reduction_oracle_v1,
             };
             let mut out = [0];
@@ -209,7 +209,7 @@ pub fn evaluate(r: &Request) -> Result<Vec<Output>, String> {
             Ok(vec![Output::i32s(1, &out)])
         }
         "row_affine_sum_u32_v1" => {
-            use fe2o3_workgroup_sync_v1::row_affine_oracle::{
+            use crate::host_cpu::workgroup::row_affine_oracle::{
                 RowAffineConfigV1, row_affine_oracle_v1,
             };
             let bounded = |i| {

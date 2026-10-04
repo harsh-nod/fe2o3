@@ -1,6 +1,6 @@
+use crate::host_cpu::attention::reference as cpu;
 use crate::protocol::{Output, Request, buffer, floats, scalar};
 use crate::references::{READ, WRITE, input, output};
-use fe2o3_gfx950_advanced_attention::reference as cpu;
 
 pub const KERNELS: [&str; 8] = [
     "gfx950_kda_decode",

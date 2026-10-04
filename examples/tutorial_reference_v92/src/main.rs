@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod host_cpu;
 mod protocol;
 mod reference_attention;
 mod reference_basic;
