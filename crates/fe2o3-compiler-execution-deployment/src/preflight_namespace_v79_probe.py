@@ -151,13 +151,14 @@ def invoke(tool, root, work, name, parent_death=False):
         try:
             if parent_death:
                 deadline = time.monotonic() + 10
-                while b'ready\n' not in output.read_bytes():
+                while b'descendant-ready\n' not in output.read_bytes():
                     assert child.poll() is None, error.read_bytes()
                     assert output.stat().st_size <= MAX_OUTPUT
                     assert time.monotonic() < deadline, 'PID1 readiness deadline'
                     time.sleep(0.01)
                 pid1 = children(child.pid)
-                assert len(pid1) == 1
+                assert len(pid1) == 1, (child.pid, child.poll(), pid1,
+                                       output.read_text(), error.read_text())
                 descendants = children(pid1[0])
                 assert len(descendants) == 1
                 pids = [child.pid, pid1[0], descendants[0]]
@@ -294,7 +295,7 @@ def main():
     try:
         for name, tail, expected in [('success', b'echo success\n', 0),
                                      ('failure', b'exit 7\n', 1),
-                                     ('parent-death', b'/bin/busybox sleep 60 &\necho ready\nwait\n', -9)]:
+                                     ('parent-death', b'/bin/busybox sh -c \'echo descendant-ready; exec /bin/busybox sleep 60\' <&0 &\nchild=$!\nwait "$child"\n', -9)]:
             with fixture(work, busybox, name, tail) as root:
                 before = root.stat()
                 status, stdout, stderr = invoke(tool, root, work, name, name == 'parent-death')
