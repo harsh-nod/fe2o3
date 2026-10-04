@@ -38,6 +38,13 @@ requests that select an authority profile still fail before Cargo unless a
 debug-only non-production validation escape is explicitly enabled. The
 production release command rejects that escape.
 
+For `run`, put device kernels in the package library. The device phase builds
+`--lib` for AMDGPU; the host phase preserves the selected `--bin NAME` (or default
+binary) and every application argument after `--`. Unsupported example/test/bench
+target selectors and ambiguous binary selections fail explicitly. `build` target
+selection is unchanged. This phase split alone does not qualify an admitted
+application; see the [current multi-GPU gates](../../docs/runtime-multi-gpu-critical-path.md).
+
 The outer release process requires descriptors 0, 1, and 2 to be the only
 inherited descriptors; exactly one additional descriptor may be the live
 `/proc/<pid>/fd` enumeration directory opened by that check. It pins its

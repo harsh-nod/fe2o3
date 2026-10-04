@@ -50,7 +50,11 @@ impl ProductionCargoPlan {
         }
         let cargo_args_end = separator.unwrap_or(args.len());
 
-        let mut device_args = args[..cargo_args_end].to_vec();
+        let mut device_args = if command == "run" {
+            device_library_args(&args[..cargo_args_end])?
+        } else {
+            args[..cargo_args_end].to_vec()
+        };
         device_args.push(OsString::from(PRODUCTION_DEVICE_BUILD_STD_V1));
         append_target(
             &mut device_args,
@@ -85,6 +89,57 @@ impl ProductionCargoPlan {
     pub(crate) fn host_mut(&mut self) -> &mut CargoPhase {
         &mut self.host
     }
+}
+
+fn device_library_args(args: &[OsString]) -> Result<Vec<OsString>, String> {
+    let mut device = Vec::with_capacity(args.len() + 1);
+    let mut selected_bin = false;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        let bytes = crate::os_bytes(argument);
+        if bytes == b"--bin" || bytes.starts_with(b"--bin=") {
+            if selected_bin {
+                return Err("cargo fe2o3 run accepts only one host --bin selection".to_owned());
+            }
+            selected_bin = true;
+            let name = if bytes == b"--bin" {
+                index += 1;
+                crate::os_bytes(args.get(index).ok_or("--bin requires a host binary name")?)
+            } else {
+                &bytes[b"--bin=".len()..]
+            };
+            if name.is_empty() || name.starts_with(b"-") {
+                return Err("--bin requires a nonempty host binary name".to_owned());
+            }
+        } else {
+            for selector in [
+                "--lib",
+                "--bins",
+                "--example",
+                "--examples",
+                "--test",
+                "--tests",
+                "--bench",
+                "--benches",
+                "--all-targets",
+            ] {
+                if bytes == selector.as_bytes()
+                    || bytes
+                        .strip_prefix(selector.as_bytes())
+                        .is_some_and(|tail| tail.starts_with(b"="))
+                {
+                    return Err(format!(
+                        "cargo fe2o3 run compiles the package library for the device and selects a host binary; {selector} is not supported"
+                    ));
+                }
+            }
+            device.push(argument.clone());
+        }
+        index += 1;
+    }
+    device.push(OsString::from("--lib"));
+    Ok(device)
 }
 
 fn reject_caller_build_std(args: &[OsString]) -> Result<(), String> {
@@ -221,8 +276,7 @@ mod tests {
         assert_eq!(
             plan.device().args(),
             strings(&[
-                "--bin",
-                "app",
+                "--lib",
                 "-Zbuild-std=core",
                 "--target",
                 "amdgcn-amd-amdhsa",
@@ -245,6 +299,83 @@ mod tests {
                 "--target=application-data",
             ])
         );
+    }
+
+    #[test]
+    fn run_selects_device_library_without_changing_host_binary_arguments() {
+        for selection in [vec![], strings(&["--bin", "app"]), strings(&["--bin=app"])] {
+            let mut args = strings(&["--package", "kernels", "--features", "fill", "--release"]);
+            args.extend(selection);
+            args.extend(strings(&[
+                "--",
+                "--bin",
+                "application-data",
+                "--example=test",
+            ]));
+            let plan =
+                ProductionCargoPlan::new("run", &args, "x86_64-unknown-linux-gnu", false).unwrap();
+            assert_eq!(
+                plan.device().args(),
+                strings(&[
+                    "--package",
+                    "kernels",
+                    "--features",
+                    "fill",
+                    "--release",
+                    "--lib",
+                    "-Zbuild-std=core",
+                    "--target",
+                    "amdgcn-amd-amdhsa"
+                ])
+            );
+            let mut expected_host = args.clone();
+            let separator = expected_host.iter().position(|arg| arg == "--").unwrap();
+            expected_host.splice(
+                separator..separator,
+                strings(&["--target", "x86_64-unknown-linux-gnu"]),
+            );
+            assert_eq!(plan.host().args(), expected_host);
+        }
+        let plan = ProductionCargoPlan::new(
+            "build",
+            &strings(&["--lib"]),
+            "x86_64-unknown-linux-gnu",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.device().args(),
+            strings(&["--lib", "-Zbuild-std=core", "--target", "amdgcn-amd-amdhsa"])
+        );
+    }
+
+    #[test]
+    fn run_rejects_malformed_or_conflicting_host_target_selections() {
+        for args in [
+            vec!["--bin"],
+            vec!["--bin="],
+            vec!["--bin", ""],
+            vec!["--bin", "--release"],
+            vec!["--bin", "a", "--bin=b"],
+            vec!["--lib"],
+            vec!["--bins"],
+            vec!["--example", "app"],
+            vec!["--example=app"],
+            vec!["--examples"],
+            vec!["--test", "app"],
+            vec!["--test=app"],
+            vec!["--tests"],
+            vec!["--bench", "app"],
+            vec!["--bench=app"],
+            vec!["--benches"],
+            vec!["--all-targets"],
+        ] {
+            assert!(
+                ProductionCargoPlan::new("run", &strings(&args), "x86_64-unknown-linux-gnu", false)
+                    .is_err(),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

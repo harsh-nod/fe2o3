@@ -473,8 +473,8 @@ impl AuthorizedKernelClosureV1 {
             .as_command_mut()
             .args(["metadata", "--format-version", "1"])
             .args(project.authority_metadata_args(args)?)
-            .args(["--frozen", "--offline"])
             .current_dir(project.invocation_dir().child_path());
+        crate::project::require_locked_query_flags(command.as_command_mut());
         crate::configure_authority_cargo_child(command.as_command_mut(), rustc)?;
         let output = command
             .output()

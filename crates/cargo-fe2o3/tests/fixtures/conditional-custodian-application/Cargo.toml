@@ -1,0 +1,22 @@
+[package]
+name = "fe2o3-conditional-custodian-application"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[profile.dev]
+debug = 0
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+debug = 0
+panic = "abort"

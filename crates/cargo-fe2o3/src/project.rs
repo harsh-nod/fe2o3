@@ -258,7 +258,7 @@ impl CargoProject {
         ]);
         command.as_command_mut().args(&routing.config_args);
         if let Some(rustc) = authority_rustc {
-            command.as_command_mut().args(["--frozen", "--offline"]);
+            require_locked_query_flags(command.as_command_mut());
             crate::configure_authority_cargo_child(command.as_command_mut(), rustc)?;
         }
         command.as_command_mut().arg(key);
@@ -355,6 +355,14 @@ fn append_snapshot_field(snapshot: &mut Vec<u8>, value: &[u8]) {
     snapshot.extend_from_slice(value);
 }
 
+pub(crate) fn require_locked_query_flags(command: &mut Command) {
+    for required in ["--frozen", "--offline"] {
+        if !command.get_args().any(|argument| argument == required) {
+            command.arg(required);
+        }
+    }
+}
+
 fn metadata_output(
     invocation_dir: &PinnedDirectory,
     routing_args: &[OsString],
@@ -372,7 +380,7 @@ fn metadata_output(
             .args(routing_args)
             .current_dir(invocation_dir.child_path());
         if authority {
-            command.as_command_mut().args(["--frozen", "--offline"]);
+            require_locked_query_flags(command.as_command_mut());
             crate::configure_authority_cargo_child(
                 command.as_command_mut(),
                 authority_rustc.ok_or_else(|| {
@@ -852,6 +860,30 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn authority_query_flags_preserve_caller_flags_without_duplicates() {
+        for query in ["metadata", "config"] {
+            for supplied in [
+                vec![],
+                vec!["--offline"],
+                vec!["--frozen"],
+                vec!["--offline", "--frozen"],
+                vec!["--frozen", "--offline", "--locked"],
+            ] {
+                let mut command = process::Command::new("cargo");
+                command.arg(query).args(&supplied);
+                let original: Vec<_> = command.get_args().map(OsString::from).collect();
+                super::require_locked_query_flags(&mut command);
+                super::require_locked_query_flags(&mut command);
+                let actual: Vec<_> = command.get_args().map(OsString::from).collect();
+                assert!(actual.starts_with(&original));
+                for required in ["--offline", "--frozen"] {
+                    assert_eq!(actual.iter().filter(|arg| *arg == required).count(), 1);
+                }
+            }
+        }
+    }
 
     #[test]
     fn routing_stops_at_the_application_separator() {

@@ -429,6 +429,16 @@ fn create_sealed_image(
             operation: "populate protected static executable memfd",
             source,
         })?;
+    // Set the mode while still owning the private inode. After transfer, this would require
+    // CAP_FOWNER, which the production coordinator and proof manager deliberately do not hold.
+    rustix::fs::fchmod(
+        &writable,
+        Mode::RUSR | Mode::RGRP | Mode::ROTH | Mode::XUSR | Mode::XGRP | Mode::XOTH,
+    )
+    .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
+        operation: "set protected static executable mode",
+        source: source.into(),
+    })?;
     if owner != ProtectedStaticExecutableOwnerV1::current() {
         rustix::fs::fchown(
             &writable,
@@ -440,14 +450,6 @@ fn create_sealed_image(
             source: source.into(),
         })?;
     }
-    rustix::fs::fchmod(
-        &writable,
-        Mode::RUSR | Mode::RGRP | Mode::ROTH | Mode::XUSR | Mode::XGRP | Mode::XOTH,
-    )
-    .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
-        operation: "set protected static executable mode",
-        source: source.into(),
-    })?;
     let content_and_exec = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::EXEC;
     rustix::fs::fcntl_add_seals(&writable, content_and_exec)
         .and_then(|()| rustix::fs::fcntl_add_seals(&writable, SealFlags::SEAL))
@@ -742,6 +744,51 @@ mod tests {
         assert!(
             seals == REQUIRED_EXECUTABLE_SEALS_V1
                 || seals == REQUIRED_EXECUTABLE_SEALS_V1 | SealFlags::FUTURE_WRITE
+        );
+    }
+
+    #[test]
+    #[ignore = "requires real root with CAP_CHOWN and without CAP_FOWNER"]
+    fn owner_transition_does_not_require_fowner() {
+        assert!(rustix::process::geteuid().is_root());
+        let status = fs::read_to_string("/proc/self/status").unwrap();
+        let effective = status
+            .lines()
+            .find_map(|line| line.strip_prefix("CapEff:\t"))
+            .unwrap();
+        let effective = u64::from_str_radix(effective, 16).unwrap();
+        assert_ne!(effective & 1, 0, "CAP_CHOWN must be present");
+        assert_eq!(effective & (1 << 3), 0, "CAP_FOWNER must be absent");
+        let fixture = Fixture::new();
+        let owner = ProtectedStaticExecutableOwnerV1::new(61001, 61001).unwrap();
+        let admitted = ProtectedStaticExecutableV1::seal_source_for_owner(
+            fixture.open(),
+            fixture.measurement(),
+            owner,
+            "restricted root transition",
+        )
+        .unwrap();
+        admitted.revalidate().unwrap();
+        let identity = admitted.object_identity();
+        assert_eq!(
+            (identity.uid(), identity.gid(), identity.mode() & 0o7777),
+            (61001, 61001, 0o555)
+        );
+        let descriptor = admitted.try_clone_for_exec().unwrap();
+        assert_eq!(
+            rustix::fs::fcntl_getfl(&descriptor).unwrap() & OFlags::ACCMODE,
+            OFlags::RDONLY
+        );
+        let seals = rustix::fs::fcntl_get_seals(&descriptor).unwrap();
+        assert!(seals.contains(REQUIRED_EXECUTABLE_SEALS_V1));
+        assert_eq!(
+            read_exact(
+                &descriptor,
+                fixture.measurement(),
+                "restricted root transition"
+            )
+            .unwrap(),
+            fixture.bytes
         );
     }
 

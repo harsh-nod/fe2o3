@@ -5,6 +5,8 @@ use fe2o3_kernel_analysis::{
 };
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 
+mod genuine_application;
+
 #[test]
 #[ignore = "run through scripts/build-static-proof-custodian.sh"]
 fn release_images_satisfy_production_static_elf_profile() {

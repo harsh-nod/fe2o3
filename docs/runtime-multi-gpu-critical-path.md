@@ -6,6 +6,34 @@ existing MI300X evidence independently. Primary owns edits, integration and test
 
 ## Immediate Priority
 
+The fresh [genuine application campaign](evidence/dev-genuine-application-startup-2026-10-04/README.md)
+now starts the actual installed manager/coordinator with fresh compiler/anchor
+keys, authenticates coordinator readiness, and reaches the selected kernel in
+the protected rustc backend. It exposed and fixed three production blockers:
+executable mode changes after ownership transfer required absent `CAP_FOWNER`,
+locked Cargo queries duplicated `--frozen`, and `run` sent its host binary target
+to AMDGPU instead of compiling the device library. This is progress through
+startup and compilation, not successful application admission.
+
+The immediate blocker is compiler-time proof placement. Cargo descendants inherit
+the mandatory exec-notification seccomp filter, but the local generated-proof
+controller requires no inherited filters. Its proof-child receipt also requires
+exactly one verifier-installed filter. Keep both contracts: route compiler-time
+proof execution through an independently admitted unfiltered controller, retaining
+the exact generated source, original compiler subject and execution/result custody.
+Do not weaken preflight, remove Cargo exec observation or import a captured proof.
+
+After that, propagate the original committed device-library binding to the exact
+matching host library through a retained, authenticated host projection. The host
+phase currently disables wrappers, and independently deriving host Cargo metadata
+does not reproduce the device binding. Then qualify FD195/current-record audit and
+retained conditional proof in the ordinary application before two-GPU fill and
+bidirectional PUBLIC XGMI. General performance work, wider opcode coverage and
+additional GPU counts remain deferred. MI300X SSH was unreachable during this
+campaign; no new hardware result is claimed.
+
+## Implemented Foundations
+
 The [conditional native invocation join](runtime-conditional-fill-invocation-v1.md)
 is now implemented: exact charged generated packing, full64 coverage, selected
 finalized entry, mandatory native storage constraint and shared remote custody
@@ -13,8 +41,9 @@ through the existing completion carrier. Production application admission and
 two-GPU execution are still unqualified. Explicit
 [Cargo/supervisor custodian routing](runtime-custodian-supervisor-route-v1.md) is
 implemented with the run-only `--application-proof-custodian` option. The next
-blocker is the complete installed proof deployment, followed by a fresh
-real-issuer compile-to-application campaign. The old composed-startup
+deployment work remains the complete production package/activation profile;
+the fresh private-layout campaign above is now exercising the actual entrypoints.
+The old composed-startup
 fixture uses synthetic carriage and cannot qualify production FD195 verification.
 
 The [independent proof manager](runtime-proof-manager-v1.md) now implements the
@@ -54,8 +83,9 @@ The existing Worker already links LLVM/LLD statically; only its seven external
 base DSOs need canonical loader placement. No analyzer rebuild or new runtime
 wrapper is required for this gate. This does not qualify production package
 activation, authenticated manager registration, genuine compiler receipt/currentness
-admission or GPU execution. Keep the next effort on the actual installed deployment
-and genuine compiler-to-application campaign, followed immediately by two-GPU fill/XGMI.
+admission or GPU execution. The genuine campaign above advances service startup
+but still fails before receipt publication. Clear its compiler-time proof and
+host-binding blockers, followed immediately by two-GPU fill/XGMI.
 
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
