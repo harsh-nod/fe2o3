@@ -559,6 +559,7 @@ fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_res
             "typed_prefix_related_0_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49,"
         ));
         assert_closed_float_execution_context_v53(&expected);
+        assert!(!expected.contains("let compared = after.values["));
         for forbidden in [
             "base: Seq<int>, initial: int, op:",
             "assume(",

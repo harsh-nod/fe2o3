@@ -256,14 +256,13 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                                 );
                             }
                             if target_present {
-                                emit!(out, " && ({{ let compared = after.values[{target}]; ");
+                                emit!(out, " && ");
                                 super::super::super::byte_function_v30::emit_value_type(
                                     output.definitions()[target].ty,
                                     width,
-                                    "compared",
+                                    format_args!("after.values[{target}]"),
                                     out,
                                 )?;
-                                emit!(out, " }})");
                             }
                         }
                         emit!(out, " }} else\n");
@@ -395,6 +394,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                 [&(); 12],
                 [Result<()>; 2],
                 Writer<'_, '_>,
+                [std::fmt::Arguments<'_>; 2],
             )>())?;
             let relocated = self.relocated_segments(out)?;
             let expressions =

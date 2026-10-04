@@ -164,7 +164,7 @@ pub(super) fn value_type(ty: &Type) -> Result<()> {
 pub(super) fn emit_pointer_value_type(
     address_space: fe2o3_kernel_ir::AddressSpace,
     width: FormalIndexWidth,
-    value: &str,
+    value: impl std::fmt::Display + Copy,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     emit!(
@@ -179,7 +179,7 @@ pub(super) fn emit_pointer_value_type(
 pub(super) fn emit_value_type(
     ty: &Type,
     width: FormalIndexWidth,
-    value: &str,
+    value: impl std::fmt::Display + Copy,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     match ty {
