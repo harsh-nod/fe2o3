@@ -587,14 +587,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-gfx950-advanced-systems"
-version = "0.1.0"
-dependencies = [
- "fe2o3-device",
- "fe2o3-host",
-]
-
-[[package]]
 name = "fe2o3-gfx950-gpt-oss-decode"
 version = "0.1.0"
 dependencies = [
@@ -1012,7 +1004,6 @@ dependencies = [
  "fe2o3-flash-attention-general-v1",
  "fe2o3-gemm-autoresearch-v1",
  "fe2o3-gfx950-advanced-attention",
- "fe2o3-gfx950-advanced-systems",
  "fe2o3-gfx950-gpt-oss-decode",
  "fe2o3-gfx950-low-precision",
  "fe2o3-moe-grouped-expert-general-v1",

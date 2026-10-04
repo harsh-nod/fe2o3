@@ -1,6 +1,6 @@
 use crate::protocol::{Output, Request, buffer, floats, integers, scalar, unsigned};
 use crate::references::{READ, WRITE, input, output};
-use fe2o3_gfx950_advanced_systems::reference as cpu;
+use crate::systems_cpu::reference as cpu;
 
 pub const KERNELS: [&str; 7] = [
     "gfx950_moe_route_fp4_t16_e4_k2_v1",

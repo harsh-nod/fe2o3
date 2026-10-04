@@ -7,6 +7,7 @@ mod reference_gpt;
 mod reference_low_precision;
 mod reference_systems;
 mod references;
+mod systems_cpu;
 
 use protocol::{Request, Response};
 use sha2::{Digest, Sha256};
