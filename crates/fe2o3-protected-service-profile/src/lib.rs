@@ -10,6 +10,12 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
 
+mod proof_controller;
+pub use proof_controller::{
+    ProofControllerCredentialProfileV1, ProofControllerProcessProfileV1,
+    require_proof_controller_parent_v1, validate_proof_controller_process_v1,
+};
+
 const INVALID_ID: u32 = u32::MAX;
 const MAX_PROC_STATUS_BYTES_V1: u64 = 64 * 1024;
 const MAX_CAPABILITY_NUMBER_V1: u32 = 63;
@@ -22,7 +28,7 @@ const SECBIT_KEEP_CAPS_LOCKED: u32 = 1 << 5;
 const SECBIT_NO_CAP_AMBIENT_RAISE: u32 = 1 << 6;
 const SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED: u32 = 1 << 7;
 
-/// Exact securebits value required by every protected service process.
+/// Exact securebits value required by the locked protected-service profile.
 ///
 /// Root privilege, set-ID capability fixups, retained capabilities, and future
 /// ambient-capability raises are all disabled and locked. `KEEP_CAPS` itself is clear while its
@@ -187,7 +193,15 @@ impl ProtectedServiceProcessProfileV1 {
     }
 
     pub fn revalidate_current(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
-        read_proc_status("/proc/self/status")?.require(self.credentials)?;
+        self.revalidate_current_with_securebits(self.credentials.securebits(), "/proc/self/status")
+    }
+
+    fn revalidate_current_with_securebits(
+        &self,
+        expected_securebits: u32,
+        status_path: &str,
+    ) -> Result<(), ProtectedServiceProfileErrorV1> {
+        read_proc_status(status_path)?.require(self.credentials)?;
         let capabilities = rustix::thread::capabilities(None)
             .map_err(|source| io_error("inspect service capabilities", source.into()))?;
         if !capabilities.effective.is_empty()
@@ -200,9 +214,9 @@ impl ProtectedServiceProcessProfileV1 {
         }
         let securebits = rustix::thread::capabilities_secure_bits()
             .map_err(|source| io_error("inspect service securebits", source.into()))?;
-        if securebits.bits() != self.credentials.securebits() {
+        if securebits.bits() != expected_securebits {
             return Err(ProtectedServiceProfileErrorV1::ProcessProfile(
-                "securebits are not exact and locked",
+                "securebits differ from the exact role profile",
             ));
         }
         if !rustix::thread::no_new_privs()
@@ -249,8 +263,12 @@ pub struct ProtectedServiceNamespaceSetV1 {
 
 impl ProtectedServiceNamespaceSetV1 {
     pub fn capture_self() -> Result<Self, ProtectedServiceProfileErrorV1> {
+        Self::capture_at("/proc/self/ns")
+    }
+
+    fn capture_at(root: &str) -> Result<Self, ProtectedServiceProfileErrorV1> {
         let identities = NAMESPACE_NAMES_V1
-            .map(|name| namespace_identity(&format!("/proc/self/ns/{name}")))
+            .map(|name| namespace_identity(&format!("{root}/{name}")))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
@@ -265,8 +283,12 @@ impl ProtectedServiceNamespaceSetV1 {
     }
 
     pub fn revalidate_self(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
+        self.revalidate_at("/proc/self/ns")
+    }
+
+    fn revalidate_at(&self, root: &str) -> Result<(), ProtectedServiceProfileErrorV1> {
         for (index, name) in NAMESPACE_NAMES_V1.iter().enumerate() {
-            if namespace_identity(&format!("/proc/self/ns/{name}"))? != self.identities[index] {
+            if namespace_identity(&format!("{root}/{name}"))? != self.identities[index] {
                 return Err(ProtectedServiceProfileErrorV1::Namespace(name));
             }
         }
@@ -356,6 +378,8 @@ struct ProcStatusProfileV1 {
     no_new_privs: u32,
     tracer_pid: u32,
     umask: u32,
+    seccomp: Option<u32>,
+    seccomp_filters: Option<u32>,
 }
 
 impl ProcStatusProfileV1 {
@@ -370,6 +394,8 @@ impl ProcStatusProfileV1 {
         let mut no_new_privs = None;
         let mut tracer_pid = None;
         let mut umask = None;
+        let mut seccomp = None;
+        let mut seccomp_filters = None;
         for line in text.lines() {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -387,6 +413,8 @@ impl ProcStatusProfileV1 {
                 "NoNewPrivs" => set_once(&mut no_new_privs, parse_decimal(value)?)?,
                 "TracerPid" => set_once(&mut tracer_pid, parse_decimal(value)?)?,
                 "Umask" => set_once(&mut umask, parse_octal(value)?)?,
+                "Seccomp" => set_once(&mut seccomp, parse_decimal(value)?)?,
+                "Seccomp_filters" => set_once(&mut seccomp_filters, parse_decimal(value)?)?,
                 _ => {}
             }
         }
@@ -417,6 +445,8 @@ impl ProcStatusProfileV1 {
             umask: umask.ok_or(ProtectedServiceProfileErrorV1::ProcessProfile(
                 "proc status lacks Umask",
             ))?,
+            seccomp,
+            seccomp_filters,
         })
     }
 

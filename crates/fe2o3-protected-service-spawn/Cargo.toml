@@ -11,10 +11,20 @@ publish = false
 [features]
 test-support = []
 
+[[bin]]
+name = "fe2o3-proof-controller-profile-fixture"
+path = "src/bin/proof_controller_profile_fixture.rs"
+required-features = ["test-support"]
+test = false
+bench = false
+
 [dependencies]
 fe2o3-protected-service-profile.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["pipe", "process", "thread"] }
+
+[dev-dependencies]
+rustix = { workspace = true, features = ["net", "event"] }
 
 [lints.rust]
 unsafe_code = "deny"

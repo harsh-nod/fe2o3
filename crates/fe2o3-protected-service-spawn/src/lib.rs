@@ -4,8 +4,11 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-protected-service-spawn requires Linux x86-64");
 
+mod proof_controller;
 #[allow(unsafe_code)]
 mod syscall;
+
+pub use proof_controller::{RootOwnedProofControllerChildV1, StagedProofControllerExecV1};
 
 use std::error::Error;
 use std::fmt;
@@ -145,7 +148,7 @@ impl StagedProtectedServiceExecV1 {
         let cap_last_cap = read_cap_last_cap()?;
         syscall::spawn(
             &self.inner,
-            credentials,
+            syscall::ChildCredentials::Protected(credentials),
             cap_last_cap,
             rustix::process::getpid(),
         )
@@ -452,6 +455,24 @@ mod tests {
         .unwrap();
         assert!(matches!(
             staged.spawn(credentials),
+            Err(ProtectedServiceSpawnErrorV1::RootRequired)
+        ));
+        let proof_stage = StagedProofControllerExecV1::new(
+            &executable,
+            &[binding],
+            profile_writer.as_fd(),
+            gate_reader.as_fd(),
+            status_writer.as_fd(),
+        )
+        .unwrap();
+        let proof_credentials =
+            fe2o3_protected_service_profile::ProofControllerCredentialProfileV1::new(
+                credentials.uid(),
+                credentials.gid(),
+            )
+            .unwrap();
+        assert!(matches!(
+            proof_stage.spawn(proof_credentials),
             Err(ProtectedServiceSpawnErrorV1::RootRequired)
         ));
         drop((profile_reader, gate_writer, status_reader));

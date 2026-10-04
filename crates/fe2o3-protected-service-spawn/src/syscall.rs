@@ -4,7 +4,7 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 use fe2o3_protected_service_profile::{
-    PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1,
+    ProofControllerCredentialProfileV1, ProtectedServiceCredentialProfileV1,
 };
 
 use crate::{
@@ -12,6 +12,8 @@ use crate::{
     PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
 };
 
+#[cfg(test)]
+mod proof_controller_tests;
 #[cfg(test)]
 mod tests;
 
@@ -28,6 +30,7 @@ const PR_SET_PDEATHSIG: c_int = 1;
 const PR_GET_PDEATHSIG: c_int = 2;
 const PR_SET_DUMPABLE: c_int = 4;
 const PR_GET_DUMPABLE: c_int = 3;
+const PR_GET_SECCOMP: c_int = 21;
 const PR_CAPBSET_READ: c_int = 23;
 const PR_CAPBSET_DROP: c_int = 24;
 const PR_GET_SECUREBITS: c_int = 27;
@@ -40,6 +43,33 @@ const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const FAILURE_BASE: u8 = 0xc0;
+
+#[derive(Clone, Copy)]
+pub(crate) enum ChildCredentials {
+    Protected(ProtectedServiceCredentialProfileV1),
+    ProofController(ProofControllerCredentialProfileV1),
+}
+
+impl ChildCredentials {
+    const fn uid(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.uid(),
+            Self::ProofController(value) => value.uid(),
+        }
+    }
+    const fn gid(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.gid(),
+            Self::ProofController(value) => value.gid(),
+        }
+    }
+    const fn securebits(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.securebits(),
+            Self::ProofController(value) => value.securebits(),
+        }
+    }
+}
 
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
@@ -244,7 +274,7 @@ fn duplicate_above(source: BorrowedFd<'_>, next: &mut RawFd) -> io::Result<Owned
 
 pub(crate) fn spawn(
     staged: &StagedProtectedServiceExecV1,
-    credentials: ProtectedServiceCredentialProfileV1,
+    credentials: ChildCredentials,
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> io::Result<RootOwnedProtectedServiceChildV1> {
@@ -264,16 +294,26 @@ pub(crate) fn spawn(
     };
     #[cfg(test)]
     let signal_probe = signal_mask_tests::child_probe_enabled();
+    #[cfg(test)]
+    let force_legacy = proof_controller_tests::take_force_legacy();
+    #[cfg(not(test))]
+    let force_legacy = false;
     let mut signals = SpawnSignalMaskV1::block()?;
     // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
     // child executes direct syscalls only and cannot return into Rust.
     let result = unsafe {
-        let result = libc::syscall(
-            libc::SYS_clone3,
-            &raw const arguments,
-            std::mem::size_of::<CloneArgsV1>(),
-        );
-        if result < 0 && *libc::__errno_location() == libc::ENOSYS {
+        let result = if force_legacy {
+            -1
+        } else {
+            libc::syscall(
+                libc::SYS_clone3,
+                &raw const arguments,
+                std::mem::size_of::<CloneArgsV1>(),
+            )
+        };
+        if force_legacy || (result < 0 && *libc::__errno_location() == libc::ENOSYS) {
+            #[cfg(test)]
+            proof_controller_tests::record_legacy_route();
             // Legacy x86-64 clone writes the atomic pidfd through parent_tid. No shared VM,
             // handlers or descriptor table; blocked signals protect until child normalization.
             libc::syscall(
@@ -467,7 +507,7 @@ fn reap_pid(pid: rustix::process::Pid) {
 
 unsafe fn child_exec(
     staged: &StagedProtectedServiceExecV1,
-    credentials: ProtectedServiceCredentialProfileV1,
+    credentials: ChildCredentials,
     cap_last_cap: u32,
     expected_parent: i32,
     #[cfg(test)] signal_probe: bool,
@@ -490,6 +530,10 @@ unsafe fn child_exec(
         }
         if establish_profile(credentials, cap_last_cap) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 3);
+        }
+        // setresgid/setresuid clear PDEATHSIG; re-arm and close the parent-death race.
+        if arm_parent_death(expected_parent) != 0 {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 10);
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::write(
@@ -601,10 +645,7 @@ unsafe fn arm_parent_death(expected_parent: i32) -> c_int {
     0
 }
 
-unsafe fn establish_profile(
-    credentials: ProtectedServiceCredentialProfileV1,
-    cap_last_cap: u32,
-) -> c_int {
+unsafe fn establish_profile(credentials: ChildCredentials, cap_last_cap: u32) -> c_int {
     let core = LinuxRlimit64V1 {
         current: 0,
         maximum: 0,
@@ -620,7 +661,7 @@ unsafe fn establish_profile(
                 std::ptr::null_mut::<LinuxRlimit64V1>(),
             )
         } != 0
-        || unsafe { libc::prctl(PR_SET_SECUREBITS, PROTECTED_SERVICE_SECUREBITS_V1, 0, 0, 0) } != 0
+        || unsafe { libc::prctl(PR_SET_SECUREBITS, credentials.securebits(), 0, 0, 0) } != 0
         || unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) } != 0
     {
         return -1;
@@ -669,10 +710,7 @@ unsafe fn establish_profile(
     unsafe { validate_profile(credentials, cap_last_cap) }
 }
 
-unsafe fn validate_profile(
-    credentials: ProtectedServiceCredentialProfileV1,
-    cap_last_cap: u32,
-) -> c_int {
+unsafe fn validate_profile(credentials: ChildCredentials, cap_last_cap: u32) -> c_int {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
     let mut header = LinuxCapabilityHeaderV1 {
@@ -724,8 +762,9 @@ unsafe fn validate_profile(
             return -1;
         }
     }
-    if unsafe { libc::prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) }
-        != PROTECTED_SERVICE_SECUREBITS_V1 as c_int
+    if unsafe { libc::prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) } != credentials.securebits() as c_int
+        || (matches!(credentials, ChildCredentials::ProofController(_))
+            && unsafe { libc::prctl(PR_GET_SECCOMP, 0, 0, 0, 0) } != 0)
         || unsafe { libc::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) } != 1
         || unsafe { libc::prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) } != 0
         || unsafe {

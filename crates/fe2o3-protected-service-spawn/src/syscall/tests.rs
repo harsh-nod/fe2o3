@@ -5,6 +5,10 @@ use std::os::unix::fs::PermissionsExt;
 fn static_exit_image() -> File {
     // One RX load segment and an x86-64 exit(0), with no interpreter or runtime startup.
     let code = [0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05];
+    static_image(&code)
+}
+
+pub(super) fn static_image(code: &[u8]) -> File {
     let mut bytes = vec![0_u8; 4096 + code.len()];
     bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
     bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
@@ -22,25 +26,37 @@ fn static_exit_image() -> File {
     bytes[96..104].copy_from_slice(&length.to_le_bytes());
     bytes[104..112].copy_from_slice(&length.to_le_bytes());
     bytes[112..120].copy_from_slice(&4096_u64.to_le_bytes());
-    bytes[4096..].copy_from_slice(&code);
+    bytes[4096..].copy_from_slice(code);
+    sealed_executable(&bytes)
+}
+
+pub(super) fn sealed_executable(bytes: &[u8]) -> File {
     // SAFETY: memfd_create returns a fresh owned descriptor or a negative errno.
     let raw = unsafe {
         libc::syscall(
             libc::SYS_memfd_create,
             c"spawn-exit-test".as_ptr(),
-            libc::MFD_CLOEXEC,
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
         )
     };
     assert!(raw >= 0);
     // SAFETY: this is the sole owner of the successful memfd result.
     let mut file = unsafe { File::from_raw_fd(raw as i32) };
-    file.write_all(&bytes).unwrap();
+    file.write_all(bytes).unwrap();
     file.set_permissions(std::fs::Permissions::from_mode(0o555))
         .unwrap();
+    rustix::fs::fcntl_add_seals(
+        &file,
+        rustix::fs::SealFlags::SEAL
+            | rustix::fs::SealFlags::SHRINK
+            | rustix::fs::SealFlags::GROW
+            | rustix::fs::SealFlags::WRITE,
+    )
+    .unwrap();
     file
 }
 
-fn deny_calls(calls: &[(c_long, i32)]) {
+pub(super) fn deny_calls(calls: &[(c_long, i32)]) {
     let instruction = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
     let mut filter = vec![
         instruction(0x20, 0, 0, 4),
