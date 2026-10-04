@@ -145,10 +145,10 @@ root/UID1000 campaign now qualifies ACK EOF with the observation alive, source
 substitution, changed flags/bytes, same-byte executable replacement and application
 death while its parent remains live. This is neither authenticated registration nor
 the no-fork application/proof-custodian deployment.
-Next, bind a dedicated inherited proof endpoint as an additional input occurrence
-on both Cargo and host sides, authenticate messages against the original application
-pidfd, and retain a fresh bounded application session independently of issuer
-lifetime. The [startup custody checkpoint](evidence/dev-application-startup-2026-10-04/README.md)
+The dedicated inherited proof endpoint is now bound as the fourth input on Cargo,
+host and root-observation sides. Next, authenticate messages against the original
+application pidfd and retain a fresh bounded application session independently of
+issuer lifetime. The [startup custody checkpoint](evidence/dev-application-startup-2026-10-04/README.md)
 adds Cargo's separate post-spawn transition before compiler readiness:
 it drops parent ACK and test-readiness writers, captures the original unreaped child's
 pidfd, completes sandbox admission once, and retains the complete occurrence,
@@ -165,7 +165,19 @@ four-right proof registration must use duplicates of these original handles.
 The [registration-prerequisite checkpoint](evidence/dev-application-registration-binding-2026-10-04/README.md)
 qualifies this transfer and the inert four-input binding. Both original handles
 and protocol occupy the same pre-spawn allocation through cleanup, without a new
-post-spawn allocation. This does not yet install the dedicated proof endpoint.
+post-spawn allocation. That checkpoint did not install the dedicated proof endpoint.
+The [proof-endpoint checkpoint](evidence/dev-application-proof-endpoint-2026-10-04/README.md)
+now creates the Cargo-owned nonblocking PASSCRED pair before spawn, closes Cargo's
+application-side alias immediately afterward, and retains the counterpart through
+failure cleanup. Host admission claims and checks the exact fourth occurrence,
+including strict environment/profile agreement, without widening the sandbox.
+Root observation derives all coordinates and process assertions from the complete
+registration binding and checks Cargo creator credentials, reversed abstract
+addresses, distinct socket objects, original pidfds and source-slot continuity.
+It retains only application-endpoint facts, never an application-side socket alias.
+The three-input observation/host qualifier remains separate. Static single/roster
+admission and cross-UID ACK EOF/proof HUP are qualified locally; this is not installed
+authenticated application registration, proof custody, or GPU launch authority.
 The join must authenticate Cargo's
 spawn/sandbox supervision and protected service isolation, neither of which follows
 from the process snapshot alone. Then deploy the fixed keyless custodian, join its
@@ -175,16 +187,15 @@ The reviewed registration design reuses the supervisor/root registry without
 another listener. Implement the following as one coherent application profile;
 these are not yet implemented registration/deployment or remote proof ownership.
 
-1. The inert canonical application binding is implemented: exactly 840 bytes
-   contain the full compiler supervisor handoff, exact four-slot occurrence,
+1. Completed prerequisite: the inert canonical application binding is exactly 840 bytes
+   containing the full compiler supervisor handoff, exact four-slot occurrence,
    descriptor coordinates, envelope expectation and challenge. Bounded decoding
    validates framing, all nested records and expectation/occurrence association;
-   coordinates must be distinct and exclude FD195. This is not authenticated
-   registration or an installed four-input profile. Next, Cargo creates a
-   nonblocking CLOEXEC seqpacket pair before spawn,
-   enables PASSCRED and eagerly binds both endpoints. Include slot 4 before encoding
-   the occurrence. Update Cargo, host claim/cleanup, and root observation together;
-   all currently require exactly three slots. Keep FD195 unchanged.
+   coordinates must be distinct and exclude FD195. Cargo now creates a nonblocking
+   CLOEXEC seqpacket pair before spawn, enables PASSCRED, eagerly binds both endpoints
+   and includes slot 4 before encoding the occurrence. Host claim/cleanup and root
+   observation now validate the same four-input profile. FD195 is unchanged.
+   Endpoint possession and local observation are not authenticated registration.
 2. Add a distinct Cargo-to-supervisor application kind with exactly four rights:
    compiler peer, duplicate of captured original app pidfd, proof peer, and original
    Cargo pidfd. Ordinary compiler handoff still requires exactly two. Authenticate
