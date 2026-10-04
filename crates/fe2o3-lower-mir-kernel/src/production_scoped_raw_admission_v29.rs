@@ -2167,7 +2167,7 @@ fn check_expanded_source_memory_inner_v29(
     };
     let checked_compiler = check_compiler_enum_closed_memory_v55(
         &pending.function,
-        layout_rows.as_ref().map_or(&[][..], |rows| rows.as_slice()),
+        layout_rows.unwrap_or(&[]),
         &compiler_enum,
         budget,
     )?;
