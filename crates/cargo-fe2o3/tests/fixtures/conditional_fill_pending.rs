@@ -10,7 +10,8 @@ use fe2o3_external_anchor_protocol::{
 use fe2o3_host::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1, PendingWorkerV3ConditionalFillArtifactV1,
     WorkerV3CompilerCurrentRecordAuditErrorV1, WorkerV3ConditionalFillAssociationErrorV1,
-    WorkerV3ConditionalFillPendingErrorV1, WorkerV3VerificationChallengeIdentityV1,
+    WorkerV3ConditionalFillPendingErrorV1, WorkerV3ConditionalFillRetainedErrorV1,
+    WorkerV3VerificationChallengeIdentityV1, execute_retained_worker_v3_conditional_fill_v1,
 };
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectLimitsV1, AuthenticatedPhysicalMachineEffectWorkerV1,
@@ -30,12 +31,14 @@ use fe2o3_verifier::{
 };
 use object::{Object, ObjectSection};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::time::Duration;
 
 struct RefinementAuditor {
     worker: AuthenticatedPhysicalMachineEffectWorkerV1,
     limits: AuthenticatedPhysicalMachineEffectLimitsV1,
     runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     change_payload: bool,
+    producer_controls: bool,
 }
 
 impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
@@ -52,6 +55,67 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
         request: &WorkerV3VerificationRequestV1<'_, GeneratedFillMarker>,
     ) -> Result<Self::Evidence, Self::Error> {
         let closure = super::compiler_closure::check_request(request);
+        if !self.change_payload {
+            if self.producer_controls {
+                check_producer_rejections(self, request);
+            }
+            let envelope = request
+                .load_envelope_evidence_view()
+                .exact_canonical_bytes()
+                .to_vec()
+                .into_boxed_slice();
+            let payload = request.finalized_hsaco_bytes().to_vec().into_boxed_slice();
+            let envelope_pointer = envelope.as_ptr();
+            let payload_pointer = payload.as_ptr();
+            let retained = execute_retained_worker_v3_conditional_fill_v1(
+                envelope,
+                payload,
+                request.descriptor().kernel_id(),
+                &self.worker,
+                &self.runtime,
+                std::time::Instant::now() + Duration::from_secs(300),
+            )
+            .unwrap();
+            assert_eq!(
+                retained.exact_canonical_envelope_bytes().as_ptr(),
+                envelope_pointer
+            );
+            assert_eq!(retained.finalized_hsaco_bytes().as_ptr(), payload_pointer);
+            assert_eq!(retained.kernel_id(), request.descriptor().kernel_id());
+            assert!(!retained.authenticates_compiler_origin());
+            assert!(!retained.grants_currentness_authority());
+            assert!(!retained.grants_load_authority());
+            assert!(!retained.grants_launch_authority());
+            let subject = retained.subject().clone();
+            assert_eq!(
+                subject,
+                closure
+                    .check_conditional_fill_refinement_v1(retained.refinement())
+                    .unwrap()
+            );
+            let source_pointer = retained.refinement().generated_source().as_ptr();
+            let analysis_pointer = retained
+                .refinement()
+                .analysis_execution()
+                .canonical_receipt_bytes()
+                .as_ptr();
+            let refinement = retained.into_refinement();
+            assert_eq!(source_pointer, refinement.generated_source().as_ptr());
+            assert_eq!(
+                analysis_pointer,
+                refinement
+                    .analysis_execution()
+                    .canonical_receipt_bytes()
+                    .as_ptr()
+            );
+            return Ok((
+                refinement,
+                request.compiler_execution_receipt_carriage().clone(),
+                request.challenge_identity(),
+                Some(subject),
+            ));
+        }
+        // Keep the genuinely proved wrong-payload case at the later Pending boundary.
         let receipts = request.semantic_compiler_handoff().capsule().receipts();
         let inputs = validate_conditional_compiler_proof_inputs_v1(
             receipts.proof_binding(),
@@ -69,29 +133,17 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
         .unwrap();
         let program = check_conditional_fill_program_v1(&inputs, &lineage).unwrap();
         let mut payload = request.finalized_hsaco_bytes().to_vec();
-        if self.change_payload {
-            let (start, len) = object::File::parse(payload.as_slice())
-                .unwrap()
-                .section_by_name(".comment")
-                .unwrap()
-                .file_range()
-                .unwrap();
-            let byte = payload[start as usize..(start + len) as usize]
-                .iter_mut()
-                .find(|byte| **byte != 0)
-                .unwrap();
-            *byte ^= 1;
-            assert!(
-                fe2o3_host::check_worker_v3_compiler_closure_v1(
-                    request
-                        .load_envelope_evidence_view()
-                        .exact_canonical_bytes(),
-                    &payload,
-                    request.descriptor().kernel_id(),
-                )
-                .is_err()
-            );
-        }
+        mutate_comment(&mut payload);
+        assert!(
+            fe2o3_host::check_worker_v3_compiler_closure_v1(
+                request
+                    .load_envelope_evidence_view()
+                    .exact_canonical_bytes(),
+                &payload,
+                request.descriptor().kernel_id(),
+            )
+            .is_err()
+        );
         let analysis = self
             .worker
             .analyze(
@@ -115,24 +167,123 @@ impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
         )
         .unwrap();
         let independent_subject = closure.check_conditional_fill_refinement_v1(&refinement);
-        let independent_subject = if self.change_payload {
-            assert!(matches!(
-                independent_subject,
-                Err(WorkerV3ConditionalFillPendingErrorV1::Association(
-                    WorkerV3ConditionalFillAssociationErrorV1::Machine("finalized payload")
-                ))
-            ));
-            None
-        } else {
-            Some(independent_subject.unwrap())
-        };
+        assert!(matches!(
+            independent_subject,
+            Err(WorkerV3ConditionalFillPendingErrorV1::Association(
+                WorkerV3ConditionalFillAssociationErrorV1::Machine("finalized payload")
+            ))
+        ));
         Ok((
             refinement,
             request.compiler_execution_receipt_carriage().clone(),
             request.challenge_identity(),
-            independent_subject,
+            None,
         ))
     }
+}
+
+fn mutate_comment(payload: &mut [u8]) {
+    let (start, len) = object::File::parse(&*payload)
+        .unwrap()
+        .section_by_name(".comment")
+        .unwrap()
+        .file_range()
+        .unwrap();
+    let byte = payload[start as usize..(start + len) as usize]
+        .iter_mut()
+        .find(|byte| **byte != 0)
+        .unwrap();
+    *byte ^= 1;
+}
+
+fn check_producer_rejections(
+    auditor: &RefinementAuditor,
+    request: &WorkerV3VerificationRequestV1<'_, GeneratedFillMarker>,
+) {
+    use WorkerV3ConditionalFillRetainedErrorV1 as E;
+    use fe2o3_runtime_protocol::WorkerV3LoadEnvelopeErrorV2;
+    let canonical = request
+        .load_envelope_evidence_view()
+        .exact_canonical_bytes();
+    let payload = request.finalized_hsaco_bytes();
+    let kernel = request.descriptor().kernel_id();
+    let reject = |envelope: Vec<u8>, hsaco: Vec<u8>, selected, deadline| {
+        execute_retained_worker_v3_conditional_fill_v1(
+            envelope.into_boxed_slice(),
+            hsaco.into_boxed_slice(),
+            selected,
+            &auditor.worker,
+            &auditor.runtime,
+            deadline,
+        )
+        .unwrap_err()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut corrupt = canonical.to_vec();
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert!(matches!(
+        reject(corrupt, payload.to_vec(), kernel, deadline),
+        E::Closure(RecoveredWorkerV3AdmissionErrorV1::Envelope(
+            WorkerV3LoadEnvelopeErrorV2::ChecksumMismatch
+        ))
+    ));
+    assert!(matches!(
+        reject(
+            canonical.to_vec(),
+            payload[..payload.len() - 1].to_vec(),
+            kernel,
+            deadline
+        ),
+        E::Closure(RecoveredWorkerV3AdmissionErrorV1::FinalizedLengthMismatch)
+    ));
+    let mut changed = payload.to_vec();
+    changed.push(0);
+    assert!(matches!(
+        reject(canonical.to_vec(), changed, kernel, deadline),
+        E::Closure(RecoveredWorkerV3AdmissionErrorV1::FinalizedLengthMismatch)
+    ));
+    let mut changed = payload.to_vec();
+    mutate_comment(&mut changed);
+    assert!(matches!(
+        reject(canonical.to_vec(), changed, kernel, deadline),
+        E::Closure(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivation(
+            fe2o3_hsaco_finalize::WorkerV3HsacoPublicationErrorV1::FinalizedHsaco(
+                fe2o3_hsaco_finalize::FinalizationError::CanonicalDigestMismatch { .. }
+            )
+        ))
+    ));
+    assert!(matches!(
+        reject(
+            canonical.to_vec(),
+            payload.to_vec(),
+            KernelId::from_bytes([0x37; 32]),
+            deadline
+        ),
+        E::Closure(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)
+    ));
+    assert!(matches!(
+        reject(
+            canonical.to_vec(),
+            payload.to_vec(),
+            kernel,
+            std::time::Instant::now()
+        ),
+        E::Deadline
+    ));
+    assert!(matches!(
+        reject(Vec::new(), payload.to_vec(), kernel, deadline),
+        E::InputSize {
+            field: "envelope",
+            ..
+        }
+    ));
+    assert!(matches!(
+        reject(canonical.to_vec(), Vec::new(), kernel, deadline),
+        E::InputSize {
+            field: "finalized HSACO",
+            ..
+        }
+    ));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -192,6 +343,7 @@ fn run_case(case: Case) {
         )
         .unwrap(),
         change_payload: matches!(case, Case::Payload),
+        producer_controls: matches!(case, Case::Good),
     };
     let (refinement, carriage, host_challenge, independent_subject) =
         audit_recovered_worker_v3_verification_v1::<GeneratedFillMarker, _>(

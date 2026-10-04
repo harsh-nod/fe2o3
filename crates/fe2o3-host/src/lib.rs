@@ -328,7 +328,8 @@ pub use worker_v3_verification_admission::{
 #[cfg(target_os = "linux")]
 pub use worker_v3_verification_admission::{
     InertWorkerV3ConditionalFillSubjectV1, PendingWorkerV3ConditionalFillArtifactV1,
-    WorkerV3ConditionalFillPendingErrorV1,
+    RetainedWorkerV3ConditionalFillProofV1, WorkerV3ConditionalFillPendingErrorV1,
+    WorkerV3ConditionalFillRetainedErrorV1, execute_retained_worker_v3_conditional_fill_v1,
 };
 #[cfg(feature = "worker-v3-verifier-test-support")]
 #[doc(hidden)]

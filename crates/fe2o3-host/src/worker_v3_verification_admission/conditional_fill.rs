@@ -27,6 +27,14 @@ mod subject;
 #[cfg(target_os = "linux")]
 pub use subject::InertWorkerV3ConditionalFillSubjectV1;
 
+#[cfg(target_os = "linux")]
+mod retained;
+#[cfg(target_os = "linux")]
+pub use retained::{
+    RetainedWorkerV3ConditionalFillProofV1, WorkerV3ConditionalFillRetainedErrorV1,
+    execute_retained_worker_v3_conditional_fill_v1,
+};
+
 /// Borrows the request and both checked owners for the duration of its publication audit.
 ///
 /// This cannot escape as `WorkerV3AuditorV1::Evidence`. It neither authenticates the
