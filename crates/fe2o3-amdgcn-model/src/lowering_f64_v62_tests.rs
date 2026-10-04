@@ -380,11 +380,12 @@ fn f64_constants_preserve_all_ieee_bit_classes_without_f32_widening() {
         (0x7fef_ffff_ffff_ffff, "0x7FEFFFFFFFFFFFFF"),
         (0x7ff0_0000_0000_0000, "0x7FF0000000000000"),
         (0xfff0_0000_0000_0000, "0xFFF0000000000000"),
-        (0x7ff8_0000_0000_0042, "0x7FF80000000000042"),
-        (0xfff0_0000_0000_0042, "0xFFF00000000000042"),
+        (0x7ff8_0000_0000_0042, "0x7FF8000000000042"),
+        (0xfff0_0000_0000_0042, "0xFFF0000000000042"),
     ];
     let mut operations = Vec::new();
     for (i, (bits, expected)) in cases.into_iter().enumerate() {
+        assert_eq!(expected.len(), 18, "0x prefix plus sixteen F64 hex digits");
         let constant = Constant::F64Bits(bits);
         assert_eq!(constant_value(&constant).as_deref(), Some(expected));
         assert!(validate_constant(&constant, LoweringTarget::Baseline).is_err());
