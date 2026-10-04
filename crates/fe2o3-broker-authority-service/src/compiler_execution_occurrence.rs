@@ -232,6 +232,26 @@ impl RetainedCompilerExecutionOccurrenceV1 {
         &self.occurrence.identity
     }
 
+    /// Retains the original publication lock descriptions for a private issuer transfer.
+    ///
+    /// These inert scoped filesystem capabilities must travel only in an authenticated
+    /// observer response. A signer must retain them through durable commit so abrupt observer
+    /// death cannot release the publication lock during signing. No semantic token is copied.
+    pub fn retain_publication_lock_descriptors(
+        &self,
+    ) -> Result<
+        fe2o3_artifact_transaction::CompilerModuleHandoffLockRetentionV3,
+        ProtectedCompilerExecutionOccurrenceErrorV1,
+    > {
+        self.revalidate()?;
+        let retained = self
+            .token
+            .retain_observed_lock_descriptors()
+            .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::RetainPublicationLock)?;
+        self.revalidate()?;
+        Ok(retained)
+    }
+
     /// Repeats live process and locked publication checks against the original observations.
     pub fn revalidate(&self) -> Result<(), ProtectedCompilerExecutionOccurrenceErrorV1> {
         match &self.occurrence.custody {
@@ -467,6 +487,8 @@ pub enum ProtectedCompilerExecutionOccurrenceErrorV1 {
     AcquirePublicationLease(CompilerModuleHandoffErrorV3),
     /// The publication lock and currentness token could not be acquired.
     AcquireCurrentToken(CompilerModuleHandoffErrorV3),
+    /// The original publication lock descriptions could not be retained for private transfer.
+    RetainPublicationLock(CompilerModuleHandoffErrorV3),
     /// The locked publication changed or ceased to be current.
     RevalidateCurrentPublication(CompilerModuleHandoffErrorV3),
     /// The current publication does not form a canonical compiler-execution subject.
@@ -533,6 +555,12 @@ impl fmt::Display for ProtectedCompilerExecutionOccurrenceErrorV1 {
                     "compiler publication lock acquisition failed: {error}"
                 )
             }
+            Self::RetainPublicationLock(error) => {
+                write!(
+                    formatter,
+                    "compiler publication lock retention failed: {error}"
+                )
+            }
             Self::RevalidateCurrentPublication(error) => {
                 write!(
                     formatter,
@@ -585,6 +613,7 @@ impl Error for ProtectedCompilerExecutionOccurrenceErrorV1 {
             Self::RecoverPublication(error)
             | Self::AcquirePublicationLease(error)
             | Self::AcquireCurrentToken(error)
+            | Self::RetainPublicationLock(error)
             | Self::RevalidateCurrentPublication(error) => Some(error),
             Self::Subject(error) => Some(error),
             _ => None,

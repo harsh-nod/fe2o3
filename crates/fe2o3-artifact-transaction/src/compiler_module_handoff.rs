@@ -3750,6 +3750,29 @@ pub(crate) mod semantic_v3 {
             validate_current_metadata_locked(&self.binding)
         }
 
+        /// Retains the complete original lock set for a private observer-to-issuer transfer.
+        ///
+        /// Only nonrepairing descriptor-root observations are supported. This duplicates kernel
+        /// lock descriptions, not this token, its semantic binding, or consumption authority.
+        /// The original token remains held and is revalidated before and after duplication.
+        pub fn retain_observed_lock_descriptors(
+            &self,
+        ) -> Result<crate::CompilerModuleHandoffLockRetentionV3, CompilerModuleHandoffErrorV3>
+        {
+            if !self.binding.output.observation_only {
+                return Err(CompilerModuleHandoffErrorV3::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "lock retention requires a nonrepairing observer token",
+                )));
+            }
+            self.revalidate_locked_currentness()?;
+            let retained =
+                crate::CompilerModuleHandoffLockRetentionV3::retain_observer_lock(&self._lock)
+                    .map_err(CompilerModuleHandoffErrorV3::Io)?;
+            self.revalidate_locked_currentness()?;
+            Ok(retained)
+        }
+
         /// A currentness token is not compiler authority.
         pub const fn grants_compiler_authority(&self) -> bool {
             false
@@ -6676,6 +6699,7 @@ pub(crate) mod semantic_v3 {
             ));
         }
 
+        mod lock_retention;
         mod observation;
 
         #[test]

@@ -46,6 +46,7 @@ fn check_owned_occurrence(client_ids: Option<(u32, u32)>) {
     assert_eq!(occurrence.subject().attempt(), fixture.attempt.unwrap());
     assert_ne!(occurrence.identity(), &[0; 32]);
     occurrence.revalidate().unwrap();
+    let retained_locks = occurrence.retain_publication_lock_descriptors().unwrap();
 
     let output = fixture._artifact_directory.path().to_owned();
     let producer = fixture.producer.as_ref().unwrap().clone();
@@ -70,6 +71,7 @@ fn check_owned_occurrence(client_ids: Option<(u32, u32)>) {
     occurrence.revalidate().unwrap();
     assert!(fixture.shutdown().success());
     assert!(occurrence.revalidate().is_err());
+    assert!(occurrence.retain_publication_lock_descriptors().is_err());
     assert!(
         finished_rx
             .recv_timeout(Duration::from_millis(100))
@@ -77,6 +79,13 @@ fn check_owned_occurrence(client_ids: Option<(u32, u32)>) {
         "failed observation must not silently release the publication lock"
     );
     drop(occurrence);
+    assert!(
+        finished_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "lock retention must survive release of the original occurrence"
+    );
+    drop(retained_locks);
     assert_ne!(
         finished_rx
             .recv_timeout(Duration::from_secs(5))

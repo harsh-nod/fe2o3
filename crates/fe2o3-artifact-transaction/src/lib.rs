@@ -60,6 +60,7 @@ mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
 mod compiler_module_handoff;
+mod compiler_module_handoff_lock_retention;
 mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
@@ -157,6 +158,7 @@ pub use compiler_module_handoff::{
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
     try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
+pub use compiler_module_handoff_lock_retention::CompilerModuleHandoffLockRetentionV3;
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
     DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,

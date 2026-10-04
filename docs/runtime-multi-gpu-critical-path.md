@@ -26,6 +26,8 @@ opcode coverage before clearing application admission.
    Root-side process/publication observation is implemented and locally qualified
    across UIDs. Connect its original occurrence custody to the issuer through an
    authenticated private channel with exact issuer containment before lock release.
+   Transfer the original publication-lock descriptions to the private issuer guard
+   as well, retaining them through durable commit even if the coordinator dies.
    The empty-capability issuer cannot perform that inspection itself. Keep signing
    unprivileged; do not relax the host's ptrace policy.
    Qualify genuine compiler receipt acquisition and verification through the deployed
@@ -74,6 +76,32 @@ observation of a UID1000 private publication and real cross-UID lock contention.
 Their waiting-process/synthetic-handoff fixture is not genuine compiler acquisition.
 The authenticated coordinator session table, remote issuer guard and containment
 remain the next integration work; the root observation owner alone cannot sign.
+
+The [lock-retention checkpoint](evidence/dev-observer-lock-retention-2026-10-04/README.md)
+adds that transfer prerequisite, not the channel:
+`CompilerModuleHandoffLockRetentionV3` duplicates the original named-lock OFD and
+directory-flock OFD from a nonrepairing descriptor-root observation. It never
+reopens paths, copies the semantic token, or imports publication authority.
+Ordinary pathname-backed observations are deliberately rejected, since their
+third path guard cannot be omitted. Both exporter and importer use coordinated,
+close-only destruction. The importer checks descriptor shape only; authentication
+and exact operation binding remain mandatory in the future private transport.
+Retaining this complete lock set in the issuer guard is necessary because killing
+or checking the root coordinator cannot make revalidation-to-commit atomic.
+Root crash closes its token without running its containment destructor.
+
+The next integration should reuse the existing root coordinator, not launch a
+new privileged helper. Keep supervisor bootstrap FD11 readiness/EOF-only; use a
+separate registration channel, authenticated with per-packet `SCM_CREDENTIALS`.
+Register only the accepted handoff's original compiler peer/pidfd, then bind the
+actual launched issuer before accepting requests. Do not observe at readiness:
+the compiler has not published yet. A bounded session table should process one
+`Begin`, `Revalidate`, or `Finish` step at a time, with fresh operation identities.
+Deliver both lock descriptions with the authenticated Begin response; the private
+issuer guard must keep them through ledger commit. On error, poison the issuer
+session and retain root custody until that exact issuer's pidfd confirms exit.
+Preserve client custody between Prepare and Issue instead of reopening a numeric
+PID. Adding issuer FD12 also requires moving its private descriptor floor above it.
 
 ## Reuse What Works
 
