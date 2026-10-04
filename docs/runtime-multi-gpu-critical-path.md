@@ -209,8 +209,9 @@ ownership are still required before ordinary application admission.
    prepared pair. Supervisor admission validates both process tokens and direct
    parentage, retaining a candidate Cargo-created proof peer. It cannot independently
    establish the remote slot-4 counterpart: that still requires root observation.
-   Cargo and production session dispatch deliberately remain unchanged until the
-   registration/readiness gate below is integrated. This prerequisite is not
+   Cargo and host activation remain pending. Production supervisor session dispatch
+   now classifies the ordinary/application profiles atomically as described below.
+   The accepted handoff alone is not
    authenticated root registration, application readiness, or GPU launch authority.
 3. Implemented [root application registry](evidence/dev-root-application-registry-2026-10-04/README.md):
    root `RegisterApplication` uses the existing two-right compiler registration
@@ -229,11 +230,19 @@ ownership are still required before ordinary application admission.
    table retains no compiler peer and permits only one initial observation per
    registry iteration. Registered observation-only EOF retires without signaling
    a still-live app; startup failure contains the original app before release.
-   Still required: supervisor must await the gate after issuer readiness, outside
-   the registry mutex, before publishing dedicated application readiness to Cargo.
-   Seal compiler registration and gate together in one private application route;
-   do not accept independently supplied gates. A gate failure must also clean up
-   the bound issuer, not rely solely on root's application containment.
+   The [supervisor startup checkpoint](evidence/dev-application-supervisor-startup-2026-10-04/README.md)
+   now seals compiler registration, full application binding and gate into one
+   opaque owner. Atomic session dispatch accepts only 184 bytes/two rights or
+   840 bytes/four rights, with no probe/fallback receive. The private application
+   route preserves mandatory registration and issuer binding, the unchanged
+   fourteen-input issuer ABI, and one startup deadline through launch/readiness.
+   The public publisher awaits the gate outside the registry mutex after issuer
+   readiness, rechecks issuer and original root continuity, and sends only the
+   dedicated 208-byte application record. Gate failure retains exact issuer
+   cancellation/reaping custody. The client requires the full registration join,
+   terminal EOF and the original transfer deadline; ordinary readiness cannot
+   complete it. Local fixtures qualify the public publication/cleanup transition,
+   not a deployed root/supervisor/issuer/application startup.
    The [application bootstrap checkpoint](evidence/dev-application-bootstrap-2026-10-04/README.md)
    implements the consuming client Hello/Challenge/Accept/Ready API and a shared
    poll-only received-root pidfd owner. It authenticates actual per-message root
@@ -242,9 +251,11 @@ ownership are still required before ordinary application admission.
    one absolute deadline; failed admission closes the original endpoint. Broker
    and application now share the strict target/procfs parsers, with broker waitid
    and signal-interruption semantics preserved. No application syscall is added.
-   The API remains inactive: host must call it after local admission and before
-   Cargo ACK, only after the supervisor route is activated. Preserve the original
-   startup deadline and recheck publication currentness after Ready, before ACK.
+   The host API remains inactive: Cargo must transfer the actual four-right
+   application profile and await dedicated readiness; host must register after
+   local admission and before Cargo ACK. Preserve the original startup deadline
+   through child admission, transfer, supervisor response and strict ACK/EOF.
+   Recheck publication currentness after root Ready, immediately before host ACK.
    Authenticate socket creator, reverse addresses and distinct per-message sender
    credentials against original pidfds. Commit observation before either readiness
    response. The new readiness pipe is not Cargo's ACK pipe: temporary ACK writer
