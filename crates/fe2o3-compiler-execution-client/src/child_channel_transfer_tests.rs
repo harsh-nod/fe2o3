@@ -46,11 +46,82 @@ fn send(sender: &OwnedFd, bytes: &[u8], descriptors: &[BorrowedFd<'_>]) {
 }
 
 fn eof(peer: &OwnedFd) {
+    wait_for_eof(peer, Duration::from_secs(2), || {}).unwrap();
+}
+
+fn wait_for_eof(peer: &OwnedFd, timeout: Duration, mut pending: impl FnMut()) -> io::Result<()> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::other("EOF deadline overflow"))?;
     let mut byte = [0];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "EOF not observed"));
+        }
+        match rustix::net::recv(peer, &mut byte, RecvFlags::DONTWAIT) {
+            Ok((0, 0)) => return Ok(()),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "data received while awaiting EOF",
+                ));
+            }
+            Err(error) => {
+                let error = io::Error::from(error);
+                if !matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) {
+                    return Err(error);
+                }
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "EOF not observed"));
+        }
+        // Concurrent fork tests can retain CLOEXEC peers until their child execs.
+        // Readiness or a timeout is not EOF; retry the actual receive after waiting.
+        pending();
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+}
+
+#[test]
+fn eof_waits_for_actual_close_of_a_delayed_duplicate() {
+    let (peer, remote) = seqpacket_pair().unwrap();
+    let mut duplicate = Some(rustix::io::fcntl_dupfd_cloexec(&peer, 0).unwrap());
+    drop(peer);
+    let mut observed_pending = false;
+    wait_for_eof(&remote, Duration::from_secs(2), || {
+        observed_pending = true;
+        drop(duplicate.take());
+    })
+    .unwrap();
+    assert!(observed_pending);
+    assert!(duplicate.is_none());
+}
+
+#[test]
+fn eof_refuses_a_retained_peer_at_the_deadline() {
+    let (peer, remote) = seqpacket_pair().unwrap();
+    let error = wait_for_eof(&remote, Duration::from_millis(10), || {}).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     assert_eq!(
-        rustix::net::recv(peer, &mut byte, RecvFlags::DONTWAIT).unwrap(),
-        (0, 0)
+        rustix::net::send(&peer, b"x", SendFlags::NOSIGNAL).unwrap(),
+        1
     );
+}
+
+#[test]
+fn eof_refuses_data_instead_of_accepting_readiness() {
+    let (peer, remote) = seqpacket_pair().unwrap();
+    assert_eq!(
+        rustix::net::send(&peer, b"x", SendFlags::NOSIGNAL).unwrap(),
+        1
+    );
+    let error = wait_for_eof(&remote, Duration::from_secs(2), || {}).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
 
 #[test]
