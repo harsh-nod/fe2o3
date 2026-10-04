@@ -14,6 +14,7 @@ pub(super) enum Guard {
     Form,
     Read,
     Write,
+    GuardedWrite,
     Copy,
     Trap,
     View(views::ViewGuard),
@@ -29,10 +30,15 @@ fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guar
             PointerByteEffectV30::Write { .. } => Guard::Write,
             PointerByteEffectV30::Copy { .. } => Guard::Copy,
             PointerByteEffectV30::None => return Err(mismatch()),
+            PointerByteEffectV30::GuardedWrite { .. } => return Err(mismatch()),
         },
         ByteOperationV30::Pointer(pointer) => match pointer.effect() {
             PointerByteEffectV30::Read { .. } => Guard::Read,
             PointerByteEffectV30::Write { .. } => Guard::Write,
+            PointerByteEffectV30::GuardedWrite { .. } => match actual {
+                OperationKind::GuardedStore { .. } => Guard::GuardedWrite,
+                _ => return Err(mismatch()),
+            },
             PointerByteEffectV30::Copy { .. } => return Err(mismatch()),
             PointerByteEffectV30::None => match actual {
                 OperationKind::GetElementPointer { .. } => Guard::Form,
@@ -70,6 +76,10 @@ pub(super) fn check(
         Guard::Form => Kind::Project,
         Guard::Read => Kind::Read,
         Guard::Write => Kind::Write,
+        // V38 intentionally retains UnknownWrite rather than claiming that a
+        // conditional store definitely initializes memory. Only this exact
+        // derived opcode discharges its dynamic Operation obligation.
+        Guard::GuardedWrite => Kind::Unmodeled,
         Guard::Copy => Kind::Copy,
         Guard::Trap => Kind::Unmodeled,
         Guard::View(
@@ -132,6 +142,7 @@ pub(super) fn check(
                         | Guard::Form
                         | Guard::Read
                         | Guard::Write
+                        | Guard::GuardedWrite
                         | Guard::Copy
                         | Guard::View(_)
                         | Guard::Trap
