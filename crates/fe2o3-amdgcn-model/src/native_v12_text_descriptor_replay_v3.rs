@@ -430,7 +430,7 @@ fn exact_output_bytes(owner: &[u8], published: &[u8], budget: &mut Budget<'_>) -
     }
     Ok(())
 }
-fn engine_text(
+pub(super) fn engine_text(
     maximum: usize,
     budget: &mut Budget<'_>,
     run: impl FnOnce() -> R<String>,

@@ -1,5 +1,9 @@
 use super::*;
 
+mod archive {
+    include!("production_source_enum_archive_v62_tests.rs");
+}
+
 fn original_read<'a>(
     plan: &'a SourceReferencePlanV29<'_, '_>,
     row: &SourceReferenceAccessRecordV29,

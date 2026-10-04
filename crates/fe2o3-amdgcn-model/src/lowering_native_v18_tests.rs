@@ -166,18 +166,52 @@ fn native_v18_target_llvm_ir_uses_exact_worker_layout_on_both_targets() {
 #[test]
 fn native_v18_worker_layout_selection_keeps_historical_renderer_unchanged() {
     let module = module_v18();
-    let llvm = lower_compiler_module_to_gfx942_llvm_ir(&module).unwrap();
+    let worker_header = format!(
+        "target datalayout = \"{}\"",
+        fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
+    );
+    for llvm in [
+        lower_compiler_module_to_llvm_ir(&module).unwrap(),
+        lower_compiler_module_to_gfx942_llvm_ir(&module).unwrap(),
+    ] {
+        assert!(
+            !llvm
+                .lines()
+                .any(|line| line.starts_with("target datalayout"))
+        );
+        assert!(!llvm.lines().any(|line| line == worker_header.as_str()));
+    }
+
     let expected = format!(
         "target datalayout = \"{}\"",
         fe2o3_amd_target::PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
     );
-    assert_eq!(
-        llvm.lines()
-            .filter(|line| line.starts_with("target datalayout"))
-            .collect::<Vec<_>>(),
-        [expected.as_str()],
-    );
-    assert!(!llvm.contains(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1));
+    for (target, capability) in [
+        (
+            LoweringTarget::Gfx942XnackMinusV1,
+            fe2o3_kernel_ir::gfx942_xnack_minus_target_capability(),
+        ),
+        (
+            LoweringTarget::Gfx950XnackMinusV1,
+            fe2o3_kernel_ir::gfx950_xnack_minus_target_capability(),
+        ),
+    ] {
+        let mut module = module_v18();
+        module.required_capabilities.insert(capability.clone());
+        module.kernels[0]
+            .required_capabilities
+            .insert(capability.clone());
+        module.functions[0].required_capabilities.insert(capability);
+        let llvm =
+            lower_compiler_module_to_llvm_ir_for_target(&module, target, None, None, true).unwrap();
+        assert_eq!(
+            llvm.lines()
+                .filter(|line| line.starts_with("target datalayout"))
+                .collect::<Vec<_>>(),
+            [expected.as_str()],
+        );
+        assert!(!llvm.lines().any(|line| line == worker_header.as_str()));
+    }
 }
 
 #[test]

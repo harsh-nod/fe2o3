@@ -1145,6 +1145,18 @@ fn check_execution_archive_v29(
     for projection in place.projections() {
         match (projection.kind(), held, original) {
             (
+                SemanticProjectionKindV1::Downcast(_),
+                SemanticValueBindingV1::Enum { .. },
+                SemanticValueBindingV1::Enum { .. },
+            ) => {
+                if !source_enum_current_binding_same_v58(held, original, &mut 0, budget)? {
+                    return Err(execution_availability_error_v29());
+                }
+                // Exact holder identity is not variant authority. The original
+                // place resolver still checks this downcast and its full suffix.
+                return Ok(());
+            }
+            (
                 SemanticProjectionKindV1::Dereference,
                 SemanticValueBindingV1::Value {
                     id: left_id,
@@ -1285,6 +1297,9 @@ fn check_execution_archive_v29(
                     }
                 }
                 true
+            }
+            (SemanticValueBindingV1::Enum { .. }, _) | (_, SemanticValueBindingV1::Enum { .. }) => {
+                source_enum_current_binding_same_v58(left, right, &mut 0, budget)?
             }
             (
                 SemanticValueBindingV1::MovedExecution | SemanticValueBindingV1::Unmaterialized,

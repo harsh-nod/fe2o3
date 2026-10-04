@@ -214,6 +214,14 @@ impl Fixture {
     }
 
     fn readmit(&self, budget: &mut Budget<'_>) -> Result<()> {
+        self.readmit_with(budget, |_, _| Ok(()))
+    }
+
+    fn readmit_with(
+        &self,
+        budget: &mut Budget<'_>,
+        check_native: impl FnOnce(&Owner, &mut Budget<'_>) -> Result<()>,
+    ) -> Result<()> {
         readmit_target_selection_v53(
             &self.forwarded,
             &self.semantic,
@@ -222,8 +230,86 @@ impl Fixture {
             self.profile,
             &self.received,
             budget,
+            check_native,
         )
     }
+}
+
+#[test]
+fn mixed_v53_native_continuation_uses_the_same_complete_readmitted_owner_only_after_selection() {
+    let fixture = Fixture::new(ProductionAmdTargetProfileV1::Gfx942, 2);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    let seen = std::cell::Cell::new(0);
+    fixture
+        .readmit_with(&mut budget, |owner, budget| {
+            assert_eq!(owner.canonical_bytes(), fixture.forwarded);
+            assert_eq!(owner.module().kernels.len(), 2);
+            assert!(budget.storage() > FLOOR);
+            seen.set(seen.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(seen.get(), 1);
+    assert_eq!(budget.storage(), FLOOR);
+    let mut changed = Fixture::new(ProductionAmdTargetProfileV1::Gfx942, 2);
+    changed.profile = ProductionAmdTargetProfileV1::Gfx950;
+    assert!(
+        changed
+            .readmit_with(&mut budget, |_, _| {
+                seen.set(seen.get() + 1);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert_eq!(seen.get(), 1);
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn mixed_v53_native_continuation_retires_owner_on_error_unwind_and_preserves_sticky_resource() {
+    let fixture = Fixture::new(ProductionAmdTargetProfileV1::Gfx942, 1);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    let error = fixture
+        .readmit_with(&mut budget, |_, budget| {
+            budget.reserve_storage(97)?;
+            Err(binding("native content callback refusal"))
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AdmissionError::MixedV53("native content callback refusal")
+    ));
+    assert_eq!(budget.storage(), FLOOR);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = fixture.readmit_with(&mut budget, |_, budget| {
+            budget.reserve_storage(97)?;
+            panic!("native content callback unwind")
+        });
+    }));
+    assert!(panic.is_err());
+    assert_eq!(budget.storage(), FLOOR);
+    let error = fixture
+        .readmit_with(&mut budget, |_, budget| {
+            budget.reserve_storage(LIMIT).map_err(AdmissionError::from)
+        })
+        .unwrap_err();
+    let expected = returned_resource(&error).unwrap();
+    assert!(
+        matches!(expected, Resource::Storage(limit) if limit.actual() > LIMIT && limit.limit() == LIMIT)
+    );
+    assert_eq!(budget.storage(), FLOOR);
+    let before = (budget.work(), budget.storage());
+    let repeated = fixture
+        .readmit_with(&mut budget, |_, _| {
+            panic!("sticky denial must stop before callback")
+        })
+        .unwrap_err();
+    assert_eq!(returned_resource(&repeated), Some(expected));
+    assert_eq!((budget.work(), budget.storage()), before);
 }
 
 #[test]

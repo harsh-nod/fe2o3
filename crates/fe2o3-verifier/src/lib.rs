@@ -44,6 +44,7 @@ mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod conditional_contract_request_v2;
 mod conditional_ranked_formulas_v1;
+mod mixed_native_correspondence_v60;
 mod mixed_optimizer_refinement_v26;
 mod mixed_target_selection_v53;
 pub use mixed_optimizer_refinement_v26::{
@@ -235,6 +236,7 @@ pub use mir_pliron_verus_execution_evidence_v1::{
     ProductionMirPlironVerusExecutionClaimsV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
     ProductionMirPlironVerusExecutionEvidenceIdentityV1,
 };
+pub use mixed_native_correspondence_v60::*;
 pub use mixed_target_selection_v53::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,

@@ -297,7 +297,9 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                 )
             },
         );
-        result.0.unwrap();
+        result
+            .0
+            .unwrap_or_else(|error| panic!("{mode:?}: {error:?}"));
         assert!(
             completed.get(),
             "all genuine lifetime cuts and paired effects must be generated"

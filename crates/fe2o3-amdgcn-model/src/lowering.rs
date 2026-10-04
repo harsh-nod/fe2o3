@@ -98,6 +98,10 @@ impl LoweringTarget {
         !matches!(self, Self::Baseline)
     }
 
+    const fn supports_f64(self) -> bool {
+        !matches!(self, Self::Baseline)
+    }
+
     const fn supports_gfx942_inline_assembly(self) -> bool {
         !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
     }
@@ -3422,6 +3426,7 @@ fn validate_capabilities(
             | TargetCapability::Subgroups => {}
             TargetCapability::Float16 | TargetCapability::BFloat16
                 if target.supports_narrow_float() => {}
+            TargetCapability::Float64 if target.supports_f64() => {}
             TargetCapability::SubgroupSize(32 | 64) => {}
             TargetCapability::WaveWidth(width) => wave_width = Some(*width),
             TargetCapability::Atomic {
@@ -4863,7 +4868,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Unary { op, operand } => {
                 let ty = self.value_type(*operand);
-                if !supported_unary(*op, ty) {
+                if !supported_unary(*op, ty, self.target) {
                     return Err(LoweringErrors::one(
                         location,
                         LoweringDiagnosticCode::UnsupportedOperation,
@@ -4876,7 +4881,7 @@ impl<'a> FunctionLowerer<'a> {
                 if !ty.as_scalar().is_some_and(|scalar| {
                     scalar == ScalarType::Bool
                         || supported_integer(scalar)
-                        || (scalar == ScalarType::F32
+                        || (matches!(scalar, ScalarType::F32 | ScalarType::F64)
                             && !matches!(self.target, LoweringTarget::Baseline))
                 }) {
                     return Err(LoweringErrors::one(
@@ -4892,6 +4897,7 @@ impl<'a> FunctionLowerer<'a> {
                     scalar == ScalarType::Bool
                         || supported_integer(scalar)
                         || scalar == ScalarType::F32
+                        || (scalar == ScalarType::F64 && self.target.supports_f64())
                 }) {
                     return Err(LoweringErrors::one(
                         location,
@@ -9098,6 +9104,7 @@ fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
     scalar == ScalarType::Bool
         || scalar.is_integer()
         || scalar == ScalarType::F32
+        || (scalar == ScalarType::F64 && target.supports_f64())
         || (target.supports_narrow_float() && matches!(scalar, ScalarType::F16 | ScalarType::Bf16))
 }
 
@@ -9138,6 +9145,7 @@ fn supported_integer(scalar: ScalarType) -> bool {
 fn supported_memory_type(ty: &Type, target: LoweringTarget) -> bool {
     matches!(ty, Type::Scalar(scalar) if supported_integer(*scalar)
         || *scalar == ScalarType::F32
+        || (*scalar == ScalarType::F64 && target.supports_f64())
         || (target.supports_narrow_float()
             && matches!(scalar, ScalarType::F16 | ScalarType::Bf16)))
 }
@@ -9162,9 +9170,8 @@ fn amdgpu_private_element_alignment(ty: &Type) -> Option<u64> {
             Some(2)
         }
         Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
-        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index) | Type::Pointer(_) => {
-            Some(8)
-        }
+        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64)
+        | Type::Pointer(_) => Some(8),
         _ => None,
     }
 }
@@ -9176,7 +9183,9 @@ fn amdgpu_lds_element_bytes(ty: &Type) -> Option<u64> {
             Some(2)
         }
         Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
-        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index) => Some(8),
+        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64) => {
+            Some(8)
+        }
         _ => None,
     }
 }
@@ -9213,9 +9222,11 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
     };
     match op {
         BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
-            supported_integer(scalar) || scalar == ScalarType::F32
+            supported_integer(scalar)
+                || scalar == ScalarType::F32
+                || (scalar == ScalarType::F64 && target.supports_f64())
         }
-        BinaryOp::Divide if scalar == ScalarType::F32 => {
+        BinaryOp::Divide if matches!(scalar, ScalarType::F32 | ScalarType::F64) => {
             !matches!(target, LoweringTarget::Baseline)
         }
         BinaryOp::Divide | BinaryOp::Remainder => supported_integer(scalar),
@@ -9238,7 +9249,7 @@ enum LlvmUnaryStyle {
 fn unary_lowering_style(op: UnaryOp, ty: &Type) -> Option<LlvmUnaryStyle> {
     let scalar = ty.as_scalar()?;
     match (op, scalar) {
-        (UnaryOp::Negate, ScalarType::F32) => Some(LlvmUnaryStyle::FloatNegate),
+        (UnaryOp::Negate, ScalarType::F32 | ScalarType::F64) => Some(LlvmUnaryStyle::FloatNegate),
         (UnaryOp::Negate, scalar) if scalar.is_signed_integer() && supported_integer(scalar) => {
             Some(LlvmUnaryStyle::SignedNegate)
         }
@@ -9248,8 +9259,9 @@ fn unary_lowering_style(op: UnaryOp, ty: &Type) -> Option<LlvmUnaryStyle> {
     }
 }
 
-fn supported_unary(op: UnaryOp, ty: &Type) -> bool {
-    unary_lowering_style(op, ty).is_some()
+fn supported_unary(op: UnaryOp, ty: &Type, target: LoweringTarget) -> bool {
+    (ty.as_scalar() != Some(ScalarType::F64) || target.supports_f64())
+        && unary_lowering_style(op, ty).is_some()
 }
 
 fn validate_pointer(
@@ -9418,6 +9430,7 @@ fn validate_constant(constant: &Constant, target: LoweringTarget) -> Result<(), 
         Constant::F32Bits(bits) if !f32::from_bits(*bits).is_nan() => Ok(()),
         Constant::F32Bits(_) => Err("G1 rejects NaN f32 constants because LLVM's widened hexadecimal spelling does not preserve every payload".to_string()),
         Constant::F16Bits(_) | Constant::Bf16Bits(_) if target.supports_narrow_float() => Ok(()),
+        Constant::F64Bits(_) if target.supports_f64() => Ok(()),
         _ => Err(format!("G1 does not lower constant {constant:?}")),
     }
 }
@@ -9445,6 +9458,10 @@ fn validate_cast(
     };
     if !supported_scalar(from_scalar, target) || !supported_scalar(to_scalar, target) {
         return Err(format!("G1 does not lower cast types {from:?} to {to:?}"));
+    }
+    // F64 admission covers basic scalar operations, not a new cast contract.
+    if matches!(from_scalar, ScalarType::F64) || matches!(to_scalar, ScalarType::F64) {
+        return Err(format!("unsupported {kind:?} cast from {from:?} to {to:?}"));
     }
     let from_width = llvm_width(from_scalar);
     let to_width = llvm_width(to_scalar);
@@ -9640,8 +9657,8 @@ fn llvm_scalar(scalar: ScalarType) -> &'static str {
         ScalarType::I32 | ScalarType::U32 => "i32",
         ScalarType::I64 | ScalarType::U64 | ScalarType::Index => "i64",
         ScalarType::F32 => "float",
+        ScalarType::F64 => "double",
         ScalarType::I128 | ScalarType::U128 => "i128",
-        ScalarType::F64 => unreachable!("preflight rejected unsupported scalar"),
     }
 }
 
@@ -9683,12 +9700,13 @@ fn constant_value(constant: &Constant) -> Option<String> {
             "0x{:016X}",
             f64::from(f32::from_bits(*bits)).to_bits()
         )),
+        Constant::F64Bits(bits) => Some(format!("0x{bits:016X}")),
         _ => None,
     }
 }
 
 fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
-    let floating = ty.as_scalar() == Some(ScalarType::F32);
+    let floating = matches!(ty.as_scalar(), Some(ScalarType::F32 | ScalarType::F64));
     match (op, floating) {
         (BinaryOp::Add, false) => "add",
         (BinaryOp::Subtract, false) => "sub",
@@ -9750,7 +9768,7 @@ fn checked_binary_intrinsic_signature(scalar: ScalarType) -> (&'static str, &'st
 
 fn compare_predicate(predicate: ComparePredicate, ty: &Type) -> &'static str {
     let scalar = ty.as_scalar().expect("validated scalar comparison");
-    if scalar == ScalarType::F32 {
+    if matches!(scalar, ScalarType::F32 | ScalarType::F64) {
         return match predicate {
             ComparePredicate::Equal => "oeq",
             ComparePredicate::NotEqual => "une",
@@ -9776,7 +9794,7 @@ fn compare_predicate(predicate: ComparePredicate, ty: &Type) -> &'static str {
 }
 
 fn compare_opcode(ty: &Type) -> &'static str {
-    if ty.as_scalar() == Some(ScalarType::F32) {
+    if matches!(ty.as_scalar(), Some(ScalarType::F32 | ScalarType::F64)) {
         "fcmp"
     } else {
         "icmp"
@@ -10075,16 +10093,24 @@ mod tests {
             )
         };
 
-        for target in [LoweringTarget::Baseline, LoweringTarget::Gfx942XnackMinusV1] {
+        for target in [
+            LoweringTarget::Baseline,
+            LoweringTarget::Gfx942StrictFloatV1,
+            LoweringTarget::Gfx942XnackMinusV1,
+            LoweringTarget::Gfx950XnackMinusV1,
+        ] {
             for scalar in scalars {
                 for operator in operators {
                     let expected = match operator {
                         BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
-                            ordinary_integer(scalar) || scalar == ScalarType::F32
+                            ordinary_integer(scalar)
+                                || scalar == ScalarType::F32
+                                || (scalar == ScalarType::F64
+                                    && !matches!(target, LoweringTarget::Baseline))
                         }
                         BinaryOp::Divide => {
                             ordinary_integer(scalar)
-                                || (scalar == ScalarType::F32
+                                || (matches!(scalar, ScalarType::F32 | ScalarType::F64)
                                     && !matches!(target, LoweringTarget::Baseline))
                         }
                         BinaryOp::Remainder => ordinary_integer(scalar),
@@ -10171,15 +10197,31 @@ mod tests {
             );
             let expected_not = scalar == ScalarType::Bool || ordinary_integer(scalar);
             assert_eq!(
-                supported_unary(UnaryOp::Negate, &ty),
+                supported_unary(UnaryOp::Negate, &ty, LoweringTarget::Baseline),
                 expected_negate,
                 "unexpected Negate support for {scalar:?}"
             );
             assert_eq!(
-                supported_unary(UnaryOp::Not, &ty),
+                supported_unary(UnaryOp::Not, &ty, LoweringTarget::Baseline),
                 expected_not,
                 "unexpected Not support for {scalar:?}"
             );
+            for target in [
+                LoweringTarget::Gfx942StrictFloatV1,
+                LoweringTarget::Gfx942XnackMinusV1,
+                LoweringTarget::Gfx950XnackMinusV1,
+            ] {
+                assert_eq!(
+                    supported_unary(UnaryOp::Negate, &ty, target),
+                    expected_negate || scalar == ScalarType::F64,
+                    "unexpected Negate support for {scalar:?} on {target:?}"
+                );
+                assert_eq!(
+                    supported_unary(UnaryOp::Not, &ty, target),
+                    expected_not,
+                    "unexpected Not support for {scalar:?} on {target:?}"
+                );
+            }
         }
 
         assert_eq!(
@@ -10192,3 +10234,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "lowering_f64_v62_tests.rs"]
+mod f64_v62_tests;

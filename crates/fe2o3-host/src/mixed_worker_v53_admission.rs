@@ -592,8 +592,22 @@ fn validate_lineage_on_budget(
         profile,
         receipts.target_binding().canonical_preimage(),
         budget,
+        |owner, budget| {
+            fe2o3_verifier::check_mixed_native_correspondence_v60(
+                owner,
+                profile,
+                table.canonical_bytes(),
+                outer,
+                budget,
+            )
+            .map_err(codec_error)
+        },
     )
 }
+
+#[cfg(test)]
+#[path = "mixed_worker_v53_native_lineage_v60_tests.rs"]
+mod native_lineage_tests_v60;
 
 #[cfg(test)]
 mod codec_tests_v53 {

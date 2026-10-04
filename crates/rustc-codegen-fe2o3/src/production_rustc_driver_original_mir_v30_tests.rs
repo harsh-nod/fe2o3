@@ -166,7 +166,16 @@ fn original_observe(
     }
     assert!(source.contains("invocation_source_logical_write_v38"));
     assert!(!source.contains("assume("));
-    assert_eq!(&subject.census()[..2], &[2, 2]);
+    let original = candidate.source(budget)?;
+    let roots = original.root_count(budget)?;
+    assert_eq!(roots, 2);
+    let mut instances = 0usize;
+    for root in 0..roots {
+        instances = instances
+            .checked_add(original.instance_count(root, budget)?)
+            .unwrap();
+    }
+    assert_eq!(&subject.census()[..2], &[roots, instances]);
     assert!(subject.census()[3] >= 4);
     let optimized = candidate.refinement_subject(budget)?;
     assert_eq!(

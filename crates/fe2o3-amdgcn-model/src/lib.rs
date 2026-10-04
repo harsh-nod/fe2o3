@@ -29,6 +29,7 @@ mod lowering;
 mod native_v12_text_descriptor_replay_v1;
 mod native_v12_text_descriptor_replay_v3;
 mod native_v12_text_descriptor_replay_v5;
+mod native_v18_text_descriptor_replay_v60;
 mod production_kir_to_llvm_replay_v1;
 mod production_limits_v1;
 mod production_refinement_v1;
@@ -61,6 +62,7 @@ pub use native_v12_text_descriptor_replay_v5::{
     NativeV12TextDescriptorReplayErrorV5, NativeV12TextDescriptorReplayStorageV5,
     ReplayedNativeV12TextDescriptorRelationV5, check_native_v12_text_descriptor_relation_v5,
 };
+pub use native_v18_text_descriptor_replay_v60::*;
 pub use production_kir_to_llvm_replay_v1::*;
 pub use production_limits_v1::*;
 pub use production_refinement_v1::*;

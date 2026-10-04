@@ -24,6 +24,7 @@ pub(super) fn readmit_target_selection_v53(
     profile: ProductionAmdTargetProfileV1,
     received: &[u8],
     budget: &mut Budget<'_>,
+    check_native: impl FnOnce(&Owner, &mut Budget<'_>) -> Result<()>,
 ) -> Result<()> {
     budget.check_prior_denials_v1()?;
     let scratch = [
@@ -31,6 +32,7 @@ pub(super) fn readmit_target_selection_v53(
         semantic.canonical_preimage().len(),
         descriptor.len(),
         received.len(),
+        std::mem::size_of_val(&check_native),
         size_of::<CanonicalKernelIrReplayStorageV18>(),
         size_of::<MixedTargetSelectionSubjectV53<'_>>(),
         size_of::<
@@ -58,8 +60,8 @@ pub(super) fn readmit_target_selection_v53(
             descriptor,
             profile,
         };
-        let result =
-            check_mixed_target_selection_v53(&subject, received, budget).map_err(codec_error);
+        check_mixed_target_selection_v53(&subject, received, budget).map_err(codec_error)?;
+        let result = check_native(&owner, budget);
         // Owner drops before the same ledger's enclosing scope refunds storage,
         // on success, refusal and unwind. No caller-created owner can substitute.
         drop(owner);
