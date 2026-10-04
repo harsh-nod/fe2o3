@@ -3,17 +3,17 @@
 use crate::mixed_worker_resources_family::mixed_worker_resources_family;
 
 mixed_worker_resources_family!(
-    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53,
-    NominalWorkerFinalizationErrorV53,
-    PreparedFinalizedNominalWorkerHsacoV53,
-    derive_unfinalized_nominal_hsaco_v53,
-    finalize_protected_worker_nominal_hsaco_v53,
-    MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
-    MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53,
-    MixedWorkerFinalizationBudgetErrorV53,
-    NominalFinalizationErrorV53,
-    finalize_protected_worker_nominal_hsaco_on_budget_v53,
-    derive_unfinalized_nominal_hsaco_on_budget_v53
+    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89,
+    NominalWorkerFinalizationErrorV89,
+    PreparedFinalizedNominalWorkerHsacoV89,
+    derive_unfinalized_nominal_hsaco_v89,
+    finalize_protected_worker_nominal_hsaco_v89,
+    MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+    MixedWorkerFinalizationBudgetErrorV89,
+    NominalFinalizationErrorV89,
+    finalize_protected_worker_nominal_hsaco_on_budget_v89,
+    derive_unfinalized_nominal_hsaco_on_budget_v89
 );
 
 #[cfg(test)]
@@ -24,11 +24,11 @@ mod tests {
     #[test]
     fn mixed_finalization_budget_scope_preserves_floor_and_unwind_history() {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(100);
-        let mut budget = Budget::new(&mut work, MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53);
+        let mut budget = Budget::new(&mut work, MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89);
         budget.reserve_storage(19).unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             scope::<(), _>(&mut budget, |scratch, work| {
-                assert_eq!(scratch, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53);
+                assert_eq!(scratch, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89);
                 work(7)?;
                 panic!("injected finalization failure")
             })
@@ -36,18 +36,18 @@ mod tests {
         assert!(panic.is_err());
         assert_eq!(budget.storage(), 19);
         assert_eq!(budget.work(), 8);
-        assert!(budget.peak_storage() > 19 + NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53);
+        assert!(budget.peak_storage() > 19 + NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89);
     }
 
     #[test]
     fn mixed_finalization_budget_scope_headers_are_independently_accounted() {
         fn inspect(scratch: usize, work: &mut Work<'_>) -> Result<u32, Failure> {
-            assert_eq!(scratch, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53);
+            assert_eq!(scratch, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89);
             work(7)?;
             Ok(23)
         }
         type Callback = fn(usize, &mut Work<'_>) -> Result<u32, Failure>;
-        let expected = NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53
+        let expected = NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89
             + size_of::<Callback>()
             + size_of::<Budget<'_>>()
             + size_of::<&mut Work<'_>>()
@@ -93,7 +93,7 @@ mod tests {
             });
             (result, output, budget.work(), budget.peak_storage())
         }
-        let measured = run(8, MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53);
+        let measured = run(8, MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89);
         measured.0.unwrap();
         assert_eq!(measured.1, [0xa5; 8]);
         let exact = run(8, measured.3);
@@ -116,7 +116,7 @@ mod tests {
         let schemas = include_str!("worker_v3_finalized_schema.rs");
         let mixed = schemas
             .split_once(
-                "Self::MixedV53 => crate::mixed_worker_resources_v53::derive_raw_default(bytes)",
+                "Self::MixedV89 => crate::mixed_worker_resources_v89::derive_raw_default(bytes)",
             )
             .expect("compact reconstruction must enter the finite default account");
         assert!(
@@ -132,17 +132,17 @@ mod tests {
             "schema.derive_raw_on_mixed_budget(exact_finalized_hsaco, &mut mixed_budget)"
         ));
         let branch = replay
-            .split_once("DescriptorSchema::MixedV53 => FinalizedOwner::MixedV53(")
+            .split_once("DescriptorSchema::MixedV89 => FinalizedOwner::MixedV89(")
             .unwrap()
             .1
             .split_once("let view = finalized.view();")
             .unwrap()
             .0;
-        assert!(branch.contains("finalize_protected_worker_nominal_hsaco_on_budget_v53("));
+        assert!(branch.contains("finalize_protected_worker_nominal_hsaco_on_budget_v89("));
         assert!(branch.contains("&mut mixed_budget"));
         assert!(
             !branch.contains("Infallible")
-                && !branch.contains("NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53")
+                && !branch.contains("NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89")
         );
     }
 }
