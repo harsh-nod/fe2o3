@@ -4,6 +4,24 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
         let result = run_mode(LIMIT, LIMIT, false, consensus, |text| {
             let (parent, rest) = text.split_once("mod typed_prefix_v49 {").unwrap();
             let (prefix, _) = rest.split_once("mod forwarding_v46 {").unwrap();
+            let expected: std::collections::BTreeSet<_> = parent
+                .split("open spec fn ")
+                .skip(1)
+                .map(|definition| definition.split_once('(').unwrap().0)
+                .filter(|name| {
+                    (0..2).any(|root| {
+                        *name == format!("byte_inputs_{root}_v55")
+                            || ["block_step", "micro_begin", "micro_step", "micro_finish"]
+                                .iter()
+                                .any(|kind| *name == format!("byte_{kind}_{root}_v30"))
+                            || ["operation", "block", "control"]
+                                .iter()
+                                .any(|kind| name.starts_with(&format!("byte_{kind}_{root}_")))
+                    })
+                })
+                .collect();
+            let mut imported = std::collections::BTreeSet::new();
+            let mut targets = std::collections::BTreeSet::new();
             let mut inputs = 0;
             let mut operations = 0;
             let mut blocks = 0;
@@ -17,11 +35,14 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
                     continue;
                 }
                 let target = target.strip_suffix(',').unwrap();
+                assert!(imported.insert(source), "duplicate source alias: {source}");
+                assert!(targets.insert(target), "duplicate target alias: {target}");
                 assert_eq!(
                     parent.matches(&format!("open spec fn {source}(")).count(),
                     1
                 );
-                assert_eq!(text.matches(&format!("open spec fn {source}(")).count(), 1);
+                // Nested forwarding models have their own namespace numbering.
+                assert!(!prefix.contains(&format!("open spec fn {source}(")));
                 assert!(!prefix.contains(&format!("open spec fn {target}(")));
                 if source.starts_with("byte_inputs_") {
                     inputs += 1;
@@ -39,6 +60,7 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
                     panic!("unexpected original interpreter alias: {source}");
                 }
             }
+            assert_eq!(imported, expected);
             assert_eq!(inputs, 2);
             assert_eq!(dispatchers, 8);
             assert!(blocks >= 2);
