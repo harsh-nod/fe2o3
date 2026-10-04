@@ -12,18 +12,18 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "f6ff9f781192d70fc473be4b4c7024fb10c41c5f"
-TREE = "cfd4d1ac64c50eafb83ec0baf883023ec10ebd0d"
+HEAD = "0a8d3868c4d9220d50d9b1a3b5cfbac0825b9128"
+TREE = "2bf4c159b67184d19ea89dbfcac5c3c96a24a878"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
 TEMP = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
-LOGS = TEMP / "issue271-source-native-v88-logs"
+LOGS = TEMP / "issue271-source-native-v88-r2-logs"
 ROSTER = CONTROL / ".github/diagnostics/issue271-proof-roster-v78.json"
 os.umask(0o077)
 assert TEMP != ROOT and ROOT not in TEMP.parents
 LOGS.mkdir(mode=0o700)
-LANE = Path(tempfile.mkdtemp(prefix="issue271-source-native-v88-", dir=TEMP))
+LANE = Path(tempfile.mkdtemp(prefix="issue271-source-native-v88-r2-", dir=TEMP))
 IDENTITY = (LANE.stat().st_dev, LANE.stat().st_ino, LANE.stat().st_uid)
 INTERRUPTED = []
 ACTIVE_CHILD = None
@@ -184,7 +184,7 @@ def run(name, args, environment, seconds, limit):
 before, error, coverage, tools, tool_pins = None, None, None, [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "6c4b3a4dfa4a66b2c71b933c2716f8ebaa3199ea35745919e1e81604d970cb8c"
+    assert before["roster_sha256"] == "8d131498f25039dece80f953305c70a0400d6bd804b1b1f62c2fd160abecb5df"
     roster = json.loads(ROSTER.read_text())
     assert roster["head"] == HEAD and roster["package"] == "fe2o3-lower-mir-kernel"
     filters = roster["filters"]
