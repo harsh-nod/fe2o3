@@ -550,7 +550,7 @@ fn mixed_v53_native_continuation_receives_same_checked_graph_and_cleans_result_e
                         |owner, budget| {
                             entered.set(entered.get() + 1);
                             assert_eq!(owner.canonical_bytes(), fixture.owner.canonical_bytes());
-                            assert_eq!(budget.work_ledger_identity_v1(), ledger);
+                            assert!(budget.work_ledger_identity_v1() == ledger);
                             assert!(budget.storage() > floor);
                             if phase == 1 {
                                 return Err(binding("fixture continuation refusal"));
@@ -579,7 +579,7 @@ fn mixed_v53_native_continuation_receives_same_checked_graph_and_cleans_result_e
         }
         assert_eq!(entered.get(), usize::from(phase != 3));
         assert_eq!(budget.storage(), floor);
-        assert_eq!(budget.work_ledger_identity_v1(), ledger);
+        assert!(budget.work_ledger_identity_v1() == ledger);
         assert!(budget.work() > 0);
         assert!(!outer.authenticates_producer());
         assert!(!outer.grants_load_authority() && !outer.grants_launch_authority());

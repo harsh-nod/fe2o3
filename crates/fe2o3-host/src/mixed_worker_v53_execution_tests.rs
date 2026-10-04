@@ -256,7 +256,7 @@ fn mixed_v53_execution_evidence_lease_refunds_only_owned_storage_after_drop_and_
             (budget.storage(), budget.work(), budget.peak_storage()),
             (41, 7, 94)
         );
-        assert_eq!(budget.work_ledger_identity_v1(), ledger);
+        assert!(budget.work_ledger_identity_v1() == ledger);
     }
     let denied = budget.charge_work(100).unwrap_err();
     budget.reserve_storage(53).unwrap();

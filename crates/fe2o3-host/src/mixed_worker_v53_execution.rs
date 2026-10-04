@@ -164,6 +164,7 @@ fn prepared_content(
             fe2o3_runtime::Gfx942RuntimeBufferAccessV1::ReadOnly => 1u8,
             fe2o3_runtime::Gfx942RuntimeBufferAccessV1::WriteOnly => 2,
             fe2o3_runtime::Gfx942RuntimeBufferAccessV1::ReadWrite => 3,
+            _ => return Err(binding("V53 unsupported runtime buffer access")),
         };
         if length != u64::try_from(buffer.bytes().len()).map_err(|_| Resource::Arithmetic)? {
             return Err(binding("V53 buffer policy length"));
