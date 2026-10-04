@@ -1,6 +1,7 @@
 // Pending source/output correspondence only. A native graph/epoch and complete
 // bounds, alias, initialization and concurrency proofs remain independent.
 use fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1;
+include!("production_source_global_guard_v85.rs");
 include!("production_optimized_source_global_native_v18.rs");
 include!("production_optimized_source_global_read_conditions_v18.rs");
 #[cfg(test)]
@@ -13,8 +14,7 @@ struct GlobalSourceLogicalEndpointV18 {
     data: SliceOperation,
     length: SliceOperation,
     address: SliceOperation,
-    guard_condition: SliceDefinition,
-    guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1,
+    guard: GlobalSourceGuardV85,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,6 +191,9 @@ fn global_source_endpoint_v18(
     origin: &GlobalSourceAccessOriginV18,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Option<GlobalSourceAccessEndpointV18>> {
+    // V18 source recipes remain CFG-only until an issued-write constructor
+    // authenticates every explicit-predicate input/output field.
+    let guard = logical.guard.require_cfg_v26()?;
     budget.charge_work(32 + 4)?;
     let row = source_operation_row_v18(inventory, logical.access.operation, budget)?;
     let (pointer, value, memory, scalar, writing) = match &row.operation.kind {
@@ -232,7 +235,7 @@ fn global_source_endpoint_v18(
     }
     if logical.access.effect != 0
         || row.effects.len() != 1
-        || logical.guard_edge.source.function != logical.access.operation.block.function
+        || guard.edge.source.function != logical.access.operation.block.function
     {
         return Err(ProductionSourceOwnedViewErrorV18::Binding(
             "pending global access effect or guard owner",
@@ -385,6 +388,8 @@ fn global_source_headers_v18() -> Result<usize, ArgumentResourceV1> {
         argument_product_v1(3, h::<GlobalSourceAccessEndpointV18>()?)?,
         argument_product_v1(2, h::<Option<GlobalSourceAccessEndpointV18>>()?)?,
         h::<GlobalSourceAccessOriginV18>()?,
+        h::<GlobalSourceGuardV85>()?,
+        h::<GlobalSourceCfgGuardV85>()?,
         h::<&fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>>()?,
         h::<&fe2o3_kernel_analysis::CanonicalKirBlockRefV1<'_>>()?,
         h::<&Option<Terminator>>()?,

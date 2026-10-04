@@ -24,6 +24,8 @@ fn source_global_domain_join_headers_v30() -> Result<usize, ArgumentResourceV1> 
         >,
         SourceOwnedResultV18<()>,
         Result<(), PendingGlobalReadConditionErrorV18>,
+        GlobalSourceCfgGuardV85,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     argument_sum_v1(&[
         argument_product_v1(2, size_of::<Frame<'_>>())?,
@@ -67,8 +69,8 @@ fn check_source_read_endpoint_prepaid_v30(
         let root = optimized_source_definition_row_v18(inventory, endpoint.logical.root, budget)?;
         let index = optimized_source_definition_row_v18(inventory, endpoint.logical.index, budget)?;
         let address_index = optimized_source_definition_row_v18(inventory, endpoint.address_index, budget)?;
-        let condition = optimized_source_definition_row_v18(inventory, endpoint.logical.guard_condition, budget)?;
-        let guard = source_block_row_v18(inventory, endpoint.logical.guard_edge.source, budget)?;
+        let condition = optimized_source_definition_row_v18(inventory, endpoint.logical.guard.condition(), budget)?;
+        let guard = source_block_row_v18(inventory, endpoint.logical.guard.require_cfg_v26()?.edge.source, budget)?;
         budget.charge_work(32)?;
         // This only rejoins actual control transport. Truth and the exact
         // taken edge still come from the independent formal fact below.
@@ -120,7 +122,7 @@ fn check_source_read_endpoint_prepaid_v30(
             SliceDefinition::Result { operation, .. } => operation.block.function,
         };
         let length = source_operation_row_v18(inventory, endpoint.logical.length, budget)?.operation;
-        let edge_index = guard.edges.start.checked_add(endpoint.logical.guard_edge.successor as usize)
+        let edge_index = guard.edges.start.checked_add(endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize)
             .filter(|index| *index < guard.edges.end).ok_or(ArgumentResourceV1::Arithmetic)?;
         let edge = inventory.edges().get(edge_index).ok_or(
             ProductionSourceOwnedViewErrorV18::Binding("pending global read guard edge absent"))?;
@@ -146,7 +148,7 @@ fn check_source_read_endpoint_prepaid_v30(
             || definition_function(condition.coordinate) != fact.operation().block.function
             || definition_function(predicate.coordinate) != fact.operation().block.function
             || endpoint.logical.length.block.function != fact.operation().block.function
-            || endpoint.logical.guard_edge.source.function != fact.operation().block.function
+            || endpoint.logical.guard.require_cfg_v26()?.edge.source.function != fact.operation().block.function
             || length_value.id != fact.normalized_length_origin() || length_value.ty != Type::INDEX
             || predicate.value != Some(domain.predicate()) || predicate.ty != &Type::BOOL
             || !matches!(&comparison.kind, OperationKind::Compare {
@@ -161,10 +163,10 @@ fn check_source_read_endpoint_prepaid_v30(
             || domain.element_bytes() != u64::from(bits / 8)
             || !endpoint.memory.alignment.is_power_of_two()
             || u64::from(endpoint.memory.alignment) > domain.element_bytes()
-            || edge.coordinate != endpoint.logical.guard_edge
+            || edge.coordinate != endpoint.logical.guard.require_cfg_v26()?.edge
             || domain.path() != (fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
                 source: guard.block.id,
-                ordinal: endpoint.logical.guard_edge.successor as usize,
+                ordinal: endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize,
                 target: edge.target_id,
             })
         {
@@ -226,11 +228,11 @@ fn check_source_store_endpoint_prepaid_v30(
             optimized_source_definition_row_v18(inventory, endpoint.address_index, budget)?;
         let condition = optimized_source_definition_row_v18(
             inventory,
-            endpoint.logical.guard_condition,
+            endpoint.logical.guard.condition(),
             budget,
         )?;
         let guard =
-            source_block_row_v18(inventory, endpoint.logical.guard_edge.source, budget)?;
+            source_block_row_v18(inventory, endpoint.logical.guard.require_cfg_v26()?.edge.source, budget)?;
         let length =
             source_operation_row_v18(inventory, endpoint.logical.length, budget)?.operation;
         let predicate = if condition.ty == &Type::BOOL {
@@ -298,7 +300,7 @@ fn check_source_store_endpoint_prepaid_v30(
         let edge_index = guard
             .edges
             .start
-            .checked_add(endpoint.logical.guard_edge.successor as usize)
+            .checked_add(endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize)
             .filter(|index| *index < guard.edges.end)
             .ok_or(ArgumentResourceV1::Arithmetic)?;
         let edge = inventory.edges().get(edge_index).ok_or(
@@ -339,7 +341,7 @@ fn check_source_store_endpoint_prepaid_v30(
             || definition_function(condition.coordinate) != fact.operation().block.function
             || definition_function(predicate.coordinate) != fact.operation().block.function
             || endpoint.logical.length.block.function != fact.operation().block.function
-            || endpoint.logical.guard_edge.source.function != fact.operation().block.function
+            || endpoint.logical.guard.require_cfg_v26()?.edge.source.function != fact.operation().block.function
             || length_value.id != fact.normalized_length_origin()
             || length_value.ty != Type::INDEX
             || predicate.value != Some(domain.predicate())
@@ -353,11 +355,11 @@ fn check_source_store_endpoint_prepaid_v30(
             || domain.element_bytes() != u64::from(bits / 8)
             || !endpoint.memory.alignment.is_power_of_two()
             || u64::from(endpoint.memory.alignment) > domain.element_bytes()
-            || edge.coordinate != endpoint.logical.guard_edge
+            || edge.coordinate != endpoint.logical.guard.require_cfg_v26()?.edge
             || domain.path()
                 != (fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
                     source: guard.block.id,
-                    ordinal: endpoint.logical.guard_edge.successor as usize,
+                    ordinal: endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize,
                     target: edge.target_id,
                 })
         {

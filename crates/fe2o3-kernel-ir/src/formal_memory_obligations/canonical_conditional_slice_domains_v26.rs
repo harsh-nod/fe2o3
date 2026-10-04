@@ -157,7 +157,8 @@ struct SliceFunctionV26 {
 }
 
 /// Conditional whole-module global family proof. Every global effect must be
-/// one ordinary guarded scalar slice Load or Store in this batch. Unsupported
+/// one guarded scalar slice Load or Store in this batch. The V85 opt-in builder
+/// also admits explicit-predicate GuardedStore facts; V26 remains CFG-only. Unsupported
 /// effects, raw pointers and unresolved calls prevent construction. Private
 /// effects are deliberately unclaimed and require an independent private proof.
 ///
@@ -294,6 +295,38 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<Option<T>> {
+    with_slice_domains_profile::<false, T>(reads, stores, launches, width, budget, consume)
+}
+
+/// Opt-in complete native effect census for CFG-guarded and explicitly predicated
+/// stores. Local V84 facts remain necessary but insufficient: every write must
+/// have the same direct invocation projection and exact launch/width premise.
+/// This does not authenticate source ownership, address formation, or runtime bindings.
+pub fn with_canonical_predicated_conditional_slice_domains_v85<'g, 'w, T>(
+    reads: &CheckedCanonicalGuardedGlobalReadsV18<'_, 'g>,
+    stores: &CheckedCanonicalGuardedGlobalStoresV24<'_, 'g>,
+    launches: &[ExplicitLaunchExtent],
+    width: FormalIndexWidth,
+    budget: &mut Budget<'w>,
+    consume: impl for<'s> FnOnce(
+        &CheckedCanonicalConditionalSliceDomainsV26<'s, 'g>,
+        &mut Budget<'w>,
+    ) -> Result<T>,
+) -> Result<Option<T>> {
+    with_slice_domains_profile::<true, T>(reads, stores, launches, width, budget, consume)
+}
+
+fn with_slice_domains_profile<'g, 'w, const PREDICATED: bool, T>(
+    reads: &CheckedCanonicalGuardedGlobalReadsV18<'_, 'g>,
+    stores: &CheckedCanonicalGuardedGlobalStoresV24<'_, 'g>,
+    launches: &[ExplicitLaunchExtent],
+    width: FormalIndexWidth,
+    budget: &mut Budget<'w>,
+    consume: impl for<'s> FnOnce(
+        &CheckedCanonicalConditionalSliceDomainsV26<'s, 'g>,
+        &mut Budget<'w>,
+    ) -> Result<T>,
+) -> Result<Option<T>> {
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(&*budget) as usize;
@@ -309,7 +342,7 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
             std::mem::align_of_val(&consume),
         )?)?;
         let Some((functions, parameters, accesses)) =
-            build_slice_batch_v26(owner, reads, stores, launches, width, budget)?
+            build_slice_batch_v26::<PREDICATED>(owner, reads, stores, launches, width, budget)?
         else {
             return Ok(None);
         };
@@ -430,7 +463,7 @@ fn slice_batch_vector_v26<T>(count: usize, budget: &mut Budget<'_>) -> Result<Ve
     Ok(rows)
 }
 
-fn build_slice_batch_v26(
+fn build_slice_batch_v26<const PREDICATED: bool>(
     owner: &VerifiedCanonicalKernelIrModuleV18,
     reads: &CheckedCanonicalGuardedGlobalReadsV18<'_, '_>,
     stores: &CheckedCanonicalGuardedGlobalStoresV24<'_, '_>,
@@ -518,10 +551,13 @@ fn build_slice_batch_v26(
                             }
                         }
                         OperationKind::Store { access, .. }
-                            if matches!(
-                                access.address_space,
-                                AddressSpace::Global | AddressSpace::Generic
-                            ) =>
+                        | OperationKind::GuardedStore { access, .. }
+                            if (PREDICATED
+                                || matches!(actual.kind, OperationKind::Store { .. }))
+                                && matches!(
+                                    access.address_space,
+                                    AddressSpace::Global | AddressSpace::Generic
+                                ) =>
                         {
                             match stores.store_at(at, budget)? {
                                 CanonicalGuardedGlobalStoreOutcomeV24::ProvedLocalConditions(

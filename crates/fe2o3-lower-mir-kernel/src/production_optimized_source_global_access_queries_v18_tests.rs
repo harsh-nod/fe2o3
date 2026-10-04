@@ -50,6 +50,8 @@ fn global_header_oracle_v18() -> usize {
         + 3 * h::<GlobalSourceAccessEndpointV18>()
         + 2 * h::<Option<GlobalSourceAccessEndpointV18>>()
         + h::<GlobalSourceAccessOriginV18>()
+        + h::<GlobalSourceGuardV85>()
+        + h::<GlobalSourceCfgGuardV85>()
         + h::<&fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>>()
         + h::<&fe2o3_kernel_analysis::CanonicalKirBlockRefV1<'_>>()
         + h::<&Option<Terminator>>()
@@ -189,8 +191,8 @@ pub(super) fn test_pending_global_accesses_v18(
                     OperationKind::SliceData { .. }));
                 optimized_source_definition_row_v18(inventory, endpoint.logical.root, budget)?;
                 optimized_source_definition_row_v18(inventory, endpoint.logical.index, budget)?;
-                assert_eq!(global_source_guard_definition_v18(inventory, endpoint.logical.guard_edge.source, budget)?,
-                    endpoint.logical.guard_condition);
+                assert_eq!(global_source_guard_definition_v18(inventory, endpoint.logical.guard.cfg_for_test().edge.source, budget)?,
+                    endpoint.logical.guard.cfg_for_test().condition);
             }
             counts[usize::from(pair.output.writing)] += 1;
         }

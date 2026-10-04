@@ -620,11 +620,13 @@ fn install_optimized_issued_roles_inner_v18(
                 length: issuer.input[0],
                 data: issuer.input[2],
                 address: issuer.input[3],
-                guard_condition: input_condition,
-                guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
-                    source: input_guard,
-                    successor,
-                },
+                guard: GlobalSourceGuardV85::CfgEdge(GlobalSourceCfgGuardV85 {
+                    condition: input_condition,
+                    edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                        source: input_guard,
+                        successor,
+                    },
+                }),
             },
             GlobalSourceLogicalEndpointV18 {
                 access: SliceAccess {
@@ -636,11 +638,13 @@ fn install_optimized_issued_roles_inner_v18(
                 length: issuer.output[0],
                 data: issuer.output[2],
                 address: issuer.output[3],
-                guard_condition: condition.definition,
-                guard_edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
-                    source: block,
-                    successor,
-                },
+                guard: GlobalSourceGuardV85::CfgEdge(GlobalSourceCfgGuardV85 {
+                    condition: condition.definition,
+                    edge: fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                        source: block,
+                        successor,
+                    },
+                }),
             },
             budget,
         )?;

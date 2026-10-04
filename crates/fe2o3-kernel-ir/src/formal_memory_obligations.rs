@@ -44,6 +44,7 @@ pub use guarded_access_v1::{
     CanonicalConditionalSliceAccessV26, CanonicalConditionalSliceDomainV26,
     CanonicalConditionalSliceParameterV26, CheckedCanonicalConditionalSliceDomainsV26,
     with_canonical_conditional_slice_domains_v26,
+    with_canonical_predicated_conditional_slice_domains_v85,
 };
 pub use guarded_access_v1::{
     CanonicalGuardedGlobalReadErrorV1, CanonicalGuardedGlobalReadFactV1,

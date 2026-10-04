@@ -214,7 +214,7 @@ pub(super) fn test_global_source_expression_pair_v23(
                 0 => changed.instance = usize::MAX,
                 1 => changed.output.value = changed.output.pointer,
                 2 => changed.input.logical.root = changed.input.logical.index,
-                3 => changed.output.logical.guard_edge.successor = u32::MAX,
+                3 => changed.output.logical.guard.cfg_mut_for_test().edge.successor = u32::MAX,
                 4 => changed.output.writing = false,
                 _ => unreachable!(),
             }

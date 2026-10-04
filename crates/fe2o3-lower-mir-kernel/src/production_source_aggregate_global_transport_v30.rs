@@ -36,6 +36,7 @@ pub(super) fn aggregate_global_headers_v30() -> Result<usize, ArgumentResourceV1
         [SliceDefinition; AGGREGATE_GLOBAL_DEFINITIONS_V30],
         ProductionMixedSliceRuntimePremiseV26,
         ProductionMixedRuntimeOccurrenceV26,
+        GlobalSourceCfgGuardV85,
     );
     type Results = (
         Result<AggregateGlobalTransportV30, ProductionAggregateSourceErrorV30>,
@@ -47,6 +48,7 @@ pub(super) fn aggregate_global_headers_v30() -> Result<usize, ArgumentResourceV1
         SourceOwnedResultV18<[SliceDefinition; AGGREGATE_GLOBAL_DEFINITIONS_V30]>,
         SourceOwnedResultV18<usize>,
         SourceOwnedResultV18<()>,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     type Queries<'a> = (
         Result<
@@ -136,7 +138,7 @@ fn aggregate_global_original_definitions_v30(
         endpoint.logical.root,
         endpoint.logical.index,
         endpoint.address_index,
-        endpoint.logical.guard_condition,
+        endpoint.logical.guard.condition(),
         value(endpoint.formation_pointer, budget)?,
         value(endpoint.pointer, budget)?,
         value(endpoint.value, budget)?,
@@ -320,7 +322,7 @@ impl AggregateGlobalTransportV30 {
                 budget,
             )?);
             operations.push(occurrence.source.input.logical.access.operation);
-            edges.push(occurrence.source.input.logical.guard_edge);
+            edges.push(occurrence.source.input.logical.guard.require_cfg_v26()?.edge);
         }
         let coordinates = AggregateCoordinateTransportV30::seed(
             stage.input,
@@ -667,8 +669,10 @@ impl AggregateGlobalTransportV30 {
             data: pointers.1,
             length,
             address: pointers.0,
-            guard_condition: global_source_guard_definition_v18(output, edge.source, budget)?,
-            guard_edge: edge,
+            guard: GlobalSourceGuardV85::CfgEdge(GlobalSourceCfgGuardV85 {
+                condition: global_source_guard_definition_v18(output, edge.source, budget)?,
+                edge,
+            }),
         };
         let endpoint = global_source_endpoint_v18(output, logical, &initial.source.origin, budget)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
@@ -962,6 +966,7 @@ impl AggregateGlobalTransportV30 {
                         self.initial_occurrences[ordinal] = ProductionMixedRuntimeOccurrenceV26 {
                             premise: initial.premise,
                             source: pair,
+                            cfg_guard: pair.output.logical.guard.require_cfg_v26()?,
                             domain,
                             projection: fact.invocation_projection(),
                         };

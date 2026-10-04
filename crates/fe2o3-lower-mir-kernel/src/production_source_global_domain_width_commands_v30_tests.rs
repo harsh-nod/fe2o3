@@ -24,16 +24,16 @@ pub(super) fn test_source_domain_width_v30(
                                     .expect("genuine source Store");
                                 let floor = budget.storage();
                                 for pair in [read, store] {
-                                    let condition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard_condition, budget)?;
+                                    let condition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard.cfg_for_test().condition, budget)?;
                                     assert_eq!(condition.ty, &Type::Scalar(scalar));
-                                    let guard = source_block_row_v18(inventory, pair.output.logical.guard_edge.source, budget)?;
+                                    let guard = source_block_row_v18(inventory, pair.output.logical.guard.cfg_for_test().edge.source, budget)?;
                                     let Some(Terminator::Switch { selector, cases, .. }) = guard.block.terminator.as_ref() else {
                                         panic!("source must emit existing legacy Switch, never IntegerSwitch");
                                     };
                                     assert_eq!(condition.value, Some(*selector));
                                     assert_eq!(cases.len(), 1);
                                     assert_eq!(cases[0].value, u64::from(!default_true));
-                                    assert_eq!(pair.output.logical.guard_edge.successor, u32::from(default_true));
+                                    assert_eq!(pair.output.logical.guard.cfg_for_test().edge.successor, u32::from(default_true));
                                     let SliceDefinition::Result { operation: cast, result: 0 } = condition.coordinate else {
                                         panic!("source discriminant result");
                                     };
@@ -64,8 +64,8 @@ pub(super) fn test_source_domain_width_v30(
                                 observed.set([1, 1]);
                                 let Some((writing, fault)) = fault else { return Ok(()); };
                                 let (pair, other) = if writing { (store, read) } else { (read, store) };
-                                let condition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard_condition, budget)?;
-                                let other_condition = optimized_source_definition_row_v18(inventory, other.output.logical.guard_condition, budget)?;
+                                let condition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard.cfg_for_test().condition, budget)?;
+                                let other_condition = optimized_source_definition_row_v18(inventory, other.output.logical.guard.cfg_for_test().condition, budget)?;
                                 assert_eq!(condition.ty, other_condition.ty);
                                 assert_ne!(condition.value, other_condition.value);
                                 let SliceDefinition::Result { operation: cast, result: 0 } = condition.coordinate else { unreachable!(); };
@@ -74,10 +74,10 @@ pub(super) fn test_source_domain_width_v30(
                                     .map_err(source_pointer_inventory_error_v18)?.expect("actual predicate");
                                 let mut changed = *pair;
                                 match fault {
-                                    0 => changed.output.logical.guard_condition = other_condition.coordinate,
-                                    1 => changed.output.logical.guard_condition = predicate.coordinate,
-                                    2 => changed.output.logical.guard_edge = other.output.logical.guard_edge,
-                                    3 => changed.output.logical.guard_edge.successor = 1,
+                                    0 => changed.output.logical.guard.cfg_mut_for_test().condition = other_condition.coordinate,
+                                    1 => changed.output.logical.guard.cfg_mut_for_test().condition = predicate.coordinate,
+                                    2 => changed.output.logical.guard.cfg_mut_for_test().edge = other.output.logical.guard.cfg_for_test().edge,
+                                    3 => changed.output.logical.guard.cfg_mut_for_test().edge.successor = 1,
                                     _ => unreachable!(),
                                 }
                                 let headers = if writing { slice_store_domain_headers_v25()? } else { global_read_condition_headers_v18(0, 1)? };

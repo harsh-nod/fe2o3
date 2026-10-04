@@ -109,6 +109,9 @@ impl ProductionMixedSliceRuntimePremiseV26 {
 pub struct ProductionMixedRuntimeOccurrenceV26 {
     premise: usize,
     source: GlobalSourceAccessPairV18,
+    // The V26 public API and wire require a real edge. Explicit predicates
+    // cannot construct this occurrence, even after a native local proof.
+    cfg_guard: GlobalSourceCfgGuardV85,
     domain: fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26,
     projection: Option<(fe2o3_kernel_ir::Axis, ValueId)>,
 }
@@ -143,11 +146,11 @@ impl ProductionMixedRuntimeOccurrenceV26 {
     }
     /// Returns the exact output edge whose condition guards the memory access.
     pub const fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
-        self.source.output.logical.guard_edge
+        self.cfg_guard.edge
     }
     /// Returns the output SSA definition of the authenticated access condition.
     pub const fn output_guard_condition(&self) -> SliceDefinition {
-        self.source.output.logical.guard_condition
+        self.cfg_guard.condition
     }
     /// Returns the conditional read or write domain with its exact raw value IDs.
     pub const fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26 {
@@ -625,6 +628,7 @@ where
                                     occurrences.push(ProductionMixedRuntimeOccurrenceV26 {
                                         premise,
                                         source: *pair,
+                                        cfg_guard: pair.output.logical.guard.require_cfg_v26()?,
                                         domain: fact.domain(),
                                         projection: fact.invocation_projection(),
                                     });

@@ -9,6 +9,8 @@ fn source_domain_join_header_oracle_v30() -> usize {
         >,
         SourceOwnedResultV18<()>,
         Result<(), PendingGlobalReadConditionErrorV18>,
+        GlobalSourceCfgGuardV85,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     2 * (size_of::<Frame<'_>>() + std::mem::align_of::<Frame<'_>>())
 }

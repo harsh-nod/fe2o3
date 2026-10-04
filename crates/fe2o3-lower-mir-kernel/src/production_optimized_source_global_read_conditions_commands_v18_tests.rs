@@ -435,17 +435,17 @@ pub(super) fn test_pending_global_read_conditions_v18(
                             }).map_err(PendingGlobalReadConditionErrorV18::from)
                                 .map_err(local_read_test_error_v18)?;
                             assert_eq!(budget.storage(), floor);
-                            let guard = source_block_row_v18(inventory, pair.output.logical.guard_edge.source, budget)?;
+                            let guard = source_block_row_v18(inventory, pair.output.logical.guard.cfg_for_test().edge.source, budget)?;
                             let Some(Terminator::Switch { selector, cases, default_target, .. }) = guard.block.terminator.as_ref()
                                 else { panic!("actual issued guard must retain the expected Switch shape"); };
                             let [case] = cases.as_slice() else { panic!("exact one-case issued discriminant switch"); };
                             assert_eq!(case.value, 1);
                             assert_ne!(case.target, *default_target);
-                            assert_eq!(pair.output.logical.guard_edge.successor, 0);
+                            assert_eq!(pair.output.logical.guard.cfg_for_test().edge.successor, 0);
                             let edge = &inventory.edges()[guard.edges.start];
-                            assert_eq!(edge.coordinate, pair.output.logical.guard_edge);
+                            assert_eq!(edge.coordinate, pair.output.logical.guard.cfg_for_test().edge);
                             assert_eq!(edge.target_id, case.target);
-                            let selector_definition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard_condition, budget)?;
+                            let selector_definition = optimized_source_definition_row_v18(inventory, pair.output.logical.guard.cfg_for_test().condition, budget)?;
                             assert_eq!(selector_definition.value, Some(*selector));
                             assert_eq!(selector_definition.ty, &Type::Scalar(ScalarType::U32));
                             let SliceDefinition::Result { operation: cast, result: 0 } = selector_definition.coordinate
@@ -480,7 +480,7 @@ pub(super) fn test_pending_global_read_conditions_v18(
                         }
                         GlobalReadConditionTestV18::ControlTransport(fault) => {
                             let other = source.roles.rows.iter().find_map(|row| row.global.as_ref().filter(|other|
-                                other.output.writing && other.output.logical.guard_condition != pair.output.logical.guard_condition))
+                                other.output.writing && other.output.logical.guard.cfg_for_test().condition != pair.output.logical.guard.cfg_for_test().condition))
                                 .expect("second actual guarded descriptor with a distinct selector");
                             source.with_native_access_v18(native, other.output.logical.access.operation, budget, |view, _| {
                                 let view = view.expect("genuine cross-descriptor Store native pair");
@@ -497,7 +497,7 @@ pub(super) fn test_pending_global_read_conditions_v18(
                             assert_eq!(budget.storage(), floor);
                             let fe2o3_kernel_ir::CanonicalGuardedGlobalReadOutcomeV18::ProvedLocalConditions(fact)
                                 = facts.read_at(operation, budget).unwrap() else { panic!("genuine formal issued read"); };
-                            let guard = source_block_row_v18(inventory, pair.output.logical.guard_edge.source, budget).unwrap();
+                            let guard = source_block_row_v18(inventory, pair.output.logical.guard.cfg_for_test().edge.source, budget).unwrap();
                             let Some(Terminator::Switch { cases, .. }) = guard.block.terminator.as_ref()
                                 else { panic!("actual issued Switch"); };
                             let [case] = cases.as_slice() else { panic!("one actual case"); };
@@ -505,8 +505,8 @@ pub(super) fn test_pending_global_read_conditions_v18(
                             assert_eq!(fact.domain().path(), fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
                                 source: guard.block.id, ordinal: 0, target: case.target,
                             });
-                            let first = optimized_source_definition_row_v18(inventory, pair.output.logical.guard_condition, budget).unwrap();
-                            let second = optimized_source_definition_row_v18(inventory, other.output.logical.guard_condition, budget).unwrap();
+                            let first = optimized_source_definition_row_v18(inventory, pair.output.logical.guard.cfg_for_test().condition, budget).unwrap();
+                            let second = optimized_source_definition_row_v18(inventory, other.output.logical.guard.cfg_for_test().condition, budget).unwrap();
                             assert_eq!(first.ty, &Type::Scalar(ScalarType::U32));
                             assert_eq!(first.ty, second.ty);
                             assert_ne!(first.value, second.value);
@@ -522,13 +522,13 @@ pub(super) fn test_pending_global_read_conditions_v18(
                             assert_ne!(*second_predicate, fact.domain().predicate());
                             let mut changed = *pair;
                             match fault {
-                                0 => changed.output.logical.guard_condition = second.coordinate,
-                                1 => changed.output.logical.guard_condition = predicate.coordinate,
-                                2 => changed.output.logical.guard_edge = other.output.logical.guard_edge,
-                                3 => changed.output.logical.guard_edge.successor = 1,
+                                0 => changed.output.logical.guard.cfg_mut_for_test().condition = second.coordinate,
+                                1 => changed.output.logical.guard.cfg_mut_for_test().condition = predicate.coordinate,
+                                2 => changed.output.logical.guard.cfg_mut_for_test().edge = other.output.logical.guard.cfg_for_test().edge,
+                                3 => changed.output.logical.guard.cfg_mut_for_test().edge.successor = 1,
                                 4 => {
-                                    changed.output.logical.guard_condition = second.coordinate;
-                                    changed.output.logical.guard_edge = other.output.logical.guard_edge;
+                                    changed.output.logical.guard.cfg_mut_for_test().condition = second.coordinate;
+                                    changed.output.logical.guard.cfg_mut_for_test().edge = other.output.logical.guard.cfg_for_test().edge;
                                 }
                                 _ => unreachable!(),
                             }
@@ -659,15 +659,15 @@ pub(super) fn test_pending_global_read_conditions_v18(
                                     changed.output.address_index = second.coordinate;
                                 }
                                 2 => {
-                                    let exact = optimized_source_definition_row_v18(inventory, pair.output.logical.guard_condition, budget).unwrap();
-                                    let second = optimized_source_definition_row_v18(inventory, other.output.logical.guard_condition, budget).unwrap();
+                                    let exact = optimized_source_definition_row_v18(inventory, pair.output.logical.guard.cfg_for_test().condition, budget).unwrap();
+                                    let second = optimized_source_definition_row_v18(inventory, other.output.logical.guard.cfg_for_test().condition, budget).unwrap();
                                     assert_eq!(exact.ty, second.ty);
                                     assert_ne!(exact.value, second.value);
-                                    changed.output.logical.guard_condition = second.coordinate;
+                                    changed.output.logical.guard.cfg_mut_for_test().condition = second.coordinate;
                                 }
                                 3 => {
-                                    assert_ne!(pair.output.logical.guard_edge, other.output.logical.guard_edge);
-                                    changed.output.logical.guard_edge = other.output.logical.guard_edge;
+                                    assert_ne!(pair.output.logical.guard.cfg_for_test().edge, other.output.logical.guard.cfg_for_test().edge);
+                                    changed.output.logical.guard.cfg_mut_for_test().edge = other.output.logical.guard.cfg_for_test().edge;
                                 }
                                 4 => {
                                     let exact = source_operation_row_v18(inventory, pair.output.logical.address, budget).unwrap();
@@ -772,7 +772,7 @@ pub(super) fn test_pending_global_read_conditions_v18(
                                 4 => changed.output.memory.volatile = true,
                                 5 => changed.output.scalar = ScalarType::U64,
                                 6 => changed.output.memory.alignment = 8,
-                                7 => changed.output.logical.guard_edge.successor ^= 1,
+                                7 => changed.output.logical.guard.cfg_mut_for_test().edge.successor ^= 1,
                                 8 => changed.output.writing = true,
                                 9 => changed.output.memory.address_space = AddressSpace::Private,
                                 10 => changed.output.value = inventory.definitions().iter()

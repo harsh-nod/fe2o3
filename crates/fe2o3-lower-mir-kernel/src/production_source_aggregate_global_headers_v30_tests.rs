@@ -35,6 +35,7 @@ pub(super) fn aggregate_global_local_header_oracle_v30() -> usize {
         [SliceDefinition; 9],
         ProductionMixedSliceRuntimePremiseV26,
         ProductionMixedRuntimeOccurrenceV26,
+        GlobalSourceCfgGuardV85,
     );
     type ReturnFrames = (
         Result<Fields, ProductionAggregateSourceErrorV30>,
@@ -46,6 +47,7 @@ pub(super) fn aggregate_global_local_header_oracle_v30() -> usize {
         SourceOwnedResultV18<[SliceDefinition; 9]>,
         SourceOwnedResultV18<usize>,
         SourceOwnedResultV18<()>,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     type QueryFrames<'a> = (
         Result<

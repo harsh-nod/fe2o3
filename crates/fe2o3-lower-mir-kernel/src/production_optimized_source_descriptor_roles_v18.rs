@@ -49,8 +49,10 @@ impl DescriptorAccessSummaryV18 {
                 data: facts.data_operation,
                 length: facts.length_operation,
                 address: facts.address_operation,
-                guard_condition: facts.guard_condition,
-                guard_edge: facts.guard_edge,
+                guard: GlobalSourceGuardV85::CfgEdge(GlobalSourceCfgGuardV85 {
+                    condition: facts.guard_condition,
+                    edge: facts.guard_edge,
+                }),
             },
         }
     }
@@ -68,8 +70,10 @@ impl DescriptorAccessSummaryV18 {
                 data: facts.data_operation,
                 length: facts.length_operation,
                 address: facts.address_operation,
-                guard_condition: facts.guard_condition,
-                guard_edge: facts.guard_edge,
+                guard: GlobalSourceGuardV85::CfgEdge(GlobalSourceCfgGuardV85 {
+                    condition: facts.guard_condition,
+                    edge: facts.guard_edge,
+                }),
             },
         }
     }

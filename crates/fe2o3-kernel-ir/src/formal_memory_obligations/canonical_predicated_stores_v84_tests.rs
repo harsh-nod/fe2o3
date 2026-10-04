@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "canonical_predicated_slice_domains_v85_tests.rs"]
+mod batch_v85;
+
 fn predicated_fixture(axis: Axis, access: AccessMode, shape: usize) -> Module {
     let mut module = fixture(axis, access, false);
     let function = &mut module.functions[0];

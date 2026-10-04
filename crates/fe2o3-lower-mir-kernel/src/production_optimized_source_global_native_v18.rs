@@ -79,6 +79,8 @@ fn global_native_pair_headers_v18() -> Result<usize, ArgumentResourceV1> {
         Result<(), ArgumentResourceV1>,
         SourceOwnedResultV18<()>,
         bool,
+        GlobalSourceCfgGuardV85,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     argument_sum_v1(&[
         size_of::<PairFrame<'_>>(),
@@ -263,11 +265,11 @@ impl PendingGlobalSourceAccessesV18<'_> {
         let guard = native
             .guard_terminator(
                 inventory.owner(),
-                endpoint.logical.guard_edge.source,
+                endpoint.logical.guard.require_cfg_v26()?.edge.source,
                 budget,
             )
             .map_err(PendingGlobalNativeErrorV18::Native)?;
-        let expected = source_block_row_v18(inventory, endpoint.logical.guard_edge.source, budget)?;
+        let expected = source_block_row_v18(inventory, endpoint.logical.guard.require_cfg_v26()?.edge.source, budget)?;
         if !guard
             .zip(expected.block.terminator.as_ref())
             .is_some_and(|(actual, expected)| std::ptr::eq(actual, expected))
@@ -288,7 +290,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
             };
             let root = value(endpoint.logical.root, budget)?;
             let index = value(endpoint.address_index, budget)?;
-            let condition = value(endpoint.logical.guard_condition, budget)?;
+            let condition = value(endpoint.logical.guard.condition(), budget)?;
             let data = source_operation_row_v18(inventory, endpoint.logical.data, budget)?.operation;
             let length = source_operation_row_v18(inventory, endpoint.logical.length, budget)?.operation;
             let address = source_operation_row_v18(inventory, endpoint.logical.address, budget)?.operation;
@@ -304,11 +306,11 @@ impl PendingGlobalSourceAccessesV18<'_> {
             };
             let guard_matches = match guard {
                 Some(Terminator::ConditionalBranch { condition: actual, .. }) =>
-                    *actual == condition && endpoint.logical.guard_edge.successor < 2,
+                    *actual == condition && endpoint.logical.guard.require_cfg_v26()?.edge.successor < 2,
                 Some(Terminator::Switch { selector, cases, .. }) =>
-                    *selector == condition && (endpoint.logical.guard_edge.successor as usize) <= cases.len(),
+                    *selector == condition && (endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize) <= cases.len(),
                 Some(Terminator::IntegerSwitch { selector, cases, .. }) =>
-                    *selector == condition && (endpoint.logical.guard_edge.successor as usize) <= cases.len(),
+                    *selector == condition && (endpoint.logical.guard.require_cfg_v26()?.edge.successor as usize) <= cases.len(),
                 _ => false,
             };
             if !access_matches || !guard_matches

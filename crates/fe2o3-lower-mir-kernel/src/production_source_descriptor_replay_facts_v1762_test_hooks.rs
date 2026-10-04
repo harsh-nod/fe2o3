@@ -111,8 +111,8 @@ pub(super) fn check_original_descriptor_replay_facts_v1762(
             assert_eq!(summary.length, length.coordinate);
             assert_eq!(summary.logical.root, view.input());
             assert_eq!(summary.logical.index, view.index());
-            assert_eq!(summary.logical.guard_condition, facts.guard_condition);
-            assert_eq!(summary.logical.guard_edge, expected_edge);
+            assert_eq!(summary.logical.guard.cfg_for_test().condition, facts.guard_condition);
+            assert_eq!(summary.logical.guard.cfg_for_test().edge, expected_edge);
             Ok(())
         },
     )?;

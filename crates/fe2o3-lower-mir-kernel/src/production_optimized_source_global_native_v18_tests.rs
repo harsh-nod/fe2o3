@@ -51,6 +51,8 @@ fn pending_global_source_native_pair_frames_have_an_independent_equation() {
         Result<(), ArgumentResourceV1>,
         SourceOwnedResultV18<()>,
         bool,
+        GlobalSourceCfgGuardV85,
+        SourceOwnedResultV18<GlobalSourceCfgGuardV85>,
     );
     let expected = size_of::<PairFrame<'_>>()
         + 2 * size_of::<Result<PairFrame<'_>, PendingGlobalNativeErrorV18>>();
@@ -315,9 +317,9 @@ pub(super) fn test_pending_global_native_mutations_v18(
                 1 => changed.output.pointer = changed.output.value,
                 2 => changed.output.logical.index = changed.output.logical.root,
                 3 => changed.output.logical.root = changed.output.logical.index,
-                4 => changed.output.logical.guard_condition = changed.output.logical.index,
+                4 => changed.output.logical.guard.cfg_mut_for_test().condition = changed.output.logical.index,
                 5 => changed.output.writing = false,
-                6 => changed.output.logical.guard_edge.successor = u32::MAX,
+                6 => changed.output.logical.guard.cfg_mut_for_test().edge.successor = u32::MAX,
                 7 => changed.output.formation_pointer = changed.output.value,
                 8 => changed.input.formation_pointer = changed.input.value,
                 _ => unreachable!(),
