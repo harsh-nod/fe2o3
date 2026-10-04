@@ -240,7 +240,7 @@ fn qualification_overlay_state_preserves_exact_modes_work_custody_and_copyup_mar
     for name in [
         "user.unexpected",
         "trusted.unexpected",
-        "trusted.overlay.unexpected",
+        "user.overlay.unexpected",
     ] {
         rustix::fs::fsetxattr(&root, name, b"", rustix::fs::XattrFlags::CREATE).unwrap();
         assert!(flistxattr(&root, &mut complete).unwrap() > 0);
