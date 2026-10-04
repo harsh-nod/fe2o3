@@ -500,15 +500,15 @@ fn source_reference_inactive_shape_matches_v29(
     }
 }
 
-fn source_reference_merge_inactive_v29(
-    references: &SourceReferenceEmissionV29<'_, '_>,
+fn source_reference_merge_inactive_plan_v59(
+    plan: &SourceReferencePlanV29<'_, '_>,
     node: usize,
     held: &SemanticValueBindingV1,
     archived: &SemanticValueBindingV1,
     nodes: &mut usize,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let plan = references.plan;
+    budget.source_reference_owner_v29(plan)?;
     let expected = source_reference_inactive_payload_types_v29(plan, node, nodes, budget)?;
     if !source_reference_inactive_shape_matches_v29(plan, node, held, nodes, budget)?
         || !source_reference_inactive_shape_matches_v29(plan, node, archived, nodes, budget)?
@@ -517,8 +517,8 @@ fn source_reference_merge_inactive_v29(
     }
     let mut a = source_reference_owned_vec_v29(plan, expected.len(), budget)?;
     let mut b = source_reference_owned_vec_v29(plan, expected.len(), budget)?;
-    source_reference_values_v29(references, held, &mut a, nodes, budget)?;
-    source_reference_values_v29(references, archived, &mut b, nodes, budget)?;
+    source_reference_values_plan_v59(plan, held, &mut a, nodes, budget)?;
+    source_reference_values_plan_v59(plan, archived, &mut b, nodes, budget)?;
     budget.source_reference_charge_v29(
         plan,
         argument_sum_v1(&[argument_product_v1(expected.len(), 4)?, 2])?,
