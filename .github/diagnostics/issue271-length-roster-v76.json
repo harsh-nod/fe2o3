@@ -1,5 +1,5 @@
 {
-  "head": "7fb6f3eba9655602e9fd3f3ee6289f3a28d8a9f7",
+  "head": "d8e6ff662f2c5598834a3020ea22ed215da20e14",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "allocation_receiver_binding_cannot_change_owner_carrier_or_physical_type",

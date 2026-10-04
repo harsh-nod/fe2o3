@@ -12,8 +12,8 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "7fb6f3eba9655602e9fd3f3ee6289f3a28d8a9f7"
-TREE = "8d0f5af10290bbd72347e2c987afaa9d997093ba"
+HEAD = "d8e6ff662f2c5598834a3020ea22ed215da20e14"
+TREE = "e30125694a341d5744cde7fae94b267b2dddad15"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
@@ -184,7 +184,7 @@ def run(name, args, environment, seconds, limit):
 before, error, coverage, tools, tool_pins = None, None, None, [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "3f2f24bd62c9b0cb16adcb50fc05db174fa0c20ec2827a19935897cf7810b7e5"
+    assert before["roster_sha256"] == "a80ccf4e30b5209f94ea1324874bdad1836ff46da9765532c6fe2d3f9c0ea627"
     roster = json.loads(ROSTER.read_text())
     assert roster["head"] == HEAD and roster["package"] == "fe2o3-lower-mir-kernel"
     filters = roster["filters"]

@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   lowerer-ordinary:
-    name: Exact 7fb SliceLength ordinary tests (diagnostic only)
+    name: Exact d8e6 SliceLength ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 7fb6f3eba9655602e9fd3f3ee6289f3a28d8a9f7
+          ref: d8e6ff662f2c5598834a3020ea22ed215da20e14
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-length-7fb-ordinary-${{ github.run_attempt }}
+          name: issue271-length-d8e6-ordinary-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-length-v76-logs/
           if-no-files-found: warn
           retention-days: 7
