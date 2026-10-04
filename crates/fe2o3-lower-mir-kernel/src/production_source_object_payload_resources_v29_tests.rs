@@ -239,6 +239,10 @@ fn typed_anchor_owner_and_recorder_headers_match_independent_live_shapes() {
             event: usize,
             local: u32,
         },
+        ScalarMove {
+            event: usize,
+            local: u32,
+        },
         Kill {
             event: usize,
             local: u32,
@@ -260,6 +264,7 @@ fn typed_anchor_owner_and_recorder_headers_match_independent_live_shapes() {
         payloads: Vec<ScopedObjectPayloadV29>,
         components: Vec<ScopedObjectComponentV29>,
         zero_objects: Vec<ScopedZeroObjectV29>,
+        compiler_enum: Vec<ScopedCompilerEnumAccessV55>,
     }
     #[allow(dead_code)]
     struct Recorder {
