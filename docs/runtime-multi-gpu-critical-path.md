@@ -96,6 +96,25 @@ does not acquire the original runtime evidence view's provenance or currentness.
 The fixed custodian can reuse these checks, but still needs authenticated original
 application occurrence, a fresh session and retained remote proof ownership. Do not
 reacquire the application's held publication lock in that service.
+The [marker-independent retained producer](evidence/dev-retained-fill-producer-2026-10-04/README.md)
+is now implemented as
+`execute_retained_worker_v3_conditional_fill_v1`. It owns the exact envelope and
+HSACO, reconstructs the checked compiler closure, executes authenticated machine
+analysis and the protected conditional proof, and retains the original proof and
+inert subject. It rejects oversized inputs before replay/copy and shares one
+absolute deadline across stages. It does not authenticate deployment, application
+occurrence or compiler origin, and it cannot become an unconditional executable.
+The next service work must retain this concrete owner, not reimport its receipt.
+Root application observation currently retires on application exit/endpoint EOF;
+leased proof custody must instead survive until exact invocation settlement or
+remain quarantined. Do not place that ownership in the compiler issuer's table.
+For the next transport increment, reuse registration instead of adding a second
+application handoff handshake: stage a duplicate of the exact peer in an
+independently measured sibling custodian, keep it inactive, and extend the
+root-authenticated Ready message with its deployment/session identity and pidfd.
+Only root sends Ready. After successful Ready delivery, activate the custodian
+and retire root's peer alias; proof packets then require that custodian's exact
+per-message credentials and fresh nonce. This design is not yet implemented.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped

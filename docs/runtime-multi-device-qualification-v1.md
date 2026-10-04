@@ -65,6 +65,12 @@ now passes strict registration under the application filter and fixes a real
 non-dumpable issuer namespace-check failure. The immediate implementation gates
 are retained keyless proof custody and its conditional native invocation join,
 not additional copy-only fixtures. Deployed compiler acquisition remains unqualified.
+The [retained conditional-fill producer](evidence/dev-retained-fill-producer-2026-10-04/README.md)
+now joins immutable compiler closure,
+authenticated machine analysis and protected proof execution under one deadline.
+Its move-only result keeps the original proof and exact input bytes; the separate
+custodian deployment, authenticated remote lease and per-device invocation join
+remain open. The producer alone is not ordinary multi-GPU launch authority.
 Qualify admitted fill -> tracked upload -> native XGMI -> readback on
 two selected GPUs, lengths 64, 65 and 4097, in both directions.
 Broader fault recovery, all-device matrices and matched HIP/HSA performance are
