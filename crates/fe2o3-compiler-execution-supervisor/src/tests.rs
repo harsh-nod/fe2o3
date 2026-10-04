@@ -1115,13 +1115,30 @@ fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
 }
 
 #[test]
-fn admitted_handoff_materializes_exact_sealed_twelve_source_launch() {
+fn production_launch_rejects_missing_root_observer_registry() {
+    let fixture = Fixture::new("missing-observer-registry");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    assert!(matches!(
+        supervisor.prepare_launch(accepted),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor(
+            ProtectedIssuerSupervisorErrorV1::Observer(_)
+        ))
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn fixture_handoff_materializes_exact_sealed_twelve_source_launch() {
     let fixture = Fixture::new("exact-prepared-launch");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
 
     assert_eq!(prepared.static_manifest().descriptors().len(), 12);
     assert_eq!(
@@ -1229,7 +1246,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (first_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.sources.swap(1, 2);
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
@@ -1237,7 +1254,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
     drop(first_reserved_fd_guard);
 
     let (anchor_peer_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let (substituted_anchor_peer, _substituted_anchor_service) = socketpair(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
@@ -1257,7 +1274,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
     drop(anchor_peer_guard);
 
     let (anchor_pidfd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.sources[11] = prepared.sources[5].try_clone().unwrap();
     assert!(matches!(
         prepared.revalidate(&supervisor),
@@ -1271,7 +1288,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (second_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.static_manifest_file = File::open("/dev/null").unwrap();
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
@@ -1280,7 +1297,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (_third_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let wrong_parent = prepared
         .static_manifest()
         .parent_pid()
@@ -1308,7 +1325,7 @@ fn prepared_launch_revalidation_detects_rustc_exit() {
         return;
     };
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(matches!(
@@ -1538,7 +1555,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
 
@@ -1585,7 +1602,7 @@ fn serving_issuer_natural_exit_is_observed_and_reaped_once() {
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -1629,7 +1646,7 @@ fn serving_exit_timeout_kills_and_eventually_reaps_exact_child() {
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -2018,7 +2035,7 @@ fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -2062,7 +2079,7 @@ fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
         };
         let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
             accepted_handoff(&supervisor);
-        let prepared = supervisor.prepare_launch(accepted).unwrap();
+        let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
         let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
         let launch_manifest = prepared.service_manifest().clone();
         let launched = supervisor
@@ -2117,7 +2134,7 @@ fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
     };
     let (first_reserved_fd_guard, mut first_rustc, _first_control, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
@@ -2136,7 +2153,7 @@ fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
 
     let (_second_reserved_fd_guard, mut second_rustc, _second_control, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
@@ -2180,7 +2197,7 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
     .unwrap();
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -2214,7 +2231,7 @@ fn clone3_parent_death_helper() {
     };
     let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();

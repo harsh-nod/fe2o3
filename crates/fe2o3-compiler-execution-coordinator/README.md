@@ -18,7 +18,21 @@ pidfd liveness.
 
 The returned move-only service retains exact supervisor pidfd/reaping custody,
 all deployment continuity inputs, and root custody of the anchor occurrence.
-Dropping it terminates the supervisor before the retained anchor is dropped.
+It also retains the bounded authenticated observer registry. Supervisor FD 13
+carries registration and FD 14 the original root pidfd; bootstrap FD 11 remains
+readiness/EOF-only. Each Register transfers the accepted compiler peer/pidfd;
+Bind names the actually launched issuer and transfers its original pidfd.
+The coordinator validates roles, parentage, namespace/profile continuity, policy,
+launch identity, exact per-message credentials and request freshness independently.
+
+The event loop services each observer once per iteration and at most one registry
+packet. Static deployment hashing retains its one-second cadence; idle waits are
+10ms and progress immediately schedules another iteration. Individual issuer
+errors contain that session without stopping unrelated observers. Registry loss
+contains all bound issuers. Drop waits for their exact pidfd-confirmed exits before
+reaping the supervisor and releasing anchor custody. No timeout releases an active
+publication lock. Coordinator-only DAC/ptrace capabilities permit observation of
+the user's private compiler publication; protected services remain empty-capability.
 
 `InheritedCompilerExecutionDeploymentV1` is the sole production input
 composition. It requires exact UID/GID 0, must run before any second process
@@ -26,7 +40,7 @@ thread exists, and takes this dense descriptor set:
 
 | FD | Content |
 |---:|---|
-| 3 | Root-owned, service-group mode-`0660` production listener |
+| 3 | Root-owned `/run/fe2o3` directory used to bind the production listener |
 | 4 | Existing supervisor-service-owned mode-`0700` state root |
 | 5 | Existing anchor-service-owned mode-`0700` state root |
 | 6 | Root-provisioned static supervisor image |

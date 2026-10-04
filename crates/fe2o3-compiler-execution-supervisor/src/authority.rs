@@ -3,9 +3,12 @@ use std::fmt;
 use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
-    ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
+    CompilerExecutionObserverErrorV1, ProtectedExternalAnchorServiceAdmissionV1,
+    ProtectedServiceAdmissionErrorV1, SupervisorCompilerObserverRegistryV1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1;
@@ -29,6 +32,8 @@ pub(super) struct ExternalAnchorLaunchClonesV1<'a> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ProtectedIssuerSupervisorErrorV1 {
+    /// The mandatory authenticated root observer registry is missing or failed admission.
+    Observer(Box<CompilerExecutionObserverErrorV1>),
     /// The binding process is not running as the configured dedicated service identity.
     ServiceIdentityMismatch,
     /// Authenticated launcher, issuer, or policy continuity failed.
@@ -53,6 +58,7 @@ pub enum ProtectedIssuerSupervisorErrorV1 {
 impl fmt::Display for ProtectedIssuerSupervisorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Observer(error) => write!(formatter, "protected observer registry: {error}"),
             Self::ServiceIdentityMismatch => formatter.write_str(
                 "supervisor process does not match the protected issuer service UID and GID",
             ),
@@ -80,6 +86,7 @@ impl fmt::Display for ProtectedIssuerSupervisorErrorV1 {
 impl Error for ProtectedIssuerSupervisorErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Observer(error) => Some(error),
             Self::Program(error) => Some(error),
             Self::ExternalAnchor(error) => Some(error),
             Self::Io { source, .. } => Some(source),
@@ -115,6 +122,7 @@ pub struct ProtectedIssuerSupervisorV1 {
     root: ProtectedIssuerRootV1,
     signing_key: CompilerExecutionSigningKeyCapabilityV1,
     external_anchor: ProtectedExternalAnchorServiceAdmissionV1,
+    observer_registry: Option<Mutex<SupervisorCompilerObserverRegistryV1>>,
 }
 
 impl fmt::Debug for ProtectedIssuerSupervisorV1 {
@@ -159,9 +167,47 @@ impl ProtectedIssuerSupervisorV1 {
             root,
             signing_key,
             external_anchor,
+            observer_registry: None,
         };
         supervisor.revalidate()?;
         Ok(supervisor)
+    }
+
+    /// Attaches the original root's registration channel before admitting production launches.
+    pub fn with_observer_registry(
+        mut self,
+        registry: SupervisorCompilerObserverRegistryV1,
+    ) -> Result<Self, ProtectedIssuerSupervisorErrorV1> {
+        if self.observer_registry.is_some()
+            || !registry.matches_deployment(
+                self.policy(),
+                self.credentials(),
+                self.external_anchor_service(),
+            )
+        {
+            return Err(observer_error(CompilerExecutionObserverErrorV1::Protocol(
+                "observer registry replacement or deployment mismatch",
+            )));
+        }
+        registry.validate_continuity().map_err(observer_error)?;
+        self.observer_registry = Some(Mutex::new(registry));
+        self.revalidate()?;
+        Ok(self)
+    }
+
+    pub(super) fn observer_registry(
+        &self,
+        deadline: Instant,
+    ) -> Result<
+        MutexGuard<'_, SupervisorCompilerObserverRegistryV1>,
+        ProtectedIssuerSupervisorErrorV1,
+    > {
+        let registry = self.observer_registry.as_ref().ok_or_else(|| {
+            observer_error(CompilerExecutionObserverErrorV1::Protocol(
+                "production observer registry missing",
+            ))
+        })?;
+        lock_registry(registry, deadline)
     }
 
     /// Revalidates the complete program, policy, key, and root custody chain.
@@ -293,6 +339,50 @@ impl ProtectedIssuerSupervisorV1 {
             .validate_transfer(external_anchor.peer, external_anchor.pidfd)
             .map_err(ProtectedIssuerSupervisorErrorV1::ExternalAnchor)?;
         Ok(())
+    }
+}
+
+pub(super) fn observer_error(
+    error: CompilerExecutionObserverErrorV1,
+) -> ProtectedIssuerSupervisorErrorV1 {
+    ProtectedIssuerSupervisorErrorV1::Observer(Box::new(error))
+}
+
+fn lock_registry<T>(
+    registry: &Mutex<T>,
+    deadline: Instant,
+) -> Result<MutexGuard<'_, T>, ProtectedIssuerSupervisorErrorV1> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err(observer_error(CompilerExecutionObserverErrorV1::Timeout));
+        }
+        match registry.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(observer_error(CompilerExecutionObserverErrorV1::Poisoned));
+            }
+            Err(TryLockError::WouldBlock) => std::thread::sleep(
+                Duration::from_millis(1).min(deadline.saturating_duration_since(Instant::now())),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_lock_tests {
+    use super::*;
+
+    #[test]
+    fn held_registry_lock_respects_launch_deadline() {
+        let mutex = Mutex::new(());
+        let _held = mutex.lock().unwrap();
+        let started = Instant::now();
+        assert!(
+            matches!(lock_registry(&mutex, started + Duration::from_millis(5)),
+            Err(ProtectedIssuerSupervisorErrorV1::Observer(error))
+                if matches!(*error, CompilerExecutionObserverErrorV1::Timeout))
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
 

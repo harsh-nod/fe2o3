@@ -10,14 +10,15 @@ use std::path::PathBuf;
 
 use fe2o3_broker_authority_service::{
     ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1, ProtectedServiceAdmissionErrorV1,
-    current_process_start_time_ticks_v1,
+    RegisteredCompilerObserverV1, current_process_start_time_ticks_v1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionServiceLaunchCapabilityV1;
 use fe2o3_compiler_execution_issuer::{
     COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
-    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1, COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1, COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1, COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
     COMPILER_EXECUTION_ISSUER_POLICY_FD_V1, COMPILER_EXECUTION_ISSUER_READY_FD_V1,
     COMPILER_EXECUTION_ISSUER_ROOT_FD_V1, COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
 };
@@ -29,14 +30,14 @@ use fe2o3_static_preexec_manifest::{
 use rustix::fs::{FileType, MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::pipe::{PipeFlags, pipe_with};
 
-use crate::authority::ExternalAnchorLaunchClonesV1;
+use crate::authority::{ExternalAnchorLaunchClonesV1, observer_error};
 use crate::handoff::validate_service_peer;
 use crate::{
     AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1,
     ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
 };
 
-const SOURCE_COUNT_V1: usize = 12;
+const SOURCE_COUNT_V1: usize = 14;
 const STDIN_SOURCE_INDEX: usize = 0;
 const STDOUT_SOURCE_INDEX: usize = 1;
 const STDERR_SOURCE_INDEX: usize = 2;
@@ -49,6 +50,8 @@ const LAUNCH_MANIFEST_SOURCE_INDEX: usize = 8;
 const READINESS_SOURCE_INDEX: usize = 9;
 const EXTERNAL_ANCHOR_PEER_SOURCE_INDEX: usize = 10;
 const EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX: usize = 11;
+const OBSERVER_PEER_SOURCE_INDEX: usize = 12;
+const OBSERVER_ROOT_PIDFD_SOURCE_INDEX: usize = 13;
 const MANIFEST_MODE_V1: u32 = 0o400;
 const REQUIRED_MANIFEST_SEALS_V1: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
@@ -68,6 +71,8 @@ const DESTINATION_FDS_V1: [i32; SOURCE_COUNT_V1] = [
     COMPILER_EXECUTION_ISSUER_READY_FD_V1,
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1,
 ];
 
 const _: () = assert!(DESTINATION_FDS_V1[0] == 0);
@@ -82,11 +87,13 @@ const _: () = assert!(DESTINATION_FDS_V1[8] == 8);
 const _: () = assert!(DESTINATION_FDS_V1[9] == 9);
 const _: () = assert!(DESTINATION_FDS_V1[10] == 10);
 const _: () = assert!(DESTINATION_FDS_V1[11] == 11);
+const _: () = assert!(DESTINATION_FDS_V1[12] == 12);
+const _: () = assert!(DESTINATION_FDS_V1[13] == 13);
 
 /// Move-only, fully materialized input to the static protected-issuer launcher.
 ///
 /// This value retains the authenticated handoff, exact launcher and issuer
-/// images, sealed 704-byte pre-exec manifest, all twelve ordered source objects,
+/// images, sealed 704-byte pre-exec manifest, all fourteen ordered source objects,
 /// and the supervisor sides of output and readiness pipes. It exposes only
 /// inert canonical manifests. Process creation consumes this value in the next
 /// supervisor checkpoint.
@@ -109,7 +116,8 @@ pub struct PreparedProtectedIssuerLaunchV1 {
     pub(super) launcher: File,
     pub(super) issuer: File,
     pub(super) static_manifest_file: File,
-    pub(super) sources: [File; SOURCE_COUNT_V1],
+    pub(super) sources: Vec<File>,
+    pub(super) registration: Option<RegisteredCompilerObserverV1>,
     pub(super) stdout_reader: OwnedFd,
     pub(super) stderr_reader: OwnedFd,
     pub(super) readiness_reader: OwnedFd,
@@ -148,6 +156,16 @@ impl PreparedProtectedIssuerLaunchV1 {
         &self,
         supervisor: &ProtectedIssuerSupervisorV1,
     ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
+        let expected_count = if self.registration.is_some() {
+            SOURCE_COUNT_V1
+        } else {
+            12
+        };
+        if self.sources.len() != expected_count || (!cfg!(test) && self.registration.is_none()) {
+            return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+                "observer source table",
+            ));
+        }
         supervisor
             .revalidate()
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
@@ -159,6 +177,28 @@ impl PreparedProtectedIssuerLaunchV1 {
             .map_err(|source| capability_error("service launch manifest", source))?;
         if self.launch_capability.manifest() != self.accepted.manifest() {
             return Err(ProtectedIssuerLaunchPreparationErrorV1::LaunchManifestMismatch);
+        }
+        if let Some(registration) = &self.registration {
+            if !registration.matches_launch(self.service_manifest()) {
+                return Err(ProtectedIssuerLaunchPreparationErrorV1::LaunchManifestMismatch);
+            }
+            let transfers = registration.try_clone_for_launch().map_err(|error| {
+                ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
+            })?;
+            for (offset, transfer) in transfers.into_iter().enumerate() {
+                let index = OBSERVER_PEER_SOURCE_INDEX + offset;
+                let source = &self.sources[index];
+                if rustix::io::fcntl_getfd(source)
+                    .map_err(|e| io_error("inspect observer source flags", e.into()))?
+                    != rustix::io::FdFlags::CLOEXEC
+                    || source_object_identity(index, source)?
+                        != source_object_identity(index, &File::from(transfer))?
+                {
+                    return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+                        "observer transfer",
+                    ));
+                }
+            }
         }
         revalidate_parent(&self.static_manifest)?;
 
@@ -250,12 +290,20 @@ impl PreparedProtectedIssuerLaunchV1 {
 impl ProtectedIssuerSupervisorV1 {
     /// Materializes one admitted rustc handoff into the exact static-launcher input set.
     ///
-    /// The ordered source table is fixed to destinations `0..=11`: isolated
+    /// The ordered source table is fixed to destinations `0..=13`: isolated
     /// standard streams, root, service peer, rustc pidfd, policy, signing key,
     /// service launch manifest, readiness writer, external-anchor endpoint, and
-    /// external-anchor pidfd. Every source descriptor is close-on-exec until the
+    /// external-anchor pidfd, root observer endpoint, and original root pidfd.
+    /// Every source descriptor is close-on-exec until the
     /// static launcher installs its destination table.
     pub fn prepare_launch(
+        &self,
+        accepted: AcceptedCompilerExecutionHandoffV1,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        self.prepare_launch_inner::<true>(accepted)
+    }
+
+    pub(crate) fn prepare_launch_inner<const PRODUCTION: bool>(
         &self,
         accepted: AcceptedCompilerExecutionHandoffV1,
     ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
@@ -264,6 +312,24 @@ impl ProtectedIssuerSupervisorV1 {
         accepted
             .revalidate(self)
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Handoff)?;
+        let registration = if PRODUCTION || !cfg!(test) {
+            Some(
+                self.observer_registry(
+                    std::time::Instant::now() + std::time::Duration::from_secs(30),
+                )
+                .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?
+                .register(
+                    accepted.manifest(),
+                    accepted.service_peer.as_fd(),
+                    accepted.client_pidfd.as_fd(),
+                )
+                .map_err(|error| {
+                    ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
+                })?,
+            )
+        } else {
+            None
+        };
 
         let launcher = self
             .clone_launcher_for_launch()
@@ -305,7 +371,7 @@ impl ProtectedIssuerSupervisorV1 {
         let (stderr_reader, stderr_writer) = protected_pipe("stderr")?;
         let (readiness_reader, readiness_writer) = protected_pipe("readiness")?;
 
-        let sources = [
+        let mut sources = vec![
             File::from(stdin_reader),
             File::from(stdout_writer),
             File::from(stderr_writer),
@@ -319,6 +385,17 @@ impl ProtectedIssuerSupervisorV1 {
             external_anchor_peer,
             external_anchor_pidfd,
         ];
+        if let Some(registration) = &registration {
+            sources.extend(
+                registration
+                    .try_clone_for_launch()
+                    .map_err(|error| {
+                        ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
+                    })?
+                    .into_iter()
+                    .map(File::from),
+            );
+        }
         let source_objects = source_identities(&sources)?;
         let descriptors = DESTINATION_FDS_V1
             .into_iter()
@@ -349,6 +426,7 @@ impl ProtectedIssuerSupervisorV1 {
             issuer,
             static_manifest_file,
             sources,
+            registration,
             stdout_reader,
             stderr_reader,
             readiness_reader,
@@ -380,20 +458,18 @@ fn clone_owned_descriptor(
 }
 
 fn source_identities(
-    sources: &[File; SOURCE_COUNT_V1],
-) -> Result<[StaticPreexecObjectIdentityV1; SOURCE_COUNT_V1], ProtectedIssuerLaunchPreparationErrorV1>
-{
-    let identities = sources
+    sources: &[File],
+) -> Result<Vec<StaticPreexecObjectIdentityV1>, ProtectedIssuerLaunchPreparationErrorV1> {
+    if sources.len() != SOURCE_COUNT_V1 && !(cfg!(test) && sources.len() == 12) {
+        return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+            "source table cardinality",
+        ));
+    }
+    sources
         .iter()
         .enumerate()
         .map(|(index, source)| source_object_identity(index, source))
-        .collect::<Result<Vec<_>, _>>()?;
-    identities.try_into().map_err(
-        |_| ProtectedIssuerLaunchPreparationErrorV1::InvalidDescriptor {
-            role: "source table",
-            reason: "source descriptor cardinality changed",
-        },
-    )
+        .collect()
 }
 
 fn source_object_identity(
@@ -403,7 +479,9 @@ fn source_object_identity(
     let identity = object_identity(source, source_role(index))?;
     if matches!(
         index,
-        CLIENT_PIDFD_SOURCE_INDEX | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
+        CLIENT_PIDFD_SOURCE_INDEX
+            | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
+            | OBSERVER_ROOT_PIDFD_SOURCE_INDEX
     ) {
         return Ok(StaticPreexecObjectIdentityV1::new_process_pidfd(
             identity.device(),
@@ -429,6 +507,8 @@ fn source_role(index: usize) -> &'static str {
         "readiness writer",
         "external-anchor peer",
         "external-anchor pidfd",
+        "root observer peer",
+        "root observer pidfd",
     ];
     ROLES[index]
 }
@@ -456,9 +536,10 @@ fn object_identity(
 fn validate_static_manifest_sources(
     manifest: &StaticPreexecManifestV1,
     issuer: &File,
-    sources: &[StaticPreexecObjectIdentityV1; SOURCE_COUNT_V1],
+    sources: &[StaticPreexecObjectIdentityV1],
 ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
-    if manifest.descriptors().len() != SOURCE_COUNT_V1
+    if (sources.len() != SOURCE_COUNT_V1 && !(cfg!(test) && sources.len() == 12))
+        || manifest.descriptors().len() != sources.len()
         || manifest.executable() != &object_identity(issuer, "compiler issuer")?
         || manifest
             .descriptors()
@@ -666,7 +747,7 @@ fn require_launcher_non_aliasing(
     launcher: &File,
     issuer: &File,
     manifest: &File,
-    sources: &[File; SOURCE_COUNT_V1],
+    sources: &[File],
 ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
     let launcher = object_identity(launcher, "static launcher")?;
     if same_object(&launcher, &object_identity(issuer, "compiler issuer")?)

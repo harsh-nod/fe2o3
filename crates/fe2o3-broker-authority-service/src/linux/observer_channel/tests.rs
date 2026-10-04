@@ -43,7 +43,7 @@ fn receive_distinguishes_closed_channel_from_zero_length_datagram() {
     ));
 }
 
-struct ChildOwner(Child);
+pub(crate) struct ChildOwner(pub(crate) Child);
 impl Drop for ChildOwner {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
@@ -53,7 +53,7 @@ impl Drop for ChildOwner {
     }
 }
 
-fn child_identity(child: &Child) -> LiveClientPidfdIdentityV1 {
+pub(crate) fn child_identity(child: &Child) -> LiveClientPidfdIdentityV1 {
     let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
     LiveClientPidfdIdentityV1::admit(
         rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap(),
@@ -195,7 +195,7 @@ fn nonblocking_backpressure_preserves_one_complete_packet() {
     assert_eq!(receiver.receive(&identity).unwrap().unwrap().0, packet);
 }
 
-fn policy() -> CompilerExecutionIssuerPolicyV1 {
+pub(crate) fn policy() -> CompilerExecutionIssuerPolicyV1 {
     CompilerExecutionIssuerPolicyV1::new(
         1,
         CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
@@ -292,7 +292,7 @@ fn dead_root_takes_precedence_over_queued_response() {
     assert!(wait_for(&receiver, &root, libc::POLLIN, Instant::now() + TIMEOUT).is_err());
 }
 
-fn bytes_file(bytes: &[u8]) -> OwnedFd {
+pub(crate) fn bytes_file(bytes: &[u8]) -> OwnedFd {
     let mut file = tempfile::tempfile().unwrap();
     file.write_all(bytes).unwrap();
     use std::io::{Seek, SeekFrom};
@@ -411,14 +411,14 @@ pub(crate) fn exercise_occurrence_channel(
     }
 }
 
-fn inherited(number: i32) -> OwnedFd {
+pub(crate) fn inherited(number: i32) -> OwnedFd {
     // SAFETY: the parent transfers each known live descriptor once to this helper.
     let fd = unsafe { OwnedFd::from_raw_fd(number) };
     rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC).unwrap();
     fd
 }
 
-fn read_inherited(number: i32) -> Vec<u8> {
+pub(crate) fn read_inherited(number: i32) -> Vec<u8> {
     let mut bytes = Vec::new();
     File::from(inherited(number))
         .read_to_end(&mut bytes)
@@ -429,6 +429,7 @@ fn read_inherited(number: i32) -> Vec<u8> {
 #[test]
 #[ignore = "private subprocess helper; requires parent-owned observer and compiler descriptors"]
 fn issuer_helper() {
+    let production = super::super::registry::tests::restore_test_profile();
     let peer = inherited(200);
     let root = inherited(201);
     let service_root = inherited(202);
@@ -442,17 +443,32 @@ fn issuer_helper() {
         ExpectedClientProcessIdentityV1::new(client.pid(), client.uid(), client.gid()).unwrap(),
     )
     .unwrap();
-    let service = ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
-        service_root,
-        service_peer,
-        client,
-    )
+    let service = if production {
+        ProtectedServiceAdmissionV1::admit(service_root, service_peer, client)
+    } else {
+        ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
+            service_root,
+            service_peer,
+            client,
+        )
+    }
     .unwrap();
     let channel = ProtectedCompilerExecutionObserverV1::admit_inner(
-        peer, root, &launch, &policy, &service, false,
+        peer, root, &launch, &policy, &service, production,
     )
     .unwrap();
     let scenario = std::env::var("FE2O3_OBSERVER_TEST_SCENARIO").unwrap();
+    if scenario == "idle" {
+        std::thread::sleep(Duration::from_secs(30));
+        panic!("idle fixture was not contained");
+    }
+    if scenario == "holding" {
+        let _guard = channel.begin().unwrap();
+        let ready = inherited(207);
+        assert_eq!(rustix::io::write(&ready, b"1").unwrap(), 1);
+        std::thread::sleep(Duration::from_secs(30));
+        panic!("holding fixture was not contained");
+    }
     if scenario == "replay" {
         let _guard = channel.begin().unwrap();
         let replay = Packet {

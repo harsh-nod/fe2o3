@@ -166,12 +166,6 @@ pub use compiler_execution_issuer_durable::{
 pub use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1,
 };
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use linux::observer_channel::{
-    CompilerExecutionObserverErrorV1, PreparedRootCompilerExecutionObserverV1,
-    ProtectedCompilerExecutionObserverV1, RootCompilerExecutionObserverProgressV1,
-    RootCompilerExecutionObserverV1,
-};
 #[cfg(target_os = "linux")]
 pub(crate) use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceGuardV1, ProtectedCompilerExecutionOccurrenceV1,
@@ -200,6 +194,14 @@ pub use durable_session_consume::{
     inspect_durable_broker_session_v1, prepare_durable_broker_session_v1,
     prepare_durable_broker_session_v1_with_options, recover_durable_broker_session_v1,
     recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use linux::observer_channel::{
+    CompilerExecutionObserverErrorV1, PreparedRootCompilerExecutionObserverV1,
+    PreparedRootCompilerObserverRegistryV1, ProtectedCompilerExecutionObserverV1,
+    RegisteredCompilerObserverV1, RootCompilerExecutionObserverProgressV1,
+    RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1,
+    SupervisorCompilerObserverRegistryV1,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{

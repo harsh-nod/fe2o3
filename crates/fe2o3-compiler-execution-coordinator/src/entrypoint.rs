@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustix::net::{
     AddressFamily, SendFlags, SocketAddrUnix, SocketFlags, SocketType, sendto, socket_with,
@@ -232,10 +232,13 @@ impl BlockedTerminationSignalsV1 {
         Err(CompilerExecutionCoordinatorErrorV1::Signal(error))
     }
 
-    fn wait_interval(&self) -> Result<Option<i32>, CompilerExecutionCoordinatorErrorV1> {
+    fn wait_interval(
+        &self,
+        interval: Duration,
+    ) -> Result<Option<i32>, CompilerExecutionCoordinatorErrorV1> {
         let timeout = libc::timespec {
-            tv_sec: i64::try_from(CONTINUITY_INTERVAL_V1.as_secs()).expect("one second fits"),
-            tv_nsec: i64::from(CONTINUITY_INTERVAL_V1.subsec_nanos()),
+            tv_sec: i64::try_from(interval.as_secs()).expect("bounded monitor interval fits"),
+            tv_nsec: i64::from(interval.subsec_nanos()),
         };
         // SAFETY: the installed set remains initialized and blocked; timeout is a valid timespec.
         let signal = unsafe { libc::sigtimedwait(&self.set, std::ptr::null_mut(), &timeout) };
@@ -256,14 +259,27 @@ impl BlockedTerminationSignalsV1 {
 }
 
 fn monitor_service(
-    service: RootManagedCompilerExecutionServiceV1,
+    mut service: RootManagedCompilerExecutionServiceV1,
     signals: &BlockedTerminationSignalsV1,
 ) -> Result<(), CompilerExecutionCoordinatorErrorV1> {
+    let mut next_audit = Instant::now();
     loop {
-        if signals.wait_interval()?.is_some() {
+        let progress = service
+            .step_observers(|error| eprintln!("compiler observer session failed: {error}"))?;
+        // Static image hashing stays at the existing cadence; each observer step independently
+        // checks live process profiles, namespaces, authenticated endpoints and publication custody.
+        if Instant::now() >= next_audit {
+            service.validate_continuity()?;
+            next_audit = Instant::now() + CONTINUITY_INTERVAL_V1;
+        }
+        let interval = if progress {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(10)
+        };
+        if signals.wait_interval(interval)?.is_some() {
             return service.shutdown();
         }
-        service.validate_continuity()?;
     }
 }
 

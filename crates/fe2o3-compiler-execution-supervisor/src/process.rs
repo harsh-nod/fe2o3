@@ -781,6 +781,35 @@ impl ProtectedIssuerSupervisorV1 {
                 if !process.is_live()? {
                     return Err(process.exited_error("exited immediately after launcher exec"));
                 }
+                if ENFORCE_PROFILE || !cfg!(test) {
+                    let registered = prepared.registration.as_ref().ok_or(
+                        ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                            "missing root observer registration",
+                        ),
+                    )?;
+                    self.observer_registry(deadline)
+                        .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?
+                        .bind_issuer(
+                            registered,
+                            pid.as_raw_pid() as u32,
+                            process
+                                .pidfd
+                                .as_ref()
+                                .expect("live child retains pidfd")
+                                .as_fd(),
+                            deadline,
+                        )
+                        .map_err(|error| {
+                            ProtectedIssuerLaunchErrorV1::Supervisor(
+                                crate::authority::observer_error(error),
+                            )
+                        })?;
+                    if Instant::now() >= deadline {
+                        return Err(ProtectedIssuerLaunchErrorV1::Timeout(
+                            "root observer binding",
+                        ));
+                    }
+                }
                 Ok(())
             })();
             if let Err(error) = result {

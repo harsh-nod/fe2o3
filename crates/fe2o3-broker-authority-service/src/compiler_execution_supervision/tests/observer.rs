@@ -3,6 +3,157 @@ use crate::RetainedCompilerExecutionOccurrenceV1;
 use std::io::{BufRead, Write};
 use std::process::Stdio;
 
+pub(super) fn publish_cross_uid_fixture(
+    output: &std::path::Path,
+    attempt: BuildAttempt,
+    handoff: &InertSemanticCompilerModuleHandoffV3,
+    wrong_producer: bool,
+    (uid, gid): (u32, u32),
+) {
+    let runtime = tempfile::tempdir().unwrap();
+    fs::set_permissions(runtime.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::chown(runtime.path(), Some(uid), Some(gid)).unwrap();
+    let bytes = tempfile::tempfile().unwrap();
+    bytes.write_all_at(handoff.canonical_bytes(), 0).unwrap();
+    let source = rustix::io::fcntl_dupfd_cloexec(&bytes, 240).unwrap();
+    let raw = source.as_raw_fd();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "compiler_execution_supervision::tests::observer::cross_uid_publisher",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", runtime.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR")
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY")
+        .env("FE2O3_TEST_PUBLICATION_ROOT", output)
+        .env("FE2O3_TEST_PUBLICATION_ATTEMPT", attempt.to_env_value())
+        .env(
+            "FE2O3_TEST_PUBLICATION_CRATE",
+            if wrong_producer {
+                "wrong_compiler_occurrence"
+            } else {
+                "compiler_occurrence"
+            },
+        );
+    // SAFETY: only async-signal-safe descriptor and credential syscalls run before exec.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(raw, 200) != 200
+                || libc::fcntl(200, libc::F_SETFD, 0) != 0
+                || libc::setgroups(0, std::ptr::null()) != 0
+                || libc::setresgid(gid, gid, gid) != 0
+                || libc::setresuid(uid, uid, uid) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            let header = [0x2008_0522_u32, 0];
+            let data = [0_u32; 6];
+            if libc::syscall(libc::SYS_capset, header.as_ptr(), data.as_ptr()) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[ignore = "private cross-UID publication helper with parent-owned fixture input"]
+fn cross_uid_publisher() {
+    let output = std::env::var_os("FE2O3_TEST_PUBLICATION_ROOT").unwrap();
+    let attempt =
+        BuildAttempt::from_env_value(&std::env::var("FE2O3_TEST_PUBLICATION_ATTEMPT").unwrap())
+            .unwrap();
+    let producer = ProducerIdentity::from_codegen(
+        &std::env::var("FE2O3_TEST_PUBLICATION_CRATE").unwrap(),
+        Some(std::path::Path::new("/src/compiler_occurrence.rs")),
+    )
+    .unwrap();
+    // SAFETY: the owned subprocess receives this exact open fixture input once.
+    let input = unsafe { File::from_raw_fd(200) };
+    let mut bytes = Vec::new();
+    input.take(4 * 1024 * 1024).read_to_end(&mut bytes).unwrap();
+    let handoff = InertSemanticCompilerModuleHandoffV3::decode(&bytes).unwrap();
+    enable_same_mount_namespace_artifact_path_guard_v1();
+    publish_compiler_module_handoff_v3(std::path::Path::new(&output), &producer, attempt, &handoff)
+        .unwrap();
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn registered_observers_bind_real_child_processes_and_contain_failures() {
+    for scenario in [
+        "success",
+        "concurrent",
+        "capacity",
+        "expiry",
+        "wrong_pidfd",
+        "rebind",
+        "registry_loss",
+    ] {
+        let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+        let (lease, token) =
+            fe2o3_artifact_transaction::try_observe_compiler_module_handoff_currentness_in_slot_v3(
+                fixture._artifact_directory.path(),
+                fixture.producer.as_ref().unwrap(),
+                fixture.attempt.unwrap(),
+                fe2o3_artifact_transaction::CompilerModuleHandoffSlotV3::Production,
+            )
+            .unwrap();
+        drop(token);
+        crate::linux::observer_channel::registry::tests::exercise_registry(
+            fixture.client.take().unwrap(),
+            fixture.admission(),
+            scenario,
+            || {
+                assert!(matches!(
+                    lease.acquire_current_token(),
+                    Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3::Busy)
+                ));
+            },
+        );
+        drop(lease.acquire_current_token().unwrap());
+        fixture.supersede_publication();
+        assert!(fixture.shutdown().success());
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+#[ignore = "requires private real-root namespace, UID1000 compiler and empty-cap UID61000 service"]
+fn cross_uid_registered_observer() {
+    let mut fixture =
+        spawn_remote_rustc_as(RemoteFixtureMutation::PublishedExact, Some((1000, 1000)));
+    let (lease, token) =
+        fe2o3_artifact_transaction::try_observe_compiler_module_handoff_currentness_in_slot_v3(
+            fixture._artifact_directory.path(),
+            fixture.producer.as_ref().unwrap(),
+            fixture.attempt.unwrap(),
+            fe2o3_artifact_transaction::CompilerModuleHandoffSlotV3::Production,
+        )
+        .unwrap();
+    drop(token);
+    crate::linux::observer_channel::registry::tests::exercise_production_registry(
+        fixture.client.take().unwrap(),
+        fixture.admission(),
+        || {
+            assert!(matches!(
+                lease.acquire_current_token(),
+                Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3::Busy)
+            ));
+        },
+    );
+    drop(lease.acquire_current_token().unwrap());
+    fixture.supersede_publication();
+    assert!(fixture.shutdown().success());
+}
+
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn authenticated_channel_observes_two_fresh_occurrences() {

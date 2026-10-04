@@ -26,11 +26,16 @@ use rustix::net::{
 use crate::{ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1};
 
 mod issuer;
+pub(crate) mod registry;
 mod root;
 pub use issuer::ProtectedCompilerExecutionObserverV1;
 pub(crate) use issuer::RemoteCompilerExecutionOccurrenceGuardV1;
 #[cfg(test)]
 pub(crate) use issuer::tests;
+pub use registry::{
+    PreparedRootCompilerObserverRegistryV1, RegisteredCompilerObserverV1,
+    RootCompilerObserverRegistryV1, SupervisorCompilerObserverRegistryV1,
+};
 pub use root::{
     PreparedRootCompilerExecutionObserverV1, RootCompilerExecutionObserverProgressV1,
     RootCompilerExecutionObserverV1,
@@ -281,6 +286,20 @@ impl Endpoint {
         &self,
         sender: &LiveClientPidfdIdentityV1,
     ) -> Result<Option<(Packet, Vec<OwnedFd>)>> {
+        let Some((bytes, rights)) = self.receive_bytes(sender)? else {
+            return Ok(None);
+        };
+        let packet = Packet::decode(&bytes)?;
+        if rights.len() != if packet.kind == Kind::Begun { 2 } else { 0 } {
+            return Err(invalid("unexpected packet descriptors"));
+        }
+        Ok(Some((packet, rights)))
+    }
+
+    fn receive_bytes(
+        &self,
+        sender: &LiveClientPidfdIdentityV1,
+    ) -> Result<Option<(Vec<u8>, Vec<OwnedFd>)>> {
         self.revalidate()?;
         sender.validate_liveness()?;
         let mut bytes = [0; MAX_PACKET];
@@ -337,14 +356,12 @@ impl Endpoint {
         {
             return Err(invalid("packet sender or ancillary roster mismatch"));
         }
-        let packet = Packet::decode(&bytes[..received.bytes])?;
-        let expected_rights = if packet.kind == Kind::Begun { 2 } else { 0 };
-        if rights.len() != expected_rights || rights_messages != usize::from(expected_rights != 0) {
+        if rights.len() > 2 || rights_messages != usize::from(!rights.is_empty()) {
             return Err(invalid("unexpected packet descriptors"));
         }
         sender.validate_liveness()?;
         self.revalidate()?;
-        Ok(Some((packet, rights)))
+        Ok(Some((bytes[..received.bytes].to_vec(), rights)))
     }
 
     fn send(&self, packet: &Packet, rights: &[BorrowedFd<'_>]) -> Result<bool> {
@@ -353,6 +370,16 @@ impl Endpoint {
             return Err(invalid("outgoing descriptor roster mismatch"));
         }
         let bytes = packet.encode()?;
+        self.send_bytes(&bytes, rights)
+    }
+
+    fn send_bytes(&self, bytes: &[u8], rights: &[BorrowedFd<'_>]) -> Result<bool> {
+        self.revalidate()?;
+        if bytes.is_empty() || bytes.len() > MAX_PACKET || rights.len() > 2 {
+            return Err(invalid(
+                "outgoing datagram exceeds private transport bounds",
+            ));
+        }
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
         let mut ancillary = SendAncillaryBuffer::new(&mut space);
         if !rights.is_empty() && !ancillary.push(SendAncillaryMessage::ScmRights(rights)) {
@@ -360,7 +387,7 @@ impl Endpoint {
         }
         match sendmsg(
             &self.peer,
-            &[IoSlice::new(&bytes)],
+            &[IoSlice::new(bytes)],
             &mut ancillary,
             SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
         ) {

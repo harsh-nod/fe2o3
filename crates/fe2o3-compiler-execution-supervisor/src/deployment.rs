@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
+    SupervisorCompilerObserverRegistryV1,
 };
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, CompilerExecutionPolicyCapabilityV1,
@@ -52,6 +53,10 @@ pub const COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 10;
 pub const COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1: RawFd = 11;
 /// Independent shared lifecycle lease retained through protected-supervisor process death.
 pub const COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1: RawFd = 12;
+/// Root-created private compiler observer registration endpoint.
+pub const COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1: RawFd = 13;
+/// Original root coordinator pidfd for authenticated registration responses.
+pub const COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1: RawFd = 14;
 
 const PRIVATE_DESCRIPTOR_FLOOR_V1: RawFd = 256;
 const CLOSE_RANGE_CLOEXEC: i32 = 1 << 2;
@@ -96,7 +101,16 @@ const _: () = assert!(
     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1
 );
 const _: () = assert!(
-    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
+    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1
+        < COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1
+        < COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1
+        < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
 );
 const _: () = assert!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1 < PRIVATE_DESCRIPTOR_FLOOR_V1);
 
@@ -159,6 +173,8 @@ pub fn run_inherited_protected_issuer_service_v1()
     let external_anchor_pidfd =
         take_inherited(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1)?;
     let bootstrap = take_inherited(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1)?;
+    let observer_peer = take_inherited(COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1)?;
+    let observer_root_pidfd = take_inherited(COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1)?;
     validate_bootstrap::<true>(&bootstrap, rustix::process::getppid())?;
     protect_unrelated_descriptors_v1()?;
     lifecycle
@@ -182,6 +198,19 @@ pub fn run_inherited_protected_issuer_service_v1()
     let supervisor =
         ProtectedIssuerSupervisorV1::bind(program, credentials, root, signing_key, external_anchor)
             .map_err(ProtectedIssuerDeploymentErrorV1::Supervisor)?;
+    let registry = SupervisorCompilerObserverRegistryV1::admit(
+        observer_peer,
+        observer_root_pidfd,
+        supervisor.policy(),
+        credentials,
+        manifest.external_anchor_service(),
+    )
+    .map_err(|error| {
+        ProtectedIssuerDeploymentErrorV1::Supervisor(crate::authority::observer_error(error))
+    })?;
+    let supervisor = supervisor
+        .with_observer_registry(registry)
+        .map_err(ProtectedIssuerDeploymentErrorV1::Supervisor)?;
     let timeouts = ProtectedIssuerSessionTimeoutsV1::new(
         HANDOFF_TIMEOUT_V1,
         LAUNCH_TIMEOUT_V1,
@@ -537,6 +566,8 @@ mod tests {
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1, 10);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1, 11);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, 12);
+        assert_eq!(COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1, 13);
+        assert_eq!(COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1, 14);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, 220);
         assert_eq!(WORKER_COUNT_V1, 4);
     }

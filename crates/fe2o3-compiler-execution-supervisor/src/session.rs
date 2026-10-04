@@ -179,7 +179,7 @@ impl ProtectedIssuerSupervisorV1 {
             .accept_handoff_inner::<PRODUCTION>(control, timeouts.handoff())
             .map_err(ProtectedIssuerSessionErrorV1::Handoff)?;
         let prepared = self
-            .prepare_launch(accepted)
+            .prepare_launch_inner::<PRODUCTION>(accepted)
             .map_err(ProtectedIssuerSessionErrorV1::Preparation)?;
         let state = after_preparation(&prepared);
         let launched = self

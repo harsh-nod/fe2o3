@@ -363,7 +363,7 @@ fn validate_issuer_profile(issuer: &LiveClientPidfdIdentityV1, production: bool)
     Ok(())
 }
 
-fn wait_for(
+pub(super) fn wait_for(
     endpoint: &Endpoint,
     root: &LiveClientPidfdIdentityV1,
     events: i16,

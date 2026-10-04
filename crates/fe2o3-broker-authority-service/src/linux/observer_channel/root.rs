@@ -21,6 +21,10 @@ pub struct PreparedRootCompilerExecutionObserverV1 {
 }
 
 impl PreparedRootCompilerExecutionObserverV1 {
+    pub(super) fn peer_closed(&self) -> Result<bool> {
+        self.endpoint.closed()
+    }
+
     /// Creates a connected, kernel-autobound authenticated-channel pair as exact root.
     ///
     /// Returns private issuer transfer descriptors in order: endpoint, original root pidfd.
@@ -228,6 +232,16 @@ pub struct RootCompilerExecutionObserverV1 {
 }
 
 impl RootCompilerExecutionObserverV1 {
+    #[cfg(test)]
+    pub(super) fn has_active_occurrence(&self) -> bool {
+        self.active.is_some()
+    }
+    pub(super) fn issuer_identity(&self) -> (u32, u64) {
+        (
+            self.issuer.expected_client.pid,
+            self.issuer.start_time_ticks,
+        )
+    }
     /// Handles at most one nonblocking send or receive and retains pending responses on EAGAIN.
     pub fn step(&mut self) -> Result<RootCompilerExecutionObserverProgressV1> {
         if self.exited {

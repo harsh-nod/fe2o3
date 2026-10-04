@@ -26,8 +26,9 @@ opcode coverage before clearing application admission.
    Root-side process/publication observation is implemented and locally qualified
    across UIDs. The authenticated broker channel and private issuer guard now retain
    original occurrence custody and both publication-lock descriptions through durable
-   commit, with exact issuer containment before failure-path lock release. Connect
-   that channel to the production coordinator registration table and static launcher.
+   commit, with exact issuer containment before failure-path lock release. The
+   production coordinator registration table and static-launcher wiring are now
+   implemented, with mandatory observer admission before issuer recovery/readiness.
    The empty-capability issuer cannot perform that inspection itself. Keep signing
    unprivileged; do not relax the host's ptrace policy.
    Qualify genuine compiler receipt acquisition and verification through the deployed
@@ -59,7 +60,7 @@ production auditor factory. Its 21 isolated cases use actual root-owned fixed pa
 but test-key responses, not a genuine deployed compiler/issuer campaign.
 A separate owned-process permission witness confirms that the current distinct-UID,
 empty-cap issuer profile lacks remote inspection permission. A narrowly scoped,
-authenticated observer handoff is the next production acquisition prerequisite.
+authenticated observer handoff is required for production acquisition and is now wired.
 That handoff must cover the complete occurrence operation, not just process
 snapshots or an artifact-directory descriptor: the issuer also lacks access to
 the user's protected publication directories and lock files. Reuse the existing
@@ -68,14 +69,14 @@ the original observation, publication lease and current token. The issuer needs
 an authenticated private-channel lease bound to its exact session and fresh
 challenge. Keep the root-held token through signing and ledger commit; failure
 handling must contain the exact issuer before releasing that token. This is the
-production integration boundary; the broker-level channel is qualified separately below.
+production integration boundary; qualification scopes are separated below.
 The [root-observation checkpoint](evidence/dev-root-occurrence-observation-2026-10-04/README.md)
 now implements that local occurrence owner with one unbroken nonblocking publication
 lock and no client-state repair or lock creation. Two isolated cases qualify root
 observation of a UID1000 private publication and real cross-UID lock contention.
 Their waiting-process/synthetic-handoff fixture is not genuine compiler acquisition.
-The authenticated coordinator session table remains the next integration work;
-the root observation owner alone cannot sign.
+The authenticated coordinator session table is now integrated; the root observation
+owner alone still cannot sign.
 
 The [lock-retention checkpoint](evidence/dev-observer-lock-retention-2026-10-04/README.md)
 adds that transfer prerequisite, not the channel:
@@ -107,23 +108,43 @@ admission. These are CPU/subprocess tests with a waiting-rustc-shaped fixture,
 real observed publication, and test-key durable records, not genuine deployed
 compiler acquisition, a new formal proof or GPU launch authority.
 
-The next integration must reuse the existing root coordinator, not launch a
-new privileged helper. Keep supervisor bootstrap FD11 readiness/EOF-only; use a
-separate registration channel at supervisor FD13 with the original root pidfd at
-FD14, authenticated with per-packet `SCM_CREDENTIALS`.
-Register only the accepted handoff's original compiler peer/pidfd, then bind the
-actual launched issuer before awaiting readiness. Do not retain Cargo's control
-endpoint, whose EOF is part of the existing readiness contract. Do not observe at readiness:
-the compiler has not published yet. A bounded session table should process one
-`Begin`, `Revalidate`, or `Finish` step at a time, with fresh operation identities.
-Deliver both lock descriptions with the authenticated Begin response; the private
-issuer guard must keep them through ledger commit. On error, poison the issuer
-session and retain root custody until that exact issuer's pidfd confirms exit.
-Preserve client custody between Prepare and Issue instead of reopening a numeric
-PID. Issuer FD12 carries the observer endpoint and FD13 the original root pidfd;
-the private descriptor floor must move to 14. The deployed issuer must require
-these descriptors and attach the observer before ledger recovery and readiness,
-with no local-observation fallback. These production wiring changes remain open.
+The [registration/launch checkpoint](evidence/dev-observer-registry-2026-10-04/README.md)
+reuses the existing root coordinator. Supervisor bootstrap FD11 stays readiness/EOF-only;
+FD13 carries private authenticated registration and FD14 the original root pidfd.
+Register transfers only the accepted compiler peer/pidfd, never Cargo control.
+Bind transfers the actual launched issuer's original pidfd before readiness.
+A bounded 16-entry table services each observer once per iteration, retaining one
+backpressured control response and continuing unrelated sessions during containment.
+Unbound entries expire; bound entries retain custody until exact issuer exit.
+Issuer FD12 carries the observer endpoint and FD13 the original root pidfd, with
+private descriptor floor 14. Production admission requires both before recovery
+and readiness and has no local-observation fallback. No observation runs at readiness,
+before the compiler has published. Registry mutex acquisition and Bind share the
+launch's absolute deadline. Root shutdown contains all issuers before releasing
+supervisor/anchor custody. DAC/ptrace capabilities are coordinator-only.
+
+CPU subprocess qualification covers concurrent sessions, capacity, expiry, substituted
+pidfds, duplicate binding and registration loss during active publication custody.
+The isolated root case uses a UID1000 waiting-rustc-shaped publication and empty-cap
+UID61000 supervisor/issuer with production registry/observer/profile checks and test
+keys. It is not the measured static deployment or genuine selected-rustc receipt
+campaign. Cross-UID fixtures publish as the client before recording payload metadata;
+changing ownership after publication invalidates the ready record's ctime binding.
+That campaign remains next, followed by invocation admission and two-GPU
+fill/copy/readback. No new GPU run, formal theorem or HIP/HSA parity claim is made.
+
+Deployment qualification also has a concrete launcher compatibility blocker:
+the unit's existing `RestrictNamespaces=yes` denies `clone3` on the inspected
+systemd 255 implementation, while both protected launch paths require its atomic
+pidfd result. Do not replace that with a numeric-PID reopen or claim the unit
+starts successfully. Disabling this setting and denying `setns`, `unshare` and
+mount syscalls is not equivalent confinement: `clone3` can still request a user
+namespace. Resolve and qualify this policy boundary before the measured static
+deployment campaign. The isolated root tests do not run the systemd unit.
+The next candidate is an ENOSYS-only legacy `clone(CLONE_PIDFD)` compatibility
+path with a fully blocked pre-clone signal mask, exact parent-mask restoration
+and existing child containment. It preserves atomic original pidfd custody and
+the unit's namespace restriction; it still needs implementation and qualification.
 
 ## Reuse What Works
 

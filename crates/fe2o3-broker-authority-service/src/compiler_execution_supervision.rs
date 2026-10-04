@@ -1391,6 +1391,25 @@ fn main() {
             closure,
         )
         .unwrap();
+        if let Some((uid, gid)) = client_ids {
+            assert_eq!(rustix::process::geteuid().as_raw(), 0);
+            fs::set_permissions(artifact_directory.path(), fs::Permissions::from_mode(0o700))
+                .unwrap();
+            fn chown_tree(path: &std::path::Path, uid: u32, gid: u32) {
+                let metadata = fs::symlink_metadata(path).unwrap();
+                assert!(!metadata.file_type().is_symlink());
+                if metadata.is_dir() {
+                    for entry in fs::read_dir(path).unwrap() {
+                        chown_tree(&entry.unwrap().path(), uid, gid);
+                    }
+                }
+                std::os::unix::fs::chown(path, Some(uid), Some(gid)).unwrap();
+            }
+            chown_tree(artifact_directory.path(), uid, gid);
+            if let Some(directory) = &rustc_executable_directory {
+                chown_tree(directory.path(), uid, gid);
+            }
+        }
         if let Some(attempt) = attempt {
             let published_descriptor = if mutation
                 == RemoteFixtureMutation::PublishedInvocationMismatch
@@ -1439,37 +1458,30 @@ fn main() {
             } else {
                 descriptor.clone()
             };
-            publish_compiler_module_handoff_v3(
-                artifact_directory.path(),
-                publication_producer.as_ref().unwrap(),
-                attempt,
-                &compiler_handoff(published_descriptor, 0xb1),
-            )
-            .unwrap();
+            let handoff = compiler_handoff(published_descriptor, 0xb1);
+            if let Some(ids) = client_ids {
+                // Publish as the client. Chown after publication changes the payload ctime
+                // committed in its ready record and is not a valid cross-UID fixture.
+                observer::publish_cross_uid_fixture(
+                    artifact_directory.path(),
+                    attempt,
+                    &handoff,
+                    mutation == RemoteFixtureMutation::PublishedWrongProducer,
+                    ids,
+                );
+            } else {
+                publish_compiler_module_handoff_v3(
+                    artifact_directory.path(),
+                    publication_producer.as_ref().unwrap(),
+                    attempt,
+                    &handoff,
+                )
+                .unwrap();
+            }
         }
         let invocation = RustcInvocationCapabilityV1::create(descriptor.clone()).unwrap();
         let invocation_file = invocation.try_clone_for_transfer().unwrap();
         let (control, child_control) = seqpacket();
-
-        if let Some((uid, gid)) = client_ids {
-            assert_eq!(rustix::process::geteuid().as_raw(), 0);
-            fs::set_permissions(artifact_directory.path(), fs::Permissions::from_mode(0o700))
-                .unwrap();
-            fn chown_tree(path: &std::path::Path, uid: u32, gid: u32) {
-                let metadata = fs::symlink_metadata(path).unwrap();
-                assert!(!metadata.file_type().is_symlink());
-                if metadata.is_dir() {
-                    for entry in fs::read_dir(path).unwrap() {
-                        chown_tree(&entry.unwrap().path(), uid, gid);
-                    }
-                }
-                std::os::unix::fs::chown(path, Some(uid), Some(gid)).unwrap();
-            }
-            chown_tree(artifact_directory.path(), uid, gid);
-            if let Some(directory) = &rustc_executable_directory {
-                chown_tree(directory.path(), uid, gid);
-            }
-        }
 
         let mut command = Command::new(&rustc_executable);
         command.args(&argv[1..]);
