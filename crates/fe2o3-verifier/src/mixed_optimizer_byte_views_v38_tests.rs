@@ -272,8 +272,8 @@ fn byte_view_unused_values_and_objects_remain_in_the_entry_census() {
         })
         .0
         .unwrap();
-        assert!(text.contains("done.values.len() != 2"));
-        assert!(text.contains("!byte_native_view_inputs_v38(done.memory, done.values)"));
+        assert!(text.contains("spec fn byte_control_inputs_38_v99(done: MemoryStateV30) -> bool { done.values.len() == 2 && byte_state_memory_well_formed_v30(done) && byte_native_view_inputs_v38(done.memory, done.values) }"));
+        assert!(text.contains("if (done.pc != 0 && !trapped) || !byte_control_inputs_38_v99(done) { byte_block_refused_v58(done, observations) }"));
         assert!(!text.contains("MemoryOperationEffectV30::Read"));
         assert!(
             view_spec_body_v38("byte_native_view_inputs_v38")

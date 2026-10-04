@@ -439,8 +439,16 @@ fn assert_forwarding_reuses_exact_parent_byte_functions_v55(text: &str, has_oper
     assert!(controls > 0);
     assert_eq!(controls, blocks);
     assert_eq!(
-        forwarding.matches("spec fn byte_control_").count(),
+        forwarding
+            .lines()
+            .filter(|line| line.starts_with("spec fn byte_control_")
+                && !line.starts_with("spec fn byte_control_inputs_"))
+            .count(),
         controls
+    );
+    assert_eq!(
+        forwarding.matches("spec fn byte_control_inputs_").count(),
+        forwarding.matches("spec fn byte_inputs_").count()
     );
 }
 

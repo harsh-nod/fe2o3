@@ -76,7 +76,21 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                         "byte_target_view_contracts_match_1_v38(s.memory, little_endian)"
                     )
                 );
+                let control_inputs = text
+                    .split(&format!("spec fn byte_control_inputs_{root}_v99("))
+                    .nth(1)
+                    .unwrap()
+                    .split("spec fn")
+                    .next()
+                    .unwrap();
+                assert!(control_inputs.contains("done.values.len() == "));
+                assert!(control_inputs.contains("byte_state_memory_well_formed_v30(done)"));
+                assert!(control_inputs.contains("(byte_target_view_contracts_match_1_v38(done.memory, true) || byte_target_view_contracts_match_1_v38(done.memory, false))"));
             }
+            assert_eq!(
+                text.matches("spec fn byte_control_inputs_").count(),
+                census[0]
+            );
             let operations: Vec<_> = text
                 .split("spec fn byte_operation_")
                 .skip(1)
@@ -101,13 +115,16 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
             let controls: Vec<_> = text
                 .split("spec fn byte_control_")
                 .skip(1)
+                .filter(|body| !body.starts_with("inputs_"))
                 .map(|body| body.split("spec fn").next().unwrap())
                 .collect();
             assert!(!controls.is_empty());
             for control in controls {
-                let gate = "|| !(byte_target_view_contracts_match_1_v38(done.memory, true) || byte_target_view_contracts_match_1_v38(done.memory, false))";
+                let (root, _) = control.split_once('_').unwrap();
+                assert!(["0", "1"].contains(&root));
+                let gate = format!("|| !byte_control_inputs_{root}_v99(done)");
                 let refused = "byte_block_refused_v58(done, observations)";
-                assert!(control.find(gate).unwrap() < control.find(refused).unwrap());
+                assert!(control.find(&gate).unwrap() < control.find(refused).unwrap());
             }
             let refused = text
                 .split_once("spec fn byte_block_refused_v58(")
