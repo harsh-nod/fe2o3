@@ -334,3 +334,18 @@ impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
         })
     }
 }
+
+impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_safety_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .verify_private_bf16_output_safety_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}

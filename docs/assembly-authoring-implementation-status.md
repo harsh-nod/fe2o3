@@ -11,6 +11,60 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 optimized-output safety diagnostics — 2026-10-04
+
+The private owning path now replays the actual checked V12 output and invokes
+a complete-only formal-memory consumer on that output. It rechecks geometry
+and target binding without replacing the retained output, and preserves typed
+analysis failures, incomplete reasons and conflicts. Source obligations supply
+only the kernel-name join: source guard proofs are not substituted for proofs
+about optimized instructions.
+
+Four fresh frontend processes (Identity and swapped inputs, debug and release)
+completed the real consumer and a separate fresh raw-output analysis. Both
+analyses agreed exactly: three allocations, nine accesses, one bounds
+requirement, two alias requirements, no reported conflicts and **eight
+`GuardedAccessRequiresRankedProof` reasons**. These are optimized-output
+locations: block 10 for Identity and block 7 for swapped inputs, at operation
+indices 38, 56, 74, 92, 121, 142, 163 and 184. All eight are guarded two-byte input
+reads with unbounded raw offsets. The output write retains its 256-byte minimum
+bound; both input/output alias obligations remain. No conflicts reported by an
+Incomplete analysis is not a memory-safety proof.
+
+The diagnostic preserves every actual allocation, access, bound, alias,
+conflict and reason, rather than assuming a source reason count. Complete and
+incomplete results cannot be interchanged; non-formal replay failures refuse
+collection. Raw formatted diagnostic payloads are evidence, not proof objects.
+The temporary observer reserves 312 bytes on the original projection account;
+its live storage observation is 910,702,637 bytes and its peak is 962,461,661.
+Post-drop checks confirm the separate materialization account is unchanged.
+Inherited formal-engine allocation and formatting exclusions remain explicit;
+these are selected logical accounts, not whole-engine or process-RSS bounds.
+
+The five-source change passed 12 focused tests (11 new and one existing filter
+match), 14 parent controls, **3,957 compiler library tests** (233 ignored),
+73 extractor tests and two API tests in each build mode, **2,082 lowerer
+tests** in each mode, release-product builds and all four fresh frontend
+processes. Debug and release raw diagnostic streams agree byte-for-byte.
+Qualified source census:
+`209cb610c470c734a6dade2157e1b4fb3caf188080ba2a68faf420d392f01d43`.
+Existing warnings remain recorded.
+
+The scalar debugger controller also built and passed 64 protocol and 97 native
+CPU tests. Its read-only current census passed 35 controls; the deployed
+startup consumer passed 29 controls and a fresh 373-file runtime check,
+including retained startup history and driver checks. Directory setup is now
+ordered before acquisition in these readers. These scoped observations do
+not establish physical register capture, kernel dispatch or exclusive writers.
+
+Next are fresh structural guard proofs over actual optimized-output definitions
+and locations, followed by remaining matrix-helper/LLVM integration. The raw
+Incomplete result and its obligations must remain intact. Debugger scope and
+wrapper qualification and a separate finite native attempt are still pending.
+Ordinary compilation, LLVM/artifact/launch admission and public debugger
+capture remain disabled on these private paths. No milestone or tutorial is
+completed here; accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 checked optimizer and scalar debugger startup — 2026-10-04
 
 The private owning compilation path now invokes the actual checked V12

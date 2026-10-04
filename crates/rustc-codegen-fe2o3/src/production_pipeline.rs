@@ -5085,3 +5085,17 @@ impl PrivateBf16OptimizedCompilationV1 {
         )
     }
 }
+
+impl PrivateBf16OptimizedCompilationV1 {
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.optimized.verify_private_bf16_output_safety_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
