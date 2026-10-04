@@ -94,6 +94,11 @@ mod mixed_source_contract_v26 {
     ) -> ProductionMixedRuntimeGuardV89 {
         row.output_guard()
     }
+    fn predicated_licm_occurrence_guard_v90(
+        row: &ProductionPredicatedLicmRuntimeOccurrenceV90,
+    ) -> ProductionMixedRuntimeGuardV89 {
+        row.output_guard()
+    }
     cfg_occurrence_guard!(ProductionMixedRuntimeOccurrenceV26);
     cfg_occurrence_guard!(ProductionMixedLicmRuntimeOccurrenceV28);
     contract_occurrence!(
@@ -103,6 +108,11 @@ mod mixed_source_contract_v26 {
     );
     contract_occurrence!(ProductionMixedRuntimeOccurrenceV26);
     contract_occurrence!(ProductionMixedLicmRuntimeOccurrenceV28);
+    contract_occurrence!(
+        ProductionPredicatedLicmRuntimeOccurrenceV90,
+        wire::MixedOccurrenceV86,
+        predicated_licm_occurrence_guard_v90
+    );
 
     struct ContractParts<'view, 'source, R> {
         source: &'view ProductionSourceOwnedViewV18<'source>,
@@ -167,6 +177,32 @@ mod mixed_source_contract_v26 {
         for ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, 'view, 'source, P>
     {
         type Occurrence = ProductionMixedLicmRuntimeOccurrenceV28;
+        fn parts(
+            &self,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>> {
+            let source = self.relocation(budget)?.prefix(budget)?.source_owned_v29();
+            let (launches, width) = self.launch_context(budget)?;
+            Ok(ContractParts {
+                source,
+                graph: self.output(budget)?,
+                premises: self.runtime_premises(budget)?,
+                occurrences: self.runtime_occurrences(budget)?,
+                launches,
+                width,
+            })
+        }
+        fn observe(
+            &self,
+            required: usize,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<()> {
+            self.observe_retained_storage_v28(required, budget)
+        }
+    }
+
+    impl ContractOwner for ProductionConditionalPredicatedLicmOutputHandoffV90<'_, '_, '_, '_> {
+        type Occurrence = ProductionPredicatedLicmRuntimeOccurrenceV90;
         fn parts(
             &self,
             budget: &ArgumentBudgetV1<'_>,
@@ -968,6 +1004,7 @@ mod mixed_source_contract_v26 {
     }
 
     mixed_source_contract_emitter_v26!(@impl [] ProductionConditionalPredicatedFixedpointOutputHandoffV89<'_, '_>, emit_predicated_contract_v89);
+    mixed_source_contract_emitter_v26!(@impl [] ProductionConditionalPredicatedLicmOutputHandoffV90<'_, '_,'_, '_>, emit_predicated_contract_v90);
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(

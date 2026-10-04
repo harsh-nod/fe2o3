@@ -17,6 +17,9 @@ mod native_writes_v88;
 #[path = "production_source_predicated_completion_v89_tests.rs"]
 mod predicated_completion_v89;
 
+#[path = "production_source_predicated_continuation_v90_tests.rs"]
+mod predicated_continuation_v90;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

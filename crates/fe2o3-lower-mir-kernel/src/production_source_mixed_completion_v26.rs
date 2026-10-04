@@ -458,9 +458,12 @@ include!("production_source_mixed_contract_v26.rs");
 mod mixed_licm_v28;
 pub use mixed_licm_v28::{
     ProductionConditionalMixedFixedpointLicmOutputHandoffV29,
-    ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedFixedpointLicmRelocationV29,
-    ProductionMixedFixedpointStoreConsensusV46, ProductionMixedLicmCompletionErrorV28,
-    ProductionMixedLicmDefinitionProjectionV28, ProductionMixedLicmRelocationErrorV28,
-    ProductionMixedLicmRelocationV28, ProductionMixedLicmRuntimeOccurrenceV28,
-    ProductionMixedStoreConsensusV46,
+    ProductionConditionalMixedLicmOutputHandoffV28,
+    ProductionConditionalPredicatedLicmOutputHandoffV90,
+    ProductionMixedFixedpointLicmRelocationV29, ProductionMixedFixedpointStoreConsensusV46,
+    ProductionMixedLicmCompletionErrorV28, ProductionMixedLicmDefinitionProjectionV28,
+    ProductionMixedLicmRelocationErrorV28, ProductionMixedLicmRelocationV28,
+    ProductionMixedLicmRuntimeOccurrenceV28, ProductionMixedStoreConsensusV46,
+    ProductionPredicatedFixedpointLicmRelocationV90, ProductionPredicatedLicmRuntimeOccurrenceV90,
+    ProductionPredicatedStoreConsensusV90,
 };

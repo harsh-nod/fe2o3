@@ -83,8 +83,11 @@ impl<'owner> ProductionMixedPrefixExecutionViewV29<'owner> {
 /// Closed source prefix contract implemented only for actual Policy10 and
 /// Policy11 handoffs. Generic consumers retain the nominal implementation.
 /// This does not permit callers to supply a policy or create a prefix view.
-pub trait ProductionMixedPrefixOwnerV29<'view, 'source>:
-    mixed_prefix_sealed_v29::Sealed + 'view
+pub trait ProductionMixedPrefixOwnerV29<
+    'view,
+    'source,
+    R: ProductionContinuationOccurrenceV90 = ProductionMixedRuntimeOccurrenceV26,
+>: mixed_prefix_sealed_v29::Sealed + 'view
 {
     /// Fixed nominal policy identity.
     const POLICY_VERSION: u16;
@@ -117,10 +120,7 @@ pub trait ProductionMixedPrefixOwnerV29<'view, 'source>:
         budget: &ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<&[ProductionMixedSliceRuntimePremiseV26]>;
     /// Borrows original exact runtime occurrences with custody checked.
-    fn runtime_occurrences(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]>;
+    fn runtime_occurrences(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<&[R]>;
     /// Borrows the source launch requirements.
     fn launch_context(
         &self,
@@ -139,8 +139,11 @@ pub trait ProductionMixedPrefixOwnerV29<'view, 'source>:
 
 macro_rules! mixed_prefix_owner_v29 {
     ($handoff:ident, $policy:literal) => {
+        mixed_prefix_owner_v29!($handoff, $policy, ProductionMixedRuntimeOccurrenceV26);
+    };
+    ($handoff:ident, $policy:literal, $occurrence:ty) => {
         impl mixed_prefix_sealed_v29::Sealed for $handoff<'_, '_> {}
-        impl<'view, 'source> ProductionMixedPrefixOwnerV29<'view, 'source>
+        impl<'view, 'source> ProductionMixedPrefixOwnerV29<'view, 'source, $occurrence>
             for $handoff<'view, 'source>
         {
             const POLICY_VERSION: u16 = $policy;
@@ -195,7 +198,7 @@ macro_rules! mixed_prefix_owner_v29 {
             fn runtime_occurrences(
                 &self,
                 budget: &ArgumentBudgetV1<'_>,
-            ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]> {
+            ) -> SourceOwnedResultV18<&[$occurrence]> {
                 self.runtime_occurrences(budget)
             }
             fn launch_context(
@@ -219,6 +222,13 @@ macro_rules! mixed_prefix_owner_v29 {
 }
 mixed_prefix_owner_v29!(ProductionConditionalMixedPureCseOutputHandoffV26, 10);
 mixed_prefix_owner_v29!(ProductionConditionalMixedFixedpointOutputHandoffV29, 11);
+mixed_prefix_owner_v29!(
+    ProductionConditionalPredicatedFixedpointOutputHandoffV89,
+    11,
+    ProductionMixedRuntimeOccurrenceV89
+);
+
+include!("production_source_predicated_continuation_v90.rs");
 
 #[cfg(test)]
 mod mixed_prefix_frame_tests_v29 {

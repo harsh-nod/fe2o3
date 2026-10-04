@@ -14,9 +14,10 @@ pub struct ProductionMixedStoreConsensusV46<
     'prefix,
     'view,
     'source,
-    P: ProductionMixedPrefixOwnerV29<'view, 'source>,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90 = ProductionMixedRuntimeOccurrenceV26,
 > {
-    pub(super) relocation: &'motion ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>,
+    pub(super) relocation: &'motion ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>,
     pub(super) tail: Forwarding,
     retained: usize,
     required: usize,
@@ -34,13 +35,28 @@ pub type ProductionMixedFixedpointStoreConsensusV46<'motion, 'prefix, 'view, 'so
         ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
     >;
 
-fn owner_header<'view, 'source: 'view, P: ProductionMixedPrefixOwnerV29<'view, 'source>>()
--> Result<usize> {
-    size_of::<ProductionMixedStoreConsensusV46<'_, '_, 'view, 'source, P>>()
+/// Actual StoreConsensus owner borrowing the typed predicated LICM owner.
+pub type ProductionPredicatedStoreConsensusV90<'motion, 'prefix, 'view, 'source> =
+    ProductionMixedStoreConsensusV46<
+        'motion,
+        'prefix,
+        'view,
+        'source,
+        ProductionConditionalPredicatedFixedpointOutputHandoffV89<'view, 'source>,
+        ProductionMixedRuntimeOccurrenceV89,
+    >;
+
+fn owner_header<
+    'view,
+    'source: 'view,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+>() -> Result<usize> {
+    size_of::<ProductionMixedStoreConsensusV46<'_, '_, 'view, 'source, P, R>>()
         .checked_sub(size_of::<Forwarding>())
         .and_then(|n| {
             n.checked_add(align_of::<
-                ProductionMixedStoreConsensusV46<'_, '_, 'view, 'source, P>,
+                ProductionMixedStoreConsensusV46<'_, '_, 'view, 'source, P, R>,
             >())
         })
         .ok_or_else(|| ArgumentResourceV1::Arithmetic.into())
@@ -53,15 +69,41 @@ impl<'prefix, 'view, 'source> ProductionMixedFixedpointLicmRelocationV29<'prefix
         &'motion self,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<ProductionMixedFixedpointStoreConsensusV46<'motion, 'prefix, 'view, 'source>> {
+        self.prepare_store_consensus_inner_v90(budget)
+    }
+}
+
+impl<'prefix, 'view, 'source>
+    ProductionPredicatedFixedpointLicmRelocationV90<'prefix, 'view, 'source>
+{
+    /// Runs all-path StoreConsensus against this actual typed LICM output.
+    pub fn prepare_predicated_store_consensus_v90<'motion>(
+        &'motion self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionPredicatedStoreConsensusV90<'motion, 'prefix, 'view, 'source>> {
+        self.prepare_store_consensus_inner_v90(budget)
+    }
+}
+
+impl<
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>
+{
+    fn prepare_store_consensus_inner_v90<'motion>(
+        &'motion self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P, R>> {
         self.check(budget)?;
         let source = self.prefix.source_owned_v29();
         let floor = budget.storage();
         let (tail, retained) =
             scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| -> Result<_> {
                 let entry = budget.storage();
-                let header = owner_header::<
-                    ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
-                >()?;
+                let header = owner_header::<P, R>()?;
                 let scratch = argument_sum_v1(&[
                     size_of::<Pair<'_>>(),
                     size_of::<PairStorage>(),
@@ -102,8 +144,14 @@ impl<'prefix, 'view, 'source> ProductionMixedFixedpointLicmRelocationV29<'prefix
     }
 }
 
-impl<'motion, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
-    ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P>
+impl<
+    'motion,
+    'prefix,
+    'view,
+    'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source, R>,
+    R: ProductionContinuationOccurrenceV90,
+> ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P, R>
 {
     pub(super) fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let source = self.relocation.prefix.source_owned_v29();
@@ -124,8 +172,9 @@ impl<'motion, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
     pub fn relocation(
         &self,
         budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&'motion ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>>
-    {
+    ) -> SourceOwnedResultV18<
+        &'motion ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P, R>,
+    > {
         self.check(budget)?;
         Ok(self.relocation)
     }
