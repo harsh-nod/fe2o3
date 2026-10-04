@@ -75,6 +75,66 @@ def group_tasks(pgid):
     return tasks
 
 
+def select_artifact(log):
+    records = [json.loads(line) for line in log.splitlines() if line.startswith("{")]
+    finish = [row for row in records if row.get("reason") == "build-finished"]
+    assert len(finish) == 1 and finish[0]["success"] is True
+    rows = [row for row in records if row.get("reason") == "compiler-artifact"
+            and row.get("executable") is not None]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["target"]["name"] == "fe2o3_verifier"
+    assert row["target"]["kind"] == ["lib"] and row["profile"]["test"] is True
+    assert Path(row["manifest_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-verifier/Cargo.toml"
+    assert Path(row["target"]["src_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-verifier/src/lib.rs"
+    executable = Path(row["executable"])
+    assert executable.resolve(strict=True) == executable
+    assert executable.parent == LANE / "target/debug/deps"
+    return executable
+
+
+def artifact_pin(path):
+    before = path.lstat()
+    assert stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+    assert 0 < before.st_size <= 1024**3
+    sha = digest(path)
+    after = path.lstat()
+    identity = lambda row: (row.st_size, row.st_mtime_ns, row.st_dev, row.st_ino, row.st_mode, row.st_uid)
+    assert identity(before) == identity(after)
+    return {"path": str(path), "sha256": sha, "identity": identity(after)}
+
+
+def export_tested_artifacts(binary, pins):
+    destination = LOGS / "artifacts"
+    destination.mkdir(mode=0o700)
+    assert shutil.disk_usage(LOGS).free >= 2 * 1024**3
+    rows = []
+    for role, original in [("verifier_binary", binary),
+                           ("verifier_depfile", binary.with_suffix(".d"))]:
+        before = artifact_pin(original)
+        assert before == pins[role]
+        bound = 1024**3 if role == "verifier_binary" else 16 * 1024**2
+        assert before["identity"][0] <= bound
+        copied = destination / original.name
+        total = 0
+        with original.open("rb") as source, copied.open("xb") as output:
+            while chunk := source.read(65536):
+                total += len(chunk)
+                assert total <= bound
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(copied, 0o500 if role == "verifier_binary" else 0o400)
+        after = artifact_pin(original)
+        copied_pin = artifact_pin(copied)
+        assert after == before
+        assert total == copied_pin["identity"][0] == before["identity"][0]
+        assert copied_pin["sha256"] == before["sha256"]
+        rows.append({"role": role, "original": before, "copy": copied_pin})
+    save("artifact-export.json", {"head": HEAD, "tree": TREE, "source": source_pin(),
+                                  "artifacts": rows, "protected_proof_executed": False})
+
+
 def parse_coverage(log, filters):
     roster_log = re.split(r"^failures:$", log, maxsplit=1, flags=re.M)[0]
     rows = re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)(?:,.*)?$", roster_log, re.M)
@@ -221,6 +281,26 @@ try:
     run("ordinary", args, environment, 1800, 64 * 1024**2)
     log = (LOGS / "ordinary.log").read_text()
     coverage = parse_coverage(log, filters)
+    artifact_args = [cargo, "test", "--offline", "--locked", "--no-default-features", "-j", "2", "-p",
+                     roster["package"], "--lib", "--no-run", "--message-format=json"]
+    run("artifact-build", artifact_args, environment, 120, 32 * 1024**2)
+    binary = select_artifact((LOGS / "artifact-build.log").read_text())
+    artifact_before = {"verifier_binary": artifact_pin(binary),
+                       "verifier_depfile": artifact_pin(binary.with_suffix(".d"))}
+    save("artifact-before.json", artifact_before)
+    direct_args = [str(binary), "--test-threads=8", *filters]
+    for name in roster["ignored_not_selected"]:
+        direct_args += ["--skip", name]
+    run("artifact-ordinary", direct_args, environment, 120, 64 * 1024**2)
+    direct_coverage = parse_coverage((LOGS / "artifact-ordinary.log").read_text(), filters)
+    assert direct_coverage["rows"] == coverage["rows"] or dict(direct_coverage["rows"]) == dict(coverage["rows"])
+    artifact_after = {"verifier_binary": artifact_pin(binary),
+                      "verifier_depfile": artifact_pin(binary.with_suffix(".d"))}
+    assert artifact_after == artifact_before
+    save("artifact-after.json", artifact_after)
+    save("artifact-coverage.json", direct_coverage)
+    assert source_pin() == before
+    export_tested_artifacts(binary, artifact_before)
     assert {str(path): digest(path) for path in tools} == tool_pins
 except BaseException as failure:
     error = repr(failure)

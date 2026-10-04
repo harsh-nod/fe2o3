@@ -36,7 +36,7 @@ jobs:
         env:
           EXPECTED_CONTROL_HEAD: ${{ github.sha }}
         run: python3 control/.github/diagnostics/issue271-proof-v78.py
-      - name: Upload diagnostic logs only
+      - name: Upload diagnostics and exact tested verifier artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
