@@ -266,6 +266,11 @@ impl ProtectedServiceNamespaceSetV1 {
         Self::capture_at("/proc/self/ns")
     }
 
+    /// Captures the calling thread, including any thread-local namespace changes.
+    pub fn capture_current_thread() -> Result<Self, ProtectedServiceProfileErrorV1> {
+        Self::capture_at("/proc/thread-self/ns")
+    }
+
     fn capture_at(root: &str) -> Result<Self, ProtectedServiceProfileErrorV1> {
         let identities = NAMESPACE_NAMES_V1
             .map(|name| namespace_identity(&format!("{root}/{name}")))
@@ -284,6 +289,11 @@ impl ProtectedServiceNamespaceSetV1 {
 
     pub fn revalidate_self(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
         self.revalidate_at("/proc/self/ns")
+    }
+
+    /// Rechecks the calling thread rather than the process leader.
+    pub fn revalidate_current_thread(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
+        self.revalidate_at("/proc/thread-self/ns")
     }
 
     fn revalidate_at(&self, root: &str) -> Result<(), ProtectedServiceProfileErrorV1> {
