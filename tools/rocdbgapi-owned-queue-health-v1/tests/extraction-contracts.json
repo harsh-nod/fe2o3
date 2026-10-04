@@ -1,0 +1,150 @@
+{
+  "schema": "fe2o3-private-owned-queue-health-mock-sections-v1",
+  "sections": [
+    {
+      "source": "src/queue.cpp",
+      "test": "tests/production-body-control.cc",
+      "role": "entire healthy_live_v1 definition",
+      "bytes": 1034,
+      "sha256": "773d10c136f2cbc196b7ff1386403e25253f39df29b81dafcbfa1d8b167f4c07",
+      "text": "bool\nqueue_t::healthy_live_v1 () const\n{\n  process_t &owner = process ();\n  if (!owner.take_queue_health_query ())\n    return false;\n\n  try\n    {\n      if (owner.from_core () || !owner.os_driver ().is_debug_enabled ()\n          || !is_valid () || m_os_queue_info.queue_type != os_queue_type_t::compute_aql)\n        {\n          owner.taint_queue_health ();\n          return false;\n        }\n    \n      os_queue_snapshot_entry_t current{};\n      size_t count = 0;\n      amd_dbgapi_status_t status = owner.os_driver ().queue_health_snapshot_v1 (\n        &current, &count);\n      if (status != AMD_DBGAPI_STATUS_SUCCESS || count != 1\n          || !detail::same_healthy_queue_v1 (\n            m_os_queue_info, current, os_exception_mask_t::queue_new,\n            os_exception_mask_t::none))\n        {\n          owner.taint_queue_health ();\n          return false;\n        }\n      return true;\n    }\n  catch (...)\n    {\n      owner.taint_queue_health ();\n      throw; // Preserve the original exception; never regain a read permit.\n    }\n}\n"
+    },
+    {
+      "source": "src/queue.cpp",
+      "test": "tests/production-body-control.cc",
+      "role": "entire STATE/ERROR_REASON production switch branch",
+      "bytes": 933,
+      "sha256": "02a4d17affca91b6e3bf35915d0b1794cb6883ee5739c60b70e395fd1217a8e5",
+      "text": "    case AMD_DBGAPI_QUEUE_INFO_STATE:\n    case AMD_DBGAPI_QUEUE_INFO_ERROR_REASON:\n      {\n        // Bad output arguments do not consume a driver observation.\n        if (value == nullptr)\n          throw api_error_t (AMD_DBGAPI_STATUS_ERROR_INVALID_ARGUMENT);\n        if (value_size != sizeof (uint32_t))\n          throw api_error_t (AMD_DBGAPI_STATUS_ERROR_INVALID_ARGUMENT_COMPATIBILITY);\n        if (!healthy_live_v1 ())\n          throw api_error_t (AMD_DBGAPI_STATUS_ERROR_NOT_IMPLEMENTED);\n        // These are conclusions from the live positive proof, never fallback\n        // constants for an unsupported/unknown/error observation.\n        const uint32_t result\n          = query == AMD_DBGAPI_QUEUE_INFO_STATE\n              ? static_cast<uint32_t> (AMD_DBGAPI_QUEUE_STATE_VALID)\n              : static_cast<uint32_t> (AMD_DBGAPI_EXCEPTION_NONE);\n        utils::get_info (value_size, value, result);\n        return;\n      }"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/production-body-control.cc",
+      "role": "entire os_queue_snapshot_entry_t definition",
+      "bytes": 589,
+      "sha256": "555b057c5ec55d81d65dcd888f31f1fe79519731ee01d0b78b83719775c4d5d4",
+      "text": "struct os_queue_snapshot_entry_t\n{\n  os_queue_id_t queue_id;\n  os_queue_state_t state{};\n  bool exception_status_complete{ false }; // Never assume unknown raw bits are clean.\n  os_agent_id_t gpu_id;\n  os_queue_type_t queue_type{ os_queue_type_t::unknown };\n  os_exception_mask_t exception_status;\n  amd_dbgapi_global_address_t ring_base_address;\n  amd_dbgapi_size_t ring_size;\n  amd_dbgapi_global_address_t write_pointer_address;\n  amd_dbgapi_global_address_t read_pointer_address;\n  amd_dbgapi_global_address_t ctx_save_restore_address;\n  amd_dbgapi_size_t ctx_save_restore_area_size;\n};"
+    },
+    {
+      "source": "src/os_driver_kfd.cpp",
+      "test": "tests/driver-body-control.cc",
+      "role": "whole KFD health method",
+      "bytes": 3022,
+      "sha256": "084f0f287387e0f134004b08294337f4ed3e5430da1a8233a519f96ab3a23632",
+      "text": "amd_dbgapi_status_t\nkfd_driver_t::queue_health_snapshot_v1 (\n  os_queue_snapshot_entry_t *snapshot, size_t *queue_count) const\n{\n  if (snapshot == nullptr || queue_count == nullptr)\n    return AMD_DBGAPI_STATUS_ERROR_INVALID_ARGUMENT;\n  if (!is_valid () || !is_debug_enabled () || !m_os_pid || *m_os_pid <= 0\n      || !s_kfd_fd)\n    return AMD_DBGAPI_STATUS_ERROR_NOT_IMPLEMENTED;\n\n  // Capacity one, no clearing, no heap or TRACE formatting. The caller has\n  // already consumed its one baseline or one of ten lifetime query permits.\n  const uint32_t pid = static_cast<uint32_t> (*m_os_pid);\n  kfd_queue_snapshot_entry raw{};\n  kfd_ioctl_dbg_trap_args args{};\n  args.pid = pid;\n  args.op = KFD_IOC_DBG_TRAP_GET_QUEUE_SNAPSHOT;\n  args.queue_snapshot.exception_mask = 0;\n  args.queue_snapshot.snapshot_buf_ptr = reinterpret_cast<uintptr_t> (&raw);\n  args.queue_snapshot.num_queues = 1;\n  args.queue_snapshot.entry_size = sizeof (raw);\n\n  // Do not use kfd_ioctl(): it retries EINTR. This private observation gets\n  // exactly one syscall, and every nonzero return is a refusal.\n  const int result = ::ioctl (*s_kfd_fd, AMDKFD_IOC_DBG_TRAP, &args);\n  if (result != 0)\n    return result < 0 && errno == ESRCH\n             ? AMD_DBGAPI_STATUS_ERROR_PROCESS_EXITED\n             : AMD_DBGAPI_STATUS_ERROR;\n\n  if (args.pid != pid\n      || args.op != KFD_IOC_DBG_TRAP_GET_QUEUE_SNAPSHOT\n      || args.queue_snapshot.exception_mask != 0\n      || args.queue_snapshot.snapshot_buf_ptr\n           != reinterpret_cast<uintptr_t> (&raw)\n      || args.queue_snapshot.entry_size != sizeof (raw)\n      || args.queue_snapshot.num_queues > 1)\n    return AMD_DBGAPI_STATUS_ERROR;\n\n  if (args.queue_snapshot.num_queues == 0)\n    {\n      *queue_count = 0; // A real empty snapshot, never a synthesized healthy row.\n      return AMD_DBGAPI_STATUS_SUCCESS;\n    }\n\n  // Refuse all unknown as well as known exception bits before any mapping can\n  // discard them. No queue flags, unsupported type or reserved ABI data qualify.\n  if (raw.exception_status != 0 || raw.reserved != 0\n      || (raw.queue_id\n          & (uint32_t (KFD_DBG_QUEUE_ERROR_MASK)\n             | uint32_t (KFD_DBG_QUEUE_INVALID_MASK))) != 0\n      || raw.queue_type != KFD_IOC_QUEUE_TYPE_COMPUTE_AQL)\n    return AMD_DBGAPI_STATUS_ERROR_NOT_IMPLEMENTED;\n\n  os_queue_snapshot_entry_t observed{};\n  observed.queue_id = raw.queue_id;\n  observed.state = {};\n  observed.exception_status_complete = true;\n  observed.gpu_id = raw.gpu_id;\n  observed.queue_type = os_queue_type_t::compute_aql;\n  observed.exception_status = os_exception_mask_t::none;\n  observed.ring_base_address = raw.ring_base_address;\n  observed.ring_size = raw.ring_size;\n  observed.write_pointer_address = raw.write_pointer_address;\n  observed.read_pointer_address = raw.read_pointer_address;\n  observed.ctx_save_restore_address = raw.ctx_save_restore_address;\n  observed.ctx_save_restore_area_size = raw.ctx_save_restore_area_size;\n  *snapshot = observed;\n  *queue_count = 1;\n  return AMD_DBGAPI_STATUS_SUCCESS;\n}\n\n"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/driver-body-control.cc",
+      "role": "default-refusing internal virtual method",
+      "bytes": 162,
+      "sha256": "aa7e7e45b37828631c68dca4fbf2ca8258e8006f31c96f08d40c6530d2a30d3e",
+      "text": "  virtual amd_dbgapi_status_t\n  queue_health_snapshot_v1 (os_queue_snapshot_entry_t *, size_t *) const\n  {\n    return AMD_DBGAPI_STATUS_ERROR_NOT_IMPLEMENTED;\n  }"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/driver-body-control.cc",
+      "role": "OS snapshot struct",
+      "bytes": 589,
+      "sha256": "555b057c5ec55d81d65dcd888f31f1fe79519731ee01d0b78b83719775c4d5d4",
+      "text": "struct os_queue_snapshot_entry_t\n{\n  os_queue_id_t queue_id;\n  os_queue_state_t state{};\n  bool exception_status_complete{ false }; // Never assume unknown raw bits are clean.\n  os_agent_id_t gpu_id;\n  os_queue_type_t queue_type{ os_queue_type_t::unknown };\n  os_exception_mask_t exception_status;\n  amd_dbgapi_global_address_t ring_base_address;\n  amd_dbgapi_size_t ring_size;\n  amd_dbgapi_global_address_t write_pointer_address;\n  amd_dbgapi_global_address_t read_pointer_address;\n  amd_dbgapi_global_address_t ctx_save_restore_address;\n  amd_dbgapi_size_t ctx_save_restore_area_size;\n};"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "enum-0",
+      "bytes": 884,
+      "sha256": "0a5af39879374257553f974c28ad800a752b0b1163e9df4161176d5af96d9573",
+      "text": "enum class os_exception_code_t : uint32_t\n{\n  none = 0,\n\n  /* per queue exceptions  */\n  queue_wave_abort = 1,\n  queue_wave_trap = 2,\n  queue_wave_math_error = 3,\n  queue_wave_illegal_instruction = 4,\n  queue_wave_memory_violation = 5,\n  queue_wave_address_error = 6,\n  queue_packet_dispatch_dim_invalid = 16,\n  queue_packet_dispatch_group_segment_size_invalid = 17,\n  queue_packet_dispatch_code_invalid = 18,\n  queue_packet_unsupported = 20,\n  queue_packet_dispatch_work_group_size_invalid = 21,\n  queue_packet_dispatch_register_invalid = 22,\n  queue_packet_vendor_unsupported = 23,\n  queue_preemption_error = 30,\n  queue_new = 31,\n\n  /* per device exceptions  */\n  device_queue_delete = 32,\n  device_memory_violation = 33,\n  device_ras_error = 34,\n  device_fatal_halt = 35,\n  device_new = 36,\n\n  /* per process exceptions  */\n  process_runtime = 48,\n  process_device_remove = 49,\n};"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "enum-1",
+      "bytes": 117,
+      "sha256": "8c982b36e030c3c696aa4abe2eeedefec98b4b8192b615735e9c21340630af06",
+      "text": "enum class os_runtime_state_t : uint32_t\n{\n  disabled = 0,\n  enabled = 1,\n  enabled_busy = 2,\n  enabled_error = 3,\n};"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "enum-2",
+      "bytes": 123,
+      "sha256": "898fb2feba21342086b794fe7f3d578e489bbc7d28c799eed932431d0dd9e995",
+      "text": "struct os_runtime_info_t\n{\n  amd_dbgapi_global_address_t r_debug;\n  os_runtime_state_t runtime_state;\n  bool ttmp_setup;\n};"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "enum-3",
+      "bytes": 2096,
+      "sha256": "d40002c80cac7a0000714f8b1d9cc328cb7e8510b783125f22fce277a3692784",
+      "text": "enum class os_exception_mask_t : uint64_t\n{\n  none = 0,\n\n  /* per queue exceptions  */\n  queue_wave_abort = ec_mask (os_exception_code_t::queue_wave_abort),\n  queue_wave_trap = ec_mask (os_exception_code_t::queue_wave_trap),\n  queue_wave_math_error = ec_mask (os_exception_code_t::queue_wave_math_error),\n  queue_wave_illegal_instruction\n  = ec_mask (os_exception_code_t::queue_wave_illegal_instruction),\n  queue_wave_memory_violation\n  = ec_mask (os_exception_code_t::queue_wave_memory_violation),\n  queue_wave_address_error\n  = ec_mask (os_exception_code_t::queue_wave_address_error),\n  queue_packet_dispatch_dim_invalid\n  = ec_mask (os_exception_code_t::queue_packet_dispatch_dim_invalid),\n  queue_packet_dispatch_group_segment_size_invalid = ec_mask (\n    os_exception_code_t::queue_packet_dispatch_group_segment_size_invalid),\n  queue_packet_dispatch_code_invalid\n  = ec_mask (os_exception_code_t::queue_packet_dispatch_code_invalid),\n  queue_packet_unsupported\n  = ec_mask (os_exception_code_t::queue_packet_unsupported),\n  queue_packet_dispatch_work_group_size_invalid = ec_mask (\n    os_exception_code_t::queue_packet_dispatch_work_group_size_invalid),\n  queue_packet_dispatch_register_invalid\n  = ec_mask (os_exception_code_t::queue_packet_dispatch_register_invalid),\n  queue_packet_vendor_unsupported\n  = ec_mask (os_exception_code_t::queue_packet_vendor_unsupported),\n  queue_preemption_error\n  = ec_mask (os_exception_code_t::queue_preemption_error),\n  queue_new = ec_mask (os_exception_code_t::queue_new),\n\n  /* per device exceptions  */\n  device_queue_delete = ec_mask (os_exception_code_t::device_queue_delete),\n  device_memory_violation\n  = ec_mask (os_exception_code_t::device_memory_violation),\n  device_ras_error = ec_mask (os_exception_code_t::device_ras_error),\n  device_fatal_halt = ec_mask (os_exception_code_t::device_fatal_halt),\n  device_new = ec_mask (os_exception_code_t::device_new),\n\n  /* per process exceptions  */\n  process_runtime = ec_mask (os_exception_code_t::process_runtime),\n  process_device_remove = ec_mask (os_exception_code_t::process_device_remove),\n};"
+    },
+    {
+      "source": "src/os_driver.h",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "ec-mask",
+      "bytes": 181,
+      "sha256": "9b6096813d569d6bc6b554492934d070cefbc7d22437bf53cd8c969192f33207",
+      "text": "constexpr auto\nec_mask (os_exception_code_t c)\n{\n  using underlying_t = typename std::underlying_type_t<os_exception_code_t>;\n  return 1ull << (static_cast<underlying_t> (c) - 1);\n}"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "runtime-entry",
+      "bytes": 211,
+      "sha256": "a45ec65b247574428331af7d1e77c5d2b63baba71165b61c7bf3c3f42fbff22d",
+      "text": "  // Lose the positive proof before any callback/subscription/lifecycle effect.\n  if (runtime_info.runtime_state != os_runtime_state_t::enabled\n      || m_queue_health.candidate ())\n    m_queue_health.taint ();\n"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "restriction-scope",
+      "bytes": 277,
+      "sha256": "7b054acdc0fdf6c18fc6943219de4cb888fe56e33f3ced43fa0538aa242d7366",
+      "text": "  auto restriction_error = utils::make_scope_exit (\n    [this] ()\n    {\n      m_queue_health.taint ();\n      os_driver ().set_exceptions_reported (\n        os_exception_mask_t::process_runtime);\n      m_runtime_state = AMD_DBGAPI_RUNTIME_STATE_LOADED_ERROR_RESTRICTION;\n    });"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "baseline",
+      "bytes": 737,
+      "sha256": "6e17908f6c765a6439e26c46e07f9881638faeb314d1dc0e543ccb58df60db9a",
+      "text": "  // Qualify once, after continuous exception subscriptions were installed and\n  // before the runtime enable event is ACKed. Attached-existing and core paths\n  // cannot acquire this positive proof. A second lifetime cannot reset taint.\n  if (!is_flag_set (flag_t::runtime_enable_during_attach)\n      && m_queue_health.begin_baseline ())\n    {\n      os_queue_snapshot_entry_t observed{};\n      size_t observed_count = 0;\n      const auto observed_status = os_driver ().queue_health_snapshot_v1 (\n        &observed, &observed_count);\n      m_queue_health.finish_baseline (\n        observed_status == AMD_DBGAPI_STATUS_SUCCESS && observed_count == 0\n        && os_driver ().is_debug_enabled ());\n    }\n  else\n    m_queue_health.taint ();\n"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "suspend-clear",
+      "bytes": 392,
+      "sha256": "da0ffbd3eb413c96cc067143684434e4f5d318272b066cc7b17f7ebf4a912340",
+      "text": "    m_queue_health.candidate () ? os_exception_mask_t::none\n      : os_exception_mask_t::queue_wave_abort\n          | os_exception_mask_t::queue_wave_trap\n          | os_exception_mask_t::queue_wave_math_error\n          | os_exception_mask_t::queue_wave_illegal_instruction\n          | os_exception_mask_t::queue_wave_memory_violation\n          | os_exception_mask_t::queue_wave_address_error"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "observed-event-taint-and-exit",
+      "bytes": 892,
+      "sha256": "8162dcb3d6fa47efb983318209c3904db50f98318ed2ad497ea893275f902a28",
+      "text": "      if (status != AMD_DBGAPI_STATUS_SUCCESS\n          && status != AMD_DBGAPI_STATUS_ERROR_PROCESS_EXITED)\n        fatal_error (\"os_driver_t::query_debug_event failed (%s)\",\n                     to_cstring (status));\n\n      // The driver returned the exact mask that was observed before clearing.\n      // A trap is not called benign: subscribed wave exceptions cannot reach\n      // the runtime without send_exceptions(), which taints before forwarding.\n      if (status != AMD_DBGAPI_STATUS_SUCCESS\n          || (exceptions & ~(os_exception_mask_t::queue_wave_trap\n                             | os_exception_mask_t::queue_new\n                             | os_exception_mask_t::process_runtime))\n               != os_exception_mask_t::none)\n        m_queue_health.taint ();\n\n      if (status == AMD_DBGAPI_STATUS_ERROR_PROCESS_EXITED\n          || exceptions == os_exception_mask_t::none)"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "forward-taint",
+      "bytes": 202,
+      "sha256": "0323370bd59ddcad46439a4f947425a3870e059e8563e33c168b23120afd8a0d",
+      "text": "  // Sticky BEFORE any effect: failure/throwing handoffs cannot retry health.\n  if ((exceptions & ~os_exception_mask_t::process_runtime)\n      != os_exception_mask_t::none)\n    m_queue_health.taint ();\n"
+    },
+    {
+      "source": "src/process.cpp",
+      "test": "tests/lifecycle-callsite-control.cc",
+      "role": "disable-taint-before-call",
+      "bytes": 96,
+      "sha256": "82a94b5103177e346c0fdeb68b82eb655d6587e242d2634343f4bee461f18c98",
+      "text": "      m_queue_health.taint ();\n      amd_dbgapi_status_t status = os_driver ().disable_debug ();"
+    }
+  ],
+  "scope": "Exact sections only; all surrounding driver/process/API/class/enum/exception/output and lifecycle ordering scaffolding remains mocked. No real API, driver, provider link, GPU or full-method claim."
+}
