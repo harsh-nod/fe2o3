@@ -229,20 +229,51 @@ fn record_array_scalar_leaves_preserve_stride_packed_alignment_and_replay() {
 #[test]
 fn storage_array_bounds_use_declared_length_even_with_padding_or_zero_size() {
     let target = SimulationTargetV1::amdgpu_64();
-    for length in [0, 3] {
-        with_view(&nested(false, length), |admitted| {
-            for index in [length, length + 1, u64::MAX] {
-                assert_eq!(
-                    kind(admitted.simulate(
-                        &request(index, target),
-                        target,
-                        SimulationLimitsV1::default()
-                    )),
-                    SimulationExecutionErrorKindV1::StorageArrayIndexOutOfBounds { index, length }
-                );
-            }
-        });
-    }
+    let mut work = Work::new(BOUND);
+    let mut budget = Budget::new(&mut work, BOUND);
+    budget.reserve_storage(FLOOR).unwrap();
+    let raw = nested(false, 0);
+    let error =
+        Owner::from_module_ref_with_verification_budget_v18(&raw, LAYOUT_LIMITS, &mut budget)
+            .unwrap_err();
+    let fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Verification(
+        fe2o3_kernel_ir::BorrowedKernelIrVerificationErrorV1::Verification(errors),
+    ) = error
+    else {
+        panic!("unexpected zero-length projection refusal: {error:?}")
+    };
+    assert_eq!(errors.diagnostics().len(), 1);
+    let diagnostic = &errors.diagnostics()[0];
+    assert_eq!(
+        diagnostic.code,
+        fe2o3_kernel_ir::DiagnosticCode::InvalidMemoryAccess
+    );
+    assert_eq!(diagnostic.location.module, raw.id);
+    assert_eq!(
+        diagnostic.location.function.as_ref(),
+        Some(&raw.functions[0].id)
+    );
+    assert_eq!(diagnostic.location.block, Some(BlockId(0)));
+    assert_eq!(diagnostic.location.operation, Some(2));
+    assert_eq!(
+        diagnostic.message,
+        "storage projection does not name an admitted child layout"
+    );
+    assert_eq!(budget.storage(), FLOOR);
+
+    let length = 3;
+    with_view(&nested(false, length), |admitted| {
+        for index in [length, length + 1, u64::MAX] {
+            assert_eq!(
+                kind(admitted.simulate(
+                    &request(index, target),
+                    target,
+                    SimulationLimitsV1::default()
+                )),
+                SimulationExecutionErrorKindV1::StorageArrayIndexOutOfBounds { index, length }
+            );
+        }
+    });
     let mut raw = nested(false, 3);
     let block = &mut raw.functions[0].body.as_mut().unwrap().blocks[0];
     block.operations.insert(
