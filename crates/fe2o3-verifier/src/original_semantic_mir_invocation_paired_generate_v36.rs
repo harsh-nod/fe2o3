@@ -8,6 +8,9 @@ use std::fmt::Write as _;
 #[path = "original_semantic_mir_source_conservation_generate_v81.rs"]
 mod conservation;
 
+#[path = "original_semantic_mir_invocation_step_generate_v85.rs"]
+mod step;
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
@@ -27,10 +30,11 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
         related(model, root, row, out)?;
         observed(model, root, row, out)?;
         initial(model, root, row, out)?;
-        if let Some(fuels) = &row.conservation_fuels {
-            conservation::emit(root, fuels, out)?;
+        if let Some(hints) = &row.step_hints {
+            conservation::emit(root, &hints.fuels, out)?;
+            step::emit(model, root, row, hints, out)?;
         }
-        proofs(root, row.conservation_fuels.is_some(), out)?;
+        proofs(root, row, out)?;
     }
     Ok(())
 }
@@ -404,9 +408,43 @@ fn related(
 ) -> Result<()> {
     emit!(
         out,
-        "spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n && invocation_source_byte_storage_related_{root}_v36(source, target)\n && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ (source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0) || (source.machine.pc == -2 && target.pc == -2) }} else\n",
+        "spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n"
+    );
+    related_body(model, root, row, true, out)?;
+    emit!(out, "}}\n");
+    if row.step_hints.is_some() {
+        emit!(
+            out,
+            "spec fn invocation_paired_residual_{root}_v85(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n"
+        );
+        related_body(model, root, row, false, out)?;
+        emit!(out, "}}\n");
+    }
+    Ok(())
+}
+
+fn related_body(
+    model: &PairedInvocations<'_, '_, '_>,
+    root: usize,
+    row: &Root,
+    storage: bool,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    emit!(
+        out,
+        " source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n",
         model.locals,
         model.definitions
+    );
+    if storage {
+        emit!(
+            out,
+            " && invocation_source_byte_storage_related_{root}_v36(source, target)\n"
+        );
+    }
+    emit!(
+        out,
+        " && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ (source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0) || (source.machine.pc == -2 && target.pc == -2) }} else\n"
     );
     for (block, cut) in row.cuts.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -437,7 +475,7 @@ fn related(
         }
         emit!(out, " }} else\n");
     }
-    emit!(out, " {{ false }} }})\n}}\n");
+    emit!(out, " {{ false }} }})\n");
     Ok(())
 }
 
@@ -570,7 +608,7 @@ fn initial(
     Ok(())
 }
 
-fn proofs(root: usize, conservation: bool, out: &mut Writer<'_, '_>) -> Result<()> {
+fn proofs(root: usize, row: &Root, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
         r#"spec fn invocation_paired_source_defined_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat) -> bool
@@ -600,11 +638,8 @@ source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, i
 {{
 "#
     );
-    if conservation {
-        emit!(
-            out,
-            " invocation_paired_source_preserved_{root}_v77(source, target);\n"
-        );
+    if row.step_hints.is_some() {
+        step::dispatch(root, row, out)?;
     }
     emit!(
         out,

@@ -88,6 +88,7 @@ fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracl
     }
     let expected = envelope::<PairedInvocations<'_, '_, '_>>()
         + envelope::<Root>()
+        + envelope::<Option<SourceStepHintsV85>>()
         + envelope::<RootArgument>()
         + envelope::<Instance>()
         + envelope::<Cut>()
@@ -296,12 +297,7 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                 }
                 super::super::byte_bindings::SourceByteBindings::derive(slots, out)?.emit(out)?;
                 paired.emit(out)?;
-                assert!(
-                    paired
-                        .roots
-                        .iter()
-                        .all(|root| root.conservation_fuels.is_none())
-                );
+                assert!(paired.roots.iter().all(|root| root.step_hints.is_none()));
                 assert!(
                     !out.text
                         .contains("proof fn invocation_paired_source_preserved_")
@@ -311,7 +307,13 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                         out.text
                             .contains(&format!("proof fn invocation_paired_step_{root}_v36("))
                     );
+                    super::step_tests::check_four(
+                        &out.text,
+                        &format!("invocation_paired_step_{root}_v36"),
+                        root,
+                    );
                 }
+                assert!(!out.text.contains("proof fn invocation_paired_cut_"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Allocate"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Read"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Write"));
@@ -347,7 +349,7 @@ fn original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_con
     run(LIMIT, LIMIT, |paired, out| {
         paired.emit(out)?;
         for (root, row) in paired.roots.iter().enumerate() {
-            let fuels = row.conservation_fuels.as_ref().unwrap();
+            let fuels = &row.step_hints.as_ref().unwrap().fuels;
             assert_eq!(fuels, &[1, 2, 2]);
             for (instance, fuel) in fuels.iter().enumerate() {
                 assert!(out.text.contains(&format!(
@@ -365,10 +367,11 @@ fn original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_con
                 format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
                 format!("invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted"),
                 format!("source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))"),
-                format!("invocation_paired_source_preserved_{root}_v77(source, target);"),
             ] {
                 assert!(step.contains(&conclusion), "{conclusion}");
             }
+            assert!(out.text.contains(&format!("invocation_paired_source_preserved_{root}_v77(source, target);")));
+            assert!(step.contains(&format!("invocation_paired_cut_{root}_terminal_all_v85(source, target);")));
         }
         Ok(())
     }).0.unwrap();
