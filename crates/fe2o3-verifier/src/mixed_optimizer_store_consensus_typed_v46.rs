@@ -669,7 +669,7 @@ fn emit_models<R: ByteAllocationResolverV30>(
             out.source_section_error(error, "typed forwarding input byte functions")
         })?;
         match emitted_input {
-            Some(index) => index.emit_output_reusing_scalar_bodies(&after, output_namespace, out),
+            Some(index) => index.emit_output_reusing_bodies_v56(&after, output_namespace, out),
             None => after.emit(output_namespace, out),
         }
         .map_err(|error| {

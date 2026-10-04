@@ -11,7 +11,7 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct IndexByteOperationV37 {
     kind: IntrinsicKind,
     axis: usize,
