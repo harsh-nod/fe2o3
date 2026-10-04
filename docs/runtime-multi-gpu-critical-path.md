@@ -140,11 +140,47 @@ the no-fork application/proof-custodian deployment.
 Next, bind a dedicated inherited proof endpoint as an additional input occurrence
 on both Cargo and host sides, authenticate messages against the original application
 pidfd, and retain a fresh bounded application session independently of issuer
-lifetime. Preserve the complete occurrence through Cargo's ACK transition; drop
-Cargo's ACK writer before any registration wait. The join must authenticate Cargo's
+lifetime. The [startup custody checkpoint](evidence/dev-application-startup-2026-10-04/README.md)
+adds Cargo's separate post-spawn transition before compiler readiness:
+it drops parent ACK and test-readiness writers, captures the original unreaped child's
+pidfd, completes sandbox admission once, and retains the complete occurrence,
+descriptor coordinates, expectation and challenge through ACK and delayed cleanup.
+The binding is allocated before spawn and moved without cloning. Fast ACK-and-exit
+is valid; this custody is not a live-process observation or registration authority.
+The existing compiler-service path still opens its own pidfd under unreaped Child
+custody; the future proof path must transfer a duplicate of the retained original.
+The join must authenticate Cargo's
 spawn/sandbox supervision and protected service isolation, neither of which follows
 from the process snapshot alone. Then deploy the fixed keyless custodian, join its
 original proof to native invocation premises, and run the selected two-GPU pipeline.
+
+The reviewed registration design reuses the supervisor/root registry rather than
+adding another listener. Cargo creates a nonblocking CLOEXEC seqpacket pair before
+spawn, enables PASSCRED and eagerly binds both endpoints. The child endpoint becomes
+occurrence slot 4 before environment encoding. Socket-creator credentials identify
+Cargo; per-message credentials must separately identify the original application
+or root responder. Root must compare reverse endpoint addresses and consume the
+original application and Cargo pidfds. Keep FD195's existing unnamed compiler-peer
+profile unchanged. The host registers after admission and before ACK, without
+reacquiring its publication token. Root must install independently bounded
+application custody before the supervisor publishes readiness; raw ACK bytes alone
+cannot satisfy that barrier. Compiler issuer exit must not retire application proof
+custody, and application exit must not imply device settlement. This design is not
+yet an implemented registration/deployment or remote proof owner.
+
+The full Cargo unit run also exposed inherited reviewed-macro source-pin drift:
+the committed macro tree no longer matches the closed host-code allowlist. Do not
+refresh that security pin merely to make tests pass. Review the intervening macro
+changes and requalify the closed build admission before the ordinary production
+application campaign. This startup change leaves that separate gate unchanged.
+A read-only delta review found no production-code defect or added proc-macro
+dependencies/I/O, but the unsafe owned-argument emission needs direct structural
+coverage before pin refresh. Add a mixed scalar/read/write/read-write/mapped-output
+test for exact accounting counts, full-signature argument ordinals, mapped index
+identity and the intended unsafe trait assertion. Check that raw-pointer and
+by-value profiles emit no runtime adapter. Then qualify macro unit/downstream
+fixtures and host generated-runtime tests under frozen source hashes. Keep the
+external-source pin independent of any workspace-local refresh.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
