@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 
 const LENGTH_EQUATIONS_V68: &str =
     include_str!("original_semantic_mir_length_boundaries_v68_tests.vrs");
+const DESCRIPTOR_EFFECT_EQUATIONS_V68: &str =
+    include_str!("original_semantic_mir_descriptor_effects_v68_tests.vrs");
 
 fn run_complete_source_model_v68(
     work: usize,
@@ -23,7 +25,11 @@ fn run_complete_source_model_v68(
                 EndiannessV2::Little,
                 out,
             )?;
-            write!(out, "\nverus! {{\n{LENGTH_EQUATIONS_V68}\n}}\n").map_err(|_| out.error())?;
+            write!(
+                out,
+                "\nverus! {{\n{LENGTH_EQUATIONS_V68}\n{DESCRIPTOR_EFFECT_EQUATIONS_V68}\n}}\n"
+            )
+            .map_err(|_| out.error())?;
             examine(&out.text, census);
             Ok(())
         })
@@ -57,8 +63,14 @@ fn original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_
         ] {
             assert!(text.contains(retained), "{retained}");
         }
-        assert!(text.ends_with(&format!("\nverus! {{\n{LENGTH_EQUATIONS_V68}\n}}\n")));
+        assert!(text.ends_with(&format!(
+            "\nverus! {{\n{LENGTH_EQUATIONS_V68}\n{DESCRIPTOR_EFFECT_EQUATIONS_V68}\n}}\n"
+        )));
         assert_eq!(LENGTH_EQUATIONS_V68.matches("proof fn ").count(), 3);
+        assert_eq!(
+            DESCRIPTOR_EFFECT_EQUATIONS_V68.matches("proof fn ").count(),
+            5
+        );
         for forbidden in ["assume(", "external_body", "admit(", "assume_specification"] {
             assert!(!text.contains(forbidden), "{forbidden}");
         }
@@ -66,6 +78,25 @@ fn original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_
     });
     result.0.unwrap();
     assert!(reached);
+    assert_eq!(result.2, 37);
+}
+
+#[test]
+fn original_complete_source_model_includes_operand_effect_acceptance_and_refusal_equations() {
+    let result = run_complete_source_model_v68(LIMIT, LIMIT, |text, _| {
+        assert!(text.contains(super::super::effects::INVOCATION_EFFECTS_V36));
+        assert!(text.contains(DESCRIPTOR_EFFECT_EQUATIONS_V68));
+        for equation in [
+            "aggregate_or_descriptor_exact_evaluation_has_no_external_effect_v68",
+            "aggregate_or_descriptor_changed_state_is_refused_v68",
+            "aggregate_or_descriptor_changed_value_is_refused_v68",
+            "aggregate_or_descriptor_invalid_observation_is_refused_v68",
+            "descriptor_operand_mutable_copy_is_refused_v68",
+        ] {
+            assert_eq!(text.matches(&format!("proof fn {equation}(")).count(), 1);
+        }
+    });
+    result.0.unwrap();
     assert_eq!(result.2, 37);
 }
 

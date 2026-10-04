@@ -1,0 +1,77 @@
+proof fn aggregate_or_descriptor_exact_evaluation_has_no_external_effect_v68(
+    head: InvocationSourceOperandObservationV36, little_endian: bool,
+)
+    requires
+        matches!(head.operand, InvocationSourceOperandV36::Aggregate { .. }
+            | InvocationSourceOperandV36::Descriptor { .. }),
+        head.before.machine.valid, head.after.machine.valid,
+        invocation_source_value_evaluate_v42(head.before, head.operand,
+            head.root, head.instance, little_endian).source == head.after,
+        invocation_source_value_evaluate_v42(head.before, head.operand,
+            head.root, head.instance, little_endian).value == head.value,
+    ensures
+        invocation_source_operands_effects_v36(seq![head], little_endian) == seq![],
+        invocation_source_operands_observations_v39(seq![head], little_endian) == seq![],
+{}
+
+proof fn aggregate_or_descriptor_changed_state_is_refused_v68(
+    head: InvocationSourceOperandObservationV36, little_endian: bool,
+)
+    requires
+        matches!(head.operand, InvocationSourceOperandV36::Aggregate { .. }
+            | InvocationSourceOperandV36::Descriptor { .. }),
+        invocation_source_value_evaluate_v42(head.before, head.operand,
+            head.root, head.instance, little_endian).source != head.after,
+    ensures
+        invocation_source_operands_effects_v36(seq![head], little_endian)
+            == seq![MemoryOperationEffectV30::Refused],
+        invocation_source_operands_observations_v39(seq![head], little_endian)
+            == invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                head.before, head.after),
+{}
+
+proof fn aggregate_or_descriptor_changed_value_is_refused_v68(
+    head: InvocationSourceOperandObservationV36, little_endian: bool,
+)
+    requires
+        matches!(head.operand, InvocationSourceOperandV36::Aggregate { .. }
+            | InvocationSourceOperandV36::Descriptor { .. }),
+        invocation_source_value_evaluate_v42(head.before, head.operand,
+            head.root, head.instance, little_endian).value != head.value,
+    ensures
+        invocation_source_operands_effects_v36(seq![head], little_endian)
+            == seq![MemoryOperationEffectV30::Refused],
+        invocation_source_operands_observations_v39(seq![head], little_endian)
+            == invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                head.before, head.after),
+{}
+
+proof fn aggregate_or_descriptor_invalid_observation_is_refused_v68(
+    head: InvocationSourceOperandObservationV36, little_endian: bool,
+)
+    requires
+        matches!(head.operand, InvocationSourceOperandV36::Aggregate { .. }
+            | InvocationSourceOperandV36::Descriptor { .. }),
+        !head.before.machine.valid || !head.after.machine.valid,
+    ensures
+        invocation_source_operands_effects_v36(seq![head], little_endian)
+            == seq![MemoryOperationEffectV30::Refused],
+        invocation_source_operands_observations_v39(seq![head], little_endian)
+            == invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                head.before, head.after),
+{}
+
+proof fn descriptor_operand_mutable_copy_is_refused_v68(
+    head: InvocationSourceOperandObservationV36, local: int,
+    recipe: InvocationSourceDescriptorRecipeV51, little_endian: bool,
+)
+    requires
+        recipe.mutable,
+        head.operand == (InvocationSourceOperandV36::Descriptor { local, recipe, moved: false }),
+    ensures
+        invocation_source_operands_effects_v36(seq![head], little_endian)
+            == seq![MemoryOperationEffectV30::Refused],
+        invocation_source_operands_observations_v39(seq![head], little_endian)
+            == invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                head.before, head.after),
+{}

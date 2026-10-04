@@ -167,9 +167,9 @@ spec fn invocation_source_operands_effects_v36(
                 invocation_source_read_effect_v36(head.before, value, bits,
                     head.root, head.instance, little_endian),
             InvocationSourceOperandV36::Pointer { .. }
-            | InvocationSourceOperandV36::Slice { .. }
-            | InvocationSourceOperandV36::Aggregate { .. } => seq![],
-            InvocationSourceOperandV36::Enum { .. } => {
+            | InvocationSourceOperandV36::Slice { .. } => seq![],
+            InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
+            | InvocationSourceOperandV36::Descriptor { .. } => {
                 let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,
                     head.root, head.instance, little_endian);
                 if evaluated.source == head.after && evaluated.value == head.value { seq![] }
@@ -216,6 +216,34 @@ mod tests {
         );
         assert!(text.contains("!head.valid_before || !head.valid_after"));
         assert!(!text.contains("byte_end_frame_v30"));
+    }
+
+    #[test]
+    fn aggregate_and_descriptor_operand_effects_require_exact_evaluated_state_and_value() {
+        let checked = "| InvocationSourceOperandV36::Descriptor { .. } => {\n                let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,\n                    head.root, head.instance, little_endian);\n                if evaluated.source == head.after && evaluated.value == head.value { seq![] }\n                else { seq![MemoryOperationEffectV30::Refused] }";
+        assert_eq!(INVOCATION_EFFECTS_V36.matches(checked).count(), 2);
+        let legacy = INVOCATION_EFFECTS_V36
+            .split_once("spec fn invocation_source_operands_effects_v36(")
+            .unwrap()
+            .1;
+        assert!(legacy.contains("!head.before.machine.valid || !head.after.machine.valid"));
+        assert!(legacy.contains("InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }\n            | InvocationSourceOperandV36::Descriptor { .. } => {"));
+        assert!(!legacy.contains("InvocationSourceOperandV36::Descriptor { .. } => seq![]"));
+        assert!(!legacy.contains("InvocationSourceOperandV36::Aggregate { .. } => seq![]"));
+        let aggregate = include_str!("original_semantic_mir_source_aggregate_values_v42.vrs");
+        assert!(aggregate.contains("InvocationSourceOperandV36::Descriptor { local, recipe, moved } =>\n            invocation_source_descriptor_evaluate_v53(source, local, recipe, moved)"));
+        assert!(aggregate.contains("InvocationSourceOperandV36::Aggregate { place, moved } =>\n            invocation_source_aggregate_place_evaluate_v42(source, place, moved)"));
+        let snapshots = include_str!("original_semantic_mir_source_descriptor_snapshots_v53.vrs");
+        for retained in [
+            "if recipe.mutable && !moved",
+            "invocation_source_descriptor_snapshot_v53(source, local, recipe)",
+            "invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined)",
+            "invocation_source_descriptor_snapshot_current_v53(consumed, snapshot, recipe)",
+            "source.logical.versions[recipe.origin] == reference.loan.version",
+            "source.machine.frames.active[i] == reference.loan.frame",
+        ] {
+            assert!(snapshots.contains(retained), "{retained}");
+        }
     }
 }
 
