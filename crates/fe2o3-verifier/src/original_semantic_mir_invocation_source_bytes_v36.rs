@@ -273,6 +273,22 @@ pub(super) enum Event {
     },
 }
 
+impl Event {
+    pub(super) fn descriptor_frame_shape_v93(self) -> bool {
+        matches!(
+            self,
+            Self::Descriptor(_)
+                | Self::Pointer(pointer_events::Event::Copy {
+                    operand: TypedOperand {
+                        kind: OperandKind::Slice { .. },
+                        ..
+                    },
+                    ..
+                })
+        )
+    }
+}
+
 pub(super) struct SourceByteBody<'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     root: usize,

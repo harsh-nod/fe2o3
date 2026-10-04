@@ -286,6 +286,9 @@ fn generate_refinement_inner_v49(
     paired.emit(out).map_err(|error| {
         out.source_section_error(error, "original paired invocation obligations")
     })?;
+    byte_source
+        .emit_cut_frame_proofs_v93(out)
+        .map_err(|error| out.source_section_error(error, "original source cut frame proofs"))?;
     if let Some(tail) = tail {
         byte_bindings.emit_carrier_extensionality_v48(out)?;
         tail.emit(

@@ -107,6 +107,13 @@ pub(super) fn emit(
                             matches!(goal, Goal::Observations),
                             out,
                         )?;
+                        if hint.frame_preserving && matches!(goal, Goal::Heap) {
+                            emit!(
+                                out,
+                                " invocation_cut_source_frame_{root}_{}_v93(source);\n",
+                                cut.source
+                            );
+                        }
                         if let Some((call, entry)) = constructor {
                             if matches!(goal, Goal::Map) {
                                 enter(root, hint, call, entry, out)?;
