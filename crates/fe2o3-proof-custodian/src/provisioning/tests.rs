@@ -3,7 +3,7 @@ use fe2o3_kernel_analysis::{
     PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectWorkerPolicyV1,
     PhysicalMachineRuntimeClosureIdentityV1, PhysicalMachineToolchainIdentityV1,
 };
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 
 #[test]
 #[ignore = "run through scripts/build-static-proof-custodian.sh"]
@@ -330,6 +330,216 @@ fn stale_staging_is_not_deleted_or_ignored() {
     assert!(install_test(&parent, &candidate()).is_err());
     assert_eq!(std::fs::read(&stale).unwrap(), b"must preserve");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+#[ignore = "requires scripts/qualify-proof-resource-inspection.sh private installed runtime"]
+fn root_fixed_resource_inspection_campaign() {
+    use std::process::Command;
+    assert!(rustix::process::getuid().is_root());
+    assert_eq!(std::env::var("FE2O3_PROOF_INSTALL_PRIVATE").unwrap(), "1");
+    assert_ne!(
+        std::fs::read_link("/proc/self/ns/pid").unwrap().as_os_str(),
+        std::env::var_os("FE2O3_PROOF_INSTALL_HOST_PID_NAMESPACE").unwrap()
+    );
+    assert!(std::env::var_os("HOME").is_none());
+    assert_eq!(std::env::current_dir().unwrap(), Path::new("/"));
+    for path in [
+        "/etc",
+        "/usr/libexec",
+        "/tmp",
+        "/home",
+        "/root",
+        "/run/host-lib",
+        "/run/setup",
+    ] {
+        assert_eq!(rustix::fs::statfs(path).unwrap().f_type, libc::TMPFS_MAGIC);
+    }
+    for path in ["/home", "/root", "/run/host-lib", "/run/setup"] {
+        assert_eq!(std::fs::read_dir(path).unwrap().count(), 0, "{path}");
+    }
+    for path in [
+        "/etc/ld.so.cache",
+        "/etc/ld.so.preload",
+        "/usr/lib/x86_64-linux-gnu/glibc-hwcaps",
+    ] {
+        assert!(!Path::new(path).exists(), "unexpected loader input: {path}");
+    }
+    for path in ["/etc/fe2o3", "/etc/fe2o3/compiler-execution"] {
+        std::fs::create_dir(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1,
+        compiler_profile().canonical_bytes(),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1,
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    let output_dir = Path::new("/run/candidates");
+    std::fs::create_dir(output_dir).unwrap();
+    std::os::unix::fs::chown(output_dir, Some(61002), Some(61003)).unwrap();
+    std::fs::set_permissions(output_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let provisioner = "/usr/libexec/fe2o3/fe2o3-proof-custodian-provision";
+    // Nested root binds must not turn the private device mounts into unusable nodev aliases.
+    let null = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
+    assert!(null.metadata().unwrap().file_type().is_char_device());
+    assert_eq!(null.metadata().unwrap().rdev(), rustix::fs::makedev(1, 3));
+    assert_eq!(
+        std::fs::read_link("/lib64").unwrap(),
+        Path::new("usr/lib64")
+    );
+    assert_eq!(
+        std::fs::read_link("/usr/lib64/ld-linux-x86-64.so.2").unwrap(),
+        Path::new("../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+    );
+    let inspect = |name: &str, success: bool| {
+        let path = output_dir.join(name);
+        let output = Command::new("/usr/bin/setpriv")
+            .env_clear()
+            .args([
+                "--reuid=61002",
+                "--regid=61003",
+                "--clear-groups",
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--bounding-set=-all",
+            ])
+            .arg(provisioner)
+            .arg("inspect-fixed-resources")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            success,
+            "inspection {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !success {
+            assert_eq!(output.status.code(), Some(98));
+            assert!(!path.exists());
+            println!(
+                "negative {name}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return None;
+        }
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(
+            (
+                metadata.uid(),
+                metadata.gid(),
+                metadata.mode() & 0o7777,
+                metadata.nlink()
+            ),
+            (61002, 61003, 0o400, 1)
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        let candidate = Candidate::decode(&bytes).unwrap();
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("candidate_sha256={}\n", candidate.sha256_hex())
+        );
+        Some(candidate)
+    };
+    rustix::process::umask(Mode::from_raw_mode(0o077));
+    // Discovery executes the real sealed worker, then admits the pinned Verus closure.
+    let first = inspect("first", true).unwrap();
+    let second = inspect("second", true).unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    assert_eq!(
+        first.application.credentials().unwrap(),
+        ProofControllerCredentialProfileV1::new(61002, 61003).unwrap()
+    );
+    let resources = Resources::open().unwrap();
+    resources.validate_candidate(&first).unwrap();
+    for path in [
+        WORKER_PATH,
+        COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1,
+        RUNTIME_PATH,
+        "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5",
+    ] {
+        let hidden = format!("{path}.qualification-absent");
+        std::fs::rename(path, &hidden).unwrap();
+        inspect("missing-resource", false);
+        std::fs::rename(&hidden, path).unwrap();
+    }
+    let output = Command::new(provisioner)
+        .env_clear()
+        .arg("install")
+        .arg(output_dir.join("first"))
+        .arg(first.sha256_hex())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let owner = crate::ProductionApplicationProofCustodianDeploymentV1::open().unwrap();
+    owner.revalidate().unwrap();
+    assert_eq!(owner.deployment(), &first.application);
+    println!(
+        "real fixed resource inspection: twice-identical candidate_sha256={}, proof_uid=61002 proof_gid=61003, home-hidden, installed and reacquired; compiler profile is a routing fixture, not a compiler receipt",
+        first.sha256_hex()
+    );
+    println!("candidate_bytes={:02x?}", first.bytes());
+    // Reuse the actual controller protocol campaign, not another resource-opening surrogate.
+    for case in ["app-good", "app-payload", "app-duplicate", "app-stale"] {
+        let capture = Path::new("/tmp").join(case);
+        let status = Command::new(std::env::current_exe().unwrap())
+            .env_clear()
+            .env("FE2O3_CUSTODIAN_PRIVATE_INSTALL", "1")
+            .env(
+                "FE2O3_CUSTODIAN_HOST_PID_NAMESPACE",
+                std::env::var_os("FE2O3_PROOF_INSTALL_HOST_PID_NAMESPACE").unwrap(),
+            )
+            .env("FE2O3_CUSTODIAN_CASE", case)
+            .env("FE2O3_CUSTODIAN_INPUTS", "/run/proof-inputs")
+            .env("FE2O3_CUSTODIAN_CAPTURE", &capture)
+            .args([
+                "--exact",
+                "launch::application::qualification::root_application_controller",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "controller case {case}");
+        for name in ["preactivation.txt", "cleanup.txt"] {
+            println!(
+                "{case}/{name}: {}",
+                std::fs::read_to_string(capture.join(name)).unwrap().trim()
+            );
+        }
+        if case == "app-good" {
+            let subject = std::fs::read(capture.join("subject.bin")).unwrap();
+            assert!(!subject.is_empty());
+            println!("{case}/subject_sha256={:02x?}", Sha256::digest(&subject));
+            println!(
+                "{case}/quarantine: {}",
+                std::fs::read_to_string(capture.join("quarantine.txt"))
+                    .unwrap()
+                    .trim()
+            );
+        } else {
+            println!(
+                "{case}/rejection: {}",
+                std::fs::read_to_string(capture.join("rejection.txt"))
+                    .unwrap()
+                    .trim()
+            );
+        }
+    }
 }
 
 #[test]

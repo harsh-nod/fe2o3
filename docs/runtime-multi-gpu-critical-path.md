@@ -32,7 +32,7 @@ not establish production deployment readiness.
 The next deployment change must extend the closed compiler-only bundle/installer
 using a distinct proof profile, preserving the existing V1 inventory. Include
 the proof manager, application controller and manager unit; install
-the analyzer's immutable loader/LLVM closure and the protected Verus runtime; then
+the analyzer's immutable loader/DSO closure and the protected Verus runtime; then
 provision application approval before manager approval against their final paths.
 The manager approval also pins the installed coordinator image. Development-tree
 analyzer measurements cannot be reused after relocation because they include
@@ -44,8 +44,18 @@ now separates non-root final-resource inspection from independently pinned root
 approval installation. It validates installed images and credential separation,
 and publishes the application/manager approval pair atomically. The static proof
 builder includes the manager, controller and provisioner. This does not complete
-the analyzer/Verus closure package, positively qualify inspection or establish
-ordinary application admission. Keep the next effort on that final resource layout.
+the analyzer/Verus closure package or establish ordinary application admission.
+The [installed-resource campaign](evidence/dev-installed-proof-resources-2026-10-04/README.md)
+now positively qualifies the real inspector twice under the exact proof account
+with homes and source aliases hidden. It installs the identical candidate and
+runs the actual fixed controller through ResourcesReady, real conditional proof,
+retained probing/EOF quarantine and three rejection cases in that same layout.
+The existing Worker already links LLVM/LLD statically; only its seven external
+base DSOs need canonical loader placement. No analyzer rebuild or new runtime
+wrapper is required for this gate. This does not qualify production package
+activation, authenticated manager registration, genuine compiler receipt/currentness
+admission or GPU execution. Keep the next effort on the actual installed deployment
+and genuine compiler-to-application campaign, followed immediately by two-GPU fill/XGMI.
 
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already

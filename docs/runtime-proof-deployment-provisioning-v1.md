@@ -98,6 +98,34 @@ application-deployment opener and object-preserving reinstallation.
 
 That campaign deliberately uses inert analyzer/runtime facts. It does not
 positively qualify inspection, service-profile resource execution, manager startup
-or GPU execution. Follow with the genuine final-layout inspection, controller
-resource campaign, ordinary compiler/application admission and two-GPU fill/XGMI
-pipeline described in [the critical path](runtime-multi-gpu-critical-path.md).
+or GPU execution.
+
+`scripts/qualify-proof-resource-inspection.sh` adds the real-resource campaign.
+Besides those four absolute input paths, it requires `FE2O3_PROOF_RUNTIME_INPUTS`
+(the pinned libc/zlib packages and rustup provenance), `FE2O3_PROOF_VERUS_DIST`
+and `FE2O3_PROOF_RUST_TOOLCHAIN`. Run it through a clean root environment. Setup
+is confined to private tmpfs mounts; the final namespace hides homes, setup
+sources, host-library aliases, loader cache/preload and hwcaps alternatives.
+The current qualified Worker links LLVM/LLD statically and needs seven external
+base DSOs at their canonical paths, not a relocated libLLVM directory.
+
+The campaign runs the actual inspector twice as UID 61002/GID 61003 under the
+closed proof profile, requires identical candidates, rejects missing resources
+without output, and installs/reopens the result. It then reuses the actual
+application-controller campaign under that same final layout: ResourcesReady,
+activation, real analysis/Verus proof, retained probing and EOF quarantine, plus
+payload, duplicate-FD and stale-session rejection. Each invocation uses a fresh
+outer cgroup with bounded cleanup; the controller tests preserve an unrelated
+sibling. Nested namespaces recreate private device mounts so recursive root
+binds cannot turn `/dev/null` into an unusable nodev alias.
+
+The [recorded campaign](evidence/dev-installed-proof-resources-2026-10-04/README.md)
+passes. This is component qualification, not production package activation. Its
+compiler profile and registration are fixtures, and its install digest is derived
+inside the test, not independent administrative approval. Host-derived setup DSOs
+are measured by the real inspector; this script is not an immutable distribution
+package or an exhaustive packaging-mutation test. The manager unit must actually
+expose the approved files at their canonical loader paths; storing copies elsewhere
+does not establish deployed behavior. Ordinary compiler/application admission and
+the two-GPU fill/XGMI pipeline remain the next gates in
+[the critical path](runtime-multi-gpu-critical-path.md).
