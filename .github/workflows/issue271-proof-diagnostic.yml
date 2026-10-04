@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   verifier-ordinary:
-    name: Exact 3de8b8 memory-write252 ordinary tests (diagnostic only)
+    name: Exact 4a9e2e memory-write252 ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 3de8b8e68683739c17c01962d789baa57231b32b
+          ref: 4a9e2ebfdf476b388488162b330079affbd61b74
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-memory-write-3de8b8-ordinary-v88-${{ github.run_attempt }}
+          name: issue271-memory-write-4a9e2e-ordinary-v88-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-memory-write-v88-logs/
           if-no-files-found: warn
           retention-days: 7

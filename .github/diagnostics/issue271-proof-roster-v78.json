@@ -1,6 +1,6 @@
 {
-  "head": "3de8b8e68683739c17c01962d789baa57231b32b",
-  "tree": "15d7130d33b634a68ab351560e9efc1e0f10ea3f",
+  "head": "4a9e2ebfdf476b388488162b330079affbd61b74",
+  "tree": "421b273a2dbfc173687da2a91d2984e3f7c93914",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
@@ -1443,6 +1443,10 @@
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_reference_address_relation_v29.rs",
       "sha256": "34b745e88866c922946744678a134cabbba5091799007285161106ab162ed5fb"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_reference_descriptors_v29.rs",
+      "sha256": "080888bf8b70350e12e4412729ec89bd512b49e58fcd605b1fd3db5e7d0aff0d"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
