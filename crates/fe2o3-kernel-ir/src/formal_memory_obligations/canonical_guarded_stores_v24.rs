@@ -409,7 +409,36 @@ pub fn with_canonical_guarded_global_stores_v24<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<T> {
-    with_owner::<true, _, _>(owner, owner.module(), limits, budget, |inner, budget| {
+    with_store_profile_v84::<false, _>(owner, limits, budget, consume)
+}
+
+/// Also derive local bounds for explicitly predicated GuardedStore operations.
+/// The actual store and its safe address Select must use the identical Boolean
+/// predicate, whose typed true implications include the matching slice bound.
+/// Ordinary Store still requires its original dominating CFG edge. This entry
+/// supplies no allocation, alias, launch, source-write or total-store authority.
+pub fn with_canonical_predicated_global_stores_v84<'g, 'w, T>(
+    owner: &'g VerifiedCanonicalKernelIrModuleV18,
+    limits: CanonicalGuardedGlobalReadLimitsV1,
+    budget: &mut Budget<'w>,
+    consume: impl for<'scope> FnOnce(
+        &CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g>,
+        &mut Budget<'w>,
+    ) -> Result<T>,
+) -> Result<T> {
+    with_store_profile_v84::<true, _>(owner, limits, budget, consume)
+}
+
+fn with_store_profile_v84<'g, 'w, const PREDICATED: bool, T>(
+    owner: &'g VerifiedCanonicalKernelIrModuleV18,
+    limits: CanonicalGuardedGlobalReadLimitsV1,
+    budget: &mut Budget<'w>,
+    consume: impl for<'scope> FnOnce(
+        &CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g>,
+        &mut Budget<'w>,
+    ) -> Result<T>,
+) -> Result<T> {
+    with_owner::<true, PREDICATED, _, _>(owner, owner.module(), limits, budget, |inner, budget| {
         let floor = budget.storage();
         let retained = Cell::new(floor);
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

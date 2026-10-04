@@ -613,6 +613,39 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         access: MemoryAccess,
         predicate: Option<ValueId>,
     ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        self.runtime_slice_access_conditions_profile_v84::<STORE, GENERIC_ROOTS, false>(
+            location, pointer, kind, access, predicate,
+        )
+    }
+
+    pub(super) fn runtime_predicated_store_conditions_v84(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        access: MemoryAccess,
+        predicate: ValueId,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        self.runtime_slice_access_conditions_profile_v84::<true, false, true>(
+            location,
+            pointer,
+            FormalMemoryAccessKind::Write,
+            access,
+            Some(predicate),
+        )
+    }
+
+    fn runtime_slice_access_conditions_profile_v84<
+        const STORE: bool,
+        const GENERIC_ROOTS: bool,
+        const PREDICATED: bool,
+    >(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
         self.ledger.charge(24)?;
         if kind
             != if STORE {
@@ -625,8 +658,11 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                 AddressSpace::Global | AddressSpace::Generic
             )
             || access.volatile
-            || predicate.is_some()
-            || self.runtime_reads.guards.is_empty()
+            || if PREDICATED {
+                !STORE || predicate.is_none()
+            } else {
+                predicate.is_some() || self.runtime_reads.guards.is_empty()
+            }
         {
             return Ok(None);
         }
@@ -753,6 +789,16 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         {
             return Ok(None);
         }
+        if PREDICATED {
+            return self.explicit_store_bound_v84(
+                location,
+                pointer,
+                offset,
+                parameter,
+                element_bytes,
+                predicate.expect("predicated profile checked above"),
+            );
+        }
         let Some(index) = self.runtime_read_index(offset)? else {
             return Ok(None);
         };
@@ -802,6 +848,185 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             index_origin: guard.index,
             length_origin: guard.length_origin,
         }))
+    }
+
+    fn explicit_store_bound_v84(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        offset: ValueId,
+        parameter: ParameterRow<'module>,
+        element_bytes: u64,
+        predicate: ValueId,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        // Pay all additional traversal/query carriers before constructing them.
+        // Dynamic backing stays paid until the enclosing function analysis ends.
+        self.ledger.storage(size_of::<(
+            Vec<[bool; 2]>,
+            Vec<(ValueId, bool)>,
+            Vec<ValueId>,
+            [usize; 20],
+            [ValueId; 12],
+            [Option<&Operation>; 8],
+            ParameterRow<'_>,
+            RuntimeSliceReadConditionsV1,
+            Result<Option<RuntimeSliceReadConditionsV1>, ResourceError>,
+        )>())?;
+        self.ledger.charge(32)?;
+        if self
+            .control_row(location.block)?
+            .is_none_or(|row| row.interval.is_none())
+            || self.runtime_type(predicate)? != Some(&Type::BOOL)
+        {
+            return Ok(None);
+        }
+        let Some(select) = self.definition(offset)? else {
+            return Ok(None);
+        };
+        if !single_type(select, &Type::INDEX) {
+            return Ok(None);
+        }
+        let OperationKind::Select {
+            condition,
+            true_value: index,
+            false_value: zero,
+        } = select.kind
+        else {
+            return Ok(None);
+        };
+        if condition != predicate {
+            return Ok(None);
+        }
+        let Some(zero_op) = self.definition(zero)? else {
+            return Ok(None);
+        };
+        if !single_type(zero_op, &Type::INDEX)
+            || !matches!(zero_op.kind, OperationKind::Constant(Constant::Index(0)))
+        {
+            return Ok(None);
+        }
+        let Some(index_origin) = self.runtime_read_index(index)? else {
+            return Ok(None);
+        };
+        let predicates = self.explicit_true_predicates_v84(predicate)?;
+        for &predicate_leaf in &predicates {
+            self.ledger.charge(32)?;
+            let Some(compare) = self.definition(predicate_leaf)? else {
+                continue;
+            };
+            if !single_type(compare, &Type::BOOL) {
+                continue;
+            }
+            let OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs,
+                rhs,
+            } = compare.kind
+            else {
+                continue;
+            };
+            if self.runtime_read_index(lhs)? != Some(index_origin) {
+                continue;
+            }
+            let Some(ReadIndex::ProvenOrigin(length_origin)) = self.runtime_read_index(rhs)? else {
+                continue;
+            };
+            let Some(length_op) = self.definition(length_origin)? else {
+                continue;
+            };
+            if !single_type(length_op, &Type::INDEX) {
+                continue;
+            }
+            let OperationKind::SliceLength { slice } = length_op.kind else {
+                continue;
+            };
+            let Some((length_parameter, _)) =
+                self.runtime_slice_parameter_profile_v30::<true, false>(slice)?
+            else {
+                continue;
+            };
+            if length_parameter.value != parameter.value {
+                continue;
+            }
+            return Ok(Some(RuntimeSliceReadConditionsV1 {
+                domain: FormalRuntimeSliceReadDomainV1 {
+                    allocation: FormalAllocationIdentity {
+                        parameter_index: parameter.ordinal,
+                    },
+                    slice: parameter.value,
+                    index,
+                    guard_index: lhs,
+                    length: rhs,
+                    predicate,
+                    pointer,
+                    element_bytes,
+                    path: FormalGuardedPathV1::ExplicitPredicate,
+                },
+                index_origin,
+                length_origin,
+            }));
+        }
+        Ok(None)
+    }
+
+    // The same Boolean introduction rules as expanded_predicates, but the
+    // hypothesis is this actual GuardedStore's predicate, never a fabricated edge.
+    fn explicit_true_predicates_v84(
+        &mut self,
+        root: ValueId,
+    ) -> Result<Vec<ValueId>, ResourceError> {
+        let count = self.definitions.len();
+        let mut visited = Vec::new();
+        self.ledger.reserve(&mut visited, count)?;
+        self.ledger.charge(count)?;
+        visited.resize(count, [false; 2]);
+        let mut pending = Vec::new();
+        let mut output = Vec::new();
+        self.ledger.push(&mut pending, (root, true))?;
+        while let Some((value, truth)) = pending.pop() {
+            self.ledger.charge(12)?;
+            let mut definition = self
+                .ledger
+                .find(&self.definitions, |row| row.value.cmp(&value))?;
+            if definition.is_none() {
+                definition = self.boolean_carrier_definition(value)?;
+            }
+            let Some(definition) = definition else {
+                continue;
+            };
+            let slot = usize::from(truth);
+            if visited[definition][slot] {
+                continue;
+            }
+            visited[definition][slot] = true;
+            let row = &self.definitions[definition];
+            let operation = row.operation;
+            self.ledger.charge(operation.results.len())?;
+            if !single_type(operation, &Type::BOOL) {
+                continue;
+            }
+            if truth {
+                self.ledger.push(&mut output, row.value)?;
+            }
+            match operation.kind {
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs,
+                    rhs,
+                } if truth => {
+                    self.ledger.push(&mut pending, (rhs, true))?;
+                    self.ledger.push(&mut pending, (lhs, true))?;
+                }
+                OperationKind::Unary {
+                    op: crate::UnaryOp::Not,
+                    operand,
+                } => {
+                    self.ledger.push(&mut pending, (operand, !truth))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(output)
     }
 }
 

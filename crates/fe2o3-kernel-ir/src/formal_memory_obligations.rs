@@ -59,7 +59,7 @@ pub use guarded_access_v1::{
     CanonicalGuardedGlobalStoreDomainV24, CanonicalGuardedGlobalStoreFactV24,
     CanonicalGuardedGlobalStoreOutcomeV24, CanonicalGuardedGlobalStoreReasonV24,
     CanonicalGuardedStoreInjectivityV24, CheckedCanonicalGuardedGlobalStoresV24,
-    with_canonical_guarded_global_stores_v24,
+    with_canonical_guarded_global_stores_v24, with_canonical_predicated_global_stores_v84,
 };
 pub use guarded_access_v1::{
     CanonicalSelectedPointerIncomingV30, CanonicalSelectedPointerNodeV30,

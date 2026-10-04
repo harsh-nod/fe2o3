@@ -312,7 +312,7 @@ pub fn with_canonical_guarded_global_reads_v1<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<T> {
-    with_owner::<false, _, _>(owner, owner.module(), limits, budget, consume)
+    with_owner::<false, false, _, _>(owner, owner.module(), limits, budget, consume)
 }
 
 /// Derives paid local guarded-read facts from the exact borrowed V18 owner.
@@ -329,10 +329,10 @@ pub fn with_canonical_guarded_global_reads_v18<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<T> {
-    with_owner::<false, _, _>(owner, owner.module(), limits, budget, consume)
+    with_owner::<false, false, _, _>(owner, owner.module(), limits, budget, consume)
 }
 
-fn with_owner<'g, 'w, const STORE: bool, O, T>(
+fn with_owner<'g, 'w, const STORE: bool, const PREDICATED: bool, O, T>(
     owner: &'g O,
     module: &'g Module,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -362,7 +362,7 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
             .and_then(|n| n.checked_add(origin_query_headers))
             .ok_or(ResourceError::Arithmetic)?;
         budget.reserve_storage(headers)?;
-        let facts = build::<STORE, _>(owner, module, limits, budget)?;
+        let facts = build::<STORE, PREDICATED, _>(owner, module, limits, budget)?;
         let accounting = Accounting {
             slot,
             ledger,
@@ -444,7 +444,7 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
     result
 }
 
-fn build<'g, const STORE: bool, O>(
+fn build<'g, const STORE: bool, const PREDICATED: bool, O>(
     owner: &'g O,
     module: &'g Module,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -477,14 +477,14 @@ fn build<'g, const STORE: bool, O>(
         budget.charge_work(1)?;
         let coordinate =
             FunctionCoordinate(u32::try_from(ordinal).map_err(|_| ResourceError::Arithmetic)?);
-        functions.push(build_function::<STORE>(
+        functions.push(build_function::<STORE, PREDICATED>(
             function, coordinate, limits, budget,
         )?);
     }
     Ok(Facts { owner, functions })
 }
 
-fn build_function<'g, const STORE: bool>(
+fn build_function<'g, const STORE: bool, const PREDICATED: bool>(
     function: &'g Function,
     coordinate: FunctionCoordinate,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -539,7 +539,12 @@ fn build_function<'g, const STORE: bool>(
                 analysis.collect_parameters_and_carried_truths(function, entry)?;
                 result.predicates = analysis.expanded_predicates()?;
                 analysis.collect_runtime_access_guards_profile_v30::<STORE, false>(function)?;
-                collect_effects::<STORE, _>(&mut result, coordinate, body, Some(&mut analysis))?;
+                collect_effects::<STORE, PREDICATED, _>(
+                    &mut result,
+                    coordinate,
+                    body,
+                    Some(&mut analysis),
+                )?;
                 result.controls = std::mem::take(&mut analysis.control);
             }
             GuardedControlCollectionV1::Unselected(mut meter) => {
@@ -840,7 +845,7 @@ fn effect_counts<const STORE: bool, M: GuardMeter>(
     Ok(read)
 }
 
-fn collect_effects<'g, const STORE: bool, M: GuardMeter>(
+fn collect_effects<'g, const STORE: bool, const PREDICATED: bool, M: GuardMeter>(
     result: &mut FunctionFacts<'g>,
     function: FunctionCoordinate,
     body: &'g crate::FunctionBody,
@@ -913,6 +918,29 @@ fn collect_effects<'g, const STORE: bool, M: GuardMeter>(
                             FormalMemoryAccessKind::Write,
                             access,
                             None,
+                        )?,
+                        CanonicalGuardedGlobalReadReasonV1::MissingBoundOrProvenance,
+                    )
+                }
+                OperationKind::GuardedStore {
+                    pointer,
+                    predicate,
+                    access,
+                    ..
+                } if STORE
+                    && PREDICATED
+                    && !access.volatile
+                    && matches!(
+                        access.address_space,
+                        AddressSpace::Global | AddressSpace::Generic
+                    ) =>
+                {
+                    (
+                        analysis.runtime_predicated_store_conditions_v84(
+                            FunctionOperationLocation::new(block.id, ordinal),
+                            pointer,
+                            access,
+                            predicate,
                         )?,
                         CanonicalGuardedGlobalReadReasonV1::MissingBoundOrProvenance,
                     )

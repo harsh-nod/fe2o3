@@ -1,6 +1,9 @@
 use super::*;
 use crate::{BasicBlock, IntrinsicOperation, Kernel, Signature, StorageLayoutLimitsV1, ValueDef};
 
+#[path = "canonical_predicated_stores_v84_tests.rs"]
+mod predicated_v84;
+
 include!("canonical_conditional_slice_domains_v26_tests.rs");
 
 #[path = "canonical_generic_effect_census_v26_tests.rs"]
