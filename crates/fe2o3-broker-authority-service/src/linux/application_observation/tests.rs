@@ -16,6 +16,38 @@ const CLIENT_ID: u32 = 1000;
 const ENVELOPE_BYTES: &[u8] = b"exact bytes; deliberately not a canonical V2 envelope";
 
 #[test]
+fn proof_counterpart_requires_the_exact_pair_even_with_the_same_cargo_creator() {
+    let pair = || {
+        let (child, peer) = rustix::net::socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap();
+        for fd in [&child, &peer] {
+            rustix::net::sockopt::set_socket_passcred(fd, true).unwrap();
+            rustix::net::bind(fd, &SocketAddrUnix::new_unnamed()).unwrap();
+        }
+        (child, peer)
+    };
+    let creator = ExpectedClientProcessIdentityV1::new(
+        std::process::id(),
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    let (child, peer) = pair();
+    let (_foreign_child, foreign_peer) = pair();
+    let child = inspect_proof_endpoint(child.as_fd(), creator).unwrap();
+    let peer = inspect_proof_endpoint(peer.as_fd(), creator).unwrap();
+    let foreign = inspect_proof_endpoint(foreign_peer.as_fd(), creator).unwrap();
+    child.require_counterpart(&peer).unwrap();
+    assert!(child.require_counterpart(&child).is_err());
+    assert!(child.require_counterpart(&foreign).is_err());
+}
+
+#[test]
 fn descriptor_coordinates_are_distinct_non_stdio() {
     for values in [
         (0, 4, 5),
@@ -148,6 +180,8 @@ struct Fixture {
     ack: File,
     _replacement_ack: OwnedFd,
     expected: WorkerV3ApplicationOccurrenceV1,
+    registered_expected: WorkerV3ApplicationOccurrenceV1,
+    proof_peer: OwnedFd,
     files: tempfile::TempDir,
 }
 
@@ -288,8 +322,8 @@ impl Fixture {
         )
         .unwrap();
         poll_readable(&parent_control);
-        let mut bytes = [0; 4];
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut bytes = [0; 32];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
         let received = rustix::net::recvmsg(
             &parent_control,
@@ -298,7 +332,7 @@ impl Fixture {
             RecvFlags::CMSG_CLOEXEC,
         )
         .unwrap();
-        assert_eq!(received.bytes, 4);
+        assert_eq!(received.bytes, 32);
         assert!(
             !received
                 .flags
@@ -311,9 +345,30 @@ impl Fixture {
                 _ => panic!("unexpected fixture ancillary"),
             }
         }
-        assert_eq!(rights.len(), 1);
+        assert_eq!(rights.len(), 2);
+        let proof_peer = rights.pop().unwrap();
         let application_pidfd = rights.pop().unwrap();
-        let application_pid = u32::from_ne_bytes(bytes);
+        let facts: Vec<_> = bytes
+            .chunks_exact(8)
+            .map(|field| u64::from_ne_bytes(field.try_into().unwrap()))
+            .collect();
+        let application_pid = u32::try_from(facts[0]).unwrap();
+        let mut inputs = expected.inputs().to_vec();
+        inputs.push(
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(
+                4,
+                facts[1],
+                facts[2],
+                u32::try_from(facts[3]).unwrap(),
+            )
+            .unwrap(),
+        );
+        let registered_expected = WorkerV3ApplicationOccurrenceV1::new(
+            expected.application(),
+            expected.spawn_identity(),
+            &inputs,
+        )
+        .unwrap();
         let mut control = File::from(control);
         read_ready(&mut control);
         Self {
@@ -326,6 +381,8 @@ impl Fixture {
             ack: File::from(ack),
             _replacement_ack: replacement_ack,
             expected,
+            registered_expected,
+            proof_peer,
             files,
         }
     }
@@ -335,6 +392,79 @@ impl Fixture {
             &self.expected,
             WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(ENVELOPE_BYTES).unwrap(),
         )
+    }
+
+    fn registration(&self) -> WorkerV3ApplicationRegistrationBindingV1 {
+        use fe2o3_compiler_execution_protocol::{
+            CompilerExecutionClientProcessIdentityV1,
+            CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+            CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
+            CompilerExecutionSupervisorHandoffV1,
+        };
+        use fe2o3_runtime_protocol::{
+            WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationRegistrationDescriptorsV1,
+        };
+        let key = |hex: &str| {
+            std::array::from_fn(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+        };
+        let policy = CompilerExecutionIssuerPolicyV1::new(
+            1,
+            CompilerExecutionIssuerMeasurementV1::new([1; 32], 123).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([2; 32], 456).unwrap(),
+            key("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
+            key("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"),
+        )
+        .unwrap();
+        let handoff = CompilerExecutionSupervisorHandoffV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(self.parent.0.id(), CLIENT_ID, CLIENT_ID)
+                .unwrap(),
+            CompilerExecutionServiceLaunchManifestV1::new(
+                CompilerExecutionClientProcessIdentityV1::new(
+                    self.application_pid,
+                    CLIENT_ID,
+                    CLIENT_ID,
+                )
+                .unwrap(),
+                CompilerExecutionExternalAnchorServiceIdentityV1::new(6000, 7000).unwrap(),
+                &policy,
+            ),
+        )
+        .unwrap();
+        WorkerV3ApplicationRegistrationBindingV1::new(
+            handoff,
+            self.registered_expected.clone(),
+            WorkerV3ApplicationRegistrationDescriptorsV1::new(180, 181, 182, 190).unwrap(),
+            WorkerV3ApplicationHandoffExpectationV1::new(
+                WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(ENVELOPE_BYTES).unwrap(),
+                &self.registered_expected,
+            ),
+            WorkerV3ApplicationHandoffChallengeV1::from_bytes([7; 32]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn observe_registered(&self) -> Result<RetainedWorkerV3ApplicationObservationV1> {
+        RetainedWorkerV3ApplicationObservationV1::observe_registered_pre_ack(
+            process_identity(&self.application_pidfd, self.application_pid, CLIENT_ID),
+            process_identity(&self.parent_pidfd, self.parent.0.id(), CLIENT_ID),
+            &self.registration(),
+            self.proof_peer.as_fd(),
+        )
+    }
+
+    fn assert_proof_hangup(&self) {
+        let mut poll = libc::pollfd {
+            fd: self.proof_peer.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll points to one initialized entry borrowing the retained root counterpart.
+        assert_eq!(unsafe { libc::poll(&mut poll, 1, 5000) }, 1);
+        assert_ne!(
+            poll.revents & libc::POLLHUP,
+            0,
+            "application proof alias leaked"
+        );
     }
 
     fn observe_expected(
@@ -441,6 +571,127 @@ fn root_application_observation_campaign() {
             .success()
     );
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut fixture = Fixture::spawn(&helper, true);
+    let observed = fixture.observe_registered().unwrap();
+    assert_eq!(observed.occurrence(), &fixture.registered_expected);
+    fixture.command(b'm');
+    let mut bytes = [0; 1];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1))];
+    let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+    let message = rustix::net::recvmsg(
+        &fixture.proof_peer,
+        &mut [IoSliceMut::new(&mut bytes)],
+        &mut ancillary,
+        RecvFlags::CMSG_CLOEXEC,
+    )
+    .unwrap();
+    assert_eq!(message.bytes, 1);
+    assert!(
+        !message
+            .flags
+            .intersects(rustix::net::ReturnFlags::TRUNC | rustix::net::ReturnFlags::CTRUNC)
+    );
+    assert_eq!(bytes, [b'p']);
+    let messages: Vec<_> = ancillary.drain().collect();
+    assert_eq!(messages.len(), 1);
+    let RecvAncillaryMessage::ScmCredentials(sender) = &messages[0] else {
+        panic!("unexpected proof message rights");
+    };
+    assert_eq!(
+        sender.pid.as_raw_nonzero().get() as u32,
+        fixture.application_pid
+    );
+    assert_eq!(
+        (sender.uid.as_raw(), sender.gid.as_raw()),
+        (CLIENT_ID, CLIENT_ID)
+    );
+    observed.revalidate_retained_inputs().unwrap();
+    fixture.acknowledge();
+    observed.revalidate_retained_inputs().unwrap();
+    fixture.command(b't');
+    fixture.assert_proof_hangup();
+    assert!(observed.revalidate_retained_inputs().is_err());
+    fixture.exit();
+    println!("PASS: four-input observation, ACK EOF and proof HUP with retained observation alive");
+
+    for command in [b'c', b'n', b'v', b's', b'o', b't'] {
+        let mut fixture = Fixture::spawn(&helper, true);
+        fixture.command(command);
+        assert!(
+            fixture.observe_registered().is_err(),
+            "accepted proof mutation {}",
+            command as char
+        );
+        fixture.command(b't');
+        fixture.assert_proof_hangup();
+        fixture.acknowledge();
+        fixture.exit();
+        println!(
+            "PASS: proof pre-ACK mutation {}; failed admission leaks no alias",
+            command as char
+        );
+    }
+    for command in [b'c', b'n', b'v', b's', b'o'] {
+        let mut fixture = Fixture::spawn(&helper, true);
+        let observed = fixture.observe_registered().unwrap();
+        fixture.acknowledge();
+        fixture.command(command);
+        assert!(observed.revalidate_retained_inputs().is_err());
+        fixture.command(b't');
+        fixture.assert_proof_hangup();
+        fixture.exit();
+        println!(
+            "PASS: retained proof continuity rejects mutation {}",
+            command as char
+        );
+    }
+
+    let mut fixture = Fixture::spawn(&helper, true);
+    let mut foreign = Fixture::spawn(&helper, true);
+    let observe = |binding: &WorkerV3ApplicationRegistrationBindingV1, peer: BorrowedFd<'_>| {
+        RetainedWorkerV3ApplicationObservationV1::observe_registered_pre_ack(
+            process_identity(
+                &fixture.application_pidfd,
+                fixture.application_pid,
+                CLIENT_ID,
+            ),
+            process_identity(&fixture.parent_pidfd, fixture.parent.0.id(), CLIENT_ID),
+            binding,
+            peer,
+        )
+    };
+    assert!(observe(&foreign.registration(), fixture.proof_peer.as_fd()).is_err());
+    assert!(observe(&fixture.registration(), foreign.proof_peer.as_fd()).is_err());
+    let registration = fixture.registration();
+    let mut inputs = fixture.registered_expected.inputs().to_vec();
+    inputs[3] = foreign.registered_expected.inputs()[3];
+    let occurrence = WorkerV3ApplicationOccurrenceV1::new(
+        fixture.expected.application(),
+        fixture.expected.spawn_identity(),
+        &inputs,
+    )
+    .unwrap();
+    let substituted = WorkerV3ApplicationRegistrationBindingV1::new(
+        registration.compiler_handoff().clone(),
+        occurrence.clone(),
+        registration.descriptors(),
+        WorkerV3ApplicationHandoffExpectationV1::new(
+            registration.expectation().envelope(),
+            &occurrence,
+        ),
+        registration.challenge(),
+    )
+    .unwrap();
+    assert!(observe(&substituted, fixture.proof_peer.as_fd()).is_err());
+    fixture.command(b't');
+    fixture.assert_proof_hangup();
+    fixture.acknowledge();
+    fixture.exit();
+    foreign.exit();
+    println!(
+        "PASS: foreign process binding, counterpart and slot4 occurrence reject without retained aliases"
+    );
 
     let mut fixture = Fixture::spawn(&helper, true);
     let observed = fixture.observe().unwrap();

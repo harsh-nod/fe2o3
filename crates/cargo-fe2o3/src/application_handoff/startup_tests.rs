@@ -50,6 +50,7 @@ pub(super) fn protocol() -> ApplicationHandoffExpectationV1 {
         ),
         occurrence,
         descriptors: [10, 11, 12],
+        proof_descriptor: None,
         challenge: WorkerV3ApplicationHandoffChallengeV1::from_bytes([7; 32]).unwrap(),
     }
 }
@@ -68,7 +69,10 @@ fn pending(child: &Child) -> PendingApplicationAck {
     PendingApplicationAck {
         read,
         parent_write: Some(write),
-        custody: ApplicationHandoffCustodyV1::prepare(protocol()),
+        custody: ApplicationHandoffCustodyV1::prepare(
+            protocol(),
+            Some(PreparedApplicationProofChannelV1::prepare().unwrap()),
+        ),
         sandbox: Some(PendingApplicationSandbox::test_reported_admission(Ok(
             child.id(),
         ))),
@@ -104,6 +108,14 @@ fn spawned(pending: PendingApplicationAck, child: &Child) -> SpawnedApplicationA
 
 fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawFd) {
     let original = cleanup.application.as_ref().unwrap();
+    assert!(original.custody.prepared_proof.is_none());
+    original
+        .custody
+        .proof
+        .as_ref()
+        .unwrap()
+        .revalidate()
+        .unwrap();
     assert_eq!(original.child().test_child_pidfd().as_raw_fd(), descriptor);
     assert_eq!(original.child().child_pid(), child.id());
     assert!(
@@ -135,7 +147,26 @@ fn startup_releases_ack_writers_before_service_wait() {
     pending.test_ready_parent_write = Some(ready_write);
     let allocation = std::ptr::from_ref(pending.custody.as_ref());
     assert!(pending.custody.child.is_none());
+    let proof_setup = pending
+        .custody
+        .prepared_proof
+        .as_ref()
+        .unwrap()
+        .child_setup();
     let mut spawned = spawned(pending, &child);
+    // Original pidfd capture may reuse the closed number, but never the socket object.
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: scalar fstat observation writes only its initialized result on success.
+    if unsafe { libc::fstat(proof_setup.descriptor(), stat.as_mut_ptr()) } == 0 {
+        // SAFETY: successful fstat initialized the structure.
+        let stat = unsafe { stat.assume_init() };
+        assert_ne!(
+            (stat.st_dev, stat.st_ino, stat.st_mode),
+            proof_setup.descriptor_identity()
+        );
+    } else {
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+    }
     assert_eq!(
         allocation,
         std::ptr::from_ref(

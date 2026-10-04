@@ -11,6 +11,7 @@ use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+    WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
 };
 
 fn main() {
@@ -29,6 +30,21 @@ fn run() -> Result<(), Box<dyn Error>> {
         None => (false, false),
         Some(control) if control == "--fe2o3-test-substitute-commitment" => (true, false),
         Some(control) if control == "--fe2o3-test-consume-roster" => (false, true),
+        Some(control)
+            if matches!(
+                control.to_str(),
+                Some(
+                    "--fe2o3-test-missing-proof"
+                        | "--fe2o3-test-aliased-proof"
+                        | "--fe2o3-test-reserved-proof"
+                        | "--fe2o3-test-blocking-proof"
+                        | "--fe2o3-test-substituted-proof-slot"
+                        | "--fe2o3-test-missing-proof-slot"
+                )
+            ) =>
+        {
+            (false, false)
+        }
         Some(control) => return Err(format!("unknown fixture control {control:?}").into()),
     };
     let handoff_names = [
@@ -38,6 +54,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
         WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
         WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
     ];
     for (name, _) in std::env::vars_os() {
         if !handoff_names
@@ -52,6 +69,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         &report,
         br#"{"host_consumer":true,"loader_environment_clear":true,"admitted":false}"#,
     )?;
+    alter_proof_input(arguments.get(3).and_then(|argument| argument.to_str()))?;
     if substitute_commitment {
         let mut commitment = std::env::var(WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1)?;
         commitment.replace_range(
@@ -108,6 +126,60 @@ fn run() -> Result<(), Box<dyn Error>> {
         report,
         br#"{"host_consumer":true,"loader_environment_clear":true,"admitted":true,"current":true}"#,
     )?;
+    Ok(())
+}
+
+fn alter_proof_input(control: Option<&str>) -> Result<(), Box<dyn Error>> {
+    use fe2o3_runtime_protocol::{
+        WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
+    };
+    // SAFETY: this adversarial fixture changes its own startup environment before host claim,
+    // without threads or signal handlers. No descriptor ownership is manufactured here.
+    unsafe {
+        match control {
+            Some("--fe2o3-test-missing-proof") => {
+                std::env::remove_var(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1)
+            }
+            Some("--fe2o3-test-aliased-proof") => std::env::set_var(
+                WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
+                std::env::var(WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1)?,
+            ),
+            Some("--fe2o3-test-reserved-proof") => {
+                std::env::set_var(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, "195")
+            }
+            Some("--fe2o3-test-blocking-proof") => {
+                let fd = std::env::var(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1)?.parse::<i32>()?;
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) < 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+            Some("--fe2o3-test-substituted-proof-slot" | "--fe2o3-test-missing-proof-slot") => {
+                let encoded = std::env::var(WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1)?;
+                let bytes = (0..encoded.len())
+                    .step_by(2)
+                    .map(|index| u8::from_str_radix(&encoded[index..index + 2], 16))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let occurrence = WorkerV3ApplicationOccurrenceV1::decode_canonical(&bytes)?;
+                let mut inputs = occurrence.inputs()[..3].to_vec();
+                if control == Some("--fe2o3-test-substituted-proof-slot") {
+                    inputs.push(WorkerV3ApplicationInputOccurrenceV1::new(4, [0x73; 32])?);
+                }
+                let changed = WorkerV3ApplicationOccurrenceV1::new(
+                    occurrence.application(),
+                    occurrence.spawn_identity(),
+                    &inputs,
+                )?;
+                let encoded = changed
+                    .encode_canonical()?
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                std::env::set_var(WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1, encoded);
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 

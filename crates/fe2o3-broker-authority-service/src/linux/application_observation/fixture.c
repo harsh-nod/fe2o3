@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -60,22 +61,42 @@ static void ready(void) {
     transfer(183, &byte, 1, 1);
 }
 
+static void proof_pair(int pair[2]) {
+    check(kernel_call(SYS_socketpair, AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK,
+                      0, (long)pair, 0, 0) == 0);
+    for (int i = 0; i != 2; i++) {
+        int enabled = 1;
+        check(kernel_call(SYS_setsockopt, pair[i], SOL_SOCKET, SO_PASSCRED,
+                          (long)&enabled, sizeof(enabled), 0) == 0);
+        struct sockaddr address = { .sa_family = AF_UNIX };
+        check(call3(SYS_bind, pair[i], &address, sizeof(address.sa_family)) == 0);
+    }
+}
+
 static int parent(void) {
+    int proof[2];
+    proof_pair(proof);
+    struct stat object;
+    check(call3(SYS_fstat, proof[0], &object, 0) == 0);
     pid_t child = fork();
     check(child >= 0);
     if (!child) {
         check(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0 && getppid() > 1);
         close(187);
+        close(proof[1]);
+        if (proof[0] != 190) { check(dup3(proof[0], 190, 0) == 190); close(proof[0]); }
+        check(fcntl(190, F_SETFD, 0) == 0);
         char *argv[] = {"observed-application", NULL};
         char *env[] = {NULL};
         fexecve(188, argv, env);
         _exit(112);
     }
+    close(proof[0]);
     int pidfd = (int)call3(SYS_pidfd_open, child, 0, 0);
     check(pidfd >= 0);
-    uint32_t pid = (uint32_t)child;
-    struct iovec iov = {&pid, sizeof(pid)};
-    union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
+    uint64_t facts[] = {(uint64_t)child, object.st_dev, object.st_ino, object.st_mode};
+    struct iovec iov = {facts, sizeof(facts)};
+    union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(2 * sizeof(int))]; } control = {0};
     struct msghdr message = {0};
     message.msg_iov = &iov;
     message.msg_iovlen = 1;
@@ -84,10 +105,12 @@ static int parent(void) {
     struct cmsghdr *header = CMSG_FIRSTHDR(&message);
     header->cmsg_level = SOL_SOCKET;
     header->cmsg_type = SCM_RIGHTS;
-    header->cmsg_len = CMSG_LEN(sizeof(pidfd));
+    header->cmsg_len = CMSG_LEN(2 * sizeof(int));
     *(int *)CMSG_DATA(header) = pidfd;
-    check(sendmsg(187, &message, MSG_NOSIGNAL) == sizeof(pid));
+    ((int *)CMSG_DATA(header))[1] = proof[1];
+    check(sendmsg(187, &message, MSG_NOSIGNAL) == sizeof(facts));
     close(pidfd);
+    close(proof[1]);
     for (int fd = 180; fd <= 189; fd++) if (fd != 187) close(fd);
     char release;
     transfer(187, &release, 1, 0);
@@ -105,6 +128,7 @@ int fixture_main(int argc, char **argv) {
     for (int fd = 180; fd <= 182; fd++) check(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0);
     for (int fd = 184; fd <= 186; fd++) check(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0);
     check(fcntl(188, F_SETFD, FD_CLOEXEC) == 0);
+    check(fcntl(190, F_SETFD, FD_CLOEXEC) == 0);
     ready();
     for (;;) {
         char command;
@@ -131,6 +155,24 @@ int fixture_main(int argc, char **argv) {
         case 'h': check(fcntl(182, F_SETFD, 0) == 0); break;
         case 'b': check(fcntl(182, F_SETFL, fcntl(182, F_GETFL, 0) & ~O_NONBLOCK) == 0); break;
         case 'j': check(fcntl(180, F_SETFL, fcntl(180, F_GETFL, 0) | O_APPEND) == 0); break;
+        case 't': close(190); break;
+        case 'm': check(write(190, "p", 1) == 1); break;
+        case 'c': check(fcntl(190, F_SETFD, 0) == 0); break;
+        case 'n': check(fcntl(190, F_SETFL, fcntl(190, F_GETFL, 0) & ~O_NONBLOCK) == 0); break;
+        case 'v': {
+            int enabled = 0;
+            check(kernel_call(SYS_setsockopt, 190, SOL_SOCKET, SO_PASSCRED,
+                              (long)&enabled, sizeof(enabled), 0) == 0);
+            break;
+        }
+        case 's': check(dup3(184, 190, O_CLOEXEC) == 190); break;
+        case 'o': {
+            int replacement[2];
+            proof_pair(replacement);
+            check(dup3(replacement[0], 190, O_CLOEXEC) == 190);
+            close(replacement[0]); close(replacement[1]);
+            break;
+        }
         case 'w':
         case 'p': {
             int flags = command == 'w' ? O_RDWR : O_PATH;
@@ -143,6 +185,7 @@ int fixture_main(int argc, char **argv) {
             for (int fd = 180; fd <= 188; fd++) {
                 if (fd != 187) check(fcntl(fd, F_SETFD, 0) == 0);
             }
+            check(fcntl(190, F_SETFD, 0) == 0);
             char *next_argv[] = {"observed-application", NULL};
             char *next_env[] = {NULL};
             fexecve(189, next_argv, next_env);

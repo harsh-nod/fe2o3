@@ -21,9 +21,14 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV3,
 };
 
+mod application_channel;
 mod child_channel;
 mod supervisor_handoff;
 
+pub use application_channel::{
+    ApplicationProofChannelErrorV1, ApplicationProofChildSetupV1, ApplicationProofTransferPeerV1,
+    PreparedApplicationProofChannelV1, RetainedApplicationProofEndpointV1,
+};
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
     PendingCompilerExecutionChildChannelV1, RetainedCompilerExecutionChildV1,

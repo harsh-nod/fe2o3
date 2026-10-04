@@ -4,16 +4,17 @@ use std::error::Error;
 use std::fmt;
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
 
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2, WorkerV3ApplicationHandoffExpectationV1,
     WorkerV3ApplicationHandoffProtocolErrorV1, WorkerV3ApplicationIdentityV1,
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
-    WorkerV3LoadEnvelopeIdentityV1,
+    WorkerV3ApplicationRegistrationBindingV1, WorkerV3LoadEnvelopeIdentityV1,
 };
 use rustix::fs::{FileType, Mode, OFlags, SealFlags};
+use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
 use super::{
     ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1, ProtectedServiceAdmissionErrorV1,
@@ -120,12 +121,13 @@ fn io_error(
     }
 }
 
-/// Move-only observation of one live application and its three original handoff input objects.
+/// Move-only observation of one live application and its original handoff input objects.
 ///
 /// The supervisor must separately authenticate the source of the original, unreaped child
 /// pidfd, parent pidfd, expected occurrence, and envelope identity. This value independently
 /// observes their OS association; it does not authenticate a registration channel or spawn nonce.
 /// The ACK writer is inspected only before return and is never retained, so Cargo can see EOF.
+/// The optional fourth input retains only socket facts, never an application-side socket alias.
 /// This layer does not require a distinct service UID or establish protected-service isolation.
 /// That policy belongs to the authenticated deployment/registration join.
 /// Nor can PID/start time and equal image bytes distinguish a same-image re-exec before this
@@ -168,6 +170,7 @@ pub struct RetainedWorkerV3ApplicationObservationV1 {
     occurrence: WorkerV3ApplicationOccurrenceV1,
     expectation: WorkerV3ApplicationHandoffExpectationV1,
     envelope_bytes: Box<[u8]>,
+    proof: Option<(i32, ProofEndpointFacts)>,
 }
 
 impl fmt::Debug for RetainedWorkerV3ApplicationObservationV1 {
@@ -196,6 +199,60 @@ impl RetainedWorkerV3ApplicationObservationV1 {
         slots: WorkerV3ApplicationDescriptorNumbersV1,
         expected_occurrence: &WorkerV3ApplicationOccurrenceV1,
         expected_envelope: WorkerV3LoadEnvelopeIdentityV1,
+    ) -> Result<Self> {
+        Self::observe_inputs(
+            application,
+            parent,
+            slots,
+            expected_occurrence,
+            expected_envelope,
+            None,
+        )
+    }
+
+    /// Observes the four-input registration profile and its exact Cargo-created proof counterpart.
+    ///
+    /// The caller must authenticate the binding and original process owners separately, retain
+    /// the root counterpart, and hold the application at its pre-ACK barrier. Creator credentials
+    /// are not packet sender authentication or proof custody. No application-side alias survives.
+    pub fn observe_registered_pre_ack(
+        application: LiveClientPidfdIdentityV1,
+        parent: LiveClientPidfdIdentityV1,
+        binding: &WorkerV3ApplicationRegistrationBindingV1,
+        root_proof_peer: BorrowedFd<'_>,
+    ) -> Result<Self> {
+        let matches = |actual: ExpectedClientProcessIdentityV1, expected: fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1| {
+            (actual.pid, actual.uid, actual.gid) == (expected.pid(), expected.uid(), expected.gid())
+        };
+        if !matches(
+            application.expected_client,
+            binding.compiler_handoff().launch_manifest().client(),
+        ) || !matches(
+            parent.expected_client,
+            binding.compiler_handoff().submitter(),
+        ) {
+            return Err(invalid(
+                "registration binding differs from original process owners",
+            ));
+        }
+        let [envelope, directory, acknowledgment, proof] = binding.descriptors().as_array();
+        Self::observe_inputs(
+            application,
+            parent,
+            WorkerV3ApplicationDescriptorNumbersV1::new(envelope, directory, acknowledgment)?,
+            binding.occurrence(),
+            binding.expectation().envelope(),
+            Some((proof, root_proof_peer)),
+        )
+    }
+
+    fn observe_inputs(
+        application: LiveClientPidfdIdentityV1,
+        parent: LiveClientPidfdIdentityV1,
+        slots: WorkerV3ApplicationDescriptorNumbersV1,
+        expected_occurrence: &WorkerV3ApplicationOccurrenceV1,
+        expected_envelope: WorkerV3LoadEnvelopeIdentityV1,
+        proof_peer: Option<(i32, BorrowedFd<'_>)>,
     ) -> Result<Self> {
         application.validate_parent(&parent)?;
         if application.expected_client.uid != parent.expected_client.uid
@@ -242,17 +299,34 @@ impl RetainedWorkerV3ApplicationObservationV1 {
             Role::Acknowledgment,
         )?;
         let acknowledgment_snapshot = acknowledgment.snapshot;
+        let mut inputs = vec![
+            envelope.snapshot.input(1)?,
+            directory.snapshot.input(2)?,
+            acknowledgment.snapshot.input(3)?,
+        ];
+        // An extra writer would keep Cargo's ACK reader open even after the application closes it.
+        drop(acknowledgment);
+        let proof = proof_peer
+            .map(|(number, peer)| {
+                let facts = inspect_remote_proof(
+                    &application,
+                    &application_proc,
+                    number,
+                    parent.expected_client,
+                )?;
+                facts
+                    .require_counterpart(&inspect_proof_endpoint(peer, parent.expected_client)?)?;
+                Ok::<_, WorkerV3ApplicationObservationErrorV1>((number, facts))
+            })
+            .transpose()?;
+        if let Some((_, facts)) = &proof {
+            inputs.push(facts.snapshot.input(4)?);
+        }
         let occurrence = WorkerV3ApplicationOccurrenceV1::new(
             application_identity,
             expected_occurrence.spawn_identity(),
-            &[
-                envelope.snapshot.input(1)?,
-                directory.snapshot.input(2)?,
-                acknowledgment.snapshot.input(3)?,
-            ],
+            &inputs,
         )?;
-        // An extra writer would keep Cargo's ACK reader open even after the application closes it.
-        drop(acknowledgment);
         if &occurrence != expected_occurrence {
             return Err(invalid(
                 "observed application occurrence differs from supervisor binding",
@@ -279,6 +353,7 @@ impl RetainedWorkerV3ApplicationObservationV1 {
             occurrence,
             expectation,
             envelope_bytes: envelope_bytes.into_boxed_slice(),
+            proof,
         };
         observed.revalidate_retained_inputs()?;
         let acknowledgment = inspect_remote(
@@ -293,11 +368,17 @@ impl RetainedWorkerV3ApplicationObservationV1 {
             ));
         }
         drop(acknowledgment);
+        if let (Some((_, facts)), Some((_, peer))) = (&observed.proof, proof_peer) {
+            facts.require_counterpart(&inspect_proof_endpoint(
+                peer,
+                observed.parent.expected_client,
+            )?)?;
+        }
         observed.validate_processes()?;
         Ok(observed)
     }
 
-    /// Revalidates process, executable, envelope and directory continuity, including source slots.
+    /// Revalidates process, executable, envelope, directory and optional proof source continuity.
     ///
     /// The historical ACK slot is deliberately not inspected: it normally closes at startup and
     /// may be reused. Original pidfds remain the liveness authority; no process is waited or reaped.
@@ -320,6 +401,16 @@ impl RetainedWorkerV3ApplicationObservationV1 {
             if current.snapshot != expected.snapshot {
                 return Err(invalid("application handoff source slot was replaced"));
             }
+        }
+        if let Some((number, expected)) = &self.proof
+            && inspect_remote_proof(
+                &self.application,
+                &self.application_proc,
+                *number,
+                self.parent.expected_client,
+            )? != *expected
+        {
+            return Err(invalid("application proof source slot changed"));
         }
         if read_exact(&self.envelope, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2 as u64)?
             != *self.envelope_bytes
@@ -557,26 +648,7 @@ fn inspect_remote(
     number: i32,
     role: Role,
 ) -> Result<RetainedFile> {
-    let file = File::from(
-        rustix::process::pidfd_getfd(
-            application.pidfd.as_fd(),
-            number,
-            rustix::process::PidfdGetfdFlags::empty(),
-        )
-        .map_err(|e| io_error("duplicate original application descriptor", e))?,
-    );
-    let retained = RetainedFile::new(file)?;
-    let flags = rustix::fs::fcntl_getfl(&retained.file)
-        .map_err(|e| io_error("inspect application descriptor access", e))?;
-    let source_flags = parse_source_flags(&read_proc(process_dir, &format!("fdinfo/{number}"))?)?;
-    if source_flags & libc::O_CLOEXEC as u32 == 0
-        || source_flags & !(libc::O_CLOEXEC as u32) != flags.bits()
-        || flags.intersects(OFlags::PATH | OFlags::ASYNC | OFlags::DIRECT | OFlags::APPEND)
-    {
-        return Err(invalid(
-            "application source descriptor flags differ or lack CLOEXEC",
-        ));
-    }
+    let (retained, flags) = duplicate_remote(application, process_dir, number)?;
     let s = retained.snapshot;
     if matches!(role, Role::Acknowledgment) && !flags.contains(OFlags::NONBLOCK) {
         return Err(invalid("application ACK writer is not nonblocking"));
@@ -605,6 +677,137 @@ fn inspect_remote(
     }
     retained.revalidate()?;
     Ok(retained)
+}
+
+fn duplicate_remote(
+    application: &LiveClientPidfdIdentityV1,
+    process_dir: &RetainedFile,
+    number: i32,
+) -> Result<(RetainedFile, OFlags)> {
+    let file = File::from(
+        rustix::process::pidfd_getfd(
+            application.pidfd.as_fd(),
+            number,
+            rustix::process::PidfdGetfdFlags::empty(),
+        )
+        .map_err(|e| io_error("duplicate original application descriptor", e))?,
+    );
+    let retained = RetainedFile::new(file)?;
+    let flags = rustix::fs::fcntl_getfl(&retained.file)
+        .map_err(|e| io_error("inspect application descriptor access", e))?;
+    let source_flags = parse_source_flags(&read_proc(process_dir, &format!("fdinfo/{number}"))?)?;
+    if source_flags & libc::O_CLOEXEC as u32 == 0
+        || source_flags & !(libc::O_CLOEXEC as u32) != flags.bits()
+        || flags.intersects(OFlags::PATH | OFlags::ASYNC | OFlags::DIRECT | OFlags::APPEND)
+    {
+        return Err(invalid(
+            "application source descriptor flags differ or lack CLOEXEC",
+        ));
+    }
+    Ok((retained, flags))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ProofEndpointFacts {
+    snapshot: Snapshot,
+    local: SocketAddrUnix,
+    remote: SocketAddrUnix,
+}
+
+impl ProofEndpointFacts {
+    fn require_counterpart(&self, peer: &Self) -> Result<()> {
+        if (self.snapshot.device, self.snapshot.inode)
+            == (peer.snapshot.device, peer.snapshot.inode)
+            || self.local != peer.remote
+            || self.remote != peer.local
+        {
+            return Err(invalid("application proof endpoint counterpart differs"));
+        }
+        Ok(())
+    }
+}
+
+fn inspect_remote_proof(
+    application: &LiveClientPidfdIdentityV1,
+    process_dir: &RetainedFile,
+    number: i32,
+    creator: ExpectedClientProcessIdentityV1,
+) -> Result<ProofEndpointFacts> {
+    let (temporary, _) = duplicate_remote(application, process_dir, number)?;
+    let facts = inspect_proof_endpoint(temporary.file.as_fd(), creator)?;
+    if facts.snapshot != temporary.snapshot {
+        return Err(invalid(
+            "application proof endpoint changed during inspection",
+        ));
+    }
+    temporary.revalidate()?;
+    // Retaining this alias would hide application EOF from the independent root session.
+    drop(temporary);
+    Ok(facts)
+}
+
+fn inspect_proof_endpoint(
+    fd: BorrowedFd<'_>,
+    creator: ExpectedClientProcessIdentityV1,
+) -> Result<ProofEndpointFacts> {
+    let inspect = || -> std::result::Result<_, rustix::io::Errno> {
+        Ok((
+            rustix::fs::fstat(fd)?,
+            rustix::io::fcntl_getfd(fd)?,
+            rustix::fs::fcntl_getfl(fd)?,
+            rustix::net::sockopt::socket_domain(fd)?,
+            rustix::net::sockopt::socket_type(fd)?,
+            rustix::net::sockopt::socket_acceptconn(fd)?,
+            rustix::net::sockopt::socket_passcred(fd)?,
+            rustix::net::sockopt::socket_peercred(fd)?,
+            rustix::net::getsockname(fd)?,
+            rustix::net::getpeername(fd)?,
+        ))
+    };
+    let (stat, fd_flags, flags, domain, kind, listener, passcred, credentials, local, remote) =
+        inspect().map_err(|e| io_error("inspect application proof endpoint", e))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Socket
+        || fd_flags != rustix::io::FdFlags::CLOEXEC
+        || flags & OFlags::ACCMODE != OFlags::RDWR
+        || !flags.contains(OFlags::NONBLOCK)
+        || flags.intersects(OFlags::PATH | OFlags::ASYNC | OFlags::DIRECT | OFlags::APPEND)
+        || domain != AddressFamily::UNIX
+        || kind != SocketType::SEQPACKET
+        || listener
+        || !passcred
+        || credentials.pid.as_raw_nonzero().get() as u32 != creator.pid
+        || credentials.uid.as_raw() != creator.uid
+        || credentials.gid.as_raw() != creator.gid
+    {
+        return Err(invalid(
+            "application proof endpoint shape, flags, or Cargo creator differs",
+        ));
+    }
+    let local =
+        SocketAddrUnix::try_from(local).map_err(|e| io_error("inspect proof local address", e))?;
+    let remote =
+        SocketAddrUnix::try_from(remote.ok_or_else(|| invalid("proof endpoint is disconnected"))?)
+            .map_err(|e| io_error("inspect proof peer address", e))?;
+    if local.abstract_name().is_none() || remote.abstract_name().is_none() || local == remote {
+        return Err(invalid(
+            "proof endpoint addresses are not distinct abstract names",
+        ));
+    }
+    Ok(ProofEndpointFacts {
+        snapshot: Snapshot {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            mode: stat.st_mode,
+            uid: stat.st_uid,
+            gid: stat.st_gid,
+            links: stat.st_nlink,
+            length: stat.st_size as u64,
+            modified: (stat.st_mtime, stat.st_mtime_nsec as i64),
+            changed: (stat.st_ctime, stat.st_ctime_nsec as i64),
+        },
+        local,
+        remote,
+    })
 }
 
 fn parse_source_flags(bytes: &[u8]) -> Result<u32> {

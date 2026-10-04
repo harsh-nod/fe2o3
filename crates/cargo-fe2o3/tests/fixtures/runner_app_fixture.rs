@@ -2,7 +2,7 @@ use std::env;
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{self, ExitCode};
 use std::thread;
@@ -13,14 +13,16 @@ mod auditor_syscall_probe;
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
+use fe2o3_compiler_execution_client::RetainedApplicationProofEndpointV1;
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-    WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
-    WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, WorkerV3ApplicationHandoffChallengeV1,
+    WorkerV3ApplicationHandoffCommitmentV1, WorkerV3ApplicationHandoffExpectationV1,
+    WorkerV3ApplicationIdentityV1, WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1,
+    WorkerV3LoadEnvelopeWireV2,
 };
 
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
@@ -30,6 +32,7 @@ struct ValidatedHandoff {
     _envelope: Option<File>,
     _artifact_directory: Option<File>,
     _current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
+    _proof: Option<RetainedApplicationProofEndpointV1>,
 }
 
 #[derive(Default)]
@@ -357,12 +360,14 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
         WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     ];
     let values = names.map(env::var_os);
-    if values.iter().all(Option::is_none) {
+    let proof_value = env::var_os(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1);
+    if values.iter().all(Option::is_none) && proof_value.is_none() {
         return Ok(ValidatedHandoff {
             report: serde_json::Value::Null,
             _envelope: None,
             _artifact_directory: None,
             _current_lease: None,
+            _proof: None,
         });
     }
     if values.iter().any(Option::is_none) {
@@ -374,6 +379,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             _envelope: None,
             _artifact_directory: None,
             _current_lease: None,
+            _proof: None,
         });
     }
 
@@ -393,6 +399,29 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     let envelope_fd = parse_fd(envelope_fd?, "envelope")?;
     let artifact_directory_fd = parse_fd(artifact_directory_fd?, "artifact directory")?;
     let ack_fd = parse_fd(ack_fd?, "acknowledgment")?;
+    let proof_fd = proof_value
+        .map(|value| {
+            parse_fd(
+                value
+                    .into_string()
+                    .map_err(|_| "proof endpoint is not UTF-8".to_string())?,
+                "proof endpoint",
+            )
+        })
+        .transpose()?;
+    let descriptors = [
+        Some(envelope_fd),
+        Some(artifact_directory_fd),
+        Some(ack_fd),
+        proof_fd,
+    ];
+    if descriptors
+        .iter()
+        .enumerate()
+        .any(|(index, fd)| fd.is_some() && (fd == &Some(195) || descriptors[..index].contains(fd)))
+    {
+        return Err("application handoff descriptors alias or name FD195".to_string());
+    }
     let challenge = WorkerV3ApplicationHandoffChallengeV1::decode_canonical(&decode_hex(
         &challenge?,
         "application handoff challenge",
@@ -403,10 +432,19 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
         fe2o3_runtime_protocol::WorkerV3ApplicationHandoffCodecBudgetV1::new(
             MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1,
             MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1,
-            3,
+            if proof_fd.is_some() { 4 } else { 3 },
         ),
     )
     .map_err(|error| format!("decode application occurrence: {error}"))?;
+    if occurrence.inputs().len() != if proof_fd.is_some() { 4 } else { 3 }
+        || !occurrence
+            .inputs()
+            .iter()
+            .enumerate()
+            .all(|(index, input)| usize::from(input.slot()) == index + 1)
+    {
+        return Err("application proof environment and occurrence profile differ".to_string());
+    }
     let mut commitment = commitment?;
 
     if controls.reuse_handoff_fd {
@@ -431,6 +469,33 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     let artifact_directory_file = unsafe { File::from_raw_fd(artifact_directory_fd) };
     // SAFETY: ownership is transferred by the same complete handoff environment.
     let mut ack_file = unsafe { File::from_raw_fd(ack_fd) };
+    let proof = proof_fd
+        .map(|fd| {
+            // SAFETY: the complete distinct descriptor environment transfers this owned endpoint.
+            let proof = unsafe { OwnedFd::from_raw_fd(fd) };
+            if rustix::io::fcntl_getfd(&proof)
+                .map_err(|error| format!("inspect inherited proof flags: {error}"))?
+                != rustix::io::FdFlags::empty()
+            {
+                return Err("proof endpoint was not exposed across exec".to_string());
+            }
+            rustix::io::fcntl_setfd(&proof, rustix::io::FdFlags::CLOEXEC)
+                .map_err(|error| format!("claim proof endpoint: {error}"))?;
+            RetainedApplicationProofEndpointV1::admit_inherited(proof)
+                .map_err(|error| format!("inspect proof endpoint: {error}"))
+        })
+        .transpose()?;
+    if let Some(proof) = &proof {
+        let (device, inode, mode) = proof.descriptor_identity();
+        let input =
+            fe2o3_runtime_protocol::WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(
+                4, device, inode, mode,
+            )
+            .map_err(|error| format!("bind proof endpoint: {error}"))?;
+        if occurrence.inputs()[3] != input {
+            return Err("proof endpoint occurrence differs".to_string());
+        }
+    }
     validate_descriptor(&envelope_file, rustix::fs::OFlags::RDONLY, "envelope")?;
     validate_descriptor(
         &artifact_directory_file,
@@ -499,6 +564,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             _envelope: Some(envelope_file),
             _artifact_directory: Some(artifact_directory_file),
             _current_lease: None,
+            _proof: proof,
         });
     }
 
@@ -587,10 +653,13 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             "exec_replacement": exec_replacement,
             "auditor_operations": auditor_operations,
             "read_only": true,
+            "proof_endpoint_retained": proof.is_some(),
+            "occurrence_inputs": occurrence.inputs().len(),
         }),
         _envelope: Some(envelope_file),
         _artifact_directory: Some(artifact_directory_file),
         _current_lease: Some(current_lease),
+        _proof: proof,
     })
 }
 
@@ -855,6 +924,7 @@ fn is_handoff_environment(name: &OsStr) -> bool {
         WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
         WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
         TEST_ACK_READY_FD_ENV,
+        WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
         "FE2O3_HSACO_DIR",
     ]
     .iter()

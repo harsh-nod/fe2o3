@@ -1603,6 +1603,36 @@ fn strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn() {
 }
 
 #[test]
+fn strict_v3_host_consumer_rejects_mixed_or_substituted_proof_inputs() {
+    for (control, diagnostic) in [
+        ("--fe2o3-test-missing-proof", "occurrence differs"),
+        ("--fe2o3-test-aliased-proof", "descriptors alias"),
+        (
+            "--fe2o3-test-reserved-proof",
+            "invalid Worker V3 application handoff environment",
+        ),
+        (
+            "--fe2o3-test-blocking-proof",
+            "invalid Worker V3 proof endpoint",
+        ),
+        ("--fe2o3-test-substituted-proof-slot", "occurrence differs"),
+        ("--fe2o3-test-missing-proof-slot", "occurrence differs"),
+    ] {
+        let fixture = prepared_v3_application_fixture();
+        let report = fixture.directory.0.join("proof-input-rejection.json");
+        let rejected = v3_application_runner_command(&fixture, &report)
+            .arg(control)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success(), "{control} was accepted");
+        let stderr = String::from_utf8_lossy(&rejected.stderr);
+        assert!(stderr.contains(diagnostic), "{control}: {stderr}");
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["admitted"], false, "{control}");
+    }
+}
+
+#[test]
 fn strict_v3_handoff_rejects_truncated_and_extended_envelopes_before_spawn() {
     for trailing_byte in [false, true] {
         let fixture = prepared_v3_application_fixture();
@@ -1697,6 +1727,8 @@ fn strict_v3_seccomp_admits_only_required_auditor_operations() {
     );
     let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
     assert_eq!(report["handoff"]["acknowledged"], true);
+    assert_eq!(report["handoff"]["proof_endpoint_retained"], true);
+    assert_eq!(report["handoff"]["occurrence_inputs"], 4);
     assert_eq!(
         report["handoff"]["auditor_operations"],
         serde_json::json!({
@@ -1726,6 +1758,8 @@ fn strict_v3_seccomp_rejects_process_and_session_escape() {
         String::from_utf8_lossy(&completed.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["proof_endpoint_retained"], true);
+    assert_eq!(report["handoff"]["occurrence_inputs"], 4);
     for probe in [
         "fork",
         "vfork",
@@ -1758,6 +1792,8 @@ fn strict_v3_seccomp_rejects_static_and_dynamic_exec_replacement() {
         String::from_utf8_lossy(&completed.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["proof_endpoint_retained"], true);
+    assert_eq!(report["handoff"]["occurrence_inputs"], 4);
     for probe in [
         "static_execve",
         "static_execveat",

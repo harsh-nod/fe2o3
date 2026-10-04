@@ -21,17 +21,18 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_compiler_execution_client::{
-    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, RetainedCompilerExecutionChildV1,
+    ApplicationProofTransferPeerV1, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+    PreparedApplicationProofChannelV1, RetainedCompilerExecutionChildV1,
 };
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
     WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-    WorkerV3ApplicationHandoffAckV1, WorkerV3ApplicationHandoffChallengeV1,
-    WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
-    WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
-    WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, WorkerV3ApplicationHandoffAckV1,
+    WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffExpectationV1,
+    WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -784,6 +785,10 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let reaper = application_reaper().reserve()?;
         ensure_child_subreaper()?;
         let (ack_read, ack_write) = cloexec_pipe()?;
+        let proof = PreparedApplicationProofChannelV1::prepare()
+            .map_err(|error| format!("failed to prepare application proof channel: {error}"))?;
+        let proof_setup = proof.child_setup();
+        let proof_fd = proof_setup.descriptor();
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         let (test_ready_read, test_ready_write) = if timeouts.wait_for_test_ready {
             let (read, write) = cloexec_pipe()?;
@@ -812,6 +817,13 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             descriptor_occurrence(1, &envelope_stat)?,
             descriptor_occurrence(2, &directory_stat)?,
             descriptor_occurrence(3, &ack_stat)?,
+            {
+                let (device, inode, mode) = proof_setup.descriptor_identity();
+                WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(
+                    4, device, inode, mode,
+                )
+                .map_err(|error| format!("failed to bind application proof endpoint: {error}"))?
+            },
         ];
         let occurrence =
             WorkerV3ApplicationOccurrenceV1::new(application_v3, random_identity_bytes()?, &inputs)
@@ -832,6 +844,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
                 ack_fd.to_string(),
             )
+            .env(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, proof_fd.to_string())
             .env(
                 WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
                 encode_lower_hex(&occurrence.encode_canonical().map_err(|error| {
@@ -855,21 +868,25 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                         .map_err(|error| format!("failed to encode V3 challenge: {error}"))?,
                 ),
             );
-        let custody = ApplicationHandoffCustodyV1::prepare(ApplicationHandoffExpectationV1 {
-            occurrence,
-            descriptors: [envelope_fd, artifact_directory_fd, ack_fd],
-            expectation,
-            challenge,
-        });
+        let custody = ApplicationHandoffCustodyV1::prepare(
+            ApplicationHandoffExpectationV1 {
+                occurrence,
+                descriptors: [envelope_fd, artifact_directory_fd, ack_fd],
+                proof_descriptor: Some(proof_fd),
+                expectation,
+                challenge,
+            },
+            Some(proof),
+        );
         let timeouts = timeouts.for_worker_v3();
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
         let seccomp_filter = no_fork_application_filter();
         let sandbox = PendingApplicationSandbox::start()?;
         let supervisor_socket = sandbox.child_socket_fd();
-        // SAFETY: all three parent-owned `File`s remain alive through spawn. The callback validates
-        // them and, in production, the earlier child-created service endpoint before clearing only
-        // those child-side CLOEXEC flags.
+        // SAFETY: the three files and prepared proof pair remain alive through spawn. The callback
+        // validates them and the production compiler endpoint before clearing their child CLOEXEC
+        // flags. Its proof setup holds no owning application-side alias.
         unsafe {
             command.pre_exec(move || {
                 establish_fresh_application_session()?;
@@ -926,6 +943,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 for inherited in [envelope_fd, artifact_directory_fd, ack_fd] {
                     crate::application_exec::expose_descriptor(inherited)?;
                 }
+                proof_setup.expose_before_exec()?;
                 install_application_profile(&seccomp_filter, supervisor_socket)?;
                 Ok(())
             });
@@ -1075,22 +1093,31 @@ struct ApplicationHandoffExpectationV1 {
     occurrence: WorkerV3ApplicationOccurrenceV1,
     // Historical child coordinates, not borrowed parent descriptors after spawn.
     descriptors: [RawFd; 3],
+    proof_descriptor: Option<RawFd>,
     expectation: WorkerV3ApplicationHandoffExpectationV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
 }
 
 impl ApplicationHandoffExpectationV1 {
     fn validate_ack(&self, bytes: &[u8]) -> Result<(), String> {
-        if self.descriptors.iter().any(|fd| *fd <= 2)
-            || self.descriptors[0] == self.descriptors[1]
-            || self.descriptors[0] == self.descriptors[2]
-            || self.descriptors[1] == self.descriptors[2]
-            || self.occurrence.inputs().len() != self.descriptors.len()
+        let values = [
+            self.descriptors[0],
+            self.descriptors[1],
+            self.descriptors[2],
+            self.proof_descriptor.unwrap_or(-1),
+        ];
+        let count = 3 + usize::from(self.proof_descriptor.is_some());
+        let descriptors = &values[..count];
+        if descriptors.iter().enumerate().any(|(index, fd)| {
+            *fd <= 2
+                || *fd == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+                || descriptors[..index].contains(fd)
+        }) || self.occurrence.inputs().len() != count
             || self
                 .occurrence
                 .inputs()
                 .iter()
-                .zip(1..=3)
+                .zip(1..=count as u16)
                 .any(|(input, slot)| input.slot() != slot)
             || WorkerV3ApplicationHandoffExpectationV1::new(
                 self.expectation.envelope(),
@@ -1110,13 +1137,20 @@ impl ApplicationHandoffExpectationV1 {
 struct ApplicationHandoffCustodyV1 {
     child: Option<RetainedCompilerExecutionChildV1>,
     protocol: ApplicationHandoffExpectationV1,
+    prepared_proof: Option<PreparedApplicationProofChannelV1>,
+    proof: Option<ApplicationProofTransferPeerV1>,
 }
 
 impl ApplicationHandoffCustodyV1 {
-    fn prepare(protocol: ApplicationHandoffExpectationV1) -> Box<Self> {
+    fn prepare(
+        protocol: ApplicationHandoffExpectationV1,
+        prepared_proof: Option<PreparedApplicationProofChannelV1>,
+    ) -> Box<Self> {
         Box::new(Self {
             child: None,
             protocol,
+            prepared_proof,
+            proof: None,
         })
     }
 }
@@ -1174,6 +1208,11 @@ impl PendingApplicationAck {
         child: &Child,
     ) -> Result<SpawnedApplicationAck, ApplicationHandoffFailure> {
         drop(self.parent_write.take());
+        self.custody.proof = self
+            .custody
+            .prepared_proof
+            .take()
+            .map(PreparedApplicationProofChannelV1::after_spawn);
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         drop(self.test_ready_parent_write.take());
         let mut cleanup = ApplicationCleanup {
@@ -2840,7 +2879,7 @@ mod tests {
         let process_group = child.id() as libc::pid_t;
         let application = OriginalApplicationHandoffV1::capture(
             &child,
-            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol()),
+            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol(), None),
         )
         .unwrap();
         let original_fd = application.child().test_child_pidfd().as_raw_fd();
@@ -3114,7 +3153,7 @@ mod tests {
         let process_group = child.id() as libc::pid_t;
         let application = OriginalApplicationHandoffV1::capture(
             &child,
-            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol()),
+            ApplicationHandoffCustodyV1::prepare(startup_tests::protocol(), None),
         )
         .unwrap();
         let original_fd = application.child().test_child_pidfd().as_raw_fd();
