@@ -487,11 +487,13 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                 return relation.source.missing("optimized erased reachable source Store").map_err(Into::into);
                             }
                         };
+                        let actual = source_operation_row_v18(inventory, output, budget)?;
+                        let rhs_operand = optimized_scalar_store_rhs_operand_v90(&actual.operation.kind)
+                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding("optimized source Store operation family changed"))?;
                         let (_, value) = optimized_source_actual_operand_v18(relation, self.optimized,
                             fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
-                                operation: request.operation, operand: 1,
+                                operation: request.operation, operand: rhs_operand,
                             }, output, budget)?;
-                        let actual = source_operation_row_v18(inventory, output, budget)?;
                         let rhs_matches = matches!(&actual.operation.kind, OperationKind::Store { value: actual, .. } if *actual == value)
                             || (matches!(actual.operation.kind, OperationKind::GuardedStore { .. })
                                 && optimized_source_guarded_scalar_input_v89(
@@ -685,7 +687,7 @@ fn optimized_source_guarded_scalar_input_v89(
             optimized,
             fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
                 operation: request.operation,
-                operand: 2,
+                operand: 1,
             },
             output,
             budget,
@@ -702,7 +704,7 @@ fn optimized_source_guarded_scalar_input_v89(
             optimized,
             fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
                 operation: request.operation,
-                operand: 1,
+                operand: 2,
             },
             output,
             budget,
@@ -710,8 +712,8 @@ fn optimized_source_guarded_scalar_input_v89(
         let matched = actual_value == value
             && [
                 pointer_use.coordinate,
-                value_use.coordinate,
                 predicate_use.coordinate,
+                value_use.coordinate,
             ] == [0, 1, 2].map(|operand| {
                 fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
                     operation: output,
@@ -730,6 +732,14 @@ fn optimized_source_guarded_scalar_input_v89(
         budget.release_storage(header)?;
         Ok(matched)
     })
+}
+
+fn optimized_scalar_store_rhs_operand_v90(kind: &OperationKind) -> Option<u32> {
+    match kind {
+        OperationKind::Store { .. } => Some(1),
+        OperationKind::GuardedStore { .. } => Some(2),
+        _ => None,
+    }
 }
 
 fn optimized_guarded_scalar_shape_v89(
@@ -950,12 +960,18 @@ impl ProductionOptimizedSourceScalarStoreV18<'_> {
                     .source
                     .missing("optimized Store expression scalar type changed");
             }
+            let inventory = self.leaves.optimized.output_inventory(budget)?;
+            let actual = source_operation_row_v18(inventory, self.output, budget)?;
+            let rhs_operand = optimized_scalar_store_rhs_operand_v90(&actual.operation.kind)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "optimized Store expression operation family changed",
+                ))?;
             let (_, value) = optimized_source_actual_operand_v18(
                 relation,
                 self.leaves.optimized,
                 fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
                     operation: self.original.operation,
-                    operand: 1,
+                    operand: rhs_operand,
                 },
                 self.output,
                 budget,
