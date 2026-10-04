@@ -1,0 +1,22 @@
+{
+  "schema": "fe2o3-simulation-request-v1",
+  "kernel": "lds_inclusive_scan_u32_v1",
+  "grid": [3, 1, 1],
+  "workgroup": [3, 1, 1],
+  "arguments": [
+    {
+      "kind": "buffer",
+      "element": "u32",
+      "access": "read_only",
+      "alignment": 4,
+      "bytes": "0x010000000200000003000000"
+    },
+    {
+      "kind": "buffer",
+      "element": "u32",
+      "access": "read_write",
+      "alignment": 4,
+      "bytes": "0x000000000000000000000000"
+    }
+  ]
+}

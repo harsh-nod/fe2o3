@@ -1,0 +1,13 @@
+error[E0502]: cannot borrow `*output` as immutable because it is also borrowed as mutable
+  --> tests/ui/operation/fail/exclusive_cannot_be_read.rs:9:13
+   |
+ 5 |         BorrowedDeviceOperation::run_scoped_unchecked(
+   |         --------------------------------------------- mutable borrow later used by call
+ 6 |             stream,
+ 7 |             &mut *output,
+   |             ------------ mutable borrow occurs here
+ 8 |             |_| Ok(()),
+ 9 |             |_| {
+   |             ^^^ immutable borrow occurs here
+10 |                 let _ = output.to_host_vec(stream)?;
+   |                         ------ second borrow occurs due to use of `*output` in closure

@@ -1,0 +1,7 @@
+error[E0599]: no method named `reuse` found for struct `Gfx942TiledGemmWave64V1<GemmPublished>` in the current scope
+ --> tests/ui/fail/general_gemm_reuse_before_consume.rs:7:23
+  |
+7 |     let _ = published.reuse();
+  |                       ^^^^^ method not found in `Gfx942TiledGemmWave64V1<GemmPublished>`
+  |
+  = note: the method was found for `Gfx942TiledGemmWave64V1<GemmConsumed>`

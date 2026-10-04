@@ -1,0 +1,16 @@
+{
+  "schema": "fe2o3-simulation-expectation-v1",
+  "arguments": [
+    {
+      "kind": "buffer",
+      "value": {
+        "element": "f32",
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x00002a4200002a4200002a4200002a42a5a5a5a5deadbeef",
+        "initialized": "0xffffff"
+      }
+    }
+  ],
+  "shared_buffers": []
+}

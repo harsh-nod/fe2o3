@@ -1,0 +1,21 @@
+CASE: trap-and-store
+CHECK-BEFORE: module commutative-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32,v4:Ptr<U32,Global,ReadWrite>] results=[U32]
+CHECK-BEFORE: f0:b0 block-id=10
+CHECK-BEFORE: f0:b0:o0 [v5:U32] Divide v0,v1
+CHECK-BEFORE: f0:b0:o1 [v2:U32] BitAnd v5,v1
+CHECK-BEFORE: f0:b0:o2 [v3:U32] BitAnd v1,v5
+CHECK-BEFORE: f0:b0:o3 [] Store v4 <- v3 Global align=4 volatile=false
+CHECK-BEFORE: f0:b0:term Return [v3]
+CHECK-AFTER: module commutative-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32,v4:Ptr<U32,Global,ReadWrite>] results=[U32]
+CHECK-AFTER: f0:b0 block-id=10
+CHECK-AFTER: f0:b0:o0 [v5:U32] Divide v0,v1
+CHECK-AFTER: f0:b0:o1 [v2:U32] BitAnd v5,v1
+CHECK-AFTER: f0:b0:o2 [] Store v4 <- v2 Global align=4 volatile=false
+CHECK-AFTER: f0:b0:term Return [v2]
+CHECK-REMARK: proved=1 changed=true independently-checked=true authority=false
+CHECK-REMARK: f0:b0:o0 retained f0:b0:o0
+CHECK-REMARK: f0:b0:o1 retained f0:b0:o1
+CHECK-REMARK: f0:b0:o2 retained f0:b0:o3
+CHECK-REMARK: f0:b0:o2:r0 substituted f0:b0:o1:r0

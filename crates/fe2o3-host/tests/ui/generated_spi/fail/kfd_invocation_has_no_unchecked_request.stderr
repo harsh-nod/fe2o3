@@ -1,0 +1,5 @@
+error[E0599]: no method named `into_unchecked_kfd_request` found for struct `GeneratedWorkerV3KfdInvocation<'allocation, K>` in the current scope
+ --> tests/ui/generated_spi/fail/kfd_invocation_has_no_unchecked_request.rs:4:24
+  |
+4 |     let _ = invocation.into_unchecked_kfd_request();
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `GeneratedWorkerV3KfdInvocation<'static, K>`

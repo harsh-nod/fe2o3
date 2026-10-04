@@ -1,0 +1,45 @@
+error[E0277]: `*mut ()` cannot be shared between threads safely
+ --> tests/ui/fail/mfma_fragments_are_not_sync.rs:6:21
+  |
+6 |     requires_sync::<Bf16MfmaAFragment<'static>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+  |
+  = help: within `Bf16MfmaFragment<'static, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `Bf16MfmaFragment<'static, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>`
+ --> src/tensor.rs
+  |
+  | pub struct Bf16MfmaFragment<'wave, Role, Profile, Distribution, Width: WaveWidth> {
+  |            ^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_sync`
+ --> tests/ui/fail/mfma_fragments_are_not_sync.rs:3:21
+  |
+3 | fn requires_sync<T: Sync>() {}
+  |                     ^^^^ required by this bound in `requires_sync`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+ --> tests/ui/fail/mfma_fragments_are_not_sync.rs:7:21
+  |
+7 |     requires_sync::<F32AccumulatorFragment<'static>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+  |
+  = help: within `F32AccumulatorFragment<'static>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `F32AccumulatorFragment<'static>`
+ --> src/tensor.rs
+  |
+  | pub struct F32AccumulatorFragment<
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `requires_sync`
+ --> tests/ui/fail/mfma_fragments_are_not_sync.rs:3:21
+  |
+3 | fn requires_sync<T: Sync>() {}
+  |                     ^^^^ required by this bound in `requires_sync`

@@ -1,0 +1,20 @@
+[package]
+name = "fe2o3-pliron-llvm-smoke"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Dialect-only pliron-llvm integration and dependency-closure smoke tests."
+publish = false
+
+[dependencies]
+pliron.workspace = true
+pliron-llvm.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"

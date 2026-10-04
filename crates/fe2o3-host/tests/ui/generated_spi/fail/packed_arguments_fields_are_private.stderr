@@ -1,0 +1,10 @@
+error[E0616]: field `bytes` of struct `fe2o3_host::generated_argument_plan::GeneratedPackedArgumentsV1` is private
+ --> tests/ui/generated_spi/fail/packed_arguments_fields_are_private.rs:6:20
+  |
+6 |     let _ = packed.bytes;
+  |                    ^^^^^ private field
+  |
+help: a method `bytes` also exists, call it with parentheses
+  |
+6 |     let _ = packed.bytes();
+  |                         ++

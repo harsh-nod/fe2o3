@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `DynamicLds::<'workgroup, T>::from_raw_parts` is unsafe and requires unsafe block
+ --> tests/ui/fail/dynamic_lds_safe_view_forgery.rs:4:13
+  |
+4 |     let _ = DynamicLds::<u32>::from_raw_parts(scope, core::ptr::null_mut(), 0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

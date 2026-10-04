@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: kernel.br_args operand and successor argument types differ
+builtin.func @typed_ssa_wrong_space: builtin.function <(gpu.pointer <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(p: gpu.pointer <builtin.integer ui32,Global,ReadOnly>):
+    kernel.br_args (p) [^exit] []: <(gpu.pointer <builtin.integer ui32,Global,ReadOnly>) -> ()>
+  ^exit(q: gpu.pointer <builtin.integer ui32,Workgroup,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+}

@@ -1,0 +1,29 @@
+error[E0616]: field `state` of struct `ReviewedHsaExecutableV1` is private
+ --> tests/ui/authority/fields_are_private.rs:6:25
+  |
+6 |     let _ = &executable.state;
+  |                         ^^^^^ private field
+
+error[E0616]: field `kernel_object` of struct `ReviewedHsaKernelV1` is private
+  --> tests/ui/authority/fields_are_private.rs:10:20
+   |
+10 |     let _ = kernel.kernel_object;
+   |                    ^^^^^^^^^^^^^ private field
+
+error[E0616]: field `symbol` of struct `ReviewedHsaKernelV1` is private
+  --> tests/ui/authority/fields_are_private.rs:11:20
+   |
+11 |     let _ = kernel.symbol;
+   |                    ^^^^^^ private field
+
+error[E0616]: field `core` of struct `ReviewedHsaRuntimeAdapterV1` is private
+  --> tests/ui/authority/fields_are_private.rs:15:22
+   |
+15 |     let _ = &adapter.core;
+   |                      ^^^^ private field
+
+error[E0616]: field `pending_dispatch` of struct `ReviewedHsaRuntimeAdapterV1` is private
+  --> tests/ui/authority/fields_are_private.rs:16:22
+   |
+16 |     let _ = &adapter.pending_dispatch;
+   |                      ^^^^^^^^^^^^^^^^ private field

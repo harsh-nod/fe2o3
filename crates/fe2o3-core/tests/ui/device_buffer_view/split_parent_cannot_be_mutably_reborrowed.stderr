@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*buffer` as mutable more than once at a time
+ --> tests/ui/device_buffer_view/split_parent_cannot_be_mutably_reborrowed.rs:5:18
+  |
+4 |     let (left, right) = buffer.split_at_mut(1).unwrap();
+  |                         ------ first mutable borrow occurs here
+5 |     let _other = buffer.view_mut(..);
+  |                  ^^^^^^ second mutable borrow occurs here
+6 |     drop((left, right));
+  |           ---- first borrow later used here

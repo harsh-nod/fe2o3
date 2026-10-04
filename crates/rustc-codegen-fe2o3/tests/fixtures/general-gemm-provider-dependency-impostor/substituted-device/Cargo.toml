@@ -1,0 +1,9 @@
+[package]
+name = "fe2o3-device"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "fe2o3_device"
+path = "src/lib.rs"

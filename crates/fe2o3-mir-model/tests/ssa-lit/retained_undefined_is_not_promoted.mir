@@ -1,0 +1,10 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: promoted []
+// CHECK: event 0 retained v0
+// CHECK-NOT: undefined
+
+entry b0
+variables !v0
+block b0
+use v0

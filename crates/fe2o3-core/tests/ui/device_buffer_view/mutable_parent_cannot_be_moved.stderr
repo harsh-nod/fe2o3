@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `buffer` because it is borrowed
+ --> tests/ui/device_buffer_view/mutable_parent_cannot_be_moved.rs:5:10
+  |
+3 | fn rejected(mut buffer: DeviceBuffer<u32>) {
+  |             ---------- binding `buffer` declared here
+4 |     let view = buffer.view_mut(..).unwrap();
+  |                ------ borrow of `buffer` occurs here
+5 |     drop(buffer);
+  |          ^^^^^^ move out of `buffer` occurs here
+6 |     drop(view);
+  |          ---- borrow later used here

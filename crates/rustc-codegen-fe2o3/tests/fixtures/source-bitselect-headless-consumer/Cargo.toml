@@ -1,0 +1,23 @@
+[package]
+name = "fe2o3-source-bitselect-headless-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autobins = false
+default-run = "fe2o3-source-bitselect-headless-consumer"
+description = "Unpublished normal-dependency smoke consumer for the bounded source-promotion API."
+
+[[bin]]
+name = "fe2o3-source-bitselect-headless-consumer"
+path = "src/main.rs"
+
+[[bin]]
+name = "fe2o3-source-bitselect-promote-once"
+path = "src/bin/promote_once.rs"
+
+# Intentionally independent: no inherited backend dev-dependencies or test cfg.
+[workspace]
+
+[dependencies]
+rustc-codegen-fe2o3 = { path = "../../.." }
+fe2o3-kernel-ir = { path = "../../../../fe2o3-kernel-ir" }

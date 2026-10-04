@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `fe2o3_device::Cluster`
+ --> tests/ui/fail/cluster_group_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_device::Cluster;
+  |     ^^^^^^^^^^^^^^^^^^^^^ no `Cluster` in the root

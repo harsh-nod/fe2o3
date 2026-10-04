@@ -1,0 +1,9 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA planner requires 1 edges, exceeding the limit 0
+
+entry b0
+variables
+limits edges=0
+block b0
+edge r1 b0

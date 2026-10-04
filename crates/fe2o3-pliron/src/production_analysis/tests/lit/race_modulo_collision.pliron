@@ -1,0 +1,14 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-RACE-001]
+// CHECK: invocation [32]
+builtin.func @race_modulo_collision: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,true,[32]>)>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 32]: <() -> (kernel.index )>;
+    v3 = kernel.index_binary (v1, v2) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.access (v0, v3) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[32]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

@@ -1,0 +1,164 @@
+name: Protected parity promotion
+
+on:
+  merge_group:
+    types: [checks_requested]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    paths:
+      - docs/cuda-oxide-parity-status.tsv
+      - docs/parity-row-evidence-policy-v2.tsv
+      - docs/parity-evidence/archive/**
+      - docs/parity-evidence/trust-policy-v2.tsv
+      - docs/parity-evidence/trusted-keys/**
+      - scripts/parity-publisher-client.py
+      - scripts/parity-signed-evidence.py
+      - scripts/parity-protected-change-policy.sh
+      - scripts/parity-repository-rules.py
+      - scripts/parity-repository-rules.sh
+      - .github/workflows/ci.yml
+      - .github/workflows/parity-promotion.yml
+      - .github/workflows/parity-publisher-gate.yml
+      - .github/workflows/source-isa-unit-matrix.yml
+      - .github/CODEOWNERS
+      - .github/parity-trust-reviewers.txt
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: parity-promotion-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Protected parity review policy
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Require protected default-branch base
+        id: default-tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
+          [[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
+          git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null
+
+          default_tip_root="${RUNNER_TEMP}/parity-default-tip.git"
+          default_remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          git init --bare "${default_tip_root}"
+          git -C "${default_tip_root}" remote add origin \
+            "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="$(
+            printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
+          )"
+          git -C "${default_tip_root}" \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --depth=1 --force origin \
+            "+refs/heads/${DEFAULT_BRANCH}:${default_remote_ref}"
+          unset auth_header
+          current_default_sha="$(
+            git -C "${default_tip_root}" rev-parse --verify \
+              "${default_remote_ref}^{commit}"
+          )"
+          if [[ "${current_default_sha}" != "${BASE_SHA}" ]]; then
+            printf 'pull request base SHA is not current default tip\n' >&2
+            exit 2
+          fi
+          printf 'sha=%s\n' "${current_default_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Check out protected base
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: protected
+
+      - name: Check out candidate as data only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Classify protected changes and enforce review policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CURRENT_DEFAULT_SHA: ${{ steps.default-tip.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 protected/scripts/parity-signed-evidence.py check-protected-base \
+            --protected-repo protected \
+            --candidate-repo candidate \
+            --protected-base "${BASE_SHA}" \
+            --default-tip "${CURRENT_DEFAULT_SHA}" \
+            --candidate-head "${HEAD_SHA}"
+
+          reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
+          changed_files="${RUNNER_TEMP}/parity-pr-files.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
+            jq -s 'add' >"${reviews}"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" |
+            jq -s 'add' >"${changed_files}"
+          mode="$(bash protected/scripts/parity-protected-change-policy.sh \
+            protected candidate docs/cuda-oxide-parity-status.tsv \
+            "${reviews}" protected/.github/parity-trust-reviewers.txt \
+            "${changed_files}" "${CHANGED_FILE_COUNT}" "${HEAD_SHA}")"
+
+          case "${mode}" in
+            no-op)
+              printf 'no parity promotion or trust change\n'
+              ;;
+            trust-change-approved)
+              python3 protected/scripts/parity-signed-evidence.py check-trust-update \
+                --protected-root protected \
+                --protected-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
+                --candidate-root candidate \
+                --candidate-policy candidate/docs/parity-evidence/trust-policy-v2.tsv \
+                --protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv \
+                --candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv
+              printf 'separate trust change has designated review approval\n'
+              ;;
+            promotion)
+              printf 'promotion classified; publisher authorization is deferred to the protected merge-group reusable workflow\n'
+              ;;
+            *)
+              printf 'unknown protected change mode: %s\n' "${mode}" >&2
+              exit 2
+              ;;
+          esac
+
+          # This pull-request/review path intentionally has no id-token
+          # permission and cannot request a production publisher receipt.
+
+  verify-merge-group:
+    name: Protected signed-evidence gate
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/parity-publisher-gate.yml

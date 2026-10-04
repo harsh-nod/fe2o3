@@ -1,0 +1,11 @@
+{
+  "schema": "fe2o3-physical-v6-diagnostic-fixture-v1",
+  "production": "src/amd-dbgapi-one-stop-native-v1.h",
+  "extracted": "tests/diagnostic-core.inc",
+  "extracted_pin": {
+    "bytes": 1280,
+    "sha256": "9094bea1143a9569742fb8b573a78e31374449808c0b0ec418127f2c9e0609e8"
+  },
+  "controls": 12,
+  "scope": "Exact portable note body only; no target memory, GDB, provider, loader, physical capture or retained DWARF claim."
+}

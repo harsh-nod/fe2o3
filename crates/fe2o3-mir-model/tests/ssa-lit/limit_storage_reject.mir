@@ -1,0 +1,8 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA planner requires 4 storage words, exceeding the limit 1
+
+entry b0
+variables v0
+limits storage=1
+block b0

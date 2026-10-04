@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/blocked_output_rejects_collision_prone_integer.rs:8:34
+  |
+8 |     let _ = output.get_block_mut(&collision, 0);
+  |                    ------------- ^^^^^^^^^^ expected `&DisjointBlock<Index1D, 16, 4>`, found `&usize`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected reference `&DisjointBlock<Index1D, 16, 4>`
+             found reference `&usize`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn get_block_mut(
+  |            ^^^^^^^^^^^^^

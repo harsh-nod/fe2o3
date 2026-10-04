@@ -1,0 +1,10 @@
+format=FE2O3-ROW-SOFTMAX-VERUS-CLOSURE-V1
+version=fixture-v1
+target=x86_64-unknown-linux-gnu
+file-count=6
+total-bytes=99
+closure-sha256=764d53948d2bcf6fcb7838e7a9a1b445e73a78c1540d209374eb39e40239226c
+required=verus|755|14|db9a76866bc8deed1e9c50b4670b5da1bbc3a9180511a95ca6ae1875e641cfdc
+required=rust_verify|755|20|deed3d211c9d4bb60e21c71746bcc698cf1e195ccaaeac0a924feff9ee65e507
+required=z3|755|11|afd40d2eed9f254acf9488c3869d65dd9d42710f1f7bef9d39398a7e2d05bab9
+subtree=vstd|2|43|ffa6ffae115cc0e9707b2b08538c670e0b60a646f76049b915914b3611eca229

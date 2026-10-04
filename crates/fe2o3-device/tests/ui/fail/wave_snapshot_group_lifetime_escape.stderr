@@ -1,0 +1,15 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:4:5
+  |
+3 | fn escape_tile(lane: &WaveLane<Wave64>) -> SubgroupTile<'static, 32> {
+  |                      - let's call the lifetime of this reference `'1`
+4 |     SubgroupTile::from_wave64_snapshot(lane)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+
+error: lifetime may not live long enough
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:8:14
+  |
+7 | fn escape_active(lane: &WaveLane<Wave64>) -> ActiveLaneGroup<'static> {
+  |                        - let's call the lifetime of this reference `'1`
+8 |     unsafe { ActiveLaneGroup::from_caller_asserted_snapshot(lane, u64::MAX).unwrap() }
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

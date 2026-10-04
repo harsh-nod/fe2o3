@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v8-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
+  "before": {
+    "bytes": 4673,
+    "sha256": "b7735a56e88c3b092c8e61ac7381258a2b76a4353b1764c1d5b6d8a5b3eaec81"
+  },
+  "after": {
+    "bytes": 4692,
+    "sha256": "07563f31d98a0ab4b3586e5bf0aad6b6f16a8c7a4f9fe1e6a81a3d2170db1e29"
+  },
+  "changes": [
+    {
+      "beforeOffset": 740,
+      "afterOffset": 740,
+      "before": "    require (cp.u64 (168)==physical_snapshot::output_bytes && cp.u64 (176)==4096\n             && cp.u64 (160)!=0 && cp.u64 (160)<=UINT64_MAX-physical_snapshot::output_bytes,\n             failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::snapshot_extent, [&] { return cp.u64 (168)==physical_snapshot::output_bytes && cp.u64 (176)==4096\n             && cp.u64 (160)!=0 && cp.u64 (160)<=UINT64_MAX-physical_snapshot::output_bytes; })"
+    }
+  ]
+}

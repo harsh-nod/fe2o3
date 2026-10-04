@@ -1,0 +1,17 @@
+{
+  "schema": "fe2o3-amd-isa-reviewed-coverage-v1",
+  "scope": "Existing source-level SSA marker families only; this overlay does not select or authorize an encoding.",
+  "source": "crates/fe2o3-kernel-ir/src/gfx942_inline_assembly_v1.rs",
+  "target": "gfx942",
+  "scalar": "u32",
+  "instruction_names": ["V_ADD_U32", "V_AND_B32", "V_MOV_B32", "V_OR_B32", "V_SUB_U32", "V_XOR_B32"],
+  "encoding_selection": "unavailable",
+  "encoding_level_authoring": "unavailable",
+  "encoding_level_simulation": "unavailable",
+  "encoding_level_proof": "unavailable",
+  "hardware_qualification": "unavailable",
+  "implicit_EXEC_semantics": "not_established_by_catalog",
+  "register_resource_legality": "not_established_by_catalog",
+  "other_targets_and_instructions": "unavailable_in_this_overlay",
+  "authority": false
+}

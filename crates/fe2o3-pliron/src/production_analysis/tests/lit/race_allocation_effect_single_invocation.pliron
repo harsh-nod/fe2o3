@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @race_allocation_effect_single_invocation: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 58, gpu_execution_global_x: gpu.execution_extent 1, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    kernel.allocation_effect () [] [kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.allocation_origin 581, kernel_allocation_effect_noalias_class: kernel.noalias_class 58]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 581, kernel_noalias_class: kernel.noalias_class 58]: <() -> (kernel.ranked_view <32,true,[1]>)>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 1]: <() -> (kernel.index )>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

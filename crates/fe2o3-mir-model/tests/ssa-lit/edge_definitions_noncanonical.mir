@@ -1,0 +1,9 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA edge 0:0 definitions must be strictly ordered
+
+entry b0
+variables v0 v1
+block b0
+edge r1 b1 defines v1 v0
+block b1

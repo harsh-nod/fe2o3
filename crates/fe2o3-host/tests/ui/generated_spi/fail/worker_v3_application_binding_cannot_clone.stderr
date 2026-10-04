@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `WorkerV3ApplicationExecutionBindingV1<()>: Clone` is not satisfied
+ --> tests/ui/generated_spi/fail/worker_v3_application_binding_cannot_clone.rs:6:21
+  |
+6 |     require_clone::<WorkerV3ApplicationExecutionBindingV1<()>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `WorkerV3ApplicationExecutionBindingV1<()>`
+  |
+note: required by a bound in `require_clone`
+ --> tests/ui/generated_spi/fail/worker_v3_application_binding_cannot_clone.rs:3:21
+  |
+3 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`

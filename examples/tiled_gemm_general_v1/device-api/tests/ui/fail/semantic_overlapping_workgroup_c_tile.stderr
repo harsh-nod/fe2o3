@@ -1,0 +1,5 @@
+error[E0616]: field `tile_column` of struct `Gfx942TiledGemmWave64V1` is private
+ --> tests/ui/fail/semantic_overlapping_workgroup_c_tile.rs:7:10
+  |
+7 |     wave.tile_column = 0;
+  |          ^^^^^^^^^^^ private field

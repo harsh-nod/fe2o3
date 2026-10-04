@@ -1,0 +1,342 @@
+{
+  "schema_version": 2,
+  "layers": [
+    {
+      "name": "canonical-contracts",
+      "packages": [
+        "fe2o3-amd-target",
+        "fe2o3-amdhsa-loader",
+        "fe2o3-aql",
+        "fe2o3-artifact-transaction",
+        "fe2o3-artifacts",
+        "fe2o3-build-authority",
+        "fe2o3-compiler-api",
+        "fe2o3-compiler-closure-capability",
+        "fe2o3-compiler-execution-protocol",
+        "fe2o3-compiler-ffi",
+        "fe2o3-compiler-lineage",
+        "fe2o3-completion",
+        "fe2o3-contracts",
+        "fe2o3-debug-protocol",
+        "fe2o3-drm-uapi",
+        "fe2o3-external-anchor-protocol",
+        "fe2o3-functional-proof",
+        "fe2o3-host-api",
+        "fe2o3-host-link-closure",
+        "fe2o3-hsaco",
+        "fe2o3-kfd-uapi",
+        "fe2o3-kernel-descriptor",
+        "fe2o3-kernel-ir",
+        "fe2o3-llvm-handoff",
+        "fe2o3-loop-device",
+        "fe2o3-mir-model",
+        "fe2o3-process-identity",
+        "fe2o3-profiler-protocol",
+        "fe2o3-proof-contracts",
+        "fe2o3-protected-publisher",
+        "fe2o3-protected-service-profile",
+        "fe2o3-rustc-invocation",
+        "fe2o3-runtime-model",
+        "fe2o3-semantic-trace",
+        "fe2o3-service-model",
+        "fe2o3-source-isa-observation",
+        "fe2o3-static-executable-format",
+        "fe2o3-static-preexec-manifest",
+        "fe2o3-target-spec",
+        "reserved-fe2o3-symbols"
+      ]
+    },
+    {
+      "name": "rust-frontend",
+      "packages": [
+        "fe2o3-device",
+        "fe2o3-macros",
+        "fe2o3-rustc-front"
+      ]
+    },
+    {
+      "name": "pliron-framework",
+      "packages": [
+        "dialect-autotune",
+        "dialect-dispatch",
+        "dialect-gpu",
+        "dialect-kernel",
+        "dialect-mir",
+        "dialect-proof",
+        "dialect-schedule",
+        "dialect-tile",
+        "fe2o3-kernel-analysis",
+        "fe2o3-kernel-opt",
+        "fe2o3-lower-mir-kernel",
+        "fe2o3-pliron",
+        "fe2o3-pliron-owner-core"
+      ]
+    },
+    {
+      "name": "target-backend",
+      "packages": [
+        "dialect-amdgcn",
+        "fe2o3-amdgcn-model",
+        "fe2o3-hsaco-finalize",
+        "fe2o3-llvm-text",
+        "fe2o3-lower-gpu-amdgcn"
+      ]
+    },
+    {
+      "name": "verification",
+      "packages": [
+        "fe2o3-service-verus",
+        "fe2o3-verifier"
+      ]
+    },
+    {
+      "name": "host-runtime",
+      "packages": [
+        "fe2o3-broker-authority-service",
+        "fe2o3-compiler-execution-client",
+        "fe2o3-compiler-execution-coordinator",
+        "fe2o3-compiler-execution-deployment",
+        "fe2o3-compiler-execution-issuer",
+        "fe2o3-compiler-execution-lifecycle",
+        "fe2o3-compiler-execution-supervisor",
+        "fe2o3-core",
+        "fe2o3-external-anchor-coordinator",
+        "fe2o3-external-anchor-provisioner",
+        "fe2o3-external-anchor-service",
+        "fe2o3-hip-sys",
+        "fe2o3-host",
+        "fe2o3-hsa-runtime",
+        "fe2o3-kfd",
+        "fe2o3-kir-debugger",
+        "fe2o3-kir-sim",
+        "fe2o3-kir-sim-trace",
+        "fe2o3-protected-service-spawn",
+        "fe2o3-protected-static-executable",
+        "fe2o3-runtime",
+        "fe2o3-runtime-protocol",
+        "fe2o3-sim-runtime",
+        "fe2o3-service-host",
+        "fe2o3-virtual-runtime",
+        "fe2o3-worker-v3-verification-client",
+        "fe2o3-worker-v3-verification-protocol",
+        "fe2o3-worker-v3-verification-service"
+      ]
+    },
+    {
+      "name": "integration",
+      "packages": [
+        "cargo-fe2o3",
+        "fe2o3-debug-cli",
+        "fe2o3-differential",
+        "fe2o3-general-gemm-compiler",
+        "fe2o3-kir-sim-cli",
+        "fe2o3-semantic-import",
+        "fe2o3-semantic-query",
+        "fe2o3-sim-differential",
+        "fe2o3-sim-physical-differential",
+        "fe2o3-pliron-conformance",
+        "fe2o3-pliron-llvm-smoke",
+        "fe2o3-runtime-machine-adapter",
+        "fe2o3-virtual-runtime-cli",
+        "rustc-codegen-fe2o3"
+      ]
+    },
+    {
+      "name": "fixture",
+      "packages": [
+        "fe2o3-scalar-gemm-v1"
+      ]
+    }
+  ],
+  "path_layers": [
+    {
+      "prefix": "crates/fe2o3-core/tests/",
+      "layer": "fixture"
+    },
+    {
+      "prefix": "crates/rustc-codegen-fe2o3/tests/fixtures/",
+      "layer": "fixture"
+    },
+    {
+      "prefix": "examples/",
+      "layer": "fixture"
+    }
+  ],
+  "allowed_dependency_edges": [
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-protected-service-spawn",
+      "kinds": [
+        "normal"
+      ],
+      "target": "cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))"
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-protected-static-executable",
+      "kinds": [
+        "normal"
+      ],
+      "target": "cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))"
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-kernel-opt",
+      "kinds": [
+        "normal",
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-kernel-analysis",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-amdgcn-model",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-kernel-opt",
+      "to": "fe2o3-kir-sim",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-lower-mir-kernel",
+      "to": "fe2o3-kir-sim",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-lower-mir-kernel",
+      "to": "dialect-amdgcn",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "dialect-kernel",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "dialect-amdgcn",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-lower-mir-kernel",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-pliron",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "cargo-fe2o3",
+      "to": "fe2o3-scalar-gemm-v1",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-hsaco-finalize",
+      "to": "fe2o3-general-gemm-compiler",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "cargo-fe2o3",
+      "to": "fe2o3-scalar-gemm-v1",
+      "kinds": [
+        "normal"
+      ]
+    }
+  ],
+  "forbidden_dependency_directions": [
+    {
+      "from": "canonical-contracts",
+      "to": [
+        "rust-frontend",
+        "pliron-framework",
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "rust-frontend",
+      "to": [
+        "pliron-framework",
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "pliron-framework",
+      "to": [
+        "target-backend",
+        "verification",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "target-backend",
+      "to": [
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "verification",
+      "to": [
+        "pliron-framework",
+        "target-backend",
+        "host-runtime",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "host-runtime",
+      "to": [
+        "pliron-framework",
+        "integration",
+        "fixture"
+      ]
+    },
+    {
+      "from": "integration",
+      "to": [
+        "fixture"
+      ]
+    }
+  ]
+}

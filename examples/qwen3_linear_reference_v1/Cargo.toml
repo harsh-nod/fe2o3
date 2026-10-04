@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-qwen3-linear-reference-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/harsh-nod/fe2o3"
+rust-version = "1.94"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+fe2o3-device = { path = "../../crates/fe2o3-device" }
+sha2 = "0.10"
+
+[lib]
+name = "fe2o3_qwen3_linear_reference_v1"
+path = "src/lib.rs"

@@ -1,0 +1,5 @@
+error[E0616]: field `argument_index` of struct `fe2o3_host::generated_argument_plan::GeneratedArgumentInputV1` is private
+ --> tests/ui/generated_spi/fail/packing_input_fields_are_private.rs:5:19
+  |
+5 |     let _ = input.argument_index;
+  |                   ^^^^^^^^^^^^^^ private field

@@ -1,0 +1,36 @@
+{
+  "schema": "fe2o3-debug-source-map-v1",
+  "binding": {
+    "bundle_subject_identity": "e584497b146b0df95a63a7890e003cd8edf2ce9dfb45dfda1cc62c8529119950",
+    "canonical_kir": {
+      "digest": "e8f2c794a5dd4aeac63f5c820f9d5785b40b5aaff357e3f6726164fa4425f384",
+      "canonical_bytes": 245
+    }
+  },
+  "files": [
+    {
+      "identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b",
+      "byte_len": 128,
+      "display_path": "crates/fe2o3-debug-cli/tutorial/fill-v1/source.rs"
+    }
+  ],
+  "sites": [
+    {
+      "site": {"function_ordinal": 0, "block_ordinal": 0, "point": {"kind": "operation", "operation_ordinal": 0}},
+      "spans": [{"file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b", "byte_start": 47, "byte_end": 56, "line": 2, "column": 5}]
+    },
+    {
+      "site": {"function_ordinal": 0, "block_ordinal": 0, "point": {"kind": "operation", "operation_ordinal": 1}},
+      "spans": [{"file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b", "byte_start": 59, "byte_end": 68, "line": 2, "column": 17}]
+    },
+    {
+      "site": {"function_ordinal": 0, "block_ordinal": 0, "point": {"kind": "operation", "operation_ordinal": 2}},
+      "spans": [{"file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b", "byte_start": 74, "byte_end": 91, "line": 3, "column": 5}]
+    },
+    {
+      "site": {"function_ordinal": 0, "block_ordinal": 0, "point": {"kind": "operation", "operation_ordinal": 3}},
+      "spans": [{"file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b", "byte_start": 97, "byte_end": 125, "line": 4, "column": 5}]
+    }
+  ],
+  "eliminated": []
+}

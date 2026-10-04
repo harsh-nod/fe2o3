@@ -1,0 +1,1297 @@
+{
+  "schema": "fe2o3-retained-compiler-component-evidence/v1",
+  "date_utc": "2026-10-01",
+  "compiler_head": "6ea0940fb67352bbc6a49c2ffab62e1f8ce803e9",
+  "batches": [
+    {
+      "commit": "5c67d6289fd6d3bb77bf987fe0a703913bbd0165",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/policy-formal-storage-publication-root-r49-r1/PUBLICATION.json",
+        "bytes": 10747,
+        "sha256": "2d671fac793641d3a1131c10f5a0f7c4615e8e3b747dd8919e2ee239289803ca"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "5c67d6289fd6d3bb77bf987fe0a703913bbd0165"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "5c67d6289fd6d3bb77bf987fe0a703913bbd0165"
+        }
+      ],
+      "debug_passed_executions": 4019,
+      "debug_ignored_executions": 8,
+      "release_passed_executions": 67,
+      "new_unique_controls": 25,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-policy-formal-storage-r1/receipt.json",
+          "bytes": 23672,
+          "sha256": "1b1f7b205a3e50220e7fa56dbba51c1ee1943b0aabad4b78fdb7beac092946d8"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-policy-formal-storage-release-r1/receipt.json",
+          "bytes": 25355,
+          "sha256": "ef0f45405e6c1edb9e620b9c55b7866c0d1b7cbd7bbb3d7a468d114a3c296244"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9609,
+          "bytes": 135663395,
+          "sha256": "f0c4d08d2f087cdba21340d9b84650f4ce0efc59e385793bae4a940356806df0"
+        },
+        {
+          "files": 9609,
+          "bytes": 135663395,
+          "sha256": "f0c4d08d2f087cdba21340d9b84650f4ce0efc59e385793bae4a940356806df0"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/policy-chain-retained-storage-independent-r49-r1/REVIEW.json",
+          "bytes": 29988,
+          "sha256": "f087760182456a4b9b2373589bc5d5d66162a9ed85a30e7c706c08b327bc1f50"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/formal-memory-retained-storage-independent-r49-r1/REVIEW.json",
+          "bytes": 11764,
+          "sha256": "efbb0474750f408f8ab267b44b4ef155287fdfa4b46aeecc7e94e78a447c0c11"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/policy-formal-storage-audit-root-r49-r1/AUDIT.json",
+          "bytes": 7253,
+          "sha256": "76c1b7c5d36013d15099fe2340292fe2ab6e36b1112d91a958808aa687c4b69f"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/policy-formal-storage-release-audit-root-r49-r1/AUDIT.json",
+          "bytes": 1756,
+          "sha256": "e8f21bc618a7a5cbcdaa59dafa5f16506450c02d6f261af678f60073d56f1e4e"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/optimization_v1.rs",
+          "bytes": 37509,
+          "sha256": "2c3c324d28ab71f86ddea18da360df29338a5c07a51f7f779f11fd1382c9d1e7"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/kir_bridge_v1.rs",
+          "bytes": 137165,
+          "sha256": "a88d986f7fb66d09b54ed9dfcb18500f9879c07d46f34e128f38821e487b1de5"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/fixed_policy_v3.rs",
+          "bytes": 18197,
+          "sha256": "82f9ef5119ffc4b25d0116fa5b27b843fc5717bf2fadb269360f5502bf7f9d6e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/fixed_integer_continuation_v1.rs",
+          "bytes": 6225,
+          "sha256": "17de2c50393b864f52126db89fc6a1898d9e8b3bd48ce560265bf7a39a05176c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/checked_neutral_optimization_v1.rs",
+          "bytes": 18023,
+          "sha256": "ca177e44d5e43015df61816eb8f4a85e3ae193cc24cf2872ddb1424dfcf4e55c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_optimization_policy3_v1.rs",
+          "bytes": 11174,
+          "sha256": "89012ce8f62e00d467cf73962a7c713cf3bffb0e83c6dd18a834da3f2c966337"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_integer_continuation_v1.rs",
+          "bytes": 11690,
+          "sha256": "39b322a320655bd8e4818aba62e21df30a20e396403dcf25fc151f4161c9ea13"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy4_v1.rs",
+          "bytes": 10694,
+          "sha256": "eb60d5c2d6dd0b43cdfa2209c848ca27638d14ea20c27ea36074f6afd06c31dd"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy5_v1.rs",
+          "bytes": 9443,
+          "sha256": "31f30df998ec60b83f1b85e40ff3d622f826e6f9a9825f922ce2fb99ca2f84ed"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy6_v1.rs",
+          "bytes": 11007,
+          "sha256": "d739834e0f44f602f7379eb7af198176c5ff321f0f3c90d936813f3fe25edcf6"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/optimization_report_retained_storage_v1.rs",
+          "bytes": 3218,
+          "sha256": "9c6edc25bf6d4be7d2254c78a6a532fa48e58976e286672a82c72341c7cb3308"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/kir_bridge_optimized_retained_storage_v1.rs",
+          "bytes": 3635,
+          "sha256": "52b6721cf1a0d771b4dacb1e8448d96e23c7c76399cff491da73d5c5457ba730"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/policy3_execution_retained_storage_v1.rs",
+          "bytes": 331,
+          "sha256": "51ce533b40a5b930bd236758e064f9442aae4d8f00ff72e92c9882986165f7ba"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/integer_execution_retained_storage_v1.rs",
+          "bytes": 848,
+          "sha256": "61843ff7300152f696068aaac94b6e5a47e213fcdccfc5ff0ff278d71014ef07"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/checked_native_parts_retained_storage_v1.rs",
+          "bytes": 1978,
+          "sha256": "b4906180431c3b6bb2a2fdd28eaa3b1be1c4d1ccd72c9c16debd03ed3b753c51"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_policy3_retained_storage_v1.rs",
+          "bytes": 1228,
+          "sha256": "1d10ac58f1ba9ea5557ae1c76d675f2c9f4b71016645ed9d67683e0ca8b9e387"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_integer_retained_storage_v1.rs",
+          "bytes": 1252,
+          "sha256": "41b80acd4b282785e4601df1b9b16df7a2baf7b9838635844c87d9efad7c909d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_policy3_retained_storage_v1_tests.rs",
+          "bytes": 4896,
+          "sha256": "d5f534a55198bf297e720bc7082ed8c58d0243903eb69f6d0ea0ad78164af54f"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/neutral_integer_retained_storage_v1_tests.rs",
+          "bytes": 4954,
+          "sha256": "bc4318600ffe6d053f3c1b55b896da0b873c6f05c83d60c997eb1de3cd6499d1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy4_retained_storage_v1.rs",
+          "bytes": 1404,
+          "sha256": "0f920ed062f2111337c8b6ea291d81353eb28f7b24b118fd05b7a47cb01aec8a"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy5_retained_storage_v1.rs",
+          "bytes": 1391,
+          "sha256": "fb7bef8c2e7d8951e5946ee4fc0113ef1dd7cf956ea2fc0e20adbb6be42198de"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy6_retained_storage_v1.rs",
+          "bytes": 3784,
+          "sha256": "8c1b3fdd8985d77380a541f334f54e75c03736e4bc151db717b331792877ddc1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy4_retained_storage_v1_tests.rs",
+          "bytes": 3582,
+          "sha256": "64fb56e7eb974fb4e2c67d0203ac034a354322a1b9b61e5eb48cdf77e4df0c30"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy5_retained_storage_v1_tests.rs",
+          "bytes": 3537,
+          "sha256": "c72f1983c9b982c7ba6318c533225f947271594cc22af53bd1e45c802e170269"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/src/checked_optimization_policy6_retained_storage_v1_tests.rs",
+          "bytes": 8908,
+          "sha256": "7e7919790fd946543d5ce953b78f047189cfb9c12a4601f03438417587d4770c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-opt/tests/policy_chain_retained_storage_public_v1.rs",
+          "bytes": 1480,
+          "sha256": "9064fa7653adda466854085baf324be2f6aec4fb70f6943c12112c4fe38305b4"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/src/formal_memory_retained_storage_v1.rs",
+          "bytes": 4158,
+          "sha256": "afe12c7294ac788e96020a580238dfe38674ad1df269ea7cc46a293656610f94"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/src/formal_memory_retained_storage_v1_tests.rs",
+          "bytes": 8504,
+          "sha256": "04e8796bca4254db5aec1e2a50ea881af0600287178e27300d0bf60c8cb97f24"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/tests/formal_memory_retained_storage_public_v1.rs",
+          "bytes": 433,
+          "sha256": "7d8698128838476796c64145120d9aa248af7d9f2c1af7dce2bb23402fe599a7"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/src/formal_memory_obligations.rs",
+          "bytes": 74431,
+          "sha256": "a439bada3bf44c091fdb868fb89e50474aef17023bfabcbcaaf90036f29846cb"
+        }
+      ]
+    },
+    {
+      "commit": "d3627abb60c3431077ebcd8441b9b0010f09c90c",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/locator-evidence-storage-publication-root-r49-r1/PUBLICATION.json",
+        "bytes": 6822,
+        "sha256": "8b38eca68ccfa7b8a7cd1c460c244a7496a6b6406fd9ae1e0b9ad2aeaea816dd"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "d3627abb60c3431077ebcd8441b9b0010f09c90c"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "d3627abb60c3431077ebcd8441b9b0010f09c90c"
+        }
+      ],
+      "debug_passed_executions": 3018,
+      "debug_ignored_executions": 3,
+      "release_passed_executions": 33,
+      "new_unique_controls": 28,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-locator-evidence-storage-r1/receipt.json",
+          "bytes": 23058,
+          "sha256": "ebf76ee8d753051723986adc501b9c615cd77c04750f35d6b8d09030d01cd398"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-locator-evidence-storage-release-r1/receipt.json",
+          "bytes": 25056,
+          "sha256": "5f2858bc4ceeb8ed98d2fcb53cab8c622ee2de081c453411eaf411104a7e0b5c"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9621,
+          "bytes": 135704969,
+          "sha256": "157068226b58435c91d0dc9991f0c8f43e85e1680ffccf714b5f8c84215a6e9d"
+        },
+        {
+          "files": 9621,
+          "bytes": 135704969,
+          "sha256": "157068226b58435c91d0dc9991f0c8f43e85e1680ffccf714b5f8c84215a6e9d"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/mir-locator-storage-independent-r49-r1/REVIEW.json",
+          "bytes": 10731,
+          "sha256": "b6cfd480dda669dbf2fe7c358199615b72e18f0b5b7ce01dbad4eb632db17d80"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ranked-evidence-retained-storage-independent-r49-r1/REVIEW.json",
+          "bytes": 24123,
+          "sha256": "d10f08e7aaa70e6593f03c6520c5ed4f5be41c50f4b37e47e03086cfe706d0ed"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/locator-evidence-storage-audit-root-r49-r1/AUDIT.json",
+          "bytes": 27057,
+          "sha256": "dbc47f2149f01ac4f5ed91f00f2c5e1d43127236029e5f3abc345ecb4202a770"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/locator-evidence-storage-release-audit-root-r49-r1/AUDIT.json",
+          "bytes": 17268,
+          "sha256": "8f1e785c0e864d78f9a645a926e8a15f10bc56cf690a3fcbf7ef7619a1f2b7d7"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/dialect-mir/src/pliron.rs",
+          "bytes": 173287,
+          "sha256": "a143ca2ae5d399d905794d90cc8424cc0be6794675d86eb2d7fc44f2726df32f"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/dialect-mir/src/pliron/locator_storage_v1.rs",
+          "bytes": 3987,
+          "sha256": "9a938f1d9d1b28025b3c4b4673bb27dd8509386797a1d2fcb5f358e9e3b2816b"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/dialect-mir/src/pliron/locator_storage_v1_tests.rs",
+          "bytes": 10006,
+          "sha256": "de546353fac13068d410986baac24679a6a7b2216aa1053cb36d9fdfea841e77"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/dialect-mir/tests/production_locator_storage_public_v1.rs",
+          "bytes": 3313,
+          "sha256": "56287e802f82f40f9b8e5190d99130a1337a03b28e8bc321fa36f722d1fe15ca"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/middle_end_evidence_v5.rs",
+          "bytes": 67786,
+          "sha256": "4babdb8416c1e8ad442e1b53482f5f899a4ffeccd005f471693870d1f5f34418"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/parallel_reference_contract_v1.rs",
+          "bytes": 27238,
+          "sha256": "bc0475607938cfccd406ab502e32b563fe1641e6aa567015947e1452905e1f3c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/src/semantic_u32_induction.rs",
+          "bytes": 104607,
+          "sha256": "bcf57c561d394ba9bc12e1a55626ae7ea8044246981205d3867a2d30f4d9cefc"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/middle_end_evidence_retained_storage_v1.rs",
+          "bytes": 2361,
+          "sha256": "3be479464d3612529a32ace41fecf759236e5517acc0f7df44861cdf3918aa14"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/middle_end_evidence_retained_storage_v1_tests.rs",
+          "bytes": 3187,
+          "sha256": "364e8b3cdb066039b73f3c78c3aed7e963a4d73c0b17c1a235f3a01a45ce0f71"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/tests/middle_end_evidence_retained_storage_public_v1.rs",
+          "bytes": 724,
+          "sha256": "712fa6d51f6e897e498d2aad071f393a89f9b885bfa06e6dde733bf8eb789a83"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/parallel_reference_retained_storage_v1.rs",
+          "bytes": 2903,
+          "sha256": "d01b9cbe291d7616129173f156ea87d2370176f23bb4336c3199c6edb76302ab"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/parallel_reference_retained_storage_v1_tests.rs",
+          "bytes": 5106,
+          "sha256": "33d93be67d33c3b755290cefd53d481b41c4d2834648a786375792c88811ef7d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/tests/parallel_reference_retained_storage_public_v1.rs",
+          "bytes": 458,
+          "sha256": "035e92af4974f4b3d2c080d718d0cb317e0841551b519710992e3a559b4d5764"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/src/semantic_u32_induction_retained_storage_v1.rs",
+          "bytes": 2680,
+          "sha256": "d77241d45cb3227309a0c214ea2ee730c1507dcbf59149b27b6740ff20913788"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/src/semantic_u32_induction_retained_storage_v1_tests.rs",
+          "bytes": 5138,
+          "sha256": "73d231c3305bb68d96311f091ed9ce707edca66e606306f264e391c631c9fa57"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/tests/semantic_u32_induction_retained_storage_public_v1.rs",
+          "bytes": 485,
+          "sha256": "4d11bfdf4737661d3fc48c58f491e6f3ccd93788e09714243aa2ade388b69472"
+        }
+      ]
+    },
+    {
+      "commit": "97ddc6c8424f797d767828df3737f0d2d103bed1",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/semantic-contract-storage-publication-root-r49-r1/PUBLICATION.json",
+        "bytes": 2623,
+        "sha256": "413387af77bc791ca85b361e0f00f93ff3e2d5a02b0352c0a0433afa898cb52b"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "97ddc6c8424f797d767828df3737f0d2d103bed1"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "97ddc6c8424f797d767828df3737f0d2d103bed1"
+        }
+      ],
+      "debug_passed_executions": 1824,
+      "debug_ignored_executions": 0,
+      "release_passed_executions": 8,
+      "new_unique_controls": 8,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-semantic-contract-storage-r1/receipt.json",
+          "bytes": 22040,
+          "sha256": "53299f22e1c5e063ed7733b115c10c422d43a7b1d33a4b533ed132fe1732f62b"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9624,
+          "bytes": 135720639,
+          "sha256": "e5ee839d49cf1cee7a7e771222b638ece38b8af70f6e03b787e1e6671a7d0912"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/semantic-contract-retained-storage-independent-r49-r2/REVIEW.json",
+          "bytes": 17946,
+          "sha256": "508267a2c14764203f32de38559aba6ed2bda20dbf56381a80f3e5b83ff598b0"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/semantic-contract-storage-audit-root-r49-r1/AUDIT.json",
+          "bytes": 9394,
+          "sha256": "20303c95c1e8f771990eb248a565d99c1cb2dcbe3e3fa54bc931b55620cc3969"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/mir_pliron_semantic_contract_v1.rs",
+          "bytes": 36707,
+          "sha256": "3e57c3dfbcf2d9ff3bcc8fbcb16484c7935b20758a2a893e5558d6f863a96ebf"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/mir_pliron_semantic_retained_storage_v1.rs",
+          "bytes": 5148,
+          "sha256": "f11b55927ec623d94ed765196cbd1555629a6819c63115513c95ae6fa962cd27"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/mir_pliron_semantic_retained_storage_v1_tests.rs",
+          "bytes": 9974,
+          "sha256": "109b8eb6813c5193f67242842cafc8cb2a8e73267706239cf82f0bc1f89f9c24"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/tests/mir_pliron_semantic_retained_storage_public_v1.rs",
+          "bytes": 467,
+          "sha256": "518d4167bf799bd1a5d1c65cf5192648d97fad7a20fc0d6da147811c538e0518"
+        }
+      ]
+    },
+    {
+      "commit": "d251ee37bb002735ba8f8bc3b9411966090f7db6",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/transcript-receipt-target-source-publication-root-r50-r1/PUBLICATION.json",
+        "bytes": 8301,
+        "sha256": "d1a941c11c7e04f87861445d7282ac884ee9ca655373ce59c03297dd6c8623ae"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "d251ee37bb002735ba8f8bc3b9411966090f7db6"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "d251ee37bb002735ba8f8bc3b9411966090f7db6"
+        }
+      ],
+      "debug_passed_executions": 4325,
+      "debug_ignored_executions": 238,
+      "release_passed_executions": 30,
+      "new_unique_controls": 30,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r49-compiler-transcript-receipt-target-debug-r1/receipt.json",
+          "bytes": 65858,
+          "sha256": "279a3e8d5c17c2e1f633976a72b07ba9512716ab92d9d7570a8d96a13cfb392c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-transcript-receipt-target-release-r2/receipt.json",
+          "bytes": 73931,
+          "sha256": "c589abd11ef61d8f678b5acb0631bfb206b8d2cc336650af399487d3c341d1bd"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-storage-format-r1/receipt.json",
+          "bytes": 56960,
+          "sha256": "5c534ecc4a073caf202eb99ee6c99fb3168706c76148039d9c7936254dac2d40"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9639,
+          "bytes": 135796608,
+          "sha256": "39ad2cd345f00fa59c275fa5ba7b0211d3173e7ce79c30af7c44edd1d95acc5f"
+        },
+        {
+          "files": 9639,
+          "bytes": 135796608,
+          "sha256": "39ad2cd345f00fa59c275fa5ba7b0211d3173e7ce79c30af7c44edd1d95acc5f"
+        },
+        {
+          "files": 9639,
+          "bytes": 135796608,
+          "sha256": "39ad2cd345f00fa59c275fa5ba7b0211d3173e7ce79c30af7c44edd1d95acc5f"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/rustc-transcript-storage-independent-r49-r1/REVIEW.json",
+          "bytes": 9583,
+          "sha256": "8d2b06d0544a81033e810188b58e1b6c2d3f45423a6cda78cb5fd934f8a511f4"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ranked-functional-receipt-storage-independent-contract-r49-r1/REVIEW.json",
+          "bytes": 23474,
+          "sha256": "85c8073825e230dbcfd401e20f696087da23d242e4894a23d966e2bdd5b9308c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/production-target-storage-independent-contract-r49-r1/REVIEW.json",
+          "bytes": 21493,
+          "sha256": "7185102f8cb0106b505fa64e01cc6df7e576bf9ce93bbb8401979a8713f94a3c"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/transcript-receipt-target-debug-audit-root-r49-r1/AUDIT.json",
+          "bytes": 49180,
+          "sha256": "f0c4b1b18eb9fcdf352a23112d6e341be6e50e0b3c7ad223c38df61b2c86067d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/transcript-receipt-target-release-audit-root-r50-r1/AUDIT.json",
+          "bytes": 91431,
+          "sha256": "98c9279d2ef05152fe711acdc38910523975a4721f74b33ad27a05bfce8439a6"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1.rs",
+          "bytes": 238171,
+          "sha256": "ed0edef0a8549357fb4f631bf8b7651d41f6a58430c27a9adb41660d0ed9b58c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/production_importer_transcript_storage_v1.rs",
+          "bytes": 2339,
+          "sha256": "f4e861c7b61bb7d0107df910a10a8d37eb16bd52be940da7eddf1fdae7b730a4"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/production_importer_transcript_storage_v1_tests.rs",
+          "bytes": 6442,
+          "sha256": "6c640cc70332ea820c573cf90d12388b7fa4ec56fdb67c5edbd0cfc26a133b7b"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/imported_functional_retained_storage_v1.rs",
+          "bytes": 2237,
+          "sha256": "3a44d245b96088bb9ffaa8fe61dccf6958b4fce12c781486bfbff9c6ccf83294"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/imported_functional_retained_storage_v1_tests.rs",
+          "bytes": 5836,
+          "sha256": "31c92465d9c9db90efaef04e45287c4652ce408563bba6360bc541971e0e7294"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/tests/imported_functional_retained_storage_public_v1.rs",
+          "bytes": 518,
+          "sha256": "006883912c7e77060e9aca21dacf201bc2555b618044fb3f79ab835c06fd3992"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/functional_refinement_retained_storage_v1.rs",
+          "bytes": 1602,
+          "sha256": "6d52300522c7047d00dfa2800e633b981114b28b5cd9d92f0017c2621a1d119e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/functional_refinement_retained_storage_v1_tests.rs",
+          "bytes": 5682,
+          "sha256": "d2924d4be0727d81b724ab03277aeb3ceffcfcc00dded8e50cf7f278a995d3a6"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/mir_pliron_execution_retained_storage_v1.rs",
+          "bytes": 1626,
+          "sha256": "927e9d2e16ad5753ea758d95c107aef8bd13e92db75165edbc66319084e38e72"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/tests/functional_receipt_retained_storage_public_v1.rs",
+          "bytes": 1058,
+          "sha256": "80da5b0ea8be705e5fc448ac6be70575558e22cff3ff2d8e590963f34b3d8fcb"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-functional-proof/src/lib.rs",
+          "bytes": 37180,
+          "sha256": "019dfdc21c03ccac22a02db6dac648a9b9cc7d193fd9724874289809267fe9d3"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/functional_refinement_receipt_v2.rs",
+          "bytes": 94854,
+          "sha256": "a373e3755753f4ffdfdec5c888307c8718a61c2c913b07ca2a0dff10ce4c1ebe"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/mir_pliron_per_compilation_verus_v1.rs",
+          "bytes": 75445,
+          "sha256": "7cbf8e7a4f7b76fa3afe0b1b861bcc311e1991ac53e433541770a409fcf678ae"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/semantic_layout_target_retained_storage_v1.rs",
+          "bytes": 3293,
+          "sha256": "7aeb71a9cb0d02aeb653c5719750a79375acdac667df1ff964adaeaa4258ce16"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/semantic_layout_target_retained_storage_v1_tests.rs",
+          "bytes": 7108,
+          "sha256": "149af885dbaecce40fe03a3ce1dbaffce0a5302224eed7ca606efcf8a7261e0a"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_target_retained_storage_v1.rs",
+          "bytes": 1842,
+          "sha256": "a4e61eede43ac6506d8a46df6e8378a238a4ab7190da5f5c2ff59e33daac0645"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_target_retained_storage_v1_tests.rs",
+          "bytes": 525,
+          "sha256": "fad80e6db3563f5bb402b514a3371558aacfc3ed986c80fff8532e319d045fd1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/semantic_layout_bridge.rs",
+          "bytes": 96225,
+          "sha256": "a9fc67822997e44e15ec2dbaba4287fd32077c7af69ff7c165e3b4fbf872f9b0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_target_v1.rs",
+          "bytes": 16461,
+          "sha256": "5edfea635ac6f458e049c42abc2509ee590bab87473159f70404095df0b82620"
+        }
+      ],
+      "note": "Transcript/receipt/target owned capacities; component scope only."
+    },
+    {
+      "commit": "a209ae259299069479570cff7726cec7ff0b448e",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-debug-bindings-publication-root-r50-r1/PUBLICATION.json",
+        "bytes": 18970,
+        "sha256": "fb04fd22a94aa23aef2939a47f20e26d1fbe66174378078dbeefacd1aabf0319"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "a209ae259299069479570cff7726cec7ff0b448e"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "a209ae259299069479570cff7726cec7ff0b448e"
+        }
+      ],
+      "debug_passed_executions": 7444,
+      "debug_ignored_executions": 215,
+      "release_passed_executions": 50,
+      "new_unique_controls": 50,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-roster-repeat-upstream-merged-r1/receipt.json",
+          "bytes": 112604,
+          "sha256": "c82c723bf55c1e65d1d9f6fff44a81885cc0397aabc4322e528d920ee8f10d11"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-roster-repeat-upstream-release-r1/receipt.json",
+          "bytes": 106968,
+          "sha256": "6c4255193889d79c815c0d470d18a267b2a4cef8820a23e831c17dd62b7fb094"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-roster-repeat-macro-integration-r1/receipt.json",
+          "bytes": 103730,
+          "sha256": "ed23e77e4e0db09283a46d3a380fc08bec371b547183205a2a6ac949cbaddb4a"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9659,
+          "bytes": 135919042,
+          "sha256": "e647809cab40b94ab8f567a79bf0893917dd9e80ba9ec2b06492684b5592923a"
+        },
+        {
+          "files": 9659,
+          "bytes": 135919042,
+          "sha256": "e647809cab40b94ab8f567a79bf0893917dd9e80ba9ec2b06492684b5592923a"
+        },
+        {
+          "files": 9659,
+          "bytes": 135919810,
+          "sha256": "75204e74566685f4059bec730a76f4157f104cbd112a0d3257a3f78ed5bc5e53"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ranked-roster-retained-storage-independent-seed-r49-r1/REVIEW.json",
+          "bytes": 15216,
+          "sha256": "e572e574b3c2597ba8cb2defdc4102d9f2aa0e1afc3ac652856b84b2776c0984"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ranked-roster-storage-normalized-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 6715,
+          "sha256": "2a0a000a6ee498bb9f164414049c484779a2a4c97fe424669a3d4dcdab97ebc8"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-repeat-promotion-independent-contract-r49-r1/REVIEW.json",
+          "bytes": 27030,
+          "sha256": "36505ae097c25e00ccb7c8bbb06f34ac4f47e1ab49b1cb559bbbd9d8422f3ccb"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-repeat-promotion-normalization-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 7116,
+          "sha256": "00e43c0e974b2f99e015c343765150e517271de36cd8836218892fc09cfad9aa"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/production-bindings-debug-storage-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 20536,
+          "sha256": "89e7464447df168e6f02f38526b339a11f76207586a8953bad7180be955d183e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/production-bindings-debug-storage-normalization-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 8300,
+          "sha256": "8c3e9c768fcf9f3f220f6e5b6385cd1eed503c32b366081fe684360d0f83fa01"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-repeat-promotion-qualification-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 20656,
+          "sha256": "3bcec734f0b334f37d98d8fc4fdd1d805fc5106a76efbda3122d6fa53b22d62d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-repeat-promotion-qualification-normalization-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 10350,
+          "sha256": "15d903793c35182762b77dbf499e5d520e11ec86d7416b3291eb7ab4ad39640a"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/repeat-parent-joins-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 13361,
+          "sha256": "90cb6d763409fe61d57afcd7d865513911c9603799c28cf6f43a7d09242641d0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/ordered-publish-external-setup-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 11395,
+          "sha256": "892b15b331c0e88c446ee036d6a336f3e14b8a81326c424c43980f1a9578efdc"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/repeat-parent-independent-contract-r50-r2/REVIEW.json",
+          "bytes": 9021,
+          "sha256": "810876653418444cd69f17dc4df10c166c04de46caf16169eecd56065777ec28"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/legacy-parent-independent-r50-r3/REVIEW.json",
+          "bytes": 17349,
+          "sha256": "e9755d270f8ecf3ecb0356f164787393cb6f2bdbe97017937db245ac589ff1d7"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/promotion-parent-metadata-independent-r50-r4/REVIEW.json",
+          "bytes": 8080,
+          "sha256": "37d2d15c85d17a35c7b8bb0bf507ab1ef3159c70b1cd6a239ba6681acfb740bd"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-debug-bindings-debug-audit-root-r50-r3/AUDIT.json",
+          "bytes": 52478,
+          "sha256": "2677395fe310eaeb71525797276e904d35c1e3f63b970cee86a02104c132a237"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-debug-bindings-release-audit-root-r50-r1/AUDIT.json",
+          "bytes": 146782,
+          "sha256": "1cd2a3df030739452081af462752c628122055b8ffa0221949a3178974aa84ee"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/promotion-parent-metadata-controls-audit-root-r50-r1/AUDIT.json",
+          "bytes": 2153,
+          "sha256": "3f5a3333597614000f0ab723ea608f5f0b1020708509c07f05abbf6705a56685"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/repeat-promotion-genuine-campaign-audit-root-r50-r2/AUDIT.json",
+          "bytes": 13044,
+          "sha256": "8078d545ce01ed9c6f3c54236cf8fadb5b0d4c0f41c528bcb4d0979531d5322c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/legacy-promotion-genuine-campaign-audit-root-r50-r2/AUDIT.json",
+          "bytes": 7982,
+          "sha256": "006e442742d5a1eb00d54058bff86073b88b1c41fbcccbc60f8947aecbaad8ce"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-upstream-merged-debug-audit-root-r50-r1/AUDIT.json",
+          "bytes": 53040,
+          "sha256": "6d4fdf7a2b83d40934e7a2d7050346b53faffc2136ec009decceb55883f49346"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-upstream-merged-release-audit-root-r50-r1/AUDIT.json",
+          "bytes": 146776,
+          "sha256": "b62c92682bfb295e52e4bbc38fafe0ae17217e34af606feb9f71fa0be4d7f3c2"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/upstream-ci-docs-format-root-r50-r1/MANIFEST.json",
+          "bytes": 8566,
+          "sha256": "273b0f2fc9231bfd001a6e8c545a842468e332884387de67a0dced34ed80a93b"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/repeat-qualified-binary-archive-root-r50-r1/ARCHIVE.json",
+          "bytes": 892,
+          "sha256": "61dd82b5a2dde059b5e72a17cee95909555a3570294fa21c7ec809cbd7842973"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/roster-repeat-macro-integration-audit-root-r50-r1/AUDIT.json",
+          "bytes": 170247,
+          "sha256": "a1f359c5e8ddb0c50635e1d323083284b415975526520f1dfe5b2a35009fb6e6"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/upstream-macro-tree-pin-root-r50-r1/MANIFEST.json",
+          "bytes": 2727,
+          "sha256": "28af86fa3fc6a58e2ab720a44c64aa42ee30fed248559cc85b5fe4e6e940bbe7"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/refinement_staging_policy_retained_storage_v1.rs",
+          "bytes": 2001,
+          "sha256": "d87edeb5d79cd2d8ccea475a6c424d34b7624bcf6553672fb6f861f9b86b98c4"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/reconciled_semantic_retained_storage_v1.rs",
+          "bytes": 1287,
+          "sha256": "8017ce6b8e53093091fbce376f43f6daabad2c3271140ba9b227f1f8a63effa6"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/tests/ranked_owner_storage_public_v1.rs",
+          "bytes": 886,
+          "sha256": "c9ad8f5c4dfed9c59d5b34d2809420ad2cb003812d84235fae90109be260a048"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/mir_pliron_join_retained_storage_v1.rs",
+          "bytes": 2232,
+          "sha256": "6e322c3e18296cb6e90e7b951bc64f6578eb1a02dcd717e1f8e1798886ccd5e4"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/ranked_roster_retained_storage_v1.rs",
+          "bytes": 6129,
+          "sha256": "eecb5a978f25590b1c6060b6994b9b9eab9aa45b1b057ca2ced1af77d3a551cf"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/refinement_staging_policy_retained_storage_v1_tests.rs",
+          "bytes": 4178,
+          "sha256": "28e8c102ca802593dc8b37954ffb0f094de0840a7dbec09ef1ed72c4b2d254e1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/ranked_roster_retained_storage_v1_tests.rs",
+          "bytes": 5006,
+          "sha256": "128e2e9a67b349839a8d58cf6b5e652562359d9c227f9ac8d6d4cfa4ac3ab014"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/ranked.rs",
+          "bytes": 270668,
+          "sha256": "dd4875e2644e1c08438e81f1d4d7bc3029a471fb36721171cc480f1450c19587"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-pliron/src/production/mir_pliron_semantic_contract_derivation_v1.rs",
+          "bytes": 26298,
+          "sha256": "67035212472d43983e991c15c844d9d9c01af93e34c792e512cd6827e864c6e3"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_mir_pliron_verus_join_v1.rs",
+          "bytes": 4060,
+          "sha256": "0ce2d8ba057e24d75b74bcb503c4584c61cce23b38de07e613aff0603624c7cd"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1.rs",
+          "bytes": 1599673,
+          "sha256": "a38f9a866390035189e9b8afccd46544d534b149ea2ee9f806d2f9df6883da4c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_ordered_composition_publish_v1.rs",
+          "bytes": 9596,
+          "sha256": "ce76da49b6e6cdbca4e8287904bc7320052edc0747c27ddac308ad9a41fbe3c1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_ordered_composition_publish_text_v1.rs",
+          "bytes": 10237,
+          "sha256": "e98192205268bd4adc810fe7a0fada741c3b647be2de70617d1506dffba1be90"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_ordered_composition_publish_repeat_v1.rs",
+          "bytes": 8231,
+          "sha256": "375b582471dffdc65f0b8f63ca883b2c9c72832b2d5a56807c140e02e0746cfb"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_ordered_composition_publish_repeat_v1_tests.rs",
+          "bytes": 13886,
+          "sha256": "4cd24856aef97e6dcda9bdb66e2ff5a9965ffd35eec9dd26b970f0e86d4611d0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/src/debug_source_file_retained_storage_v1.rs",
+          "bytes": 1287,
+          "sha256": "7313d2b8c3c7a5c1a3d22852a51c3742eae9e1efeb80dad33c87bdff6a6fe70b"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/tests/debug_source_file_retained_storage_api_v1.rs",
+          "bytes": 1610,
+          "sha256": "ce6109c9cbf513c116d92eec645e9dd84a89094137a478f69d3ac523c367844e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_bindings_debug_retained_storage_v1.rs",
+          "bytes": 5752,
+          "sha256": "6b3d2f575fb39676246f9806dc284329ea30b36ee6b5643adbda7a0437f6a80f"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_bindings_debug_retained_storage_v1_tests.rs",
+          "bytes": 7326,
+          "sha256": "ba6abbfc39c36dcaece552f538289ae886735daa188d78233260e2d66b1663e3"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/rustc_semantic_plan_debug_retained_storage_v1_tests.rs",
+          "bytes": 4722,
+          "sha256": "1fca7af7fb46366f274d7f594e116e4a6606fb880a741edefd120a6b0c1b5d05"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-kernel-ir/src/debug_source_map_v1.rs",
+          "bytes": 19832,
+          "sha256": "765720bcd1de1fd192655721927df8183693e7ba91ebc6e63140e3896a577c74"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_pipeline.rs",
+          "bytes": 208057,
+          "sha256": "abe119ea2bd84ab2ce90c309d05ab8cb97fa748e21d8d2919fd16ab315ff8490"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/rustc_semantic_plan_v1.rs",
+          "bytes": 176970,
+          "sha256": "c409daf0cf66e9ca232e76650efbc6ae179b08f53113e59eedea352195e6a622"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_ordered_composition_publish_qualification_v1_tests.rs",
+          "bytes": 19284,
+          "sha256": "1b8c2cfc253a04b11bc505ea9d6d9954b641089aa4b59cdd219ab723e198e7b7"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_ordered_repeat_promotion_v1_tests.rs",
+          "bytes": 26333,
+          "sha256": "7c3f1bde30f6d28310ae9fb70dea018a2a654593c4a2ab67f842ed51afed0a62"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_ordered_repeat_promotion_cpu_v1_tests.rs",
+          "bytes": 8870,
+          "sha256": "9eb2f651ba55ad535543e55dae9b8d6796e533c77d0b09e5cac3a2c534b7f2f0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-1.rs",
+          "bytes": 640,
+          "sha256": "897b9b77fe1070673616be9441836fb1f913233f3c7f4a7681cb0cd32def451d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-2.rs",
+          "bytes": 640,
+          "sha256": "976152b24bcdb5594007aa539144139c7f1af6b38e43413d890c1e01791c0b74"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-15.rs",
+          "bytes": 641,
+          "sha256": "7f1639d4675d081b85460490def32597225a9623bef2df25befe1e5335328275"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_ordered_composition_publish_setup_v1_tests.rs",
+          "bytes": 5594,
+          "sha256": "2ef81002bbc88dac841ab8e5ad2f7496dd09b9e395732a3f15c0efff734c8953"
+        }
+      ],
+      "note": "Ranked roster/debug components and literal-repeat source promotion. Genuine campaigns retain their earlier source snapshot; merged regressions are distinct.",
+      "historical_campaigns": [
+        {
+          "receipt": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-repeat-promotion-genuine-campaign-r2/receipt.json",
+            "sha256": "cb22b59adadf3d3bef9da9abc4016690e891c090c997485eafb9212803356fca"
+          },
+          "audit": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/repeat-promotion-genuine-campaign-audit-root-r50-r2/AUDIT.json",
+            "sha256": "8078d545ce01ed9c6f3c54236cf8fadb5b0d4c0f41c528bcb4d0979531d5322c"
+          }
+        },
+        {
+          "receipt": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-legacy-promotion-genuine-campaign-r2/receipt.json",
+            "sha256": "0985ced7c61928371aebb0c538d015980a226f4b39749fd0f0069cdb351032ef"
+          },
+          "audit": {
+            "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/legacy-promotion-genuine-campaign-audit-root-r50-r2/AUDIT.json",
+            "sha256": "006e442742d5a1eb00d54058bff86073b88b1c41fbcccbc60f8947aecbaad8ce"
+          }
+        }
+      ]
+    },
+    {
+      "commit": "6ea0940fb67352bbc6a49c2ffab62e1f8ce803e9",
+      "publication": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-branches-publication-root-r51-r1/PUBLICATION.json",
+        "bytes": 12517,
+        "sha256": "c8d705ab123dc562b27cbd55c04c09d00e8fe2fe75bf28c44d0de5ba89ac4bac"
+      },
+      "publication_remotes": [
+        {
+          "url": "https://github.com/harsh-nod/fe2o3.git",
+          "branch": "main",
+          "head": "6ea0940fb67352bbc6a49c2ffab62e1f8ce803e9"
+        },
+        {
+          "url": "https://github.com/powderluv/fe2o3.git",
+          "branch": "main",
+          "head": "6ea0940fb67352bbc6a49c2ffab62e1f8ce803e9"
+        }
+      ],
+      "debug_passed_executions": 5299,
+      "debug_ignored_executions": 244,
+      "release_passed_executions": 78,
+      "new_unique_controls": 50,
+      "receipts": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-bindings-branches-debug-serial-r2/receipt.json",
+          "bytes": 86783,
+          "sha256": "8f1fd101ec2b8ac2cb5cfb40739002d1312e29b53718716d9adf62333e687ba6"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r50-compiler-bindings-branches-release-r1/receipt.json",
+          "bytes": 91629,
+          "sha256": "c83d46a363d00aa6b70d16c27ca9ddf99bdbab9f0822a935b805391b16641733"
+        }
+      ],
+      "source_censuses": [
+        {
+          "files": 9678,
+          "bytes": 136017043,
+          "sha256": "94c1337bf88f984eb45471c3bc724d67386e50728ee7f868b3815bf37d495e1f"
+        },
+        {
+          "files": 9678,
+          "bytes": 136017043,
+          "sha256": "94c1337bf88f984eb45471c3bc724d67386e50728ee7f868b3815bf37d495e1f"
+        }
+      ],
+      "reviews": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-context-retained-storage-independent-r50-r1/REVIEW.json",
+          "bytes": 13534,
+          "sha256": "6ee0f7aa6a642b7ec87f7fae7a78363d0583edbc14eed0bb2654b79cafb7ad70"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-context-retained-storage-independent-r50-r1/NORMALIZATION.json",
+          "bytes": 6794,
+          "sha256": "12bf973f2b19e04ad0fa49df7cea12fea30a711885967a22d4f9f4144edfe28e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-typed-descriptor-storage-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 27185,
+          "sha256": "c8c4e389047f36f29aa713ecdc0ead5ed458ba6af8b572f24e2b9100fbc3e77e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-typed-descriptor-storage-normalization-independent-seed-r50-r1/REVIEW.json",
+          "bytes": 13636,
+          "sha256": "98956a9511f1a6571b6c13a0b13080b57de184a00f9bdeed77f2522ccc60db7d"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-reference-retained-storage-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 20882,
+          "sha256": "6669fe6c6f4375331208a0574e589e7930482b057f85ae7ff89ad5b85bb07136"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-reference-retained-storage-normalization-independent-contract-r50-r1/REVIEW.json",
+          "bytes": 18703,
+          "sha256": "a0436a769e80b4427bb2e920b78098a8656485f4686fa73cc357578c7284f85c"
+        }
+      ],
+      "audits": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-branches-debug-audit-root-r50-r2/AUDIT.json",
+          "bytes": 69873,
+          "sha256": "f73dfbcb47eed457ce237edcffee393e953f0ebcf612e70e72df2e7364f69821"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-branches-release-audit-root-r50-r1/AUDIT.json",
+          "bytes": 47510,
+          "sha256": "372422b44a93382322f4630f2f0d3b562b51ca0dac275a4438909426445a6f9f"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/bindings-branches-first-failure-audit-root-r50-r1/AUDIT.json",
+          "bytes": 2145,
+          "sha256": "311e62a2d62e7d198602782bd1f62079a486f1ce81372e3dc32048bc4f413668"
+        }
+      ],
+      "files": [
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/src/semantic_operand_retained_storage_v1.rs",
+          "bytes": 2674,
+          "sha256": "ef42666f8057281ccdf0ad0a7f86eea7e18d9ec8a928846264be794d041cb4aa"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/tests/semantic_operand_retained_storage_api_v1.rs",
+          "bytes": 3919,
+          "sha256": "e2409e0dc92452666296d7c5f3596af9ff35a10bcb24e448fddd8b6b217b71d0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/workgroup_scope_retained_storage_v29.rs",
+          "bytes": 3881,
+          "sha256": "6d5bbdee4eb9357e307dcbf402d2af18680688ade175a9ee5103b55a584237ec"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/kernel_context_retained_storage_v29.rs",
+          "bytes": 6966,
+          "sha256": "e8ba4d0a4f2b14adf81569e9962ffa5184d7ab943d5847d5b80bb13b3f72f377"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_bindings_context_retained_storage_v1.rs",
+          "bytes": 1573,
+          "sha256": "96b7e9a060b008902338cbff81990c20a6d413a270f10efbe8e4d412c4d7b54e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/kernel_context_custody_v29_tests/retained_storage_tests.rs",
+          "bytes": 6361,
+          "sha256": "a9cf5cc97bc7f9aa2e3c59f66a854af0b0c36178696949e0e1a0a545f9b8fd22"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-mir-model/src/semantic_mir_v1.rs",
+          "bytes": 808973,
+          "sha256": "699547e7a219a6aa7fcb2b0466595a3a7094da6a857fba358662e7c9a9e8c025"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/kernel_context_custody_v29.rs",
+          "bytes": 21531,
+          "sha256": "fe53311a38db3f573caa79a12f5750e46381b648f229448432dafd1dc5a71b4e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/workgroup_scope_custody_v29.rs",
+          "bytes": 12245,
+          "sha256": "78a5f3125dd78489a8db6b2e0f7dd60b83d0c247c1adab821504a96c01deb0da"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_pipeline.rs",
+          "bytes": 208379,
+          "sha256": "f39974cb0feff38d6fd64352e89721ae5b3c7e851a52b3eac42444e8a7f15985"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/kernel_context_custody_v29_tests.rs",
+          "bytes": 33230,
+          "sha256": "a124c106aca6cdbce540b7f47a7d8c0f5a72ffd5d19ea1f1ac703d9ac119bdc1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-artifacts/src/rust_layout_retained_storage_v1.rs",
+          "bytes": 1538,
+          "sha256": "52ee6c6db9e43741d462c9e94190be78d87ba4ca3db0fbcf7cfd1a254b1cb4a1"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-artifacts/src/launch_retained_storage_v1.rs",
+          "bytes": 1162,
+          "sha256": "1a5b1648b41197a619680175552140111445ca0e3e471f9c7fabed7400313341"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-artifacts/tests/typed_retained_storage_v1.rs",
+          "bytes": 2801,
+          "sha256": "0eb09b1befe2940af40b10fbb009b557fc60c0d7b3fa37aaedf26163db9cd6da"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector/typed_argument_retained_storage_v1.rs",
+          "bytes": 4693,
+          "sha256": "e8c7eee9fe2babd1bb8286540f4cbf234f8e1e9915639406a9c0afbafc4a08ea"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/compiler_descriptor_retained_storage_v1.rs",
+          "bytes": 3632,
+          "sha256": "d6f51ece02a3e7f2f37f62b7b10de4ec58484619be178c775f7b866b1b086002"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_bindings_typed_descriptor_retained_storage_v1.rs",
+          "bytes": 1749,
+          "sha256": "842112f199607ed287a3094fc5af3262ca6179a62e98366793a8a0adba881850"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/compiler_descriptor_retained_storage_v1_tests.rs",
+          "bytes": 8747,
+          "sha256": "0120a2995b29a392ab2112c29fd15ad7e32b2752b6c41c12c3319457afef086c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-artifacts/src/rust_layout.rs",
+          "bytes": 29230,
+          "sha256": "afe0de5e8ca8b0dcd6680d3c0a443f70a4f234c87e7d8cb4a06fdd1a1f19ef3c"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-artifacts/src/identities.rs",
+          "bytes": 9685,
+          "sha256": "90919903815e6ccc3253a53021d3776630578a9c5549e63980138a794a697126"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/collector.rs",
+          "bytes": 177131,
+          "sha256": "2c0fb35711bfc704f7f2cbe26dc7736c25cff46f52f0ac25c0fe268e02919a4e"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/compiler_descriptor.rs",
+          "bytes": 131373,
+          "sha256": "da45a99ccc57b984050cb8aaecd5c2bde5b2481b55d130cfe80c4822ba4d5971"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/portable_reference_v1/signature_retained_storage_v1.rs",
+          "bytes": 1542,
+          "sha256": "cc3901d50d66052ab4aa7a6bfe7c94cdd4adab325a274e44cbf6b945fde18db2"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/portable_reference_v1/retained_storage_v1.rs",
+          "bytes": 14115,
+          "sha256": "23b792baaf3f6edb683e80a0dadb4fda24aa3261164c1b5beb24a88da4ccd487"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/tests/portable_reference_retained_storage_v1.rs",
+          "bytes": 20545,
+          "sha256": "976b531660db91e31f8cc22df8732de14e10b25a101ce0e7f7ddba47dc5efd47"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/reference_effect_retained_storage_v1.rs",
+          "bytes": 3044,
+          "sha256": "2ac464de6f0aef539e170d3939d7aa5a35ff6022b27fc55e72f86c19ea8411bf"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/reference_effect_retained_storage_v1_tests.rs",
+          "bytes": 5508,
+          "sha256": "b218d2970ae8adf175ad90f763d7ff3ef7db8e73b039bf7ad59bf9824b7a2ae9"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/production_bindings_reference_retained_storage_v1.rs",
+          "bytes": 1618,
+          "sha256": "84a62d8aa010055d3c38f0d4481c3c3a532d899c80f0a3d337296f0765eea857"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/portable_reference_v1/signature.rs",
+          "bytes": 13143,
+          "sha256": "0f001031c27f69a18d3a5431c4839fde6159df44e55028e36d85669c75c6b5d0"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/fe2o3-verifier/src/portable_reference_v1.rs",
+          "bytes": 1126,
+          "sha256": "eb57acd713452b48bedea626053670d61f0ca8ef5b8d61e4d7b6beebc3dec269"
+        },
+        {
+          "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/candidates/milestones-phase40/crates/rustc-codegen-fe2o3/src/reference_effect_v1.rs",
+          "bytes": 145226,
+          "sha256": "296dada75434e00413aabbad07739d8e55ca980bd8fe2a420b4536e02606a69c"
+        }
+      ],
+      "note": "Context, typed descriptor and reference components. Authenticated wrapper signatures are checked, but synthetic owner controls are not genuine frontend checkpoints."
+    }
+  ],
+  "allocation_routing_inspection": {
+    "audit": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-allocator-routing-feasibility-audit-r49-r1/AUDIT.json",
+      "bytes": 8875,
+      "sha256": "801e9cf5e4ecb4368ccdbf6ff32cf6e6c4a6315c52c0257d4ba2837bb00b1cf4"
+    },
+    "independent_review": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-allocator-routing-independent-r49-r1/REVIEW.json",
+      "bytes": 8072,
+      "sha256": "cab1ba5d9062bc05bd4c0e442430997f2e7470025405c5479598a8030eac9d24"
+    },
+    "elf": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-allocator-elf-inspection-root-r49-r1/INSPECTION.json",
+      "bytes": 12465,
+      "sha256": "c8dc15fa8fa1a915e35b8141784829dc26d47f337a1bfaf6e4929b029f941d1e"
+    },
+    "disassembly": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/recipe-allocator-shim-disassembly-root-r49-r1/INSPECTION.json",
+      "bytes": 6871,
+      "sha256": "4ffb4ac40c06a57fe70ae30db99c67fa2c6deeedc1afcee4e6371d86097f1560"
+    },
+    "claim": "Pinned-driver GLOBAL PROTECTED Rust allocator shims defeat an assumption that an executable-only GlobalAlloc hook observes every driver allocation. This is static routing evidence, not runtime allocation measurement."
+  },
+  "limitations": [
+    "Logical retained component payloads, not allocator metadata, temporary scratch, peak heap, RSS or total action storage",
+    "Tests are CPU validation; no native launch or performance campaign",
+    "Independent owners remain distinct; compose with one bounded counter and discard incomplete observations",
+    "Default and explicit pliron test invocations both unify the dev dependency; no-default-features library check was separate",
+    "Historical source-replay and const timing samples were not rerun on these commits",
+    "Complete bindings/action composition and the 128 MiB action requirement remain unqualified; these visitors do not establish whole-action storage.",
+    "The first parallel verifier run for context/typed/reference returned EAGAIN in an unchanged SCM_RIGHTS test. Isolated and complete serial reruns passed; the failure remains retained and its root cause is not proven."
+  ],
+  "accepted_milestones": [
+    "M1",
+    "V1",
+    "V2",
+    "U1",
+    "U2",
+    "U3"
+  ],
+  "milestones_closed": []
+}

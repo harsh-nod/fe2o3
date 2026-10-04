@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-ATOMIC-002]
+// CHECK: system scope requires authenticated coherent-allocation provenance
+// ATOMIC-CAPABILITY: 32 Global System
+builtin.func @atomic_system_coherence: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,true,[1]>)>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind AtomicRead, kernel_atomic_ordering: kernel.atomic_ordering SequentiallyConsistent, kernel_atomic_scope: kernel.atomic_scope System]: <(kernel.ranked_view <32,true,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

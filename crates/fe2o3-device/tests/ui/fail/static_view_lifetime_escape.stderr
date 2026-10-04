@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/static_view_lifetime_escape.rs:4:5
+  |
+3 | fn escape(parent: &[u32]) -> StaticView<'static, u32, 4> {
+  |                   - let's call the lifetime of this reference `'1`
+4 |     StaticView::from_shared_slice(parent, 0).unwrap()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

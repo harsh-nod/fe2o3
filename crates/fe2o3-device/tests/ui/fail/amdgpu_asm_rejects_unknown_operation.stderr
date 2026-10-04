@@ -1,0 +1,7 @@
+error: unsupported amdgpu_asm! operation; use the typed gfx942 V1 allowlist
+ --> tests/ui/fail/amdgpu_asm_rejects_unknown_operation.rs:4:13
+  |
+4 |     let _ = amdgpu_asm!(global_load_dword(0u32));
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `amdgpu_asm` (in Nightly builds, run with -Z macro-backtrace for more info)

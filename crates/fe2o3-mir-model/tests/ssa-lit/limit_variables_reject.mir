@@ -1,0 +1,8 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA planner requires 1 variables, exceeding the limit 0
+
+entry b0
+variables v0
+limits variables=0
+block b0

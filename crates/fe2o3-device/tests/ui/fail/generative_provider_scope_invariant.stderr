@@ -1,0 +1,62 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/generative_provider_scope_invariant.rs:4:5
+  |
+3 | fn context<'short, 'long: 'short>(value: KernelContext<'long>) -> KernelContext<'short> {
+  |            ------  ----- lifetime `'long` defined here
+  |            |
+  |            lifetime `'short` defined here
+4 |     value
+  |     ^^^^^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+  |
+  = help: consider adding the following bound: `'short: 'long`
+  = note: requirement occurs because of the type `KernelContext<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `KernelContext<'kernel, Kernel, Target, Launch>` is invariant over the parameter `'kernel`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/generative_provider_scope_invariant.rs:10:5
+   |
+ 7 | fn workgroup<'short, 'long: 'short>(
+   |              ------  ----- lifetime `'long` defined here
+   |              |
+   |              lifetime `'short` defined here
+...
+10 |     value
+   |     ^^^^^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+   |
+   = help: consider adding the following bound: `'short: 'long`
+   = note: requirement occurs because of the type `WorkgroupCapability<'_, ()>`, which makes the generic argument `'_` invariant
+   = note: the struct `WorkgroupCapability<'workgroup, KernelBrand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/generative_provider_scope_invariant.rs:16:5
+   |
+13 | fn tile<'short, 'long: 'short>(
+   |         ------  ----- lifetime `'long` defined here
+   |         |
+   |         lifetime `'short` defined here
+...
+16 |     value
+   |     ^^^^^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+   |
+   = help: consider adding the following bound: `'short: 'long`
+   = note: requirement occurs because of the type `MaskedTile1D<'_, u32, 1, 1, ()>`, which makes the generic argument `'_` invariant
+   = note: the struct `MaskedTile1D<'workgroup, T, L, E, Brand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/generative_provider_scope_invariant.rs:22:5
+   |
+19 | fn fragment<'short, 'long: 'short>(
+   |             ------  ----- lifetime `'long` defined here
+   |             |
+   |             lifetime `'short` defined here
+...
+22 |     value
+   |     ^^^^^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+   |
+   = help: consider adding the following bound: `'short: 'long`
+   = note: requirement occurs because of the type `LaneFragment<'_, u32, 1, 1, ()>`, which makes the generic argument `'_` invariant
+   = note: the struct `LaneFragment<'workgroup, T, L, E, Brand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

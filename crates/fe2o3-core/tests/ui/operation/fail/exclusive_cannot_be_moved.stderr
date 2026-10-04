@@ -1,0 +1,16 @@
+error[E0505]: cannot move out of `output` because it is borrowed
+ --> tests/ui/operation/fail/exclusive_cannot_be_moved.rs:9:13
+  |
+3 | fn rejected(stream: &Stream, mut output: DeviceBuffer<u32>) -> Result<()> {
+  |                              ---------- binding `output` declared here
+4 |     unsafe {
+5 |         BorrowedDeviceOperation::run_scoped_unchecked(
+  |         --------------------------------------------- borrow later used by call
+6 |             stream,
+7 |             &mut output,
+  |             ----------- borrow of `output` occurs here
+8 |             |_| Ok(()),
+9 |             |_| drop(output),
+  |             ^^^      ------ move occurs due to use in closure
+  |             |
+  |             move out of `output` occurs here

@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `ReviewedHsaKernelSetV1<'executable, 2>: Clone` is not satisfied
+ --> tests/ui/authority/kernel_set_cannot_clone.rs:6:21
+  |
+6 |     require_clone::<ReviewedHsaKernelSetV1<'executable, 2>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ReviewedHsaKernelSetV1<'executable, 2>`
+  |
+note: required by a bound in `require_clone`
+ --> tests/ui/authority/kernel_set_cannot_clone.rs:3:21
+  |
+3 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`

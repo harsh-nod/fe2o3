@@ -1,0 +1,34 @@
+{
+  "schema": "fe2o3-rocgdb-one-stop-disabled-history-v1",
+  "scope": "Historical private R4 static build, not a build or test of this package layout",
+  "upstream": {
+    "repository": "https://github.com/ROCm/ROCgdb",
+    "commit": "48b1d324e389d2ed5e19822d377ff9050770233d"
+  },
+  "static_build": {
+    "path": "phase28-one-stop-adapter-build-r4/receipts/build.json",
+    "bytes": 5467,
+    "sha256": "88ecbfb2ebf34779d5fbf86f53504a6c7a97f54033f4cafc599fa35fe05491e4"
+  },
+  "outer_static_build": {
+    "path": "logs/phase28-resume-r13-compiler-one-stop-adapter-build-r4/receipt.json",
+    "bytes": 195746,
+    "sha256": "23dd98207f1bfad4ba10f4da9b966f332e5d67a84c3cc3e9c58e814a58b6251a"
+  },
+  "placement_predecessor": {
+    "path": "logs/phase28-resume-r13-compiler-one-stop-adapter-placement-r3/receipt.json",
+    "bytes": 146540,
+    "sha256": "41c1359f7885f30e74bc6cd31486d4e3fbed13d4ec0a81d1a4b606176cb820eb"
+  },
+  "binary": {
+    "path": "phase28-one-stop-adapter-build-r4/build/gdb/gdb",
+    "bytes": 199308360,
+    "sha256": "8127e80df626be048c1952bb97988831ebdea05f729ad63da5ae8a7a83f2ae75"
+  },
+  "activation_available": false,
+  "built_debugger_executed": false,
+  "target_executed": false,
+  "installed": false,
+  "native_qualified": false,
+  "package_controls_run": false
+}

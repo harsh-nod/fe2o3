@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `WaveLane::<Width>::from_raw` is unsafe and requires unsafe block
+ --> tests/ui/fail/wave_lane_safe_forgery.rs:4:13
+  |
+4 |     let _ = WaveLane::<Wave32>::from_raw(0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

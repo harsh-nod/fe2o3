@@ -1,0 +1,4 @@
+{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-characteristic-request-v1","request_id":1}
+{"operation":"query_targets","schema":"fe2o3-agent-source-isa-characteristic-request-v1","request_id":2,"collection_identity":"5595821cf85ebc8cb5018f68a7ac07e938af0b4ed424e9f4039201581db23a7c","query":{"selector":"all"},"cursor":null,"limit":64}
+{"operation":"query_facts","schema":"fe2o3-agent-source-isa-characteristic-request-v1","request_id":3,"collection_identity":"5595821cf85ebc8cb5018f68a7ac07e938af0b4ed424e9f4039201581db23a7c","query":{"selector":"all"},"cursor":null,"limit":64}
+{"operation":"query_intervals","schema":"fe2o3-agent-source-isa-characteristic-request-v1","request_id":4,"collection_identity":"5595821cf85ebc8cb5018f68a7ac07e938af0b4ed424e9f4039201581db23a7c","occurrence_identity":"d000c249aa034c3b7e13d51e7f63e52d12c6510329c8ee916426e19d89bb57c0","cursor":null,"limit":64}

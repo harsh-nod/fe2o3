@@ -1,0 +1,23 @@
+error[E0599]: no method named `into_raw` found for struct `AuthenticatedServiceQueueHostDataUpdateV1` in the current scope
+ --> tests/ui/authenticated_service_queue/authenticated_data_updates_have_no_raw_escape.rs:7:23
+  |
+7 |     let _raw = update.into_raw();
+  |                       ^^^^^^^^
+  |
+help: there is a method `into` with a similar name
+  |
+7 -     let _raw = update.into_raw();
+7 +     let _raw = update.into();
+  |
+
+error[E0599]: no method named `into_raw` found for struct `AuthenticatedServiceQueuePartitionedDataUpdateV1<R, N>` in the current scope
+  --> tests/ui/authenticated_service_queue/authenticated_data_updates_have_no_raw_escape.rs:13:23
+   |
+13 |     let _raw = update.into_raw();
+   |                       ^^^^^^^^
+   |
+help: there is a method `into` with a similar name
+   |
+13 -     let _raw = update.into_raw();
+13 +     let _raw = update.into();
+   |

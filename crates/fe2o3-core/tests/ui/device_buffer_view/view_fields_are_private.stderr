@@ -1,0 +1,13 @@
+error: cannot construct `DeviceBufferView<'_, _>` with struct literal syntax due to private fields
+ --> tests/ui/device_buffer_view/view_fields_are_private.rs:4:5
+  |
+4 |     DeviceBufferView {
+  |     ^^^^^^^^^^^^^^^^
+5 |         buffer,
+  |         ------ private field
+6 |         ptr: core::ptr::null_mut(),
+  |         -------------------------- private field
+7 |         len: 0,
+  |         ------ private field
+  |
+  = note: ...and other private fields `byte_start` and `byte_end` that were not provided

@@ -1,0 +1,16 @@
+error[E0061]: this method takes 0 arguments but 1 argument was supplied
+ --> tests/ui/cooperative_peer/peer_direction_cannot_be_substituted.rs:5:24
+  |
+5 |     let _ = capability.enable(other_destination);
+  |                        ^^^^^^ ----------------- unexpected argument of type `&Arc<GpuContext>`
+  |
+note: method defined here
+ --> src/peer_access.rs
+  |
+  |     pub fn enable(self) -> std::result::Result<PeerAccess, PeerAccessEnableError> {
+  |            ^^^^^^
+help: remove the extra argument
+  |
+5 -     let _ = capability.enable(other_destination);
+5 +     let _ = capability.enable();
+  |

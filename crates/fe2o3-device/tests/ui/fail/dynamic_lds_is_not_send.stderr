@@ -1,0 +1,40 @@
+error[E0277]: `NonNull<MaybeUninit<u32>>` cannot be sent between threads safely
+ --> tests/ui/fail/dynamic_lds_is_not_send.rs:6:19
+  |
+6 |     assert_send::<DynamicLds<'static, u32>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<MaybeUninit<u32>>` cannot be sent between threads safely
+  |
+  = help: within `DynamicLds<'static, u32>`, the trait `Send` is not implemented for `NonNull<MaybeUninit<u32>>`
+note: required because it appears within the type `DynamicLds<'static, u32>`
+ --> src/lds.rs
+  |
+  | pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
+  |            ^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/fail/dynamic_lds_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+ --> tests/ui/fail/dynamic_lds_is_not_send.rs:6:19
+  |
+6 |     assert_send::<DynamicLds<'static, u32>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+  |
+  = help: within `DynamicLds<'static, u32>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `DynamicLds<'static, u32>`
+ --> src/lds.rs
+  |
+  | pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
+  |            ^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/fail/dynamic_lds_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`

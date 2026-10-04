@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/ui/worker_v3_verification_admission/roster_finalizer_cannot_escape.rs:7:5
+  |
+5 |     decision: &WorkerV3RosterVerificationDecisionV1,
+  |               - let's call the lifetime of this reference `'1`
+6 | ) -> &'static RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+7 |     decision.finalizer_derivation()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

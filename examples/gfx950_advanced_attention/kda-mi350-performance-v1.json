@@ -1,0 +1,539 @@
+{
+  "ablations": {
+    "decode_explicit_key_reuse": {
+      "bootstrap_95_ci_speedup": [
+        1.168,
+        1.2695652173913043
+      ],
+      "median_latency_reduction_percent": 19.17808219178082,
+      "median_paired_speedup": 1.2372881355932204,
+      "paired_process_speedups": [
+        1.2372881355932204,
+        1.2695652173913043,
+        1.168,
+        1.2372881355932204,
+        1.2203389830508475
+      ]
+    },
+    "negative_and_inapplicable": {
+      "lds_multibuffering": {
+        "contribution_percent": 0.0,
+        "interpretation": "the matrix state is register resident and there is no streamed K tile to stage; LDS would add barriers and reloads",
+        "status": "not-applicable"
+      },
+      "subgroup_load_coalescing": {
+        "contribution_percent": null,
+        "interpretation": "conditional producer lanes before subgroup broadcasts were not proven convergent",
+        "status": "compiler-rejected"
+      },
+      "workgroup_128_pair_tile": {
+        "contribution_percent": null,
+        "interpretation": "the verifier could not prove convergence around the early-exit reduction",
+        "status": "compiler-rejected"
+      },
+      "workgroup_64_four_columns_per_lane": {
+        "decode_hsaco_sha256": "de74f1be03cee6d88e08c8c15d6db54f2aea6fa3392a8442b15a6d216a09d5f2",
+        "decode_median_ns": 6160.0,
+        "decode_raw_sha256": "37e86e7d836ee94a4fd247513a03b12a217ec0e3417d9f6fbdcc4c4110fc5b47",
+        "decode_regression_vs_final_percent": 30.508474576271194,
+        "interpretation": "column coarsening increased live state and serialized the Wave16 reduction",
+        "prefill_hsaco_sha256": "42842b56e5bb75cc107406d4e7a49e2bb4d5a550c002295ecbc7d28cefdfe918",
+        "prefill_median_ns": 13160.0,
+        "prefill_raw_sha256": "4f7f8024523725262e06d225d4704b56aeab2d2354a97078b94377d14b4163d7",
+        "prefill_regression_vs_final_percent": 15.438596491228074,
+        "protocol": "single process using the same 1,000-warmup, 3,000-dispatch sampling shape",
+        "status": "correctness-passed, performance-rejected"
+      }
+    },
+    "prefill_c4_wy_ut": {
+      "bootstrap_95_ci_speedup": [
+        1.301038062283737,
+        1.3298245614035087
+      ],
+      "median_latency_reduction_percent": 24.40318302387268,
+      "median_paired_speedup": 1.3228070175438595,
+      "paired_process_speedups": [
+        1.301038062283737,
+        1.3228070175438595,
+        1.3298245614035087,
+        1.3263157894736841,
+        1.3030223848096856
+      ]
+    }
+  },
+  "comparisons": {
+    "claim_boundary": "fastest measured eligible implementation for this exact shape and semantics; not a universal KDA SOTA claim",
+    "decode_fe2o3_over_fla_speedup": 8.335876010232052,
+    "prefill_fe2o3_over_fla_speedup": 3.4309412303723787
+  },
+  "fe2o3": {
+    "decode_baseline": {
+      "bootstrap_95_ci_ns": [
+        5760.0,
+        5840.0
+      ],
+      "median_of_process_medians_ns": 5840.0,
+      "process_median_range_ns": [
+        5760.0,
+        5840.0
+      ],
+      "process_medians_ns": [
+        5840.0,
+        5840.0,
+        5840.0,
+        5840.0,
+        5760.0
+      ],
+      "raw_manifest": [
+        {
+          "file": "decode-duplicate-key-read-p0.jsonl",
+          "max_ns": 9640.0,
+          "median_ns": 5840.0,
+          "min_ns": 5760.0,
+          "records": 3000,
+          "sha256": "88921cfae992deb737fb96cfc4c49c80ec6788368812c84605a2a3b1305dcda4"
+        },
+        {
+          "file": "decode-duplicate-key-read-p1.jsonl",
+          "max_ns": 9440.0,
+          "median_ns": 5840.0,
+          "min_ns": 5760.0,
+          "records": 3000,
+          "sha256": "be1ec4b5ae1b38ef0e4ebb31669d9fa4b9f384adfec591802fc3b400f3d2fd94"
+        },
+        {
+          "file": "decode-duplicate-key-read-p2.jsonl",
+          "max_ns": 9440.0,
+          "median_ns": 5840.0,
+          "min_ns": 5800.0,
+          "records": 3000,
+          "sha256": "ece209cc864813d439490ca1a098c5f4d6eec6ff260854a57ec0f52d0eb956e8"
+        },
+        {
+          "file": "decode-duplicate-key-read-p3.jsonl",
+          "max_ns": 8760.0,
+          "median_ns": 5840.0,
+          "min_ns": 5800.0,
+          "records": 3000,
+          "sha256": "c60bf68c285bfb895198e177983c23bdbd838e3317b10c7db5ff0e6552725d8a"
+        },
+        {
+          "file": "decode-duplicate-key-read-p4.jsonl",
+          "max_ns": 10560.0,
+          "median_ns": 5760.0,
+          "min_ns": 5680.0,
+          "records": 3000,
+          "sha256": "bc6e0097d12deb63c6675d7d56760e6d8361c58e187ea275f684f0ed4b52a2e0"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.advanced-dispatch-sample.v1"
+      ]
+    },
+    "decode_final": {
+      "bootstrap_95_ci_ns": [
+        4600.0,
+        5000.0
+      ],
+      "median_of_process_medians_ns": 4720.0,
+      "process_median_range_ns": [
+        4600.0,
+        5000.0
+      ],
+      "process_medians_ns": [
+        4720.0,
+        4600.0,
+        5000.0,
+        4720.0,
+        4720.0
+      ],
+      "raw_manifest": [
+        {
+          "file": "decode-explicit-key-reuse-p0.jsonl",
+          "max_ns": 8560.0,
+          "median_ns": 4720.0,
+          "min_ns": 4600.0,
+          "records": 3000,
+          "sha256": "8a86a91a3c938870b66e10536ef592b7b8b0573dfe2cfabba4003afd542e2ecc"
+        },
+        {
+          "file": "decode-explicit-key-reuse-p1.jsonl",
+          "max_ns": 9600.0,
+          "median_ns": 4600.0,
+          "min_ns": 4520.0,
+          "records": 3000,
+          "sha256": "352d96b79f3790bdd84f53aad7f03581e98c56b4c190880d8345885e705ea4d9"
+        },
+        {
+          "file": "decode-explicit-key-reuse-p2.jsonl",
+          "max_ns": 10640.0,
+          "median_ns": 5000.0,
+          "min_ns": 4560.0,
+          "records": 3000,
+          "sha256": "e28c3ecbb23302eea93fa9723999c15df6b8f1cac23e387f7ca1e56940fb82aa"
+        },
+        {
+          "file": "decode-explicit-key-reuse-p3.jsonl",
+          "max_ns": 9120.0,
+          "median_ns": 4720.0,
+          "min_ns": 4640.0,
+          "records": 3000,
+          "sha256": "8036449e08bd5f09aae900e608e6291fe6b4d4ea4e408f68401a3dae0eae05f8"
+        },
+        {
+          "file": "decode-explicit-key-reuse-p4.jsonl",
+          "max_ns": 9520.0,
+          "median_ns": 4720.0,
+          "min_ns": 4680.0,
+          "records": 3000,
+          "sha256": "89a89369ffc00d3b6e94fd3fb80d53f65c3844830b278ed37741b1742bdbef36"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.advanced-dispatch-sample.v1"
+      ]
+    },
+    "prefill_baseline": {
+      "bootstrap_95_ci_ns": [
+        14960.0,
+        15160.0
+      ],
+      "median_of_process_medians_ns": 15080.0,
+      "process_median_range_ns": [
+        14960.0,
+        15160.0
+      ],
+      "process_medians_ns": [
+        15040.0,
+        15080.0,
+        15160.0,
+        15120.0,
+        14960.0
+      ],
+      "raw_manifest": [
+        {
+          "file": "prefill-sequential-recurrence-p0.jsonl",
+          "max_ns": 43800.0,
+          "median_ns": 15040.0,
+          "min_ns": 14880.0,
+          "records": 3000,
+          "sha256": "2215175c92f30c4a6e3804eae6fde7874b640130be2d840bffe0b1dd558522b2"
+        },
+        {
+          "file": "prefill-sequential-recurrence-p1.jsonl",
+          "max_ns": 42080.0,
+          "median_ns": 15080.0,
+          "min_ns": 14921.0,
+          "records": 3000,
+          "sha256": "8381a4abbb11d3ecd79b68fb267515e590541d96f46594157415840f0165f1be"
+        },
+        {
+          "file": "prefill-sequential-recurrence-p2.jsonl",
+          "max_ns": 23040.0,
+          "median_ns": 15160.0,
+          "min_ns": 15000.0,
+          "records": 3000,
+          "sha256": "a9ac16e59b4035248f32b2eb0e0e88b1bb7a1ef59fc1d237a2f45394649e8646"
+        },
+        {
+          "file": "prefill-sequential-recurrence-p3.jsonl",
+          "max_ns": 15320.0,
+          "median_ns": 15120.0,
+          "min_ns": 15000.0,
+          "records": 3000,
+          "sha256": "3cc36d992011534bd47c59d0fefdb99c91a800eb315231a8e9996a323ef27f2e"
+        },
+        {
+          "file": "prefill-sequential-recurrence-p4.jsonl",
+          "max_ns": 42360.0,
+          "median_ns": 14960.0,
+          "min_ns": 14760.0,
+          "records": 3000,
+          "sha256": "e07b0caf19381f386b0adfcdf97681ba028adcfd61927649746c7d8579843432"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.advanced-dispatch-sample.v1"
+      ]
+    },
+    "prefill_final": {
+      "bootstrap_95_ci_ns": [
+        11400.0,
+        11560.0
+      ],
+      "median_of_process_medians_ns": 11400.0,
+      "process_median_range_ns": [
+        11400.0,
+        11560.0
+      ],
+      "process_medians_ns": [
+        11560.0,
+        11400.0,
+        11400.0,
+        11400.0,
+        11481.0
+      ],
+      "raw_manifest": [
+        {
+          "file": "prefill-c4-wy-ut-p0.jsonl",
+          "max_ns": 11800.0,
+          "median_ns": 11560.0,
+          "min_ns": 11400.0,
+          "records": 3000,
+          "sha256": "7b7ca899e4bbae3d4050e5b4cf409da41400065d36b0516aefe0c9aa8b9ca961"
+        },
+        {
+          "file": "prefill-c4-wy-ut-p1.jsonl",
+          "max_ns": 11560.0,
+          "median_ns": 11400.0,
+          "min_ns": 11200.0,
+          "records": 3000,
+          "sha256": "0973d76ba95d7e13dd764617fd856f0abfa670292b6ff2b67230fdbc8fd51f00"
+        },
+        {
+          "file": "prefill-c4-wy-ut-p2.jsonl",
+          "max_ns": 11680.0,
+          "median_ns": 11400.0,
+          "min_ns": 11240.0,
+          "records": 3000,
+          "sha256": "b0fd9ff3ffa10006cf6cd5784ec3e966ac98be582a5620c4e9b339e669e4bfd0"
+        },
+        {
+          "file": "prefill-c4-wy-ut-p3.jsonl",
+          "max_ns": 11640.0,
+          "median_ns": 11400.0,
+          "min_ns": 11240.0,
+          "records": 3000,
+          "sha256": "a8a4f0506ca31bfb46ea3d947ff1d9136e1213cbb7e2551390ffc3dbe78877c7"
+        },
+        {
+          "file": "prefill-c4-wy-ut-p4.jsonl",
+          "max_ns": 11720.0,
+          "median_ns": 11481.0,
+          "min_ns": 11280.0,
+          "records": 3000,
+          "sha256": "90317fa070eda5c33fea206fdb32bcac96a2ef73ca625c366f94cb9d81a219f5"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.advanced-dispatch-sample.v1"
+      ]
+    }
+  },
+  "fla": {
+    "decode": {
+      "bootstrap_95_ci_ns": [
+        39207.329750061035,
+        39824.53465461731
+      ],
+      "median_of_process_medians_ns": 39345.33476829529,
+      "process_median_range_ns": [
+        39207.329750061035,
+        39824.53465461731
+      ],
+      "process_medians_ns": [
+        39824.53465461731,
+        39620.74041366577,
+        39338.139295578,
+        39207.329750061035,
+        39345.33476829529
+      ],
+      "raw_manifest": [
+        {
+          "file": "fla-t1-p0.jsonl",
+          "max_ns": 45292.94967651367,
+          "median_ns": 39824.53465461731,
+          "min_ns": 39206.929206848145,
+          "records": 30,
+          "sha256": "254f45b38a8c465fa22a004b821781fdd05f336f06009fdba79aea6721b204cb"
+        },
+        {
+          "file": "fla-t1-p1.jsonl",
+          "max_ns": 52982.96928405762,
+          "median_ns": 39620.74041366577,
+          "min_ns": 38805.739879608154,
+          "records": 30,
+          "sha256": "8813465fa09992dc83b2a9f8dc548d168dd179634548555e7b83d42e65f5ee06"
+        },
+        {
+          "file": "fla-t1-p2.jsonl",
+          "max_ns": 43972.94998168945,
+          "median_ns": 39338.139295578,
+          "min_ns": 38255.72967529297,
+          "records": 30,
+          "sha256": "334bdbc7653dffe4b7acca9bb5dc7aa17b31ff7e61f6eaeb9b7a6ec129188856"
+        },
+        {
+          "file": "fla-t1-p3.jsonl",
+          "max_ns": 44182.538986206055,
+          "median_ns": 39207.329750061035,
+          "min_ns": 38473.73008728027,
+          "records": 30,
+          "sha256": "97af50e0c28b798548aa1e4169ab9aa908b052233af0173eee656a15579520fb"
+        },
+        {
+          "file": "fla-t1-p4.jsonl",
+          "max_ns": 44666.948318481445,
+          "median_ns": 39345.33476829529,
+          "min_ns": 38548.9296913147,
+          "records": 30,
+          "sha256": "a2a5e5dad02c22566112fa554b3fe4085f3bcd96bfba930a8fe9295e1ef14f64"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.kda-comparator-block.v1"
+      ]
+    },
+    "prefill": {
+      "bootstrap_95_ci_ns": [
+        39084.134101867676,
+        40552.93560028076
+      ],
+      "median_of_process_medians_ns": 39112.73002624512,
+      "process_median_range_ns": [
+        39084.134101867676,
+        40552.93560028076
+      ],
+      "process_medians_ns": [
+        40552.93560028076,
+        39111.329317092896,
+        39084.134101867676,
+        39142.93050765991,
+        39112.73002624512
+      ],
+      "raw_manifest": [
+        {
+          "file": "fla-t8-p0.jsonl",
+          "max_ns": 54388.980865478516,
+          "median_ns": 40552.93560028076,
+          "min_ns": 39585.7310295105,
+          "records": 30,
+          "sha256": "2685ed10f74ff2067a7d186f2a042e16770629f307d1439f1d1070cc5c2377f2"
+        },
+        {
+          "file": "fla-t8-p1.jsonl",
+          "max_ns": 44221.7493057251,
+          "median_ns": 39111.329317092896,
+          "min_ns": 38606.131076812744,
+          "records": 30,
+          "sha256": "2cedca566af60eea695c5e8f2542aeaf3fee6733d7275408cd08a0cb072b81f6"
+        },
+        {
+          "file": "fla-t8-p2.jsonl",
+          "max_ns": 64237.81871795654,
+          "median_ns": 39084.134101867676,
+          "min_ns": 38202.11887359619,
+          "records": 30,
+          "sha256": "44aad26edbbf3dfd5d25c8fad9772da0210f27c3c088e8cbc20746e25ef2333f"
+        },
+        {
+          "file": "fla-t8-p3.jsonl",
+          "max_ns": 47889.77146148682,
+          "median_ns": 39142.93050765991,
+          "min_ns": 38557.729721069336,
+          "records": 30,
+          "sha256": "4ecfc04dfc02a6a4a854c2a89006c12ab1ce6d1d7c9f77dda36a960b07762cc3"
+        },
+        {
+          "file": "fla-t8-p4.jsonl",
+          "max_ns": 44484.148025512695,
+          "median_ns": 39112.73002624512,
+          "min_ns": 38248.12889099121,
+          "records": 30,
+          "sha256": "a9d46d005dfba0fff7169f41d685afce920e2545a426bfeffd33538ef604b59c"
+        }
+      ],
+      "schemas": [
+        "fe2o3.gfx950.kda-comparator-block.v1"
+      ]
+    }
+  },
+  "isa_evidence": {
+    "decode_duplicate_key_read": {
+      "binding_sha256": "160b57240e4d405563c3dd402992eb50ac0b1192c795954e6853d2fe08b4dd09",
+      "campaign_hsaco_sha256": "63e87d54598720575e4a6734ae3ca3949e1ba97725e0a6d1b432bbd288d4ae3a",
+      "ds_bpermute_instructions": 8,
+      "global_load_instructions": 5,
+      "lds_bytes": 0,
+      "private_segment_bytes": 0,
+      "s_waitcnt_instructions": 14,
+      "sgprs": 58,
+      "vgprs": 14
+    },
+    "decode_explicit_key_reuse": {
+      "binding_sha256": "e249ff03f475aa75595229ee6a68e816a2a9ad395940c495ad874c54c0e9b0ad",
+      "campaign_hsaco_sha256": "9f65a1407247cafa26eebaa574a92037cadc4bd1f11da1c81535927fc9cafde4",
+      "ds_bpermute_instructions": 8,
+      "global_load_instructions": 5,
+      "lds_bytes": 0,
+      "private_segment_bytes": 0,
+      "s_waitcnt_instructions": 11,
+      "sgprs": 58,
+      "vgprs": 14
+    },
+    "prefill_c4_wy_ut": {
+      "binding_sha256": "673210266e41c1a545820dbc0baec859659b5c1cf4d5e3e8ac6b5e542b4028d3",
+      "campaign_hsaco_sha256": "af4b48c379010aca3b5d64761eb92058823d042a0e95b5a7ded0cc81c0ea7791",
+      "ds_bpermute_instructions": 192,
+      "global_load_instructions": 33,
+      "global_store_instructions": 3,
+      "lds_bytes": 0,
+      "private_segment_bytes": 0,
+      "s_waitcnt_instructions": 135,
+      "sgprs": 58,
+      "vgprs": 85
+    },
+    "prefill_sequential_recurrence": {
+      "binding_sha256": "083c8464c05f4af00df5503e2a5905f65e7b865610f441f9eca4a3c7e556efa6",
+      "campaign_hsaco_sha256": "7b17631b97cd431d6d3f4c12c1132ddc8acc4e2165963655992c6bde9df1018c",
+      "ds_bpermute_instructions": 64,
+      "global_load_instructions": 33,
+      "global_store_instructions": 3,
+      "lds_bytes": 0,
+      "private_segment_bytes": 0,
+      "s_waitcnt_instructions": 92,
+      "sgprs": 58,
+      "vgprs": 35
+    }
+  },
+  "protocol": {
+    "blocks": 30,
+    "bootstrap_resamples": 20000,
+    "fe2o3_timer": "ROCr HSA dispatch timestamps, one duration per dispatch",
+    "fla_timer": "torch HIP event, 100-call block average",
+    "initial_warmups": 1000,
+    "processes": 5,
+    "samples_per_block": 100,
+    "statistic": "median of five independent process medians",
+    "timer_caveat": "both are device-side timers, but their sampling granularity differs"
+  },
+  "provenance": {
+    "fe2o3_source_commit": "cf8a766fe11a53b7bfa6d5678c903e877bb95d75",
+    "fe2o3_source_tree": "b9c09ca3ae2807cecd967d89ec3e4c4ca56ee633",
+    "fla_commit": "8e84ed4a6727be082c34a3855c60623fd11411e9",
+    "fla_implementation": "fused_recurrent_kda from official main"
+  },
+  "schema": "fe2o3.gfx950.kda-mi350-performance.v1",
+  "scope": {
+    "cache_regime": "persistent allocations, repeated single-workgroup dispatch",
+    "co_resident_allocation": "foreign idle vLLM allocation observed on physical GPU 6; no compute activity observed",
+    "decode_tokens": 1,
+    "device": "AMD Instinct MI350X gfx950:xnack- physical GPU 6",
+    "prefill_tokens": 8,
+    "shape": "FP32 B=1 H=1 K=16 V=16 with initial/final matrix state"
+  },
+  "theoretical_bound": {
+    "amd_mi350x_peak_hbm_bandwidth_bytes_per_second": 8000000000000.0,
+    "amd_source": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi350x.html",
+    "decode_bound_fraction_percent": 0.008824152542372883,
+    "decode_floor_ns": 0.41650000000000004,
+    "decode_measured_over_floor": 11332.53301320528,
+    "decode_unique_compulsory_bytes": 3332,
+    "interpretation": "the floor excludes launch and instruction latency and assumes peak HBM bandwidth; one tiny head cannot saturate HBM, so dispatch and dependency latency dominate",
+    "kind": "optimistic compulsory-HBM-only latency floor",
+    "prefill_bound_fraction_percent": 0.006771929824561404,
+    "prefill_floor_ns": 0.772,
+    "prefill_measured_over_floor": 14766.839378238341,
+    "prefill_unique_compulsory_bytes": 6176
+  }
+}

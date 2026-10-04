@@ -1,0 +1,24 @@
+[
+  {
+    "path": "upstream/llvm/lib/Target/AMDGPU/FLATInstructions.td",
+    "url": "https://raw.githubusercontent.com/ROCm/llvm-project/f58b06dce1f9c15707c5f808fd002e18c2accf7e/llvm/lib/Target/AMDGPU/FLATInstructions.td",
+    "bytes": 181099,
+    "sha256": "e03a0d4f7303edf830910b19233ca4c964d850dd4cf0f13557c33fcab8fae0b1",
+    "reviewed_sections": [
+      "34-88",
+      "95-171",
+      "229-253",
+      "2635-2651",
+      "2775"
+    ]
+  },
+  {
+    "path": "upstream/llvm/test/MC/AMDGPU/gfx9_asm_flat.s",
+    "url": "https://raw.githubusercontent.com/ROCm/llvm-project/f58b06dce1f9c15707c5f808fd002e18c2accf7e/llvm/test/MC/AMDGPU/gfx9_asm_flat.s",
+    "bytes": 145869,
+    "sha256": "637ddae0432d8699ec41c4cc53cc97f481c1b4bc7d900e077d75af51ba53bc9a",
+    "reviewed_sections": [
+      "1335-1378"
+    ]
+  }
+]

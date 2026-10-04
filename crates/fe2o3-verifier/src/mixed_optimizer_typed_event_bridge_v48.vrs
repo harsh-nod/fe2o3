@@ -1,0 +1,34 @@
+// The allocation environment contains exact SSA carriers at this event. It is
+// not reconstructed from heap liveness and grants no allocation authority.
+struct TypedEventStateV48 {
+    memory: ByteMemoryV30,
+    generations: Map<MemoryPrivateSiteV30, int>,
+    frames: MemoryFrameRuntimeV30,
+    allocations: Map<MemoryPrivateSiteV30, MemoryValueV30>,
+    valid: bool,
+}
+
+struct TypedMemoryObservationV48 {
+    original: int,
+    before: TypedEventStateV48,
+    after: TypedEventStateV48,
+    effect: MemoryOperationEffectV30,
+}
+
+spec fn typed_observation_erases_pure_v48(
+    observation: MemoryOperationObservationV30,
+    before: TypedEventStateV48,
+    after: TypedEventStateV48,
+) -> bool {
+    match observation.effect {
+        MemoryOperationEffectV30::Pure => observation.before.valid
+            && observation.after.valid && before == after,
+        MemoryOperationEffectV30::Refused
+        | MemoryOperationEffectV30::Trap
+        | MemoryOperationEffectV30::Allocate { .. }
+        | MemoryOperationEffectV30::Read { .. }
+        | MemoryOperationEffectV30::Write { .. }
+        | MemoryOperationEffectV30::Copy { .. }
+        | MemoryOperationEffectV30::TagRead { .. } => false,
+    }
+}

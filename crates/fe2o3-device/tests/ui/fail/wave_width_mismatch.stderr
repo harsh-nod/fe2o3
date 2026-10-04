@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/wave_width_mismatch.rs:6:21
+  |
+6 |     requires_wave32(lane);
+  |     --------------- ^^^^ expected `WaveLane<Wave32>`, found `WaveLane<Wave64>`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected struct `WaveLane<Wave32>`
+             found struct `WaveLane<Wave64>`
+note: function defined here
+ --> tests/ui/fail/wave_width_mismatch.rs:3:4
+  |
+3 | fn requires_wave32(_: WaveLane<Wave32>) {}
+  |    ^^^^^^^^^^^^^^^ -------------------

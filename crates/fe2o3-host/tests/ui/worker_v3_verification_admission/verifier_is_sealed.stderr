@@ -1,0 +1,78 @@
+error[E0277]: the trait bound `ExternalVerifier: fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>` is not satisfied
+  --> tests/ui/worker_v3_verification_admission/verifier_is_sealed.rs:11:5
+   |
+11 | /     unsafe fn verify(
+12 | |         &mut self,
+13 | |         _request: &WorkerV3VerificationRequestV1<'_, K>,
+14 | |     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+   | |____________________________________________________________^ unsatisfied trait bound
+   |
+help: the trait `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>` is not implemented for `ExternalVerifier`
+  --> tests/ui/worker_v3_verification_admission/verifier_is_sealed.rs:6:1
+   |
+ 6 | struct ExternalVerifier;
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>`
+  --> src/worker_v3_verification_admission.rs
+   |
+   | / impl<K, B> verifier_seal::Sealed<K> for WorkerV3ProtectedVerifierAdapterV1<B>
+   | | where
+   | |     K: CompilerGeneratedKernelExpectationV1,
+   | |     B: WorkerV3ProtectedVerifierBackendV1<K>,
+   | |_____________________________________________^ `WorkerV3ProtectedVerifierAdapterV1<B>`
+...
+   | / impl<K, B, R> verifier_seal::Sealed<K> for WorkerV3RefiningProtectedVerifierAdapterV1<B, R>
+   | | where
+   | |     K: CompilerGeneratedKernelExpectationV1,
+   | |     B: WorkerV3ProtectedVerifierBackendV1<K>,
+   | |     R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+   | |_____________________________________________________^ `WorkerV3RefiningProtectedVerifierAdapterV1<B, R>`
+note: required by a bound in `WorkerV3VerifierV1`
+  --> src/worker_v3_verification_admission.rs
+   |
+   | pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
+   |                  ------------------ required by a bound in this trait
+   |     verifier_seal::Sealed<K>
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WorkerV3VerifierV1`
+   = note: `WorkerV3VerifierV1` is a "sealed trait", because to implement it you also need to implement `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             fe2o3_host::WorkerV3ProtectedVerifierAdapterV1<B>
+             fe2o3_host::WorkerV3RefiningProtectedVerifierAdapterV1<B, R>
+
+error[E0277]: the trait bound `ExternalVerifier: fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>` is not satisfied
+ --> tests/ui/worker_v3_verification_admission/verifier_is_sealed.rs:8:80
+  |
+8 | unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerifierV1<K> for ExternalVerifier {
+  |                                                                                ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>` is not implemented for `ExternalVerifier`
+ --> tests/ui/worker_v3_verification_admission/verifier_is_sealed.rs:6:1
+  |
+6 | struct ExternalVerifier;
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed<K>`
+ --> src/worker_v3_verification_admission.rs
+  |
+  | / impl<K, B> verifier_seal::Sealed<K> for WorkerV3ProtectedVerifierAdapterV1<B>
+  | | where
+  | |     K: CompilerGeneratedKernelExpectationV1,
+  | |     B: WorkerV3ProtectedVerifierBackendV1<K>,
+  | |_____________________________________________^ `WorkerV3ProtectedVerifierAdapterV1<B>`
+...
+  | / impl<K, B, R> verifier_seal::Sealed<K> for WorkerV3RefiningProtectedVerifierAdapterV1<B, R>
+  | | where
+  | |     K: CompilerGeneratedKernelExpectationV1,
+  | |     B: WorkerV3ProtectedVerifierBackendV1<K>,
+  | |     R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+  | |_____________________________________________________^ `WorkerV3RefiningProtectedVerifierAdapterV1<B, R>`
+note: required by a bound in `WorkerV3VerifierV1`
+ --> src/worker_v3_verification_admission.rs
+  |
+  | pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
+  |                  ------------------ required by a bound in this trait
+  |     verifier_seal::Sealed<K>
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WorkerV3VerifierV1`
+  = note: `WorkerV3VerifierV1` is a "sealed trait", because to implement it you also need to implement `fe2o3_host::worker_v3_verification_admission::verifier_seal::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            fe2o3_host::WorkerV3ProtectedVerifierAdapterV1<B>
+            fe2o3_host::WorkerV3RefiningProtectedVerifierAdapterV1<B, R>

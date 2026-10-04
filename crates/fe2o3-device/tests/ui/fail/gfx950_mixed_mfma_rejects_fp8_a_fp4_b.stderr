@@ -1,0 +1,25 @@
+error[E0308]: arguments to this method are incorrect
+  --> tests/ui/fail/gfx950_mixed_mfma_rejects_fp8_a_fp4_b.rs:12:20
+   |
+12 |     let _ = matrix.multiply_accumulate_fp4_fp8(lhs, rhs, accumulator);
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: expected `Gfx950Fp4E2M1`, found `Gfx950Fp8E4M3`
+  --> tests/ui/fail/gfx950_mixed_mfma_rejects_fp8_a_fp4_b.rs:12:48
+   |
+12 |     let _ = matrix.multiply_accumulate_fp4_fp8(lhs, rhs, accumulator);
+   |                                                ^^^
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp4E2M1, Gfx950MfmaOperandA>`
+              found struct `Gfx950MfmaFragment<'wave, Gfx950Fp8E4M3, Gfx950MfmaOperandA>`
+note: expected `Gfx950Fp8E4M3`, found `Gfx950Fp4E2M1`
+  --> tests/ui/fail/gfx950_mixed_mfma_rejects_fp8_a_fp4_b.rs:12:53
+   |
+12 |     let _ = matrix.multiply_accumulate_fp4_fp8(lhs, rhs, accumulator);
+   |                                                     ^^^
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp8E4M3, Gfx950MfmaOperandB>`
+              found struct `Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandB>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn multiply_accumulate_fp4_fp8<'wave>(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^

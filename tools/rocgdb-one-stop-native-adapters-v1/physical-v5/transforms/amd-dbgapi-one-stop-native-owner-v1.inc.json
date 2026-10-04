@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v5-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+  "before": {
+    "bytes": 14619,
+    "sha256": "4501c2ca022ae6baf7a274ffbdedd792598604d67eea443a9380710528882ff8"
+  },
+  "after": {
+    "bytes": 14683,
+    "sha256": "2cbbe32903de25a518c96decfe97f4efdbbbf40487f37852ffa386e74862ae60"
+  },
+  "changes": [
+    {
+      "beforeOffset": 13333,
+      "afterOffset": 13333,
+      "before": "    m_candidate.breakpoint_number=static_cast<std::uint64_t> (installed->number);\n    flush ();\n  } catch (...) { m_owner.poison (failure::owner_changed); throw; }\n}\nvoid native_adapter::check_owned_breakpoint_owner () {\n  require (m_owner.check_owner (current_identity ()),failure::owner_changed);\n}\nvoid native_adapter::check_owned_breakpoint_reset (const owned_checkpoint_breakpoint *bp) {\n  require (m_owner.selected () && bp==m_breakpoint\n           && bp->pspace==m_inferior->pspace && bp->has_single_location ()\n           && bp->first_loc ().address==m_checkpoint_pc\n           && bp->first_loc ().pspace==m_inferior->pspace\n           && bp->disposition==disp_del,failure::breakpoint_changed);\n  // Fixed address remains unchanged through the legitimate selected solib refresh.\n}\nvoid native_adapter::checkpoint_hit (owned_checkpoint_breakpoint *bp,bpstat *status) {\n  require (m_owner.selected () && bp==m_breakpoint && status!=nullptr\n           && status->breakpoint_at==bp && status->bp_location_at!=nullptr\n           && status->bp_location_at->address==m_checkpoint_pc\n           && bp->disposition==disp_del,failure::breakpoint_changed);\n  inspect_checkpoint (false);\n",
+      "after": "    m_candidate.breakpoint_number=static_cast<std::uint64_t> (installed->number);\n    flush ();\n  } catch (...) { m_owner.poison (failure::owner_changed); throw; }\n}\nvoid native_adapter::check_owned_breakpoint_owner () {\n  require (m_owner.check_owner (current_identity ()),failure::owner_changed);\n}\nvoid native_adapter::check_owned_breakpoint_reset (const owned_checkpoint_breakpoint *bp) {\n  breakpoint_check (m_owner.selected () && bp==m_breakpoint && bp!=nullptr\n                    && bp->pspace==m_inferior->pspace && bp->has_single_location ()\n                    && bp->first_loc ().address==m_checkpoint_pc\n                    && bp->first_loc ().pspace==m_inferior->pspace\n                    && bp->disposition==disp_del,bp,breakpoint_site::owned_reset);\n  // Fixed address remains unchanged through the legitimate selected solib refresh.\n}\nvoid native_adapter::checkpoint_hit (owned_checkpoint_breakpoint *bp,bpstat *status) {\n  require (m_owner.selected () && bp==m_breakpoint && status!=nullptr\n           && status->breakpoint_at==bp && status->bp_location_at!=nullptr\n           && status->bp_location_at->address==m_checkpoint_pc\n           && bp->disposition==disp_del,failure::breakpoint_changed);\n  inspect_checkpoint (false);\n"
+    }
+  ]
+}

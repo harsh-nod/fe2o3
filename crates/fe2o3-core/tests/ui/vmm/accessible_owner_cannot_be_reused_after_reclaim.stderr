@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `owner`
+ --> tests/ui/vmm/accessible_owner_cannot_be_reused_after_reclaim.rs:5:19
+  |
+3 | fn reclaim_twice(owner: VmmAccessibleAllocation) {
+  |                  ----- move occurs because `owner` has type `VmmAccessibleAllocation`, which does not implement the `Copy` trait
+4 |     let _first = owner.reclaim();
+  |                        --------- `owner` moved due to this method call
+5 |     let _second = owner.reclaim();
+  |                   ^^^^^ value used here after move
+  |
+note: `VmmAccessibleAllocation::reclaim` takes ownership of the receiver `self`, which moves `owner`
+ --> src/vmm.rs
+  |
+  |     pub fn reclaim(mut self) -> Result<VmmReclamationReceipt, VmmCleanupError> {
+  |                        ^^^^

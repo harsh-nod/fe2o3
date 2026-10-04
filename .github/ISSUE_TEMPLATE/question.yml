@@ -1,0 +1,36 @@
+name: Question or support request
+description: Ask about installation, supported workflows, or project behavior.
+title: "[Question]: "
+labels: [question]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Support is best effort. Read SUPPORT.md and remove credentials, proprietary kernels, and device identifiers before posting.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: State what you are trying to accomplish and where you are blocked.
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: fe2o3 revision
+      description: Provide the commit SHA or preview tag when the question concerns a checkout.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include relevant OS, toolchain, GPU/GFX target, commands, and redacted output.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched the documentation and existing issues.
+          required: true
+        - label: I removed sensitive and proprietary information.
+          required: true

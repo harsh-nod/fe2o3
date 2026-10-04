@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `prepared`
+  --> tests/ui/worker_v3_verification_admission/prepared_cannot_dispatch_twice.rs:14:19
+   |
+ 7 |     prepared: GeneratedWorkerV3PreparedInvocationV1<'_, '_, K, A, Arguments>,
+   |     -------- move occurs because `prepared` has type `fe2o3_host::GeneratedWorkerV3PreparedInvocationV1<'_, '_, K, A, Arguments>`, which does not implement the `Copy` trait
+...
+13 |     let _first = prepared.dispatch();
+   |                           ---------- `prepared` moved due to this method call
+14 |     let _second = prepared.dispatch();
+   |                   ^^^^^^^^ value used here after move
+   |
+note: `fe2o3_host::GeneratedWorkerV3PreparedInvocationV1::<'_, '_, K, A, Arguments>::dispatch` takes ownership of the receiver `self`, which moves `prepared`
+  --> src/generated_worker_v3_dispatch.rs
+   |
+   |         self,
+   |         ^^^^

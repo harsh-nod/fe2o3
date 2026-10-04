@@ -1,0 +1,5 @@
+error[E0599]: no method named `exact_artifact_bytes` found for reference `&RecoveredWorkerV3PinnedDescriptorV1` in the current scope
+ --> tests/ui/recovered_worker_v3_admission/exact_bytes_are_unavailable.rs:4:24
+  |
+4 |     let _bytes = value.exact_artifact_bytes();
+  |                        ^^^^^^^^^^^^^^^^^^^^ method not found in `&RecoveredWorkerV3PinnedDescriptorV1`

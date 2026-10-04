@@ -1,0 +1,15 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-RACE-002]
+// CHECK: allocation origin 77 is assigned inconsistent no-alias classes 701 and 702
+// CHECK: help[FE2O3-FIX-RACE]
+builtin.func @race_provenance_inconsistent_class: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 77, kernel_noalias_class: kernel.noalias_class 701]: <() -> (kernel.ranked_view <32,false,[1]>)>;
+    v1 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 77, kernel_noalias_class: kernel.noalias_class 702]: <() -> (kernel.ranked_view <32,false,[1]>)>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    kernel.access (v0, v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[1]>, kernel.index ) -> ()>;
+    kernel.access (v1, v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

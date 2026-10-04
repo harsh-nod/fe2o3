@@ -1,0 +1,16 @@
+fe2o3-compiler-execution-install-manifest-v3
+git_commit	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+target	x86_64-unknown-linux-musl
+entry_count	12
+file	BUILD-INFO	/usr/share/fe2o3/compiler-execution/BUILD-INFO	0444	17	0000000000000000000000000000000000000000000000000000000000000000
+file	SHA256SUMS	/usr/share/fe2o3/compiler-execution/SHA256SUMS	0444	17	0000000000000000000000000000000000000000000000000000000000000000
+file	systemd/fe2o3-compiler-execution.service	/usr/lib/systemd/system/fe2o3-compiler-execution.service	0444	17	0000000000000000000000000000000000000000000000000000000000000000
+file	sysusers.d/fe2o3-compiler-execution.conf	/usr/lib/sysusers.d/fe2o3-compiler-execution.conf	0444	17	0000000000000000000000000000000000000000000000000000000000000000
+file	tmpfiles.d/fe2o3-compiler-execution.conf	/usr/lib/tmpfiles.d/fe2o3-compiler-execution.conf	0444	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator	/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional	/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-compiler-execution-provision	/usr/libexec/fe2o3/fe2o3-compiler-execution-provision	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3	/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3	/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-external-anchor-service-v3	/usr/libexec/fe2o3/fe2o3-external-anchor-service-v3	0555	17	0000000000000000000000000000000000000000000000000000000000000000
+file	usr/libexec/fe2o3/fe2o3-static-preexec-launcher	/usr/libexec/fe2o3/fe2o3-static-preexec-launcher	0555	17	0000000000000000000000000000000000000000000000000000000000000000

@@ -1,0 +1,7 @@
+error[E0599]: no method named `multiply_accumulate` found for struct `Gfx942TiledGemmWave64V1<GemmReady>` in the current scope
+ --> tests/ui/fail/semantic_lds_read_before_initialization.rs:7:18
+  |
+7 |     let _ = wave.multiply_accumulate();
+  |                  ^^^^^^^^^^^^^^^^^^^ method not found in `Gfx942TiledGemmWave64V1<GemmReady>`
+  |
+  = note: the method was found for `Gfx942TiledGemmWave64V1<GemmPublished>`

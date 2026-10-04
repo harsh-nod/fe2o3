@@ -1,0 +1,699 @@
+use super::super::source_function::tests::with_slots;
+use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
+
+const LIMIT: usize = 256 * 1024 * 1024;
+
+fn check_trace_induction(text: &str, roots: usize) {
+    for root in 0..roots {
+        let prefix_name = format!("invocation_paired_source_defined_prefix_{root}_v79");
+        let finite_name = format!("invocation_paired_finite_trace_{root}_v36");
+        for name in [&prefix_name, &finite_name] {
+            assert_eq!(
+                text.matches(&format!("#[verifier::spinoff_prover]\nproof fn {name}("))
+                    .count(),
+                1
+            );
+        }
+        let prefix = text
+            .split_once(&format!("proof fn {prefix_name}("))
+            .unwrap()
+            .1
+            .split("proof fn")
+            .next()
+            .unwrap();
+        let finite = text
+            .split_once(&format!("proof fn {finite_name}("))
+            .unwrap()
+            .1
+            .split("proof fn")
+            .next()
+            .unwrap();
+        let premise = |theorem: &str| {
+            theorem
+                .split_once(" requires ")
+                .unwrap()
+                .1
+                .split_once(" ensures ")
+                .unwrap()
+                .0
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(
+            premise(prefix),
+            format!("invocation_paired_source_defined_{root}_v36(source, fuel), fuel > 0,")
+        );
+        assert_eq!(
+            premise(finite),
+            format!(
+                "invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, fuel),"
+            )
+        );
+        assert!(prefix.contains(&format!(
+            "reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);"
+        )));
+        assert!(finite.contains(&format!("{prefix_name}(source, fuel);")));
+        assert!(finite.contains(&format!(
+            "{finite_name}(original.state, actual.state, (fuel - 1) as nat);"
+        )));
+        assert!(finite.contains("reveal_with_fuel(cfg_trace_v26, 1);"));
+        assert!(finite.contains("if fuel == 0"));
+        assert!(finite.contains(&format!(
+            "invocation_paired_observations_related_{root}_v39(seq![], seq![])"
+        )));
+        assert!(finite.contains(&format!(
+            "invocation_paired_step_{root}_v36(source, target);"
+        )));
+        assert!(finite.contains(&format!(
+            "invocation_paired_observations_append_{root}_v39(original.events, actual.events,"
+        )));
+        for forbidden in [
+            "assume(",
+            "admit(",
+            "external_body",
+            ".memory",
+            ".generations",
+        ] {
+            assert!(!prefix.contains(forbidden), "{prefix_name}: {forbidden}");
+            assert!(!finite.contains(forbidden), "{finite_name}: {forbidden}");
+        }
+    }
+}
+
+#[test]
+fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracle() {
+    fn envelope<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<std::result::Result<T, Error>>()
+    }
+    let expected = envelope::<PairedInvocations<'_, '_, '_>>()
+        + envelope::<Root>()
+        + envelope::<RootArgument>()
+        + envelope::<Instance>()
+        + envelope::<Cut>()
+        + envelope::<Binding>()
+        + envelope::<ComponentCut>()
+        + envelope::<AggregateBindingV42>()
+        + envelope::<Vec<AggregateBindingV42>>()
+        + envelope::<Vec<EnumBinding>>()
+        + enum_bindings::headers()
+        + envelope::<Vec<Option<ComponentDemandsV42<'_, '_, '_>>>>()
+        + aggregate_bindings::headers()
+        + object_returns::headers()
+        + logical::headers()
+        + envelope::<SourceValue>()
+        + envelope::<End>()
+        + envelope::<Vec<Root>>()
+        + envelope::<Vec<RootArgument>>()
+        + envelope::<Vec<Option<Instance>>>()
+        + envelope::<Vec<Option<Cut>>>()
+        + envelope::<Vec<Binding>>()
+        + envelope::<Vec<Option<Binding>>>()
+        + envelope::<Vec<Option<Value>>>()
+        + envelope::<Vec<u32>>()
+        + envelope::<Vec<bool>>()
+        + envelope::<Vec<Vec<Block>>>()
+        + envelope::<Vec<Block>>()
+        + envelope::<Boundaries<'_>>()
+        + envelope::<ControlInput<'_>>()
+        + envelope::<&[fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>]>()
+        + envelope::<&[bool]>()
+        + envelope::<FunctionRole>()
+        + envelope::<Range<usize>>()
+        + envelope::<Option<usize>>()
+        + envelope::<Option<fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1>>()
+        + envelope::<std::result::Result<usize, usize>>()
+        + envelope::<Value>()
+        + envelope::<Variable>()
+        + envelope::<Edge>()
+        + 64 * size_of::<usize>()
+        + 48 * size_of::<&()>();
+    assert_eq!(headers(), expected);
+}
+
+#[test]
+fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        check_trace_induction(&out.text, paired.roots.len());
+        for root in 0..paired.roots.len() {
+            for required in [
+                format!("invocation_source_byte_map_valid_{root}_v36(source[i].before, target[i].before)"),
+                format!("invocation_source_byte_map_valid_{root}_v36(source[i].after, target[i].after)"),
+                format!("invocation_source_byte_map_{root}_v36(source[i].before, target[i].before)"),
+                format!("invocation_source_byte_map_{root}_v36(source[i].after, target[i].after)"),
+                format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
+                format!("invocation_paired_observations_append_{root}_v39(original.events, actual.events"),
+            ] {
+                assert!(out.text.contains(&required), "{required}");
+            }
+            assert!(!out.text.contains(&format!(
+                "invocation_paired_source_step_{root}_v36(source).events =="
+            )));
+        }
+        assert!(out.text.contains("CfgStepV26<InvocationSourceByteStateV36, InvocationSourceEffectObservationV39>"));
+        assert!(out.text.contains("CfgStepV26<MemoryStateV30, MemoryOperationObservationV30>"));
+        assert!(out.text.contains("source.len() == target.len() && (forall|i: int|"));
+        assert!(out.text.contains("events: invocation_source_observations_v39(next"));
+        assert!(out.text.contains("events: invocation_actual_observations_v39(next.observations)"));
+        assert!(!out.text.contains("assume("));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+fn run(
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&PairedInvocations<'_, '_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::super::invocations::tests::run_variant(work, storage, true, |plan, out| {
+        with_slots(plan, out, |slots, out| {
+            let program = SourceByteProgram::derive(plan, slots, out)?;
+            let paired = PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+            examine(&paired, out)
+        })
+    })
+}
+
+#[test]
+fn original_mir_paired_consumer_keeps_complete_cuts_call_arguments_and_suspended_callers() {
+    run(LIMIT, LIMIT, |paired, out| {
+        assert_eq!(paired.roots.len(), 2);
+        assert_eq!(paired.instances.iter().flatten().count(), 6);
+        for root in &paired.roots {
+            let mut source_blocks = Vec::new();
+            for cut in root.cuts.iter().flatten() {
+                assert!(root.instances.contains(&cut.instance));
+                assert!(!source_blocks.contains(&cut.source));
+                source_blocks.push(cut.source);
+            }
+            assert!(!source_blocks.is_empty());
+        }
+        assert!(
+            paired
+                .instances
+                .iter()
+                .flatten()
+                .any(|row| !row.suspended.is_empty())
+        );
+        assert!(
+            paired
+                .instances
+                .iter()
+                .flatten()
+                .any(|row| row.arguments.len() == 2)
+        );
+        paired.emit(out)?;
+        assert!(
+            out.text
+                .contains("invocation_source_byte_storage_related_0_v36(source, target)")
+        );
+        assert!(out.text.contains("source_result.operands.len() == 2"));
+        assert!(
+            out.text
+                .contains("let original = source_result.operands[1].value")
+        );
+        assert!(
+            out.text
+                .contains("match source_result.returned { Some(original)")
+        );
+        assert!(out.text.contains("head.observations + tail.observations"));
+        assert!(!out.text.contains("assume("));
+        assert!(!out.text.contains("invocation_actual_segment_"));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_paired_consumer_preserves_independent_source_validity_and_physical_lifetime() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        assert!(
+            out.text
+                .contains("invocation_paired_source_defined_0_v36(source, 1)")
+        );
+        assert!(out.text.contains("source.machine.valid && target.valid"));
+        assert!(out.text.contains("invocation_byte_follow_0_v36(head.state"));
+        assert!(out.text.contains("!invocation_byte_cut_0_v36(target.pc)"));
+        assert!(out.text.contains("fuel == 0 || target.pc <"));
+        assert!(out.text.contains("source.machine.frames.active.len() == 0"));
+        for actual in out
+            .text
+            .split("spec fn invocation_paired_actual_step_")
+            .skip(1)
+        {
+            let actual = actual.split("spec fn").next().unwrap();
+            assert!(!actual.contains("byte_end_frame_v30"));
+            assert!(!actual.contains("byte_pop_frame_v30"));
+            assert!(!actual.contains("invocation_source_return_v36"));
+        }
+        assert!(
+            !out.text
+                .contains("invocation_source_byte_activate_v36(source, target")
+        );
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatcher() {
+    super::super::super::invocations::tests::run_scalar_allocation_variant(
+        LIMIT,
+        LIMIT,
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let program = SourceByteProgram::derive(plan, slots, out)?;
+                let paired =
+                    PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                let inventory = slots.correspondence(out)?.inventory(out.budget)?;
+                let (physical_analysis, physical_storage) =
+                    fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                        inventory,
+                        fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                            max_boundaries: 4096,
+                        },
+                        out.budget,
+                    )?;
+                out.budget
+                    .reserve_storage(physical_storage.retained_storage())?;
+                for root in 0..paired.roots.len() {
+                    let physical = plan.root(root, out)?.physical;
+                    super::super::super::super::byte_function_v30::ByteFunctionV30::derive(
+                        inventory,
+                        &physical_analysis,
+                        fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(physical as u32),
+                        ByteContext::native(FormalIndexWidth::Bits64),
+                        slots,
+                        out,
+                    )?
+                    .emit(root, out)?;
+                }
+                super::super::byte_bindings::SourceByteBindings::derive(slots, out)?.emit(out)?;
+                paired.emit(out)?;
+                assert!(
+                    paired
+                        .roots
+                        .iter()
+                        .all(|root| root.conservation_fuels.is_none())
+                );
+                assert!(
+                    !out.text
+                        .contains("proof fn invocation_paired_source_preserved_")
+                );
+                for root in 0..paired.roots.len() {
+                    assert!(
+                        out.text
+                            .contains(&format!("proof fn invocation_paired_step_{root}_v36("))
+                    );
+                }
+                assert!(out.text.contains("MemoryOperationEffectV30::Allocate"));
+                assert!(out.text.contains("MemoryOperationEffectV30::Read"));
+                assert!(out.text.contains("MemoryOperationEffectV30::Write"));
+                check_trace_induction(&out.text, paired.roots.len());
+                assert!(out.text.contains("let head = byte_block_step_0_v30"));
+                assert!(
+                    out.text
+                        .contains("invocation_source_byte_storage_related_0_v36(source, target)")
+                );
+                drop(physical_analysis);
+                out.budget
+                    .release_storage(physical_storage.retained_storage())?;
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_paired_consumer_exact_and_one_short_complete_resource_replay() {
+    let execute = |work, storage| run(work, storage, |paired, out| paired.emit(out));
+    let measured = execute(LIMIT, LIMIT);
+    measured.0.unwrap();
+    execute(measured.1, measured.3).0.unwrap();
+    assert!(execute(measured.1 - 1, measured.3).0.is_err());
+    assert!(execute(measured.1, measured.3 - 1).0.is_err());
+}
+
+#[test]
+fn original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_conclusions() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        for (root, row) in paired.roots.iter().enumerate() {
+            let fuels = row.conservation_fuels.as_ref().unwrap();
+            assert_eq!(fuels, &[1, 2, 2]);
+            for (instance, fuel) in fuels.iter().enumerate() {
+                assert!(out.text.contains(&format!(
+                    "reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});"
+                )));
+            }
+            let step = out.text.split(&format!("proof fn invocation_paired_step_{root}_v36("))
+                .nth(1).unwrap().split("proof fn").next().unwrap();
+            let requires = step.split(" requires ").nth(1).unwrap().split(" ensures ").next().unwrap();
+            assert_eq!(requires.trim(), format!(
+                "invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),"
+            ));
+            for conclusion in [
+                format!("invocation_paired_related_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state)"),
+                format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
+                format!("invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted"),
+                format!("source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))"),
+                format!("invocation_paired_source_preserved_{root}_v77(source, target);"),
+            ] {
+                assert!(step.contains(&conclusion), "{conclusion}");
+            }
+        }
+        Ok(())
+    }).0.unwrap();
+}
+
+#[test]
+fn original_mir_paired_consumer_rejects_unknown_width_before_any_emission() {
+    super::super::super::invocations::tests::run_variant(LIMIT, LIMIT, true, |plan, out| {
+        with_slots(plan, out, |slots, out| {
+            let program = SourceByteProgram::derive(plan, slots, out)?;
+            let before = out.text.len();
+            assert!(matches!(
+                PairedInvocations::derive(plan, &program, FormalIndexWidth::Unknown, out),
+                Err(Error::Statement(_))
+            ));
+            assert_eq!(before, out.text.len());
+            Ok(())
+        })
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_paired_initial_and_trace_share_explicit_execution_coordinates() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        for root in 0..2 {
+            assert!(out.text.contains(&format!(
+                "invocation_paired_raw_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)"
+            )));
+            assert!(out.text.contains(&format!(
+                "invocation_source_initial_runtime_{root}_v36(arguments, external, execution)"
+            )));
+            assert!(out.text.contains(&format!(
+                "invocation_paired_ready_{root}_v36(arguments, external, execution)"
+            )));
+            assert!(out.text.contains(&format!(
+                "Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false"
+            )));
+        }
+        assert!(!out.text.contains("frames: byte_root_frame_v30("));
+        assert!(out.text.contains("frames: byte_root_frame_with_execution_v37("));
+        assert!(super::super::bytes::INVOCATION_BYTES_V36.contains(
+            "source.frames.execution == target.frames.execution"
+        ));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_paired_source_readiness_is_an_independent_native_input_obligation() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        for root in 0..2 {
+            let predicate = out
+                .text
+                .split(&format!("spec fn invocation_paired_native_inputs_{root}_v38"))
+                .nth(1)
+                .unwrap()
+                .split("proof fn")
+                .next()
+                .unwrap();
+            assert!(predicate.contains(&format!(
+                "invocation_runtime_execution_{root}_v37(execution)"
+            )));
+            assert!(predicate.contains(&format!(
+                "invocation_paired_arguments_{root}_v36(arguments)"
+            )));
+            assert!(predicate.contains("byte_memory_well_formed_v30(external)"));
+            assert!(predicate.contains("byte_native_view_inputs_v38(external, arguments)"));
+            assert!(predicate.contains("invocation_native_provenance_v39(external, arguments)"));
+            assert!(!predicate.contains("source_initial"));
+            assert!(!predicate.contains("source_ready"));
+            assert!(!predicate.contains("machine.valid"));
+
+            let readiness = out
+                .text
+                .split(&format!("proof fn invocation_paired_source_ready_{root}_v38"))
+                .nth(1)
+                .unwrap()
+                .split("spec fn")
+                .next()
+                .unwrap();
+            let required = readiness.split(" requires ").nth(1).unwrap();
+            let (premise, consequence) = required.split_once(" ensures ").unwrap();
+            assert_eq!(
+                premise.trim(),
+                format!("invocation_paired_native_inputs_{root}_v38(arguments, external, execution),")
+            );
+            assert!(consequence.contains(&format!(
+                "invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid"
+            )));
+            assert!(readiness.contains(
+                "let entered_memory = ByteMemoryV30 { view_contracts: invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36()), ..external };"
+            ));
+            assert!(readiness.contains(&format!(
+                "invocation_native_initial_memory_invariants_v77(entered_memory, arguments, byte_root_frame_with_execution_v37({}, execution));",
+                paired.roots[root].owner
+            )));
+            for forbidden in ["assume(", "admit(", "external_body", "valid: true"] {
+                assert!(!readiness.contains(forbidden));
+            }
+            let initial = out.text.split(&format!(
+                "spec fn invocation_paired_raw_initial_{root}_v36("
+            )).nth(1).unwrap().split("spec fn").next().unwrap();
+            let gate = format!("let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);");
+            assert_eq!(initial.matches("let admitted =").count(), 1);
+            let gated = initial.find(&gate).unwrap();
+            let installed = initial.find("let memory = if admitted { ByteMemoryV30 { view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external } } else { external };").unwrap();
+            let validity = initial.find("valid: admitted").unwrap();
+            assert!(gated < installed && installed < validity);
+            assert!(!initial.contains("valid: true"));
+            for theorem in ["initial", "initial_trace"] {
+                let theorem = out
+                    .text
+                    .split(&format!("proof fn invocation_paired_{theorem}_{root}_v36"))
+                    .nth(1)
+                    .unwrap();
+                let premise = theorem
+                    .split(" requires ")
+                    .nth(1)
+                    .unwrap()
+                    .split(" ensures ")
+                    .next()
+                    .unwrap();
+                assert!(premise.contains(&format!(
+                    "invocation_paired_native_inputs_{root}_v38(arguments, external, execution)"
+                )));
+            }
+            let initial_proof = out.text.split(&format!(
+                "proof fn invocation_paired_initial_{root}_v36("
+            )).nth(1).unwrap().split("spec fn").next().unwrap();
+            assert!(initial_proof.contains(&format!(
+                "invocation_paired_source_ready_{root}_v38(arguments, external, execution);"
+            )));
+            assert!(initial_proof.contains(&format!(
+                "let frames = byte_root_frame_with_execution_v37({}, execution);",
+                paired.roots[root].owner
+            )));
+            for side in ["source", "target"] {
+                assert!(initial_proof.contains(&format!(
+                    "invocation_native_initial_memory_invariants_v77({side}_memory, arguments, frames);"
+                )));
+            }
+            assert!(initial_proof.contains(
+                "invocation_native_initial_heaps_related_v77(external, arguments);"
+            ));
+        }
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_execution_domain_preserves_original_required_and_maximum_workgroup_contract() {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |_, functions| {
+            for function in &mut functions[..2] {
+                let entry = function.kernel_entry().unwrap();
+                let contract = entry.source_contract();
+                let launch = SemanticKernelLaunchBoundsV1::new(
+                    Some(SemanticWorkgroupDimensionsV1::new([32, 1, 1]).unwrap()),
+                    Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                    None,
+                )
+                .unwrap();
+                *function = function
+                    .clone()
+                    .with_kernel_entry(SemanticKernelEntryV1::new(
+                        entry.export_symbol().clone(),
+                        entry.kernel_binding_identity(),
+                        SemanticKernelSourceContractV1::new_with_resources(
+                            Some(launch),
+                            contract.resources(),
+                            contract.unsafe_assembly(),
+                            contract.reachable_assembly(),
+                        )
+                        .unwrap(),
+                    ));
+            }
+        },
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                for root in 0..2 {
+                    super::super::emit_execution_v37(slots.correspondence(out)?, root, out)?;
+                }
+                assert!(
+                    out.text
+                        .contains("execution.workgroup == seq![32int, 1int, 1int]")
+                );
+                assert!(out.text.contains("execution.workgroup[0] <= 64"));
+                assert!(out.text.contains("execution.workgroup[1] <= 1"));
+                assert!(out.text.contains("execution.workgroup[2] <= 1"));
+                assert!(
+                    out.text
+                        .contains("execution.extent == invocation_runtime_launch_0_v36().1")
+                );
+                assert!(
+                    out.text
+                        .contains("byte_execution_well_formed_v37(execution)")
+                );
+                assert!(
+                    out.text
+                        .contains("memory_value_modulus_v30(invocation_runtime_index_bytes_v36())")
+                );
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
+}
+
+fn ignored_unit_case(
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+) -> (Result<()>, usize, usize, usize) {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |_, functions| {
+            let unit = SemanticTypeIdV1::from_index(1);
+            for (root, function) in functions[..2].iter_mut().enumerate() {
+                let mut parameters: Vec<_> = function
+                    .abi()
+                    .arguments()
+                    .iter()
+                    .map(|argument| argument.value().clone())
+                    .collect();
+                let argument = parameters.len() as u32;
+                parameters.push(SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore));
+                let mut ownerships = function.abi().source_argument_ownership().to_vec();
+                ownerships.push(ownership);
+                let abi = SemanticFunctionAbiV1::new(
+                    SemanticAbiIdentityV1::from_sha256([210 + root as u8; 32]),
+                    SemanticLayoutIdentityV1::from_sha256([212 + root as u8; 32]),
+                    SemanticCanonAbiV1::GpuKernel,
+                    false,
+                    false,
+                    parameters,
+                    SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+                )
+                .unwrap()
+                .with_source_argument_ownership(ownerships)
+                .unwrap();
+                let mut locals = function.locals().to_vec();
+                locals.push(SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([214 + root as u8; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Argument(argument),
+                    function.source(),
+                ));
+                *function = SemanticFunctionDeclV1::new(
+                    function.identity(),
+                    function.role(),
+                    function.item_definition_identity(),
+                    function.monomorphization_identity(),
+                    function.generic_type_arguments_identity(),
+                    function.const_generic_arguments_identity(),
+                    function.source(),
+                    abi,
+                    locals,
+                    function.entry(),
+                    function.blocks().to_vec(),
+                )
+                .unwrap()
+                .with_kernel_entry(function.kernel_entry().unwrap().clone());
+            }
+        },
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let program = SourceByteProgram::derive(plan, slots, out)?;
+                let paired =
+                    PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                for root in &paired.roots {
+                    let entry = paired.instances[root.instances.start].as_ref().unwrap();
+                    assert_eq!(entry.arguments.len(), 3);
+                    assert_eq!(entry.arguments[2].definition, None);
+                    assert_eq!(root.parameters.len(), 2);
+                    assert_eq!(
+                        root.parameters
+                            .iter()
+                            .map(|row| row.source)
+                            .collect::<Vec<_>>(),
+                        [0, 1]
+                    );
+                }
+                paired.emit(out)?;
+                assert!(out.text.contains("arguments.len() == 3"));
+                assert!(
+                    out.text
+                        .contains("let value = arguments[2];  value == MemoryValueV30::Unit")
+                );
+                assert!(!out.text.contains(", arguments[2])"));
+                Ok(())
+            })
+        },
+    )
+}
+
+#[test]
+fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_parameters() {
+    ignored_unit_case(fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue)
+        .0
+        .unwrap();
+}
+
+#[test]
+fn original_mir_paired_root_abi_refuses_ignored_unit_without_source_ownership() {
+    let error = ignored_unit_case(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::Unspecified,
+    )
+    .0
+    .unwrap_err();
+    assert!(matches!(error, Error::Source(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("by-value kernel argument requires exact component lowering")
+    );
+}

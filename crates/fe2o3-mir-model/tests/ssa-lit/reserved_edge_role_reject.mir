@@ -1,0 +1,8 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA edge 0:0 uses reserved role zero
+
+entry b0
+variables v0
+block b0
+edge r0 b0

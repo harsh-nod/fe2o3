@@ -1,0 +1,23 @@
+error[E0451]: fields `authenticated`, `coordinates` and `packing` of struct `WorkerV3ApplicationExecutionBindingV1` are private
+ --> tests/ui/generated_spi/fail/worker_v3_application_binding_fields_are_private.rs:5:9
+  |
+4 |     let WorkerV3ApplicationExecutionBindingV1 {
+  |         ------------------------------------- in this type
+5 |         authenticated,
+  |         ^^^^^^^^^^^^^ private field
+6 |         coordinates,
+  |         ^^^^^^^^^^^ private field
+7 |         packing,
+  |         ^^^^^^^ private field
+
+error: type `fe2o3_host::generated_kfd_invocation::WorkerV3ApplicationExecutionCoordinatesV1` is private
+ --> tests/ui/generated_spi/fail/worker_v3_application_binding_fields_are_private.rs:6:9
+  |
+6 |         coordinates,
+  |         ^^^^^^^^^^^ private type
+
+error: type `fe2o3_host::generated_kfd_invocation::WorkerV3ApplicationExecutionCoordinatesV1` is private
+  --> tests/ui/generated_spi/fail/worker_v3_application_binding_fields_are_private.rs:10:13
+   |
+10 |     let _ = (authenticated, coordinates, packing);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type

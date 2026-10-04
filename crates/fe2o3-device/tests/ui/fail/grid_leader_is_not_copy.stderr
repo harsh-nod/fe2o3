@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `leader`
+ --> tests/ui/fail/grid_leader_is_not_copy.rs:5:19
+  |
+3 | fn duplicate(leader: GridLeader) {
+  |              ------ move occurs because `leader` has type `GridLeader`, which does not implement the `Copy` trait
+4 |     let _first = leader;
+  |                  ------ value moved here
+5 |     let _second = leader;
+  |                   ^^^^^^ value used here after move

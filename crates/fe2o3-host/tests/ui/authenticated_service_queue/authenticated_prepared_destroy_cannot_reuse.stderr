@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `queue`
+ --> tests/ui/authenticated_service_queue/authenticated_prepared_destroy_cannot_reuse.rs:5:19
+  |
+3 | fn destroy_twice(queue: AuthenticatedServiceQueueSessionV1<1>) {
+  |                  ----- move occurs because `queue` has type `AuthenticatedServiceQueueSessionV1<1>`, which does not implement the `Copy` trait
+4 |     let _first = queue.destroy_and_release();
+  |                        --------------------- `queue` moved due to this method call
+5 |     let _second = queue.destroy_and_release();
+  |                   ^^^^^ value used here after move
+  |
+note: `AuthenticatedServiceQueueSessionV1::<N>::destroy_and_release` takes ownership of the receiver `self`, which moves `queue`
+ --> src/authenticated_service_queue.rs
+  |
+  |         self,
+  |         ^^^^

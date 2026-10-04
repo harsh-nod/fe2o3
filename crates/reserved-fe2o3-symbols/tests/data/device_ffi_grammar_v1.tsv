@@ -1,0 +1,10 @@
+# name	expect	direction	symbol	physical_abi	effects	contract_id
+valid_none	ok	1	external_add	C(u32[size=4,align=4])->u32[size=4,align=4]	none	aa6d4e2ed1e700d8e0f84324ed4cacef4468e8bcae28bd458529c3645825e122
+valid_global_rw	ok	2	reviewed_helper	C(const_ptr<global,f32>[size=8,align=8,as=global],mut_ptr<global,f32>[size=8,align=8,as=global],u64[size=8,align=8])->unit[size=0,align=1]	read_global,write_global	b4b6c331b0b753f561435f993d62c31f134ddf4fcccdbb916925bc1eb15c5613
+valid_workgroup	ok	1	sync_tile	C(mut_ptr<workgroup,f32>[size=8,align=8,as=workgroup])->unit[size=0,align=1]	atomic_workgroup,barrier_workgroup,read_workgroup,write_workgroup	2d484b1443f643a415744bcc22d7fcd027037ed4034f5160f0f5a3db97afb211
+direction_leading_zero	direction	01	external_add	C()->unit[size=0,align=1]	none	-
+symbol_leading_digit	symbol	1	1external	C()->unit[size=0,align=1]	none	-
+physical_bad_alignment	physical_abi	2	helper	C(u32[size=4,align=8])->unit[size=0,align=1]	none	-
+effects_reordered	effects	1	helper	C(const_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]	read_global,atomic_global	-
+effect_requires_mutable	effect_abi	2	helper	C(const_ptr<global,u32>[size=8,align=8,as=global])->unit[size=0,align=1]	write_global	-
+effect_ignores_pointer_result	effect_abi	1	helper	C()->const_ptr<global,u32>[size=8,align=8,as=global]	read_global	-

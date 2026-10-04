@@ -1,0 +1,36 @@
+CASE: nested-loops
+CHECK-BEFORE: module loop-preheader-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:Bool] results=[]
+CHECK-BEFORE: f0:b0 block-id=10 params=[]
+CHECK-BEFORE: f0:b0:term Conditional v0 then-id=20 [] else-id=20 []
+CHECK-BEFORE: f0:b1 block-id=20 params=[]
+CHECK-BEFORE: f0:b1:term Conditional v0 then-id=30 [] else-id=30 []
+CHECK-BEFORE: f0:b2 block-id=30 params=[]
+CHECK-BEFORE: f0:b2:term Conditional v0 then-id=40 [] else-id=50 []
+CHECK-BEFORE: f0:b3 block-id=40 params=[]
+CHECK-BEFORE: f0:b3:term Branch block-id=30 []
+CHECK-BEFORE: f0:b4 block-id=50 params=[]
+CHECK-BEFORE: f0:b4:term Conditional v0 then-id=20 [] else-id=60 []
+CHECK-BEFORE: f0:b5 block-id=60 params=[]
+CHECK-BEFORE: f0:b5:term Return []
+CHECK-AFTER: module loop-preheader-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:Bool] results=[]
+CHECK-AFTER: f0:b0 block-id=10 params=[]
+CHECK-AFTER: f0:b0:term Conditional v0 then-id=61 [] else-id=61 []
+CHECK-AFTER: f0:b1 block-id=20 params=[]
+CHECK-AFTER: f0:b1:term Conditional v0 then-id=62 [] else-id=62 []
+CHECK-AFTER: f0:b2 block-id=30 params=[]
+CHECK-AFTER: f0:b2:term Conditional v0 then-id=40 [] else-id=50 []
+CHECK-AFTER: f0:b3 block-id=40 params=[]
+CHECK-AFTER: f0:b3:term Branch block-id=30 []
+CHECK-AFTER: f0:b4 block-id=50 params=[]
+CHECK-AFTER: f0:b4:term Conditional v0 then-id=20 [] else-id=60 []
+CHECK-AFTER: f0:b5 block-id=60 params=[]
+CHECK-AFTER: f0:b5:term Return []
+CHECK-AFTER: f0:b6 block-id=61 params=[]
+CHECK-AFTER: f0:b6:term Branch block-id=20 []
+CHECK-AFTER: f0:b7 block-id=62 params=[]
+CHECK-AFTER: f0:b7:term Branch block-id=30 []
+CHECK-REMARK: preheaders=2 changed=true independently-checked=true idempotent=true authority=false
+CHECK-REMARK: f0:b1 preheader f0:b6
+CHECK-REMARK: f0:b2 preheader f0:b7

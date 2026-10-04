@@ -1,0 +1,21 @@
+error[E0616]: field `identity` of struct `StagedFfiLinkPlanV1` is private
+ --> tests/ui/compiler_ffi/staged_fields_are_private.rs:4:20
+  |
+4 |     let _ = staged.identity;
+  |                    ^^^^^^^^ private field
+  |
+help: a method `identity` also exists, call it with parentheses
+  |
+4 |     let _ = staged.identity();
+  |                            ++
+
+error[E0616]: field `inspection` of struct `StagedFfiLinkPlanV1` is private
+ --> tests/ui/compiler_ffi/staged_fields_are_private.rs:5:20
+  |
+5 |     let _ = staged.inspection;
+  |                    ^^^^^^^^^^ private field
+  |
+help: a method `inspection` also exists, call it with parentheses
+  |
+5 |     let _ = staged.inspection();
+  |                              ++

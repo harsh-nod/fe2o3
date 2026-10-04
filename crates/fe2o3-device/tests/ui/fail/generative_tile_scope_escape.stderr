@@ -1,0 +1,40 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/generative_tile_scope_escape.rs:4:48
+  |
+4 |     let _ = context.with_workgroup(|workgroup| workgroup);
+  |                                     ---------- ^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                                     |        |
+  |                                     |        return type of closure is WorkgroupCapability<'2, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>
+  |                                     has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`
+  |
+  = note: requirement occurs because of the type `WorkgroupCapability<'_, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+  = note: the struct `WorkgroupCapability<'workgroup, KernelBrand, Epoch>` is invariant over the parameter `'workgroup`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+ --> tests/ui/fail/generative_tile_scope_escape.rs:9:9
+  |
+8 |     let _ = context.with_workgroup(|workgroup| {
+  |                                     ---------- return type of closure is MaskedTile1D<'2, u32, 1, 1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>
+  |                                     |
+  |                                     has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`
+9 |         MaskedTile1D::<u32, 1, 1, _>::load_masked(&workgroup, input, 0)
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |
+  = note: requirement occurs because of the type `MaskedTile1D<'_, u32, 1, 1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+  = note: the struct `MaskedTile1D<'workgroup, T, L, E, Brand, Epoch>` is invariant over the parameter `'workgroup`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/generative_tile_scope_escape.rs:15:9
+   |
+14 |     let _ = context.with_workgroup(|workgroup| {
+   |                                     ---------- return type of closure is LaneFragment<'2, u32, 1, 1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>
+   |                                     |
+   |                                     has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`
+15 |         MaskedTile1D::<u32, 1, 1, _>::load_masked(&workgroup, input, 0).into_fragment()
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+   |
+   = note: requirement occurs because of the type `LaneFragment<'_, u32, 1, 1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `LaneFragment<'workgroup, T, L, E, Brand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

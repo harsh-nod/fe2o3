@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: Branch Op is passing 0 arguments, but target block expects 1
+builtin.func @boolean_wrong_arity: builtin.function <(builtin.integer i1) -> ()>
+{
+  ^entry(b: builtin.integer i1):
+    gpu.cond_branch (b, b) [^exit, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 0]]: <(builtin.integer i1, builtin.integer i1) -> ()>
+  ^exit(c: builtin.integer i1):
+    kernel.return () [] []: <() -> ()>
+}

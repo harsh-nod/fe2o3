@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `fe2o3_host::WorkerV2ApplicationDescriptorHandoffErrorV1`
+ --> tests/ui/production_application_handoff/worker_v2_error_alias_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::WorkerV2ApplicationDescriptorHandoffErrorV1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `WorkerV2ApplicationDescriptorHandoffErrorV1` in the root
+  |
+help: a similar name exists in the module
+  |
+1 - use fe2o3_host::WorkerV2ApplicationDescriptorHandoffErrorV1;
+1 + use fe2o3_host::WorkerV3ApplicationDescriptorHandoffErrorV1;
+  |

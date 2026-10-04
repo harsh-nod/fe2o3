@@ -1,0 +1,15 @@
+CASE: nonidentity-neighbor
+CHECK-BEFORE: function f parameters=[u32] results=[u32] trap-declarations=0
+CHECK-BEFORE: f:b0:o0 Constant U32(0) results=[u32]
+CHECK-BEFORE: f:b0:o1 Binary Checked(Add) arg0,b0:o0:r0 results=[u32,bool]
+CHECK-BEFORE: f:b0:o2 Binary BitOr b0:o1:r0,b0:o0:r0 results=[u32]
+CHECK-BEFORE: f:b0:o3 Constant U32(3) results=[u32]
+CHECK-BEFORE: f:b0:o4 Binary BitXor b0:o2:r0,b0:o3:r0 results=[u32]
+CHECK-BEFORE: f:b0:term Return [b0:o4:r0]
+CHECK-AFTER: function f parameters=[u32] results=[u32] trap-declarations=0
+CHECK-AFTER: f:b0:o0 Constant U32(3) results=[u32]
+CHECK-AFTER: f:b0:o1 Binary BitXor arg0,b0:o0:r0 results=[u32]
+CHECK-AFTER: f:b0:term Return [b0:o1:r0]
+CHECK-REMARK: passes=integer-neutral-canonicalization,dead-code-elimination changed=true,true independently-checked=true authority=false
+CHECK-REMARK: f:b0:o0 retained f:b0:o3
+CHECK-REMARK: f:b0:o1 retained f:b0:o4

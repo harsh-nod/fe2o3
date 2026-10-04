@@ -1,0 +1,885 @@
+//! Inert framing components only: no source/proof/nominal or execution custody.
+#![cfg(test)]
+use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
+use fe2o3_build_authority::CompilerClosureV2;
+use fe2o3_compiler_lineage::*;
+use fe2o3_rustc_invocation::*;
+use sha2::{Digest, Sha256};
+use std::{
+    ffi::OsString,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
+};
+const LIMIT: usize = MAX_NATIVE_CONDITIONAL_STORAGE_V1;
+
+fn output() -> (NativeConditionalOutputLayoutV1, Vec<u8>) {
+    let layout = NativeConditionalOutputLayoutV1::new::<()>(1, 2, 3).unwrap();
+    let mut b = vec![0; layout.encoded_len()];
+    b[layout.history_range()].copy_from_slice(b"h");
+    b[layout.catalog_range()].copy_from_slice(b"cc");
+    b[layout.descriptor_range()].copy_from_slice(b"ddd");
+    seal_native_conditional_output_v1(layout, &mut b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    (layout, b)
+}
+fn carrier(output: &[u8]) -> Vec<u8> {
+    let l = NativeConditionalCarrierLayoutV1::new::<()>(output.len(), 4).unwrap();
+    let mut b = vec![0; l.encoded_len()];
+    b[l.output_range()].copy_from_slice(output);
+    b[l.source_range()].copy_from_slice(b"src2");
+    seal_native_conditional_carrier_v1(l, &mut b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    b
+}
+fn invocation(profile: Profile) -> Vec<u8> {
+    let closure =
+        CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap();
+    let unit = RustcUnitV2::new(
+        "/workspace",
+        vec![
+            "/opt/rustc".into(),
+            "--crate-name".into(),
+            "conditional_fixture".into(),
+            "src/lib.rs".into(),
+            "--crate-type=lib".into(),
+            "--edition=2024".into(),
+            "-Zcodegen-backend=/opt/backend.so".into(),
+        ],
+    )
+    .unwrap();
+    let env = CompileEnvironmentV2::from_child_environment(
+        [
+            ("CARGO_CFG_TARGET_ARCH", "amdgcn"),
+            ("FE2O3_HSACO_DIR", "/workspace/out"),
+            ("FE2O3_TARGET", profile.device_target()),
+            ("FE2O3_VERIFY_KERNEL_IR", "1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v))),
+    )
+    .unwrap();
+    let v2 = RustcInvocationDescriptorV2::new([4; 32], [6; 32], unit, env).unwrap();
+    encode_descriptor_v3(&RustcInvocationDescriptorV3::new(v2, closure).unwrap()).unwrap()
+}
+fn metadata(profile: Profile) -> (NativeConditionalMetadataLayoutV1, Vec<u8>) {
+    let inv = invocation(profile);
+    let layout = canonical_semantic_target_layout_transcript_v1(
+        "amdgcn-amd-amdhsa",
+        "layout",
+        64,
+        profile.cpu(),
+        "features",
+    )
+    .unwrap();
+    let axis = |n| TargetLineageIdentityV3::new([n; 32], 1).unwrap();
+    let lowering = InertNativeLoweringAssociationV1::new(NativeLoweringAssociationInputsV1 {
+        final_native: InertNativeNeutralSubjectV1::new([1; 32], 1, [2; 32], 1).unwrap(),
+        carrier: axis(3),
+        descriptor: axis(4),
+        pre_descriptor_llvm: axis(5),
+        final_llvm: axis(6),
+        module_handoff: axis(7),
+        profile,
+    });
+    let input = NativeConditionalMetadataInputV1 {
+        invocation: &inv,
+        rustc_inventory: b"inventory",
+        rustc_preflight: b"preflight",
+        semantic_target_layout: &layout,
+        native_lowering: lowering.canonical_bytes(),
+        final_module_commitment: b"FFI alone admits this",
+    };
+    let l = NativeConditionalMetadataLayoutV1::new::<()>(input).unwrap();
+    let mut b = vec![0; l.encoded_len()];
+    for (r, p) in [
+        (l.invocation_range(), input.invocation),
+        (l.rustc_inventory_range(), input.rustc_inventory),
+        (l.rustc_preflight_range(), input.rustc_preflight),
+        (
+            l.semantic_target_layout_range(),
+            input.semantic_target_layout,
+        ),
+        (l.native_lowering_range(), input.native_lowering),
+        (
+            l.final_module_commitment_range(),
+            input.final_module_commitment,
+        ),
+    ] {
+        b[r].copy_from_slice(p);
+    }
+    seal_native_conditional_metadata_v1(l, &mut b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    (l, b)
+}
+fn capsule(meta: &[u8]) -> (InertProductionSemanticCapsuleLayoutV5, Vec<u8>) {
+    let (_, meta) = metadata_v2(meta, b"src2");
+    capsule_members(&meta, &carrier(&output().1))
+}
+fn metadata_v2(meta: &[u8], source: &[u8]) -> (NativeConditionalMetadataLayoutV2, Vec<u8>) {
+    // Deliberately public inert test material, not policies accepted by a verifier.
+    let roots = [NativeConditionalPolicyRootInputV1 {
+        semantic_root: 9,
+        kernel_binding: [1; 32],
+        effect_signers: &[[2; 32]],
+        effect_toolchain: [[3; 32]; 5],
+        formula_verifying_key: [4; 32],
+        formula_toolchain: [[5; 32]; 5],
+        formula_boundary: 1,
+    }];
+    let roster = encode_native_conditional_policy_roster_v1(
+        NativeConditionalPolicyRosterInputV1 {
+            source_packet: source,
+            roots: &roots,
+        },
+        LIMIT,
+        |_| Ok::<_, ()>(()),
+    )
+    .unwrap();
+    let layout = NativeConditionalMetadataLayoutV2::new::<()>(meta.len(), roster.len()).unwrap();
+    let mut bytes = vec![0; layout.encoded_len()];
+    bytes[layout.metadata_range()].copy_from_slice(meta);
+    bytes[layout.policy_roster_range()].copy_from_slice(&roster);
+    seal_native_conditional_metadata_v2(layout, &mut bytes, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    (layout, bytes)
+}
+fn capsule_members(meta: &[u8], pair: &[u8]) -> (InertProductionSemanticCapsuleLayoutV5, Vec<u8>) {
+    let l = InertProductionSemanticCapsuleLayoutV5::new::<()>(meta.len(), pair.len()).unwrap();
+    let mut b = vec![0; l.encoded_len()];
+    b[l.metadata_range()].copy_from_slice(meta);
+    b[l.carrier_range()].copy_from_slice(pair);
+    seal_inert_production_semantic_capsule_v5(l, &mut b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    (l, b)
+}
+fn hash(domain: &[u8], b: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(domain);
+    h.update((b.len() as u64).to_le_bytes());
+    h.update(b);
+    h.finalize().into()
+}
+
+#[test]
+fn conditional_output_v1_fixed_header_ranges_and_domains() {
+    let (l, b) = output();
+    assert_eq!(b.len(), 166);
+    assert_eq!(&b[..16], b"F2NCO1\0\0\x01\0\x01\0\x30\0\0\0");
+    assert_eq!(l.history_range(), 48..49);
+    assert_eq!(l.catalog_range(), 97..99);
+    assert_eq!(l.descriptor_range(), 99..102);
+    assert_eq!(&b[49..65], b"F2NCA1\0\0\x01\0\x01\0\x30\0\0\0");
+    assert_eq!(
+        &b[102..134],
+        hash(b"FE2O3/NATIVE-CONDITIONAL-AUXILIARY/V1\0", &b[49..102])
+    );
+    assert_eq!(
+        &b[134..],
+        hash(b"FE2O3/NATIVE-CONDITIONAL-OUTPUT/V1\0", &b[..134])
+    );
+    let r = read_native_conditional_output_v1(&b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert_eq!(
+        (r.history(), r.catalog(), r.descriptor_bytes()),
+        (&b"h"[..], &b"cc"[..], &b"ddd"[..])
+    );
+    assert!(!r.grants_authority());
+    assert_eq!(b, output().1);
+}
+
+#[test]
+fn conditional_output_v1_exact_prepaid_composite_work_and_refusal() {
+    let (l, original) = output();
+    let aux = 53 + b"FE2O3/NATIVE-CONDITIONAL-AUXILIARY/V1\0".len() + 8 + 128 + 96 + 32;
+    let outer = 134 + b"FE2O3/NATIVE-CONDITIONAL-OUTPUT/V1\0".len() + 8 + 128 + 96 + 32;
+    for limit in [aux + outer - 1, aux + outer] {
+        let mut b = original.clone();
+        b[..48].fill(7);
+        let before = b.clone();
+        let mut work = 0;
+        let mut calls = 0;
+        let result = seal_native_conditional_output_v1(l, &mut b, LIMIT, |n| {
+            calls += 1;
+            if n > limit {
+                return Err("work");
+            }
+            work += n;
+            Ok(())
+        });
+        assert_eq!(calls, 1);
+        if limit < aux + outer {
+            assert!(matches!(
+                result,
+                Err(NativeConditionalOutputErrorV1::Charge("work"))
+            ));
+            assert_eq!(b, before);
+            assert_eq!(work, 0);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(work, aux + outer);
+            assert_eq!(b, original);
+        }
+    }
+    let mut charges = Vec::new();
+    read_native_conditional_output_v1(&original, LIMIT, |n| {
+        charges.push(n);
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    assert_eq!(
+        charges,
+        vec![
+            48,
+            134 + b"FE2O3/NATIVE-CONDITIONAL-OUTPUT/V1\0".len() + 8 + 128 + 32,
+            48,
+            53 + b"FE2O3/NATIVE-CONDITIONAL-AUXILIARY/V1\0".len() + 8 + 128 + 32
+        ]
+    );
+}
+
+#[test]
+fn conditional_output_v1_callback_and_destructor_unwind_before_all_mutation() {
+    let (l, mut b) = output();
+    let before = b.clone();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ =
+                seal_native_conditional_output_v1::<()>(l, &mut b, LIMIT, |_| panic!("callback"));
+        }))
+        .is_err()
+    );
+    assert_eq!(b, before);
+    struct Bomb;
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            panic!("closure destruction");
+        }
+    }
+    let bomb = Bomb;
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = seal_native_conditional_output_v1(l, &mut b, LIMIT, move |_| {
+                let _ = &bomb;
+                Ok::<_, ()>(())
+            });
+        }))
+        .is_err()
+    );
+    assert_eq!(b, before);
+}
+
+#[test]
+fn conditional_frames_independent_limits_without_large_allocations() {
+    let l = NativeConditionalOutputLayoutV1::new::<()>(
+        MAX_NATIVE_CONDITIONAL_HISTORY_BYTES_V1,
+        MAX_NATIVE_CONDITIONAL_CATALOG_BYTES_V1,
+        MAX_NATIVE_CONDITIONAL_DESCRIPTOR_BYTES_V1,
+    )
+    .unwrap();
+    assert_eq!(l.encoded_len(), MAX_NATIVE_CONDITIONAL_OUTPUT_BYTES_V1);
+    for args in [
+        (0, 1, 1),
+        (1, 0, 1),
+        (1, 1, 0),
+        (usize::MAX, 1, 1),
+        (MAX_NATIVE_CONDITIONAL_HISTORY_BYTES_V1 + 1, 1, 1),
+        (1, MAX_NATIVE_CONDITIONAL_CATALOG_BYTES_V1 + 1, 1),
+        (1, 1, MAX_NATIVE_CONDITIONAL_DESCRIPTOR_BYTES_V1 + 1),
+    ] {
+        assert!(NativeConditionalOutputLayoutV1::new::<()>(args.0, args.1, args.2).is_err());
+    }
+    assert!(
+        NativeConditionalCarrierLayoutV1::new::<()>(1, MAX_NATIVE_CONDITIONAL_SOURCE_BYTES_V1 + 1)
+            .is_err()
+    );
+    assert_eq!(
+        MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V5,
+        MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V4
+    );
+    let (l, mut b) = output();
+    let before = b.clone();
+    let mut visits = 0;
+    assert!(matches!(
+        seal_native_conditional_output_v1(l, &mut b, LIMIT + 1, |_| {
+            visits += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(NativeConditionalOutputErrorV1::StorageLimit)
+    ));
+    assert_eq!(visits, 0);
+    assert_eq!(b, before);
+}
+
+#[test]
+fn conditional_frames_reject_truncation_mutation_trailing_and_old_roles() {
+    let (_, b) = output();
+    for end in 0..b.len() {
+        assert!(read_native_conditional_output_v1(&b[..end], LIMIT, |_| Ok::<_, ()>(())).is_err());
+    }
+    for i in 0..b.len() {
+        let mut bad = b.clone();
+        bad[i] ^= 1;
+        assert!(
+            read_native_conditional_output_v1(&bad, LIMIT, |_| Ok::<_, ()>(())).is_err(),
+            "byte {i}"
+        );
+    }
+    let mut trailing = b.clone();
+    trailing.push(0);
+    assert!(read_native_conditional_output_v1(&trailing, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    let new = carrier(&b);
+    assert!(read_native_refined_forwarding_carrier_v1(&new, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    let old_l = NativeRefinedForwardingCarrierLayoutV1::new::<()>(b.len(), 4).unwrap();
+    let mut old = vec![0; old_l.encoded_len()];
+    old[old_l.output_range()].copy_from_slice(&b);
+    seal_native_refined_forwarding_carrier_v1(old_l, &mut old, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert!(read_native_conditional_carrier_v1(&old, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    assert!(read_native_refined_forwarding_carrier_v1(&old, LIMIT, |_| Ok::<_, ()>(())).is_ok());
+}
+
+#[test]
+fn conditional_metadata_v1_exact_fields_layout_and_unparsed_ffi_member() {
+    let (l, b) = metadata(Profile::Gfx942);
+    let r = read_native_conditional_metadata_v1(&b, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert_eq!(&b[..16], b"F2NCM1\0\0\x01\0\x01\0\x50\0\0\0");
+    assert_eq!(&b[24..32], &[6, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(r.rustc_inventory(), b"inventory");
+    assert_eq!(r.rustc_preflight(), b"preflight");
+    assert_eq!(r.semantic_target_layout().default_pointer_width_bits, 64);
+    assert_eq!(r.semantic_target_layout().target_cpu, "gfx942");
+    assert_eq!(r.final_module_commitment(), b"FFI alone admits this");
+    assert_eq!(r.invocation().as_ptr(), b[l.invocation_range()].as_ptr());
+    assert!(!r.grants_authority());
+    for at in [0, 8, 10, 12, 16, 24, 26, 32] {
+        let mut bad = b.clone();
+        bad[at] ^= 1;
+        let end = bad.len() - 32;
+        let digest = hash(b"FE2O3/NATIVE-CONDITIONAL-METADATA/V1\0", &bad[..end]);
+        bad[end..].copy_from_slice(&digest);
+        assert!(read_native_conditional_metadata_v1(&bad, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    }
+    let mut bad = b.clone();
+    bad[l.semantic_target_layout_range().start] = 255;
+    seal_native_conditional_metadata_v1(l, &mut bad, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert!(matches!(
+        read_native_conditional_metadata_v1(&bad, LIMIT, |_| Ok::<_, ()>(())),
+        Err(NativeConditionalMetadataErrorV1::TargetLayout)
+    ));
+}
+
+#[test]
+fn conditional_capsule_v5_both_profiles_exact_shared_ranges_and_drop() {
+    for p in [Profile::Gfx942, Profile::Gfx950] {
+        let (ml, meta) = metadata(p);
+        let (cl, b) = capsule(&meta);
+        let mut backing = Vec::with_capacity(b.len() + 4096);
+        backing.extend_from_slice(&[7; 13]);
+        backing.extend_from_slice(&b);
+        backing.extend_from_slice(&[9; 17]);
+        let backing = Arc::new(backing);
+        let weak = Arc::downgrade(&backing);
+        let owner =
+            InertProductionSemanticCapsuleV5::decode_shared_vec(backing.clone(), 13..13 + b.len())
+                .unwrap();
+        assert_eq!(owner.canonical_bytes().as_ptr(), backing[13..].as_ptr());
+        assert_eq!(
+            owner
+                .rustc_identity_inventory()
+                .canonical_preimage()
+                .as_ptr(),
+            backing[13
+                + cl.metadata_range().start
+                + NATIVE_CONDITIONAL_METADATA_HEADER_BYTES_V2
+                + ml.rustc_inventory_range().start..]
+                .as_ptr()
+        );
+        assert_eq!(
+            owner.carrier_bytes().as_ptr(),
+            backing[13 + cl.carrier_range().start..].as_ptr()
+        );
+        assert_eq!(owner.history_bytes(), b"h");
+        assert_eq!(owner.catalog_bytes(), b"cc");
+        assert_eq!(owner.descriptor_bytes(), b"ddd");
+        assert_eq!(owner.source_packet_bytes(), b"src2");
+        assert_eq!(owner.invocation().amd_target(), p.device_target());
+        assert_eq!(owner.native_lowering().inputs().profile, p);
+        assert!(!owner.grants_authority());
+        drop(backing);
+        assert!(weak.upgrade().is_some());
+        drop(owner);
+        assert!(weak.upgrade().is_none());
+        assert!(InertProductionSemanticCapsuleV4::decode_owned(b.clone()).is_err());
+        assert!(InertProductionSemanticCapsuleV3::decode(&b).is_err());
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_resealed_foreign_invocation_target_rejected() {
+    let (l, mut meta) = metadata(Profile::Gfx942);
+    let foreign = invocation(Profile::Gfx950);
+    assert_eq!(foreign.len(), l.invocation_range().len());
+    meta[l.invocation_range()].copy_from_slice(&foreign);
+    seal_native_conditional_metadata_v1(l, &mut meta, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    let (_, b) = capsule(&meta);
+    assert!(matches!(
+        InertProductionSemanticCapsuleV5::decode_owned(b),
+        Err(InertProductionSemanticCapsuleErrorV5::Target)
+    ));
+}
+
+#[test]
+fn conditional_metadata_v1_work_refusal_and_truncation_preserve_input() {
+    let (l, original) = metadata(Profile::Gfx942);
+    let mut paid = 0;
+    let mut b = original.clone();
+    seal_native_conditional_metadata_v1(l, &mut b, LIMIT, |n| {
+        paid += n;
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    for limit in [paid - 1, paid] {
+        let mut candidate = original.clone();
+        candidate[..80].fill(9);
+        let before = candidate.clone();
+        let r = seal_native_conditional_metadata_v1(l, &mut candidate, LIMIT, |n| {
+            if n > limit { Err(()) } else { Ok(()) }
+        });
+        if limit < paid {
+            assert!(r.is_err());
+            assert_eq!(candidate, before);
+        } else {
+            assert!(r.is_ok());
+            assert_eq!(candidate, original);
+        }
+    }
+    for end in 0..original.len() {
+        assert!(
+            read_native_conditional_metadata_v1(&original[..end], LIMIT, |_| Ok::<_, ()>(()))
+                .is_err()
+        );
+    }
+    let mut total = 0;
+    read_native_conditional_metadata_v1(&original, LIMIT, |n| {
+        total += n;
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    for limit in [total - 1, total] {
+        let mut remaining = limit;
+        let r = read_native_conditional_metadata_v1(&original, LIMIT, |n| {
+            remaining = remaining.checked_sub(n).ok_or(())?;
+            Ok::<(), ()>(())
+        });
+        assert_eq!(r.is_ok(), limit == total);
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_rejects_invalid_ranges_and_preserves_inert_leaf_boundary() {
+    let (_, meta) = metadata(Profile::Gfx942);
+    let (_, b) = capsule(&meta);
+    let shared = Arc::new(b);
+    for r in [2..1, 0..shared.len() + 1, usize::MAX..usize::MAX, 0..0] {
+        assert!(InertProductionSemanticCapsuleV5::decode_shared_vec(shared.clone(), r).is_err());
+    }
+    // These intentionally non-leaf payloads exercise framing only, never genuine replay.
+    let owner =
+        InertProductionSemanticCapsuleV5::decode_shared_vec(shared.clone(), 0..shared.len())
+            .unwrap();
+    assert_eq!(owner.history_bytes(), b"h");
+    assert!(!owner.grants_authority());
+    for i in [0, 8, 10, 12, 16, 24, 32, 40] {
+        let mut bad = shared.as_ref().clone();
+        bad[i] ^= 1;
+        let end = bad.len() - 32;
+        let digest = hash(b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V5\0", &bad[..end]);
+        bad[end..].copy_from_slice(&digest);
+        assert!(InertProductionSemanticCapsuleV5::decode_owned(bad).is_err());
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_layout_getter_borrows_the_validated_preimage() {
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let (_, metadata) = metadata(profile);
+        let (_, bytes) = capsule(&metadata);
+        let owner = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+        drop(metadata);
+        let view = owner.semantic_target_layout();
+        assert_eq!(view.rustc_llvm_target, "amdgcn-amd-amdhsa");
+        assert_eq!(view.live_rustc_data_layout, "layout");
+        assert_eq!(view.default_pointer_width_bits, 64);
+        assert_eq!(view.target_cpu, profile.cpu());
+        assert_eq!(view.target_features, "features");
+        assert_eq!(view, owner.semantic_target_layout());
+        let preimage = owner.semantic_target_layout_bytes();
+        let start = preimage.as_ptr() as usize;
+        let end = start + preimage.len();
+        for text in [
+            view.rustc_llvm_target,
+            view.live_rustc_data_layout,
+            view.target_cpu,
+            view.target_features,
+        ] {
+            let pointer = text.as_ptr() as usize;
+            assert!(pointer >= start && pointer + text.len() <= end);
+        }
+        let reconstructed = canonical_semantic_target_layout_transcript_v1(
+            view.rustc_llvm_target,
+            view.live_rustc_data_layout,
+            view.default_pointer_width_bits,
+            view.target_cpu,
+            view.target_features,
+        )
+        .unwrap();
+        assert_eq!(&*reconstructed, preimage);
+        assert!(!owner.grants_authority());
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_cached_final_receipt_matches_v3_golden_and_shared_range() {
+    // A const accessor can compose with the existing const identity getter; no
+    // content decoder, hashing callback or resource ledger is needed at access.
+    const fn identity(
+        owner: &InertProductionSemanticCapsuleV5,
+    ) -> InertFinalCompilerModuleCommitmentIdentityV3 {
+        owner.final_compiler_module_commitment().identity()
+    }
+    let preimage = b"FFI alone admits this";
+    let expected =
+        InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(preimage.to_vec())
+            .unwrap();
+    let golden = [
+        0x18, 0x2d, 0x73, 0xe7, 0xa9, 0xa7, 0xc1, 0x8f, 0x62, 0x6a, 0x57, 0x60, 0x4b, 0x1f, 0xb7,
+        0x5d, 0xa2, 0x13, 0xa3, 0xbb, 0xa9, 0x4a, 0xab, 0x5c, 0xc6, 0x93, 0x55, 0xa8, 0x68, 0x96,
+        0x93, 0x1a,
+    ];
+    assert_eq!(expected.identity().sha256(), &golden);
+    assert_eq!(
+        golden,
+        hash(
+            b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-COMPILER-MODULE-COMMITMENT/V3\0",
+            preimage,
+        )
+    );
+    assert_ne!(golden, <[u8; 32]>::from(Sha256::digest(preimage)));
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let (ml, metadata) = metadata(profile);
+        let (cl, bytes) = capsule(&metadata);
+        let mut backing = Vec::with_capacity(bytes.len() + 4096);
+        backing.extend_from_slice(&[7; 13]);
+        backing.extend_from_slice(&bytes);
+        backing.extend_from_slice(&[9; 17]);
+        let backing = Arc::new(backing);
+        let weak = Arc::downgrade(&backing);
+        let owner = InertProductionSemanticCapsuleV5::decode_shared_vec(
+            backing.clone(),
+            13..13 + bytes.len(),
+        )
+        .unwrap();
+        let at = 13
+            + cl.metadata_range().start
+            + NATIVE_CONDITIONAL_METADATA_HEADER_BYTES_V2
+            + ml.final_module_commitment_range().start;
+        let cached = owner.final_compiler_module_commitment();
+        assert_eq!(cached, &expected);
+        assert_eq!(cached.canonical_preimage().as_ptr(), backing[at..].as_ptr());
+        assert_eq!(
+            owner.final_module_commitment_bytes().as_ptr(),
+            backing[at..].as_ptr()
+        );
+        assert_eq!(identity(&owner).byte_len(), preimage.len() as u64);
+        let references = Arc::strong_count(&backing);
+        for _ in 0..32 {
+            assert!(std::ptr::eq(
+                owner.final_compiler_module_commitment(),
+                cached
+            ));
+            assert_eq!(identity(&owner), expected.identity());
+            assert_eq!(Arc::strong_count(&backing), references);
+        }
+        drop(backing);
+        drop(bytes);
+        drop(metadata);
+        assert_eq!(owner.final_module_commitment_bytes(), preimage);
+        assert_eq!(identity(&owner).sha256(), &golden);
+        assert!(weak.upgrade().is_some());
+        assert!(!owner.grants_authority());
+        drop(owner);
+        assert!(weak.upgrade().is_none());
+    }
+}
+
+#[test]
+fn conditional_capsule_v5_resealed_final_preimage_changes_only_inert_content() {
+    let (ml, mut metadata) = metadata(Profile::Gfx942);
+    let (_, bytes) = capsule(&metadata);
+    let original = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+    metadata[ml.final_module_commitment_range().start] ^= 1;
+    seal_native_conditional_metadata_v1(ml, &mut metadata, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    let (_, bytes) = capsule(&metadata);
+    let changed = InertProductionSemanticCapsuleV5::decode_owned(bytes).unwrap();
+    assert_ne!(
+        original.final_module_commitment_bytes(),
+        changed.final_module_commitment_bytes()
+    );
+    assert_ne!(
+        original.final_compiler_module_commitment().identity(),
+        changed.final_compiler_module_commitment().identity(),
+    );
+    assert_eq!(
+        changed.final_compiler_module_commitment(),
+        &InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+            changed.final_module_commitment_bytes().to_vec(),
+        )
+        .unwrap(),
+    );
+    // Lineage still accepts an opaque leaf. Only FFI may validate its schema/module join.
+    assert!(!original.grants_authority());
+    assert!(!changed.grants_authority());
+}
+
+#[test]
+fn conditional_metadata_v2_preserves_v1_and_shared_roster_ranges() {
+    let (v1_layout, legacy) = metadata(Profile::Gfx942);
+    let (layout, bytes) = metadata_v2(&legacy, b"src2");
+    let frame = read_native_conditional_metadata_v2(&bytes, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert_eq!(&bytes[..16], b"F2NCM2\0\0\x02\0\x01\0\x30\0\0\0");
+    assert_eq!(layout.metadata_range(), 48..48 + legacy.len());
+    assert_eq!(frame.metadata().canonical_bytes(), legacy);
+    assert_eq!(
+        frame.metadata().canonical_bytes().as_ptr(),
+        bytes[layout.metadata_range()].as_ptr()
+    );
+    assert_eq!(
+        frame.policy_roster().canonical_bytes().as_ptr(),
+        bytes[layout.policy_roster_range()].as_ptr()
+    );
+    assert_eq!(frame.identity().byte_len(), bytes.len() as u64);
+    assert_eq!(
+        *frame.identity().sha256(),
+        hash(
+            b"FE2O3/NATIVE-CONDITIONAL-METADATA/V2\0",
+            &bytes[..bytes.len() - 32]
+        )
+    );
+    assert!(!frame.grants_authority());
+    assert!(!frame.policy_roster().grants_authority());
+    let (cl, capsule) = capsule_members(&bytes, &carrier(&output().1));
+    let borrowed =
+        read_inert_production_semantic_capsule_v5(&capsule, LIMIT, |_| Ok::<_, ()>(())).unwrap();
+    assert_eq!(borrowed.metadata().canonical_bytes(), legacy);
+    assert_eq!(borrowed.metadata_v2().canonical_bytes(), bytes);
+    assert_eq!(
+        borrowed.policy_roster().canonical_bytes(),
+        frame.policy_roster().canonical_bytes()
+    );
+    let mut backing = vec![7; 13];
+    backing.extend_from_slice(&capsule);
+    backing.extend_from_slice(&[9; 17]);
+    let backing = Arc::new(backing);
+    let owner = InertProductionSemanticCapsuleV5::decode_shared_vec(
+        backing.clone(),
+        13..13 + capsule.len(),
+    )
+    .unwrap();
+    let base = 13 + cl.metadata_range().start;
+    assert_eq!(
+        owner.policy_roster_bytes().as_ptr(),
+        backing[base + layout.policy_roster_range().start..].as_ptr()
+    );
+    assert_eq!(
+        owner.semantic_target_layout_bytes().as_ptr(),
+        backing[base
+            + layout.metadata_range().start
+            + v1_layout.semantic_target_layout_range().start..]
+            .as_ptr()
+    );
+    assert_eq!(
+        owner.policy_roster_bytes(),
+        frame.policy_roster().canonical_bytes()
+    );
+}
+
+#[test]
+fn conditional_v2_and_v5_reject_resealed_downgrades_and_source_mismatches() {
+    let (_, legacy) = metadata(Profile::Gfx942);
+    assert!(read_native_conditional_metadata_v2(&legacy, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    let carrier = carrier(&output().1);
+    let (_, downgrade) = capsule_members(&legacy, &carrier);
+    assert!(matches!(
+        read_inert_production_semantic_capsule_v5(&downgrade, LIMIT, |_| Ok::<_, ()>(())),
+        Err(InertProductionSemanticCapsuleErrorV5::Metadata(
+            NativeConditionalMetadataErrorV2::Header
+        ))
+    ));
+    assert!(InertProductionSemanticCapsuleV5::decode_owned(downgrade).is_err());
+    for source in [&b"src3"[..], &b"source longer"[..]] {
+        let (_, metadata) = metadata_v2(&legacy, source);
+        let (_, bytes) = capsule_members(&metadata, &carrier);
+        assert!(matches!(
+            read_inert_production_semantic_capsule_v5(&bytes, LIMIT, |_| Ok::<_, ()>(())),
+            Err(InertProductionSemanticCapsuleErrorV5::SourceIdentity)
+        ));
+        assert!(InertProductionSemanticCapsuleV5::decode_owned(bytes).is_err());
+    }
+    let (layout, original) = metadata_v2(&legacy, b"src2");
+    for field in [24..32, 32..64] {
+        let mut changed = original.clone();
+        let roster = &mut changed[layout.policy_roster_range()];
+        roster[field.start] ^= 1;
+        let end = roster.len() - 32;
+        let digest = hash(
+            b"FE2O3/NATIVE-CONDITIONAL-POLICY-ROSTER/V1\0",
+            &roster[..end],
+        );
+        roster[end..].copy_from_slice(&digest);
+        seal_native_conditional_metadata_v2(layout, &mut changed, LIMIT, |_| Ok::<_, ()>(()))
+            .unwrap();
+        assert!(read_native_conditional_metadata_v2(&changed, LIMIT, |_| Ok::<_, ()>(())).is_ok());
+        let (_, bytes) = capsule_members(&changed, &carrier);
+        assert!(matches!(
+            read_inert_production_semantic_capsule_v5(&bytes, LIMIT, |_| Ok::<_, ()>(())),
+            Err(InertProductionSemanticCapsuleErrorV5::SourceIdentity)
+        ));
+    }
+}
+
+#[test]
+fn conditional_v2_strict_envelope_nested_mutations_truncation_and_bounds() {
+    let (_, legacy) = metadata(Profile::Gfx942);
+    let (layout, original) = metadata_v2(&legacy, b"src2");
+    for end in 0..original.len() {
+        assert!(
+            read_native_conditional_metadata_v2(&original[..end], LIMIT, |_| Ok::<_, ()>(()))
+                .is_err()
+        );
+    }
+    for at in [0, 8, 10, 12, 16, 24, 32, 40, 47] {
+        let mut bytes = original.clone();
+        bytes[at] ^= 1;
+        let end = bytes.len() - 32;
+        let digest = hash(b"FE2O3/NATIVE-CONDITIONAL-METADATA/V2\0", &bytes[..end]);
+        bytes[end..].copy_from_slice(&digest);
+        assert!(read_native_conditional_metadata_v2(&bytes, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    }
+    for at in [
+        layout.metadata_range().start,
+        layout.policy_roster_range().start,
+        layout.policy_roster_range().end - 1,
+    ] {
+        let mut bytes = original.clone();
+        bytes[at] ^= 1;
+        seal_native_conditional_metadata_v2(layout, &mut bytes, LIMIT, |_| Ok::<_, ()>(()))
+            .unwrap();
+        assert!(read_native_conditional_metadata_v2(&bytes, LIMIT, |_| Ok::<_, ()>(())).is_err());
+    }
+    for (first, second) in [
+        (0, 1),
+        (1, 0),
+        (MAX_NATIVE_CONDITIONAL_METADATA_BYTES_V1 + 1, 1),
+        (1, MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_BYTES_V1 + 1),
+        (usize::MAX, usize::MAX),
+    ] {
+        assert!(NativeConditionalMetadataLayoutV2::new::<()>(first, second).is_err());
+    }
+    let maximum = NativeConditionalMetadataLayoutV2::new::<()>(
+        MAX_NATIVE_CONDITIONAL_METADATA_BYTES_V1,
+        MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_BYTES_V1,
+    )
+    .unwrap();
+    assert_eq!(
+        maximum.encoded_len(),
+        MAX_NATIVE_CONDITIONAL_METADATA_BYTES_V2
+    );
+    assert_eq!(
+        maximum.policy_roster_range().end + 32,
+        maximum.encoded_len()
+    );
+    let (_, capsule) = capsule_members(&original, &carrier(&output().1));
+    for end in 0..capsule.len() {
+        assert!(
+            read_inert_production_semantic_capsule_v5(&capsule[..end], LIMIT, |_| Ok::<_, ()>(()))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn conditional_v2_v5_exact_work_and_final_source_hash_refusal() {
+    let (_, legacy) = metadata(Profile::Gfx942);
+    let (layout, metadata) = metadata_v2(&legacy, b"src2");
+    let (_, capsule) = capsule_members(&metadata, &carrier(&output().1));
+    let mut costs = Vec::new();
+    read_inert_production_semantic_capsule_v5(&capsule, LIMIT, |n| {
+        costs.push(n);
+        Ok::<_, u8>(())
+    })
+    .unwrap();
+    assert_eq!(*costs.last().unwrap(), b"src2".len() + 128 + 32);
+    for fail in 0..costs.len() {
+        let mut call = 0;
+        let result = read_inert_production_semantic_capsule_v5(&capsule, LIMIT, |_| {
+            let refused = call == fail;
+            call += 1;
+            if refused { Err(37_u8) } else { Ok(()) }
+        });
+        assert!(result.is_err());
+        assert_eq!(call, fail + 1);
+        if fail == costs.len() - 1 {
+            assert!(matches!(
+                result,
+                Err(InertProductionSemanticCapsuleErrorV5::Charge(37))
+            ));
+        }
+    }
+    let total: usize = costs.iter().sum();
+    for limit in [total - 1, total] {
+        let mut remaining = limit;
+        let result = read_inert_production_semantic_capsule_v5(&capsule, LIMIT, |n| {
+            remaining = remaining.checked_sub(n).ok_or(37_u8)?;
+            Ok::<_, u8>(())
+        });
+        assert_eq!(result.is_ok(), limit == total);
+    }
+    let mut paid = 0;
+    let mut bytes = metadata.clone();
+    seal_native_conditional_metadata_v2(layout, &mut bytes, LIMIT, |n| {
+        paid += n;
+        Ok::<_, u8>(())
+    })
+    .unwrap();
+    for limit in [paid - 1, paid] {
+        let mut bytes = metadata.clone();
+        bytes[..48].fill(33);
+        let before = bytes.clone();
+        let result = seal_native_conditional_metadata_v2(layout, &mut bytes, LIMIT, |n| {
+            if n > limit { Err(37_u8) } else { Ok(()) }
+        });
+        if limit < paid {
+            assert!(matches!(
+                result,
+                Err(NativeConditionalMetadataErrorV2::Charge(37))
+            ));
+            assert_eq!(bytes, before);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(bytes, metadata);
+        }
+    }
+    struct Bomb;
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            panic!("callback destructor");
+        }
+    }
+    let mut bytes = metadata.clone();
+    bytes[..48].fill(33);
+    let before = bytes.clone();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let bomb = Bomb;
+        seal_native_conditional_metadata_v2(layout, &mut bytes, LIMIT, move |_| {
+            let _capture = &bomb;
+            Ok::<_, u8>(())
+        })
+        .unwrap();
+    }));
+    assert!(result.is_err());
+    assert_eq!(bytes, before);
+    assert_eq!(metadata_v2(&legacy, b"src2").1, metadata);
+}

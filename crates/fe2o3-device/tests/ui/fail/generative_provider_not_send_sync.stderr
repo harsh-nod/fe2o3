@@ -1,0 +1,183 @@
+error[E0277]: `*mut ()` cannot be sent between threads safely
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:7:12
+  |
+7 |     send::<KernelContext<'static>>();
+  |            ^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+  |
+  = help: within `KernelContext<'static>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `KernelContext<'static>`
+ --> src/context.rs
+  |
+  | pub struct KernelContext<
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `send`
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:3:12
+  |
+3 | fn send<T: Send>() {}
+  |            ^^^^ required by this bound in `send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:8:12
+  |
+8 |     sync::<KernelContext<'static>>();
+  |            ^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+  |
+  = help: within `KernelContext<'static>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `KernelContext<'static>`
+ --> src/context.rs
+  |
+  | pub struct KernelContext<
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `sync`
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:4:12
+  |
+4 | fn sync<T: Sync>() {}
+  |            ^^^^ required by this bound in `sync`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:9:12
+  |
+9 |     send::<WorkgroupCapability<'static, ()>>();
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+  |
+  = help: within `WorkgroupCapability<'static, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `WorkgroupCapability<'static, ()>`
+ --> src/execution.rs
+  |
+  | pub struct WorkgroupCapability<'workgroup, KernelBrand, Epoch: SynchronizationEpoch = InitialEpoch>
+  |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `send`
+ --> tests/ui/fail/generative_provider_not_send_sync.rs:3:12
+  |
+3 | fn send<T: Send>() {}
+  |            ^^^^ required by this bound in `send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:10:12
+   |
+10 |     sync::<WorkgroupCapability<'static, ()>>();
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+   |
+   = help: within `WorkgroupCapability<'static, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `WorkgroupCapability<'static, ()>`
+  --> src/execution.rs
+   |
+   | pub struct WorkgroupCapability<'workgroup, KernelBrand, Epoch: SynchronizationEpoch = InitialEpoch>
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `sync`
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:4:12
+   |
+ 4 | fn sync<T: Sync>() {}
+   |            ^^^^ required by this bound in `sync`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:11:12
+   |
+11 |     send::<MaskedTile1D<'static, u32, 1, 1, ()>>();
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `MaskedTile1D<'static, u32, 1, 1, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `MaskedTile1D<'static, u32, 1, 1, ()>`
+  --> src/tile.rs
+   |
+   | pub struct MaskedTile1D<
+   |            ^^^^^^^^^^^^
+note: required by a bound in `send`
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:3:12
+   |
+ 3 | fn send<T: Send>() {}
+   |            ^^^^ required by this bound in `send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:12:12
+   |
+12 |     sync::<MaskedTile1D<'static, u32, 1, 1, ()>>();
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+   |
+   = help: within `MaskedTile1D<'static, u32, 1, 1, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `MaskedTile1D<'static, u32, 1, 1, ()>`
+  --> src/tile.rs
+   |
+   | pub struct MaskedTile1D<
+   |            ^^^^^^^^^^^^
+note: required by a bound in `sync`
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:4:12
+   |
+ 4 | fn sync<T: Sync>() {}
+   |            ^^^^ required by this bound in `sync`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:13:12
+   |
+13 |     send::<LaneFragment<'static, u32, 1, 1, ()>>();
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `LaneFragment<'static, u32, 1, 1, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `LaneFragment<'static, u32, 1, 1, ()>`
+  --> src/tile.rs
+   |
+   | pub struct LaneFragment<
+   |            ^^^^^^^^^^^^
+note: required by a bound in `send`
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:3:12
+   |
+ 3 | fn send<T: Send>() {}
+   |            ^^^^ required by this bound in `send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:14:12
+   |
+14 |     sync::<LaneFragment<'static, u32, 1, 1, ()>>();
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+   |
+   = help: within `LaneFragment<'static, u32, 1, 1, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `LaneFragment<'static, u32, 1, 1, ()>`
+  --> src/tile.rs
+   |
+   | pub struct LaneFragment<
+   |            ^^^^^^^^^^^^
+note: required by a bound in `sync`
+  --> tests/ui/fail/generative_provider_not_send_sync.rs:4:12
+   |
+ 4 | fn sync<T: Sync>() {}
+   |            ^^^^ required by this bound in `sync`

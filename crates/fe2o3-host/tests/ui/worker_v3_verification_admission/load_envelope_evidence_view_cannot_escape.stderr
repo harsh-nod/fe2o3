@@ -1,0 +1,17 @@
+error: lifetime may not live long enough
+  --> tests/ui/worker_v3_verification_admission/load_envelope_evidence_view_cannot_escape.rs:12:5
+   |
+ 7 |     owner: WorkerV3RosterVerificationRequestV1<'_, R>,
+   |     ----- has type `WorkerV3RosterVerificationRequestV1<'1, R>`
+...
+12 |     owner.load_envelope_evidence_view()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+
+error[E0515]: cannot return value referencing function parameter `owner`
+  --> tests/ui/worker_v3_verification_admission/load_envelope_evidence_view_cannot_escape.rs:12:5
+   |
+12 |     owner.load_envelope_evidence_view()
+   |     -----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     returns a value referencing data owned by the current function
+   |     `owner` is borrowed here

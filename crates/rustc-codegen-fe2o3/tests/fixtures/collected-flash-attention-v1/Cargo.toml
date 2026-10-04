@@ -1,0 +1,16 @@
+[package]
+name = "fe2o3-collected-flash-attention-v1-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The focused rustc test constructs a crate root whose path modules are these
+# exact public files. It never copies or rewrites the admitted kernel body.
+[lib]
+path = "../../../../../examples/flash_attention_v1/src/lib.rs"
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[workspace]

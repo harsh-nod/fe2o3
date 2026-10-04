@@ -1,0 +1,25 @@
+CASE: loop
+CHECK-BEFORE: module policy10-golden kernels=0 layouts=0
+CHECK-BEFORE: f0 f params=[v0:Bool,v1:U32,v2:U32] results=[U32]
+CHECK-BEFORE: f0:b0 block-id=90 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:U32] BitXor v1,v2
+CHECK-BEFORE: f0:b0:term Branch id=200 [v10]
+CHECK-BEFORE: f0:b1 block-id=200 params=[v20:U32]
+CHECK-BEFORE: f0:b1:o0 [v11:U32] BitXor v1,v2
+CHECK-BEFORE: f0:b1:o1 [v21:U32] BitXor v20,v11
+CHECK-BEFORE: f0:b1:o2 [v22:U32] BitXor v20,v11
+CHECK-BEFORE: f0:b1:term Conditional v0 then-id=200 [v21] else-id=300 [v22]
+CHECK-BEFORE: f0:b2 block-id=300 params=[v30:U32]
+CHECK-BEFORE: f0:b2:term Return [v30]
+CHECK-AFTER: module policy10-golden kernels=0 layouts=0
+CHECK-AFTER: f0 f params=[v0:Bool,v1:U32,v2:U32] results=[U32]
+CHECK-AFTER: f0:b0 block-id=90 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:U32] BitXor v1,v2
+CHECK-AFTER: f0:b0:term Branch id=200 [v10]
+CHECK-AFTER: f0:b1 block-id=200 params=[v20:U32]
+CHECK-AFTER: f0:b1:o0 [v21:U32] BitXor v20,v10
+CHECK-AFTER: f0:b1:term Conditional v0 then-id=200 [v21] else-id=300 [v21]
+CHECK-AFTER: f0:b2 block-id=300 params=[v30:U32]
+CHECK-AFTER: f0:b2:term Return [v30]
+CHECK-REMARK: policy=10 schema=18 passes=integer-neutral-worklist,local-pure-cse,dominance-pure-cse,dce
+CHECK-REMARK: changed=true independently-checked=true authority=false

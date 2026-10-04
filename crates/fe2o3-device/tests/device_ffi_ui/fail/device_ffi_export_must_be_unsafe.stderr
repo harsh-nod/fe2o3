@@ -1,0 +1,5 @@
+error: #[device_export] requires `pub unsafe extern "C" fn`; the attribute grants no safe-call authority
+  --> tests/device_ffi_ui/fail/device_ffi_export_must_be_unsafe.rs:10:5
+   |
+10 | pub extern "C" fn exported(value: u32) -> u32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

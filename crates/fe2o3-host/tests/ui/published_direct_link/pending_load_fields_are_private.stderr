@@ -1,0 +1,5 @@
+error[E0451]: field `inspection` of struct `PendingPublishedDirectLinkLoadAdmissionV1` is private
+ --> tests/ui/published_direct_link/pending_load_fields_are_private.rs:4:53
+  |
+4 |     let PendingPublishedDirectLinkLoadAdmissionV1 { inspection, .. } = token;
+  |                                                     ^^^^^^^^^^ private field

@@ -1,0 +1,16 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @boolean_mixed_branch: builtin.function <(builtin.integer i1, kernel.index, gpu.pointer <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(b: builtin.integer i1, i: kernel.index, p: gpu.pointer <builtin.integer ui32,Global,ReadOnly>):
+    gpu.cond_branch (b, i, p, b) [^left, ^right] [operand_segment_sizes: builtin.operand_segment_sizes [1, 2, 1]]: <(builtin.integer i1, kernel.index, gpu.pointer <builtin.integer ui32,Global,ReadOnly>, builtin.integer i1) -> ()>
+  ^left(j: kernel.index, q: gpu.pointer <builtin.integer ui32,Global,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+  ^right(c: builtin.integer i1):
+    gpu.cond_branch (c) [^exit, ^trap] [operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+  ^exit():
+    kernel.return () [] []: <() -> ()>
+  ^trap():
+    kernel.trap () [] []: <() -> ()>
+}

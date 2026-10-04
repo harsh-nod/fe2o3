@@ -1,0 +1,13 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: event 1 kill v0=d0
+// CHECK: event 3 use v0=d1
+// CHECK-NOT: undefined
+
+entry b0
+variables v0
+block b0
+def v0
+kill v0
+def v0
+use v0

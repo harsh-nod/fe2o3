@@ -1,0 +1,16 @@
+error: unused `OwnedDeviceOperation` that must be used
+ --> tests/ui/operation/fail/owned_handle_must_be_used.rs:6:14
+  |
+6 |     unsafe { OwnedDeviceOperation::submit_unchecked(stream, (), |_| Ok(()))? };
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: dropping a submitted device operation waits for completion
+note: the lint level is defined here
+ --> tests/ui/operation/fail/owned_handle_must_be_used.rs:1:9
+  |
+1 | #![deny(unused_must_use)]
+  |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+  |
+6 |     unsafe { let _ = OwnedDeviceOperation::submit_unchecked(stream, (), |_| Ok(()))?; };
+  |              +++++++                                                                +

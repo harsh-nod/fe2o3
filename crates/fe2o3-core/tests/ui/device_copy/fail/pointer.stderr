@@ -1,0 +1,94 @@
+error[E0277]: `*const u32` cannot be shared between threads safely
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^ `*const u32` cannot be shared between threads safely
+  |
+  = help: within `ContainsPointer`, the trait `Sync` is not implemented for `*const u32`
+note: required because it appears within the type `ContainsPointer`
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^
+note: required by a bound in `DeviceCopy`
+ --> src/device_copy.rs
+  |
+  | pub unsafe trait DeviceCopy: Copy + Send + Sync + 'static {}
+  |                                            ^^^^ required by this bound in `DeviceCopy`
+
+error[E0277]: `*const u32` cannot be sent between threads safely
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^ `*const u32` cannot be sent between threads safely
+  |
+  = help: within `ContainsPointer`, the trait `Send` is not implemented for `*const u32`
+note: required because it appears within the type `ContainsPointer`
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^
+note: required by a bound in `DeviceCopy`
+ --> src/device_copy.rs
+  |
+  | pub unsafe trait DeviceCopy: Copy + Send + Sync + 'static {}
+  |                                     ^^^^ required by this bound in `DeviceCopy`
+
+error[E0277]: the trait bound `*const u32: DeviceCopy` is not satisfied
+ --> tests/ui/device_copy/fail/pointer.rs:6:12
+  |
+6 |     value: *const u32,
+  |            ^^^^^^^^^^ the trait `DeviceCopy` is not implemented for `*const u32`
+  |
+help: the trait `DeviceCopy` is implemented for `u32`
+ --> src/device_copy.rs
+  |
+  |             unsafe impl DeviceCopy for $type {}
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | impl_device_copy_for_primitives!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64,);
+  | --------------------------------------------------------------------------------------------- in this macro invocation
+note: required by a bound in `__fe2o3_assert_device_copy`
+ --> tests/ui/device_copy/fail/pointer.rs:3:23
+  |
+3 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^ required by this bound in `__fe2o3_assert_device_copy`
+  = note: this error originates in the macro `impl_device_copy_for_primitives` which comes from the expansion of the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `*const u32` cannot be sent between threads safely
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^ `*const u32` cannot be sent between threads safely
+  |
+  = help: within `ContainsPointer`, the trait `Send` is not implemented for `*const u32`
+note: required because it appears within the type `ContainsPointer`
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^
+note: required by a bound in `__fe2o3_assert_send`
+ --> tests/ui/device_copy/fail/pointer.rs:3:23
+  |
+3 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^ required by this bound in `__fe2o3_assert_send`
+  = note: this error originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `*const u32` cannot be shared between threads safely
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^ `*const u32` cannot be shared between threads safely
+  |
+  = help: within `ContainsPointer`, the trait `Sync` is not implemented for `*const u32`
+note: required because it appears within the type `ContainsPointer`
+ --> tests/ui/device_copy/fail/pointer.rs:5:8
+  |
+5 | struct ContainsPointer {
+  |        ^^^^^^^^^^^^^^^
+note: required by a bound in `__fe2o3_assert_sync`
+ --> tests/ui/device_copy/fail/pointer.rs:3:23
+  |
+3 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^ required by this bound in `__fe2o3_assert_sync`
+  = note: this error originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)

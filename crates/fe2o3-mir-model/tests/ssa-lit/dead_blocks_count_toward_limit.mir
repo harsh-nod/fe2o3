@@ -1,0 +1,9 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA planner requires 2 blocks, exceeding the limit 1
+
+entry b0
+variables v0
+limits blocks=1
+block b0
+block b1

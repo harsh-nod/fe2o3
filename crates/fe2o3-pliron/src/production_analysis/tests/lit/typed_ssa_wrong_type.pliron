@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: kernel.br_args operand and successor argument types differ
+builtin.func @typed_ssa_wrong_type: builtin.function <(builtin.integer i1) -> ()>
+{
+  ^entry(b: builtin.integer i1):
+    kernel.br_args (b) [^exit] []: <(builtin.integer i1) -> ()>
+  ^exit(i: kernel.index):
+    kernel.return () [] []: <() -> ()>
+}

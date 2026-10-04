@@ -1,0 +1,16 @@
+CASE: neutral-then-cse
+CHECK-BEFORE: module policy10-golden kernels=0 layouts=0
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-BEFORE: f0:b0 block-id=90 params=[]
+CHECK-BEFORE: f0:b0:o0 [v2:U32] U32 0
+CHECK-BEFORE: f0:b0:o1 [v11:U32] BitXor v0,v2
+CHECK-BEFORE: f0:b0:o2 [v12:U32] BitXor v0,v1
+CHECK-BEFORE: f0:b0:o3 [v13:U32] BitXor v11,v1
+CHECK-BEFORE: f0:b0:term Return [v13]
+CHECK-AFTER: module policy10-golden kernels=0 layouts=0
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-AFTER: f0:b0 block-id=90 params=[]
+CHECK-AFTER: f0:b0:o0 [v12:U32] BitXor v0,v1
+CHECK-AFTER: f0:b0:term Return [v12]
+CHECK-REMARK: policy=10 schema=18 passes=integer-neutral-worklist,local-pure-cse,dominance-pure-cse,dce
+CHECK-REMARK: changed=true independently-checked=true authority=false

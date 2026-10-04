@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*view` as mutable more than once at a time
+ --> tests/ui/fail/static_view_mutable_alias.rs:5:18
+  |
+4 |     let first = view.at_const_mut(StaticIndex::<4, 0>::CHECKED);
+  |                 ---- first mutable borrow occurs here
+5 |     let second = view.at_const_mut(StaticIndex::<4, 1>::CHECKED);
+  |                  ^^^^ second mutable borrow occurs here
+6 |     *first += *second;
+  |     ----------------- first borrow later used here

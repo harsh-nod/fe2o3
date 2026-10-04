@@ -1,0 +1,11 @@
+error[E0451]: fields `raw`, `_index_space` and `_not_send_sync` of struct `DisjointIndex` are private
+ --> tests/ui/fail/disjoint_index_private_fields.rs:6:9
+  |
+5 |     let _ = DisjointIndex::<Index1D> {
+  |             ------------------------ in this type
+6 |         raw: 0,
+  |         ^^^ private field
+7 |         _index_space: PhantomData,
+  |         ^^^^^^^^^^^^ private field
+8 |         _not_send_sync: PhantomData,
+  |         ^^^^^^^^^^^^^^ private field

@@ -1,0 +1,9 @@
+[package]
+name = "fe2o3-memory-v1-compiler-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../fe2o3-host" }

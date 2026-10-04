@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @bounds_positive_remainder: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(epoch_v0: kernel.index ):
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 9, gpu_execution_global_x: gpu.execution_extent 1, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
+    v1 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[2]>)>;
+    two_v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 2]: <() -> (kernel.index )>;
+    slot_v3 = kernel.index_binary (epoch_v0, two_v2) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.access (v1, slot_v3) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[2]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

@@ -1,0 +1,22 @@
+error[E0277]: `*mut ()` cannot be sent between threads safely
+ --> tests/ui/fail/device_math_is_not_send.rs:6:20
+  |
+6 |     require_send::<DeviceMath>();
+  |                    ^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+  |
+  = help: within `DeviceMath`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `DeviceMath`
+ --> src/math.rs
+  |
+  | pub struct DeviceMath {
+  |            ^^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/ui/fail/device_math_is_not_send.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`

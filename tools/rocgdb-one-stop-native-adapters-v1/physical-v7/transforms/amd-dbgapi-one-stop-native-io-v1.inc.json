@@ -1,0 +1,62 @@
+{
+  "schema": "fe2o3-disabled-physical-v7-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+  "before": {
+    "bytes": 10505,
+    "sha256": "e44093157bd9332922e4966282c73777288e1f1dd6f668a98d0121d95f5de3eb"
+  },
+  "after": {
+    "bytes": 11103,
+    "sha256": "4edd5dfe27ea29a964beb89899a9421feb8fa4d0a901201b003544df162433e2"
+  },
+  "changes": [
+    {
+      "beforeOffset": 1016,
+      "afterOffset": 1016,
+      "before": "  if (m_owner.why ()==failure::native_result\n",
+      "after": "  if (m_owner.why ()==failure::checkpoint_changed\n      && m_checkpoint_note.site!=checkpoint_site::none)\n    error (\"fixed owned one-stop native relation refused (%u); commit-site=%u; checkpoint-site=%u\",\n           static_cast<unsigned> (m_owner.why ()),\n           static_cast<unsigned> (m_owner.first_commit_site ()),\n           static_cast<unsigned> (m_checkpoint_note.site));\n  if (m_owner.why ()==failure::native_result\n"
+    },
+    {
+      "beforeOffset": 3486,
+      "afterOffset": 3868,
+      "before": "  require (m_hash.finish (m_digest) && m_digest==expected,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::hash_finish, [&] { return m_hash.finish (m_digest) && m_digest==expected; })"
+    },
+    {
+      "beforeOffset": 3723,
+      "afterOffset": 4134,
+      "before": "  require (bytes==5312 || bytes==12288 || bytes==4096,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::hash_inferior_extent, [&] { return bytes==5312 || bytes==12288 || bytes==4096; })"
+    },
+    {
+      "beforeOffset": 4042,
+      "afterOffset": 4491,
+      "before": "    require (checked_sum (address,at,current),failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::hash_inferior_address, [&] { return checked_sum (address,at,current); })"
+    },
+    {
+      "beforeOffset": 4551,
+      "afterOffset": 5039,
+      "before": "  require (m_exec_fd>=0 && m_file_passes<2,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::executable_pass, [&] { return m_exec_fd>=0 && m_file_passes<2; })"
+    },
+    {
+      "beforeOffset": 4733,
+      "afterOffset": 5254,
+      "before": "  require (::fstat (m_exec_fd,&before)==0 && S_ISREG (before.st_mode)\n           && before.st_size==static_cast<off_t> (target_bytes)\n           && before.st_dev==m_exec_identity.st_dev && before.st_ino==m_exec_identity.st_ino\n           && before.st_size==m_exec_identity.st_size\n           && before.st_mtim.tv_sec==m_exec_identity.st_mtim.tv_sec\n           && before.st_mtim.tv_nsec==m_exec_identity.st_mtim.tv_nsec\n           && before.st_ctim.tv_sec==m_exec_identity.st_ctim.tv_sec\n           && before.st_ctim.tv_nsec==m_exec_identity.st_ctim.tv_nsec,\n           failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::executable_before, [&] { return ::fstat (m_exec_fd,&before)==0 && S_ISREG (before.st_mode)\n           && before.st_size==static_cast<off_t> (target_bytes)\n           && before.st_dev==m_exec_identity.st_dev && before.st_ino==m_exec_identity.st_ino\n           && before.st_size==m_exec_identity.st_size\n           && before.st_mtim.tv_sec==m_exec_identity.st_mtim.tv_sec\n           && before.st_mtim.tv_nsec==m_exec_identity.st_mtim.tv_nsec\n           && before.st_ctim.tv_sec==m_exec_identity.st_ctim.tv_sec\n           && before.st_ctim.tv_nsec==m_exec_identity.st_ctim.tv_nsec; })"
+    },
+    {
+      "beforeOffset": 6109,
+      "afterOffset": 6653,
+      "before": "  require (eof==0,failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::executable_eof, [&] { return eof==0; })"
+    },
+    {
+      "beforeOffset": 6190,
+      "afterOffset": 6766,
+      "before": "  require (::fstat (m_exec_fd,&after)==0 && after.st_dev==before.st_dev\n           && after.st_ino==before.st_ino && after.st_size==before.st_size\n           && after.st_mtim.tv_sec==before.st_mtim.tv_sec\n           && after.st_mtim.tv_nsec==before.st_mtim.tv_nsec\n           && after.st_ctim.tv_sec==before.st_ctim.tv_sec\n           && after.st_ctim.tv_nsec==before.st_ctim.tv_nsec,\n           failure::checkpoint_changed)",
+      "after": "  checkpoint_require (checkpoint_site::executable_after, [&] { return ::fstat (m_exec_fd,&after)==0 && after.st_dev==before.st_dev\n           && after.st_ino==before.st_ino && after.st_size==before.st_size\n           && after.st_mtim.tv_sec==before.st_mtim.tv_sec\n           && after.st_mtim.tv_nsec==before.st_mtim.tv_nsec\n           && after.st_ctim.tv_sec==before.st_ctim.tv_sec\n           && after.st_ctim.tv_nsec==before.st_ctim.tv_nsec; })"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schema": "disabled-physical-v4-finish-event-context-extraction-v1",
+  "start": "void native_adapter::before_finish_step (",
+  "end": "void native_adapter::about_to_proceed ()",
+  "fixture_prefix": "// SPDX-License-Identifier: GPL-3.0-or-later\n// Exact new body followed by exact original body with method name only changed.\n",
+  "public_preimages": [
+    {
+      "file": "amd-dbgapi-one-stop-native-resume-v1.inc",
+      "path": "src/amd-dbgapi-one-stop-native-resume-v1.inc",
+      "bytes": 26297,
+      "sha256": "37ff3cc9aa99da6fed9d65dcdfb1400f814a9b046aa145d5b68f2a0e8f465d39"
+    },
+    {
+      "file": "amd-dbgapi-one-stop-native-v1.h",
+      "path": "src/amd-dbgapi-one-stop-native-v1.h",
+      "bytes": 11432,
+      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+    }
+  ],
+  "reviewed_method_token_sha256": "bf82ca38a03c298880d89ea0a37fba969fe55a1a9c142543d7447ac885bd33ca",
+  "reviewed_folded_header_token_sha256": "552eb6c60dadb8d89a07a6e7a870ae2aa7c6379b9f79aefe0a3866d2b5d2b13b",
+  "private_source_proposal": {
+    "manifest_sha256": "54b628c50e47c50198e0b10e8dbea8705d2f017b658596151f8d9b5aa5c99f4b",
+    "method": {
+      "path": "amd-dbgapi-one-stop-native-resume-v1.inc",
+      "bytes": 27118,
+      "sha256": "365731375b3d2ab263a62bf9e10ef7f0cbe0c94b15a88b0f91c37900c79019fd"
+    },
+    "header": {
+      "path": "amd-dbgapi-one-stop-native-v1.h",
+      "bytes": 11833,
+      "sha256": "8d2194b9bb1458799e89a2e5e02f7327cee2241f17b61e81753012649e4d97ef"
+    }
+  },
+  "cpp_fixture_sha256": "b94f1bd7fbd474d7f810c08e225292350844ec09b39d3adb416444d247c651a9",
+  "owner_core_sha256": "860ec536174cdae094d31026729fe46b152b35ecabf981e04884e5fd546c9f89",
+  "unchanged_mi_input_sha256": "6fb6c5eda0fd97e8e45ac6704266d0a9e8d8ec542788fa49970a9c3d74dbbf82",
+  "unchanged_first35_transforms_sha256": "c17253f33b00c89a5ff460554fff6204d33f667741c2c6039b9c22e30ab258d1",
+  "cpp_mock_groups": 16,
+  "source_tests": 7,
+  "native_authority": false
+}

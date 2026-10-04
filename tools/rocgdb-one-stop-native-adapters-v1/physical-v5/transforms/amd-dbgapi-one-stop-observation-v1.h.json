@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v5-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-observation-v1.h",
+  "before": {
+    "bytes": 1472,
+    "sha256": "f6e83271aa1412a0081100e2e65404fbdf382b0221c09e24c778157a42d70903"
+  },
+  "after": {
+    "bytes": 2406,
+    "sha256": "6ed782e5668957da2db3278e954977270672f93f23780d742b90b57ee5f7d849"
+  },
+  "changes": [
+    {
+      "beforeOffset": 118,
+      "afterOffset": 118,
+      "before": "#ifndef GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H\n#define GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H\n#if HAVE_AMD_DBGAPI\n#include \"target.h\"\n#include <amd-dbgapi/amd-dbgapi.h>\n#include <cstddef>\n#include <cstdint>\n#include <exception>\nnamespace amd_owned_one_stop_native_v1 {\nbool selected () noexcept;\nvoid before_resume (ptid_t,int,gdb_signal);\nvoid after_resume ();\nvoid before_commit ();\nvoid after_commit ();\nvoid unwind () noexcept;\nvoid infrun_begin (thread_info *,ptid_t,bool,gdb_signal,bool,bool,bool,bool);\nvoid infrun_end () noexcept;\nvoid before_finish_step (thread_info *,const target_waitstatus &,bool,bool,std::uint64_t);\n",
+      "after": "#ifndef GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H\n#define GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H\n#if HAVE_AMD_DBGAPI\n#include \"target.h\"\n#include <amd-dbgapi/amd-dbgapi.h>\n#include <cstddef>\n#include <cstdint>\n#include <exception>\nstruct breakpoint;\nstruct program_space;\nnamespace amd_owned_one_stop_native_v1 {\nbool selected () noexcept;\n// This guard is constructed only by the stock internal_breakpoint::re_set\n// deletion cases. It retains no breakpoint pointer beyond begin/consume.\nbool before_internal_breakpoint_reset (breakpoint *,program_space *);\nvoid after_internal_breakpoint_reset ();\nvoid abort_breakpoint_refresh () noexcept;\nclass internal_breakpoint_reset_guard final {\n  bool m_active;\npublic:\n  internal_breakpoint_reset_guard (breakpoint *bp,program_space *pspace)\n    : m_active (before_internal_breakpoint_reset (bp,pspace)) {}\n  internal_breakpoint_reset_guard (const internal_breakpoint_reset_guard &)=delete;\n  internal_breakpoint_reset_guard &operator= (const internal_breakpoint_reset_guard &)=delete;\n  ~internal_breakpoint_reset_guard () noexcept {\n    if (m_active) abort_breakpoint_refresh ();\n  }\n  void complete () {\n    if (m_active) { after_internal_breakpoint_reset (); m_active=false; }\n  }\n};\nvoid before_resume (ptid_t,int,gdb_signal);\nvoid after_resume ();\nvoid before_commit ();\nvoid after_commit ();\nvoid unwind () noexcept;\nvoid infrun_begin (thread_info *,ptid_t,bool,gdb_signal,bool,bool,bool,bool);\nvoid infrun_end () noexcept;\nvoid before_finish_step (thread_info *,const target_waitstatus &,bool,bool,std::uint64_t);\n"
+    }
+  ]
+}

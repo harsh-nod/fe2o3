@@ -1,0 +1,5 @@
+error[E0599]: no method named `launch` found for struct `LoadedWorkerV3HsaExecutableV1<K, A>` in the current scope
+  --> tests/ui/worker_v3_verification_admission/loaded_launch_is_unavailable.rs:11:12
+   |
+11 |     loaded.launch();
+   |            ^^^^^^ method not found in `LoadedWorkerV3HsaExecutableV1<K, A>`

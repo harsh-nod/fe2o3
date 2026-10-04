@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `fe2o3_core::GpuContext`
+ --> tests/ui/default_runtime_surface/legacy_context_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_core::GpuContext;
+  |     ^^^^^^^^^^^^^^^^^^^^^^ no `GpuContext` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "qualification-legacy-hip-runtime")]
+  |       -------------------------------------------- the item is gated behind the `qualification-legacy-hip-runtime` feature
+  | pub use context::GpuContext;
+  |                  ^^^^^^^^^^

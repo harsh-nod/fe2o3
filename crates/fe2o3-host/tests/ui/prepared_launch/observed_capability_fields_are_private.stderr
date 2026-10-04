@@ -1,0 +1,11 @@
+error[E0616]: field `hip_capabilities` of struct `ObservedContext` is private
+ --> tests/ui/prepared_launch/observed_capability_fields_are_private.rs:4:13
+  |
+4 |     context.hip_capabilities = context.hip_capabilities;
+  |             ^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `hip_capabilities` of struct `ObservedContext` is private
+ --> tests/ui/prepared_launch/observed_capability_fields_are_private.rs:4:40
+  |
+4 |     context.hip_capabilities = context.hip_capabilities;
+  |                                        ^^^^^^^^^^^^^^^^ private field

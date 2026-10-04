@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.binary operand types differ
+builtin.func @native_data_wrong_binary_type: builtin.function <(builtin.integer ui32, builtin.integer ui64) -> ()>
+{
+  ^entry(x: builtin.integer ui32, y: builtin.integer ui64):
+    sum = gpu.binary (x, y) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.integer ui32, builtin.integer ui64) -> (builtin.integer ui32)>;
+    kernel.return () [] []: <() -> ()>
+}

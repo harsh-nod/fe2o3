@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-BOUNDS-001]
+// CHECK: required: 1 < 1
+builtin.func @race_layout_only_oob_read: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 58, gpu_execution_global_x: gpu.execution_extent 64, gpu_execution_global_y: gpu.execution_extent 2, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 581, kernel_noalias_class: kernel.noalias_class 58]: <() -> (kernel.ranked_view <32,false,[1]>)>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

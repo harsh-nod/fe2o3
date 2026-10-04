@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/ui/worker_v3_verification_admission/authenticated_roster_entry_cannot_escape.rs:13:5
+   |
+ 7 |     roster: &AuthenticatedWorkerV3RosterV1<R>,
+   |             - let's call the lifetime of this reference `'1`
+...
+13 |     roster.entry::<K>().unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

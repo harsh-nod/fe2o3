@@ -1,0 +1,32 @@
+error[E0451]: fields `manifest_digest`, `kernel_id`, `name`, `symbol`, `source_digest`, `executable_digest`, `code_object`, `payload_digest`, `target`, `required_capabilities`, `abi`, `launch` and `effective_launch` of struct `ArtifactKernelIdentityV1` are private
+  --> tests/ui/artifact_binding/identity_fields_are_private.rs:18:9
+   |
+17 |     let _identity = ArtifactKernelIdentityV1 {
+   |                     ------------------------ in this type
+18 |         manifest_digest,
+   |         ^^^^^^^^^^^^^^^ private field
+19 |         kernel_id: KernelId::from_bytes([0; 32]),
+   |         ^^^^^^^^^ private field
+20 |         name: Name::new("kernel").unwrap(),
+   |         ^^^^ private field
+21 |         symbol: Name::new("kernel.kd").unwrap(),
+   |         ^^^^^^ private field
+22 |         source_digest: DigestBytes::from_bytes([1; 32]),
+   |         ^^^^^^^^^^^^^ private field
+23 |         executable_digest: DigestBytes::from_bytes([2; 32]),
+   |         ^^^^^^^^^^^^^^^^^ private field
+24 |         code_object,
+   |         ^^^^^^^^^^^ private field
+25 |         payload_digest: PayloadDigest::new(
+   |         ^^^^^^^^^^^^^^ private field
+...
+29 |         target,
+   |         ^^^^^^ private field
+30 |         required_capabilities: vec![],
+   |         ^^^^^^^^^^^^^^^^^^^^^ private field
+31 |         abi,
+   |         ^^^ private field
+32 |         launch,
+   |         ^^^^^^ private field
+33 |         effective_launch,
+   |         ^^^^^^^^^^^^^^^^ private field

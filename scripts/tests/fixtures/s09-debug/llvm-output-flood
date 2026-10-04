@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Emit output until the caller's file-size resource limit stops the process."""
+
+import os
+
+
+chunk = b"x" * (64 * 1024)
+while True:
+    os.write(1, chunk)

@@ -1,0 +1,232 @@
+//! Whole actual Rust MIR census for declarative physical-entry primitives.
+//! The Rust body is one acyclic marker chain; this does not execute native steps.
+use crate::production_physical_entry_call_v37::{ActualPhysicalEntryCallV37, observe};
+use fe2o3_mir_model::semantic_mir_v1::{
+    SEMANTIC_PHYSICAL_ENTRY_MAX_OCCURRENCES_V37 as MAX_OCCURRENCES,
+    SemanticCompilerIntrinsicOperationV1 as Operation,
+};
+use rustc_middle::mir::{
+    Body, Operand, Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
+};
+use rustc_middle::ty::{Instance, TyCtxt};
+#[path = "production_physical_entry_transport_v37.rs"]
+mod transport;
+use transport::ArgumentTransport;
+
+pub(crate) const MAX_SOURCE_BLOCKS: usize = 4096;
+pub(crate) const MAX_SOURCE_ITEMS: usize = 65_536;
+
+#[derive(Clone, Copy)]
+pub(crate) struct Occurrence<'tcx> {
+    pub(crate) raw_block: u32,
+    pub(crate) actual: ActualPhysicalEntryCallV37<'tcx>,
+}
+pub(crate) struct Census<'tcx> {
+    calls: [Option<Occurrence<'tcx>>; MAX_OCCURRENCES],
+    count: usize,
+}
+impl<'tcx> Census<'tcx> {
+    pub(crate) fn calls(&self) -> impl Iterator<Item = Occurrence<'tcx>> + '_ {
+        self.calls[..self.count].iter().copied().flatten()
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.count
+    }
+}
+
+/// Checked before whole-body hashing and traversal. Fixed stack storage only;
+/// rustc queries and compiler RSS are not measured by this logical bound.
+pub(crate) fn require_body_bounds(body: &Body<'_>) -> Result<usize, &'static str> {
+    if body.basic_blocks.is_empty()
+        || body.basic_blocks.len() > MAX_SOURCE_BLOCKS
+        || !(6..=transport::MAX_LOCALS).contains(&body.local_decls.len())
+    {
+        return Err("physical-entry source body/local bound exceeded");
+    }
+    let mut items = body.local_decls.len();
+    for block in body.basic_blocks.iter() {
+        items = items
+            .checked_add(block.statements.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or("physical-entry source item overflow")?;
+        if items > MAX_SOURCE_ITEMS {
+            return Err("physical-entry source item bound exceeded");
+        }
+    }
+    Ok(items)
+}
+
+pub(crate) fn observe_root<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: Instance<'tcx>,
+    body: &Body<'tcx>,
+) -> Result<Census<'tcx>, &'static str> {
+    require_body_bounds(body)?;
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(root.def_id()).instantiate(tcx, root.args),
+    );
+    if body.arg_count != 5
+        || !body.return_ty().is_unit()
+        || !crate::production_complete_body_call_vnext::valid_root_signature(tcx, &signature)
+    {
+        return Err("physical-entry root signature differs");
+    }
+    for (index, ty) in signature.inputs().iter().enumerate() {
+        if body
+            .local_decls
+            .get(rustc_middle::mir::Local::from_usize(index + 1))
+            .is_none_or(|local| local.ty != *ty)
+        {
+            return Err("physical-entry root MIR argument type differs");
+        }
+    }
+    let mut transport = ArgumentTransport::new(body.local_decls.len())?;
+    let mut visited = [false; MAX_SOURCE_BLOCKS];
+    let mut census = Census {
+        calls: [None; MAX_OCCURRENCES],
+        count: 0,
+    };
+    let mut next = START_BLOCK;
+    let mut labels = 0usize;
+    let mut native = 0usize;
+    let mut fallthrough = 0usize;
+    loop {
+        let block = body
+            .basic_blocks
+            .get(next)
+            .ok_or("physical-entry source edge leaves body")?;
+        if visited[next.index()] || block.is_cleanup {
+            return Err("physical-entry source chain cycles or enters cleanup");
+        }
+        visited[next.index()] = true;
+        for statement in &block.statements {
+            match &statement.kind {
+                StatementKind::Nop => {}
+                StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
+                    transport.storage(local.index())?
+                }
+                StatementKind::Assign(assignment) => {
+                    let (destination, value) = &**assignment;
+                    if !destination.projection.is_empty() {
+                        return Err("physical-entry source writes a projection");
+                    }
+                    let Rvalue::Use(operand) = value else {
+                        return Err("physical-entry source computes outside authored instructions");
+                    };
+                    if destination.local.as_u32() == 0 {
+                        if !matches!(operand,Operand::Constant(value) if value.const_.ty().is_unit())
+                        {
+                            return Err("physical-entry return assignment is not unit");
+                        }
+                        continue;
+                    }
+                    if census.count != 0 {
+                        return Err(
+                            "physical-entry source performs argument transport after begin",
+                        );
+                    }
+                    let (source, moved) = match operand {
+                        Operand::Copy(place) => (place, false),
+                        Operand::Move(place) => (place, true),
+                        _ => {
+                            return Err(
+                                "physical-entry source contains a foreign argument assignment",
+                            );
+                        }
+                    };
+                    if !source.projection.is_empty()
+                        || destination.ty(&body.local_decls, tcx).ty
+                            != source.ty(&body.local_decls, tcx).ty
+                    {
+                        return Err(
+                            "physical-entry source argument transport projects or changes type",
+                        );
+                    }
+                    transport.assign(destination.local.index(), source.local.index(), moved)?;
+                }
+                _ => return Err("physical-entry source has an unadmitted statement"),
+            }
+        }
+        next = match &block.terminator().kind {
+            TerminatorKind::Goto { target } => *target,
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Continue | UnwindAction::Unreachable,
+                ..
+            } => {
+                if census.count == MAX_OCCURRENCES
+                    || !destination.projection.is_empty()
+                    || !destination.ty(&body.local_decls, tcx).ty.is_unit()
+                {
+                    return Err("physical-entry marker count or unit call destination differs");
+                }
+                let actual = match args.len() {
+                    0 => observe(tcx, root, body, func, &[])?,
+                    5 => observe(
+                        tcx,
+                        root,
+                        body,
+                        func,
+                        &[
+                            &args[0].node,
+                            &args[1].node,
+                            &args[2].node,
+                            &args[3].node,
+                            &args[4].node,
+                        ],
+                    )?,
+                    _ => return Err("physical-entry marker runtime arity differs"),
+                };
+                match actual.operation() {
+                    Operation::Gfx942PhysicalEntryBegin if census.count == 0 => {
+                        transport
+                            .consume_marker(actual.argument_locals(), actual.moved_arguments())?;
+                    }
+                    Operation::Gfx942PhysicalEntryLabel(_) if census.count != 0 => {
+                        labels += 1;
+                        if labels > 4 {
+                            return Err("physical-entry source exceeds four labels");
+                        }
+                    }
+                    Operation::Gfx942PhysicalEntryStep(step) if census.count > 1 && labels != 0 => {
+                        if step.opcode() == 18 {
+                            fallthrough += 1;
+                        } else {
+                            native += 1;
+                        }
+                        if native > 64 || fallthrough > 4 {
+                            return Err("physical-entry native/fallthrough bound exceeded");
+                        }
+                    }
+                    _ => return Err("physical-entry begin/label/step source order differs"),
+                }
+                census.calls[census.count] = Some(Occurrence {
+                    raw_block: next.as_u32(),
+                    actual,
+                });
+                census.count += 1;
+                *target
+            }
+            TerminatorKind::Return => {
+                transport.require_marker()?;
+                if !matches!(labels, 1 | 4)
+                    || native == 0
+                    || visited[..body.basic_blocks.len()].iter().any(|v| !*v)
+                {
+                    return Err(
+                        "physical-entry source labels, instructions or complete chain census differ",
+                    );
+                }
+                return Ok(census);
+            }
+            _ => {
+                return Err(
+                    "physical-entry source has a foreign call, Rust branch or hidden effect",
+                );
+            }
+        };
+    }
+}

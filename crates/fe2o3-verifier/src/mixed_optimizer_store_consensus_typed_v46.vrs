@@ -1,0 +1,171 @@
+// The classifiers below are closed images of the two authenticated inventories.
+// No integer stands for a pointer, allocation, descriptor or memory state.
+spec fn forwarding_pointer_separate_v46(pointer: MemoryPointerV30) -> bool {
+    !forwarding_selected_allocation_v46(pointer.allocation)
+    && match pointer.view {
+        None => true,
+        Some(view) => forall|i: int| 0 <= i < view.guards.len() ==>
+            !forwarding_selected_allocation_v46(view.guards[i].allocation),
+    }
+}
+
+spec fn forwarding_value_separate_v46(value: MemoryValueV30) -> bool {
+    match value {
+        MemoryValueV30::Undefined | MemoryValueV30::Unit
+        | MemoryValueV30::Scalar(_) | MemoryValueV30::Vector(_) => true,
+        MemoryValueV30::Pointer(pointer) => forwarding_pointer_separate_v46(pointer),
+        MemoryValueV30::Slice(slice) => forwarding_pointer_separate_v46(slice.pointer),
+    }
+}
+
+spec fn forwarding_heap_separate_v46(memory: ByteMemoryV30) -> bool {
+    forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
+        ({ let object = memory.live[allocation];
+            (forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] ==>
+                match object.bytes[i] {
+                    MemoryByteV37::Octet(_) => true,
+                    MemoryByteV37::PointerFragment { pointer, .. } =>
+                        forwarding_pointer_separate_v46(pointer),
+                })
+            && (forall|offset: int| object.relocations.contains_key(offset) ==>
+                forwarding_pointer_separate_v46(object.relocations[offset].pointer))
+            && (forwarding_selected_allocation_v46(allocation) ==>
+                forwarding_selected_object_shape_v46(allocation, object))
+        })
+}
+
+spec fn forwarding_selected_slot_v46(state: MemoryStateV30, slot: int) -> bool {
+    0 <= slot < forwarding_slot_count_v46()
+    && 0 <= forwarding_slot_definition_v46(slot) < state.values.len()
+    && match state.values[forwarding_slot_definition_v46(slot)] {
+        MemoryValueV30::Undefined => true,
+        MemoryValueV30::Pointer(pointer) => pointer.byte_offset == 0
+            && pointer.view.is_none()
+            && ({ let generation = private_generation_v30(state.generations,
+                    forwarding_slot_site_v46(slot));
+                0 < generation
+                && pointer.allocation == private_allocation_v30(
+                    forwarding_slot_site_v46(slot), generation - 1)
+                && state.memory.live.contains_key(pointer.allocation)
+                && forwarding_selected_object_shape_v46(pointer.allocation,
+                    state.memory.live[pointer.allocation])
+            }),
+        _ => false,
+    }
+}
+
+spec fn forwarding_state_invariant_v46(state: MemoryStateV30) -> bool {
+    !state.valid || state.values.len() == forwarding_definition_count_v46()
+        && byte_state_memory_well_formed_v30(state)
+        && forwarding_heap_separate_v46(state.memory)
+        && (forall|slot: int| 0 <= slot < forwarding_slot_count_v46() ==>
+            forwarding_selected_slot_v46(state, slot))
+        && (forall|definition: int| 0 <= definition < state.values.len()
+            && !forwarding_selected_definition_v46(definition) ==>
+                forwarding_value_separate_v46(state.values[definition]))
+}
+
+// Failed executions expose no subsequent SSA/control result. Their actual heap,
+// generation counters and frame state remain part of the comparison. Valid
+// normal return (-1) and valid Trap (-2) are never collapsed into refusal (-3).
+spec fn forwarding_terminal_state_v46(state: MemoryStateV30) -> MemoryStateV30 {
+    if state.valid { state }
+    else { MemoryStateV30 { pc: -3, values: seq![], ..state } }
+}
+
+spec fn forwarding_states_related_v46(input: MemoryStateV30, output: MemoryStateV30)
+    -> bool
+{
+    forwarding_terminal_state_v46(input) == forwarding_terminal_state_v46(output)
+    && forwarding_state_invariant_v46(input) && forwarding_state_invariant_v46(output)
+}
+
+spec fn forwarding_store_fact_v46(
+    state: MemoryStateV30, pointer: int, value: int, width: int,
+    alignment: int, little_endian: bool,
+) -> bool {
+    0 <= pointer < state.values.len() && 0 <= value < state.values.len()
+    && match (state.values[pointer], state.values[value]) {
+        (MemoryValueV30::Pointer(pointer), MemoryValueV30::Scalar(value)) =>
+            0 <= value < memory_value_modulus_v30(width)
+            && byte_range_live_v30(state.memory, pointer, width)
+            && byte_range_aligned_v30(state.memory, pointer, width, alignment)
+            && byte_scalar_range_initialized_v37(state.memory, pointer, width)
+            && byte_load_v30(state.memory, pointer, width, little_endian) == value,
+        _ => false,
+    }
+}
+
+spec fn forwarding_project_observation_v46(observation: MemoryOperationObservationV30)
+    -> Seq<MemoryOperationObservationV30>
+{
+    if !byte_observation_snapshots_valid_v39(observation)
+        || !observation.valid_before || !observation.valid_after {
+        seq![MemoryOperationObservationV30 {
+            before: forwarding_terminal_state_v46(observation.before),
+            after: forwarding_terminal_state_v46(observation.after),
+            effect: MemoryOperationEffectV30::Refused,
+            ..observation
+        }]
+    } else {
+        match observation.effect {
+            MemoryOperationEffectV30::Pure => seq![],
+            MemoryOperationEffectV30::Read { .. } =>
+                if forwarding_removed_read_v46(observation) { seq![] }
+                else { seq![observation] },
+            MemoryOperationEffectV30::Refused | MemoryOperationEffectV30::Trap
+            | MemoryOperationEffectV30::Allocate { .. }
+            | MemoryOperationEffectV30::Write { .. }
+            | MemoryOperationEffectV30::Copy { .. }
+            | MemoryOperationEffectV30::TagRead { .. } => seq![observation],
+        }
+    }
+}
+
+spec fn forwarding_project_observations_v46(
+    observations: Seq<MemoryOperationObservationV30>,
+) -> Seq<MemoryOperationObservationV30>
+    decreases observations.len(),
+{
+    if observations.len() == 0 { seq![] }
+    else { forwarding_project_observation_v46(observations[0])
+        + forwarding_project_observations_v46(observations.drop_first()) }
+}
+
+proof fn forwarding_projection_append_v46(
+    a: Seq<MemoryOperationObservationV30>, b: Seq<MemoryOperationObservationV30>,
+)
+    ensures forwarding_project_observations_v46(a + b)
+        == forwarding_project_observations_v46(a) + forwarding_project_observations_v46(b),
+    decreases a.len(),
+{
+    if a.len() > 0 {
+        forwarding_projection_append_v46(a.drop_first(), b);
+        assert((a + b).drop_first() == a.drop_first() + b);
+    }
+}
+
+struct ForwardingBlockEventV46 {
+    observations: Seq<MemoryOperationObservationV30>,
+    returned: Seq<MemoryValueV30>,
+    terminal: int,
+}
+
+spec fn forwarding_block_event_v46(result: MemoryBlockResultV30)
+    -> ForwardingBlockEventV46
+{
+    ForwardingBlockEventV46 {
+        observations: forwarding_project_observations_v46(result.observations),
+        returned: if result.state.valid { result.returned } else { seq![] },
+        terminal: if !result.state.valid { -3 }
+            else if result.state.pc == -2 { -2 }
+            else if result.state.pc == -1 { -1 } else { 0 },
+    }
+}
+
+proof fn forwarding_refusal_is_not_trap_or_return_v46(state: MemoryStateV30)
+    ensures !state.valid ==> forwarding_terminal_state_v46(state).pc == -3,
+        state.valid ==> forwarding_terminal_state_v46(state) == state,
+        state.valid && state.pc == -2 ==> forwarding_terminal_state_v46(state).pc == -2,
+        state.valid && state.pc == -1 ==> forwarding_terminal_state_v46(state).pc == -1,
+{}

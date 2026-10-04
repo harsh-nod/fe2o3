@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_data_checked_bool: builtin.function <(builtin.integer ui32, builtin.integer ui32) -> ()>
+{
+  ^entry(x: builtin.integer ui32, y: builtin.integer ui32):
+    sum, overflow = gpu.binary (x, y) [] [gpu_binary_kind: gpu.binary_kind CheckedAdd]: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32, builtin.integer i1)>;
+    gpu.cond_branch (overflow, sum, y) [^exit, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, builtin.integer ui32, builtin.integer ui32) -> ()>
+  ^exit(value: builtin.integer ui32):
+    kernel.return () [] []: <() -> ()>
+}

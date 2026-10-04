@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `decode` found for struct `WorkerRequestV2` in the current scope
+ --> tests/ui/compiler_ffi/worker_v2_decode.rs:4:30
+  |
+4 |     let _ = WorkerRequestV2::decode(b"F3LREQ02");
+  |                              ^^^^^^ associated function or constant not found in `WorkerRequestV2`

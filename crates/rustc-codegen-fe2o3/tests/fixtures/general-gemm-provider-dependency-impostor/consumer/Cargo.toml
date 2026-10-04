@@ -1,0 +1,9 @@
+[package]
+name = "general-gemm-provider-dependency-impostor-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fe2o3-device = { path = "../../../../../fe2o3-device" }
+fe2o3-gemm-device-v1 = { path = "../provider" }

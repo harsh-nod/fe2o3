@@ -1,0 +1,13 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: resources blocks=2 reachable=1 pruned=1
+// CHECK: rpo [b0]
+// CHECK: block b1 unreachable
+// CHECK-NOT: undefined
+
+entry b0
+variables v0
+block b0
+block b1
+use v0
+edge r1 b1

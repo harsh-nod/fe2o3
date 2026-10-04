@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `VmmUnmappedAllocation` in the current scope
+ --> tests/ui/vmm/unmapped_owner_is_linear.rs:4:23
+  |
+4 |     let _copy = owner.clone();
+  |                       ^^^^^ method not found in `VmmUnmappedAllocation`

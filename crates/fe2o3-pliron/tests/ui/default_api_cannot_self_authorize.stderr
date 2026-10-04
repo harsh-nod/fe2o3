@@ -1,0 +1,24 @@
+error[E0432]: unresolved imports `fe2o3_pliron::ProductionRefinementStagingPolicyV2`, `fe2o3_pliron::compile_ranked_kernel_with_policy_checked_refinement_staging_v2`
+ --> tests/ui/default_api_cannot_self_authorize.rs:2:5
+  |
+2 |     ProductionRefinementStagingPolicyV2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ProductionRefinementStagingPolicyV2` in the root
+3 |     compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `compile_ranked_kernel_with_policy_checked_refinement_staging_v2` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "internal-proof-staging")]
+  |       ---------------------------------- the item is gated behind the `internal-proof-staging` feature
+  | pub use production::{
+  |     ProductionRefinementStagingPolicyV2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "internal-proof-staging")]
+  |       ---------------------------------- the item is gated behind the `internal-proof-staging` feature
+...
+  |     compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

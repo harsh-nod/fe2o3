@@ -1,0 +1,11 @@
+[package]
+name = "renamed-typed-host-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpu-device = { package = "fe2o3-device", path = "../../../../fe2o3-device" }
+gpu-host = { package = "fe2o3-host", path = "host-stub" }

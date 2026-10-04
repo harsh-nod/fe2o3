@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `GeneratedWorkerV3KfdInvocation<'allocation, K>` in the current scope
+ --> tests/ui/generated_spi/fail/kfd_invocation_cannot_clone.rs:4:24
+  |
+4 |     let _ = invocation.clone();
+  |                        ^^^^^ method not found in `GeneratedWorkerV3KfdInvocation<'static, K>`

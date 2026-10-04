@@ -1,0 +1,15 @@
+error[E0382]: borrow of moved value: `view`
+ --> tests/ui/fail/dynamic_lds_use_after_split.rs:5:13
+  |
+3 | fn duplicate(view: DynamicLds<'_, u32>) {
+  |              ---- move occurs because `view` has type `DynamicLds<'_, u32>`, which does not implement the `Copy` trait
+4 |     let _parts = view.split_at(1);
+  |                       ----------- `view` moved due to this method call
+5 |     let _ = view.len();
+  |             ^^^^ value borrowed here after move
+  |
+note: `DynamicLds::<'_, T, State>::split_at` takes ownership of the receiver `self`, which moves `view`
+ --> src/lds.rs
+  |
+  |     pub fn split_at(self, mid: usize) -> Result<(Self, Self), Self> {
+  |                     ^^^^

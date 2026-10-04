@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `OwnedDeviceOperation<'stream, R>` in the current scope
+ --> tests/ui/operation/fail/owned_handle_cannot_be_cloned.rs:5:32
+  |
+5 |     let _duplicate = operation.clone();
+  |                                ^^^^^ method not found in `OwnedDeviceOperation<'_, ()>`

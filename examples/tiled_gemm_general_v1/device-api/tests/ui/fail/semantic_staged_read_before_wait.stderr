@@ -1,0 +1,5 @@
+error[E0599]: no method named `read_staged` found for struct `Gfx942TiledGemmWave64V1<State>` in the current scope
+ --> tests/ui/fail/semantic_staged_read_before_wait.rs:8:29
+  |
+8 |     let _premature = staged.read_staged();
+  |                             ^^^^^^^^^^^ method not found in `Gfx942TiledGemmWave64V1<GemmStaged>`

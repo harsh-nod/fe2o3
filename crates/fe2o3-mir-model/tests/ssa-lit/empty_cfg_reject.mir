@@ -1,0 +1,6 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA input has no control-flow blocks
+
+entry b0
+variables

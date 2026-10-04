@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-PROGRESS-001]
+// CHECK: live incoming edge carries i = 0 and bound = 8
+// CHECK: help[FE2O3-FIX-SEMANTIC]
+builtin.func @progress_zero_step: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 8]: <() -> (kernel.index )>;
+    kernel.br_args (v0) [^header_block2v1] []: <(kernel.index ) -> ()>
+  ^header_block2v1(i_v2: kernel.index ):
+    kernel.index_lt_br_args (i_v2, v1, i_v2) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>
+  ^body_block3v1(body_i_v3: kernel.index ):
+    v4 = kernel.index_binary (body_i_v3, v0) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.br_args (v4) [^header_block2v1] []: <(kernel.index ) -> ()>
+  ^exit_block4v1():
+    kernel.return () [] []: <() -> ()>
+}

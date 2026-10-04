@@ -1,0 +1,20 @@
+{
+  "source": "examples/fill/src/lib.rs",
+  "source_sha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+  "bundle_sha256": "239489e4d2bd51d4fa45a69911d7e1725eb1f0c7955a9524afc3f2e67f5b009e",
+  "canonical_kir_digest": "be476760d364e97a9a40ea7a1e5a9ab88c96b479ad8d2a0c46f7e5d89d228ccc",
+  "bundle_identity": "8075dd455e9280e38623f5b3dcf4b4fee1141340bca375650565c6f9fed3ab67",
+  "simulation_sha256": "f8237e4105b3adc3a0c00a827b452cddb9bb570858f1344b448e0fe27c934de2",
+  "debug_responses_sha256": "ca23bb415f19d193ededf6f663f1d1e4e068a915273c10c88603c0bdf97a03a4",
+  "checks": [
+    "ordinary_source_export",
+    "bound_inspection",
+    "region_selection",
+    "stale_selection_rejection",
+    "independent_four_word_oracle",
+    "canaries",
+    "source_bound_memory_checkpoint"
+  ],
+  "hardware_observed": false,
+  "typed_isa_frontend_readmission": "unavailable"
+}

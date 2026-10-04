@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `WorkerV3RosterLoadEnvelopeEvidenceViewV1<'evidence>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/load_envelope_evidence_view_cannot_clone.rs:4:24
+  |
+4 |     let _second = view.clone();
+  |                        ^^^^^ method not found in `WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_>`

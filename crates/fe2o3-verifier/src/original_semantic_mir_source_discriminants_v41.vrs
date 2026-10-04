@@ -1,0 +1,56 @@
+struct InvocationSourceDiscriminantReadV41 {
+    destination: int,
+    access: InvocationSourceByteAccessV36,
+    source_type: int,
+    tag_alignment: int,
+    bits: int,
+}
+
+struct InvocationSourceDiscriminantResultV41 {
+    source: InvocationSourceByteStateV36,
+    effect: MemoryOperationEffectV30,
+}
+
+spec fn invocation_source_discriminant_read_v41(
+    source: InvocationSourceByteStateV36, read: InvocationSourceDiscriminantReadV41,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceDiscriminantResultV41 {
+    let refused = InvocationSourceDiscriminantResultV41 {
+        source: invocation_source_byte_refused_v36(source),
+        effect: MemoryOperationEffectV30::Refused };
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || source.machine.memory.view_contracts != invocation_source_view_contracts_0_v39(little_endian)
+        || !source.machine.memory.view_contracts.rows.contains_key(read.source_type) {
+        refused
+    } else {
+        let contract = source.machine.memory.view_contracts.rows[read.source_type];
+        match invocation_source_byte_address_v36(source, read.access, root, instance) {
+            Some(pointer) => {
+                if contract.object_bytes != read.access.width { refused }
+                else { match byte_read_tag_v39(source.machine.memory, pointer, read.source_type, read.tag_alignment) {
+                    Some(observed) => match byte_tag_selected_variant_v39(contract, observed) {
+                        Some(variant) => {
+                            let value = MemoryValueV30::Scalar(contract.discriminants[variant]);
+                            if !invocation_source_byte_value_typed_v36(value, read.bits) { refused }
+                            else {
+                                let after = invocation_source_byte_put_local_v36(source, read.destination, value);
+                                if !after.machine.valid { refused }
+                                else { InvocationSourceDiscriminantResultV41 {
+                                    source: after,
+                                    effect: MemoryOperationEffectV30::TagRead {
+                                        address: MemoryValueV30::Pointer(byte_tag_address_v39(pointer, contract)),
+                                        width: contract.tag_width, alignment: read.tag_alignment,
+                                        purpose: MemoryTagReadPurposeV39::DiscriminantRead,
+                                        observation: Some(observed) },
+                                } }
+                            }
+                        }
+                        None => refused,
+                    },
+                    None => refused,
+                } }
+            }
+            None => refused,
+        }
+    }
+}

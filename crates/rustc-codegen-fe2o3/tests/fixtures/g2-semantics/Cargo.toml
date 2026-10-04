@@ -1,0 +1,23 @@
+[workspace]
+members = ["helper-lib"]
+resolver = "2"
+
+[package]
+name = "g2-semantic-kernels"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[features]
+default = []
+aggregate = []
+const-generic = []
+cross-crate = ["dep:g2-semantic-helpers"]
+generic = []
+integer-match = []
+loops = []
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+g2-semantic-helpers = { path = "helper-lib", optional = true }

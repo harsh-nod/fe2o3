@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "shards": [
+    {
+      "id": "01-production-pipeline",
+      "tests": [
+        "production_pipeline"
+      ]
+    },
+    {
+      "id": "02-production-drivers",
+      "tests": [
+        "bf16_generated_source_admission_api_v1",
+        "bf16_source_promotion_api_v1",
+        "production_device_math_sqrt_v1",
+        "production_extraction_driver_v1",
+        "production_general_matrix_driver_v1",
+        "production_neutral_workgroup_reduce_driver_v1",
+        "production_ranked_bounds_driver_v1",
+        "production_semantic_conformance_v3",
+        "source_local_order_recipe_measurement_api_v1"
+      ]
+    },
+    {
+      "id": "03-device-ffi",
+      "tests": [
+        "device_ffi_cross_crate"
+      ]
+    },
+    {
+      "id": "04-frontend-types",
+      "tests": [
+        "cross_crate_imports",
+        "frontend_contract_collector",
+        "g2_monomorphization",
+        "reference_binding_v1",
+        "trusted_device_items"
+      ]
+    },
+    {
+      "id": "05-abi-semantics",
+      "tests": [
+        "cross_crate_typed_binding",
+        "g2_layout",
+        "g2_semantics",
+        "general_two_kernel_import"
+      ]
+    }
+  ]
+}

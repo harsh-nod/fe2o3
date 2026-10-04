@@ -1,0 +1,45 @@
+[package]
+name = "fe2o3-compiler-execution-issuer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Sealed-static protected compiler-execution issuer entrypoint for fe2o3."
+publish = false
+default-run = "fe2o3-compiler-execution-issuer"
+
+[dependencies]
+fe2o3-broker-authority-service = { path = "../fe2o3-broker-authority-service" }
+fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
+fe2o3-protected-service-profile.workspace = true
+libc.workspace = true
+rustix = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+fe2o3-compiler-execution-client.workspace = true
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-runtime-protocol.workspace = true
+
+[lib]
+name = "fe2o3_compiler_execution_issuer"
+
+[[bin]]
+name = "fe2o3-compiler-execution-issuer"
+path = "src/main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-issuer-native"
+path = "src/bin/fe2o3-compiler-execution-issuer-native.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-issuer-conditional"
+path = "src/bin/fe2o3-compiler-execution-issuer-conditional.rs"
+test = false
+bench = false

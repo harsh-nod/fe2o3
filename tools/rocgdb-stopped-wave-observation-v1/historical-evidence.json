@@ -1,0 +1,49 @@
+{
+  "schema": "fe2o3-rocgdb-stopped-wave-historical-source-evidence-v1",
+  "records": [
+    {
+      "role": "cpu",
+      "retained_task_relative_path": "logs/phase28-resume-r13-compiler-stopped-wave-observer-cpu-r1/receipt.json",
+      "bytes": 89980,
+      "sha256": "3a167c40dbd6b8b0a22a3fc29a3b51f0af188d7da506e666f551b790a5c88f21"
+    },
+    {
+      "role": "static_build",
+      "retained_task_relative_path": "logs/phase28-resume-r13-compiler-stopped-wave-static-build-r1/receipt.json",
+      "bytes": 90309,
+      "sha256": "5afa6863900f39a4b43f365e44f33f90d6e3850ba588e92a44ac38533c7741c0"
+    },
+    {
+      "role": "build_record",
+      "retained_task_relative_path": "phase28-stopped-wave-observer-build-r2/receipts/build.json",
+      "bytes": 2739,
+      "sha256": "b2a5c33aebe39f47fea9dfe30242d313a5e280f140d0281e880347019512577a"
+    },
+    {
+      "role": "static_elf",
+      "retained_task_relative_path": "phase28-stopped-wave-observer-build-r2/build/gdb/gdb",
+      "bytes": 198796296,
+      "sha256": "c52feb106f7b47b11b965b60d931e28e6a59944b1e46b8a0e400600d6108e9be"
+    },
+    {
+      "role": "overlay_manifest",
+      "retained_task_relative_path": "phase28-drafts/gfx950-stopped-wave-observer-v1-r1/MANIFEST.json",
+      "bytes": 5561,
+      "sha256": "aee6910d8d59be4f59baeb11b4a85162d1f3bc8ba8f9b54fb5db78b7d37beeba"
+    }
+  ],
+  "cpu_controls": {
+    "ledger": 79,
+    "actual_hook_test_doubles": 106,
+    "source_placement": 14,
+    "total": 199
+  },
+  "historical_static_build_completed": true,
+  "packaging_controls_qualified": false,
+  "built_debugger_executed": false,
+  "native_stop_qualified": false,
+  "physical_samples": false,
+  "source_or_runtime_authority": false,
+  "whole_family_cleanup_proved": false,
+  "limits": "Historical root-run observations, not executable admission. This package has no runtime route; exact matches do not transfer environment/startup/native qualification."
+}

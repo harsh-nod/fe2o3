@@ -1,0 +1,77 @@
+# Dynamic strided GEMM
+
+This example is an attributed safe Rust GPU kernel candidate for
+
+```text
+C = alpha * A * B + beta * C
+```
+
+`M`, `N`, `K`, `lda`, `ldb`, `ldc`, `alpha`, and `beta` are runtime values.
+Each wave64 workgroup owns one 16x16 output tile and executes
+`V_MFMA_F32_16X16X16_BF16` for every 16-element K phase. Checked edge loads
+contribute BF16 zero; checked tiled output witnesses suppress stores outside
+logical M and N. Every active output applies the dynamic alpha/beta epilogue
+once.
+
+The K loop keeps current and next MFMA operand fragments live as a two-buffer
+register pipeline and performs one speculative, zero-filled prefetch. This is
+distinct from the target-neutral `kernel.pipeline` PLIRON protocol, which
+verifies shared workgroup-storage ring lifecycles. The source frontend does not
+yet synthesize that workgroup protocol from this Rust loop.
+
+The matrix instruction is exposed through the target-neutral `DeviceMatrix`
+capability. Bounds, uniformity, convergence, ranked indexing, and disjoint
+output ownership are ordinary compiler analyses shared with every other kernel;
+none of those passes recognizes GEMM or grants it a special case.
+
+## Run on gfx942
+
+From this directory:
+
+```bash
+./run-gfx942.sh
+```
+
+The script requests the complete qualification flow:
+
+```text
+safe Rust
+  -> semantic MIR
+  -> ranked PLIRON verification
+  -> Kernel IR
+  -> formal memory admission
+  -> gfx942 LLVM
+  -> external ROCm clang/LLD HSACO
+  -> fe2o3-core unsafe qualification launch
+```
+
+The compiler now carries the checked-tiled source capability through the
+dynamic-launch race proof and reaches gfx942 LLVM qualification.
+`run-gfx942.sh` passes that LLVM through external ROCm clang/LLD to produce an
+HSACO and runs the numerical gfx942 qualification path. Confirming that the
+disassembly contains `v_mfma_f32_16x16x16_bf16` remains required before making
+performance claims.
+
+This script deliberately uses the external-HSACO unsafe qualification path. It
+does not exercise protected Worker publication or artifact-currentness
+admission; those remain a separate, fail-closed pipeline.
+
+## Safety boundary
+
+The standalone capability API owns its host UI tests. From the repository root:
+
+```bash
+cargo test --locked --offline --manifest-path examples/tiled_gemm_general_v1/device-api/Cargo.toml --test device_api_ui
+```
+
+This runs one passing and sixteen compile-fail capability cases. It does not
+compile the attributed GEMM kernel or qualify its semantic proofs or GPU execution.
+
+The library containing the kernel uses `#![forbid(unsafe_code)]`. Ordinary Rust
+slice indexing and `DisjointSlice::get_mut` remain visible to the compiler, so
+generic bounds and ownership analysis can verify them. The host binary contains
+the two required documented unsafe operations: loading external machine code
+and launching it with an exact physical ABI.
+
+Any resulting HSACO is qualification output. Protected release publication
+and artifact-currentness admission remain a separate, fail-closed pipeline.

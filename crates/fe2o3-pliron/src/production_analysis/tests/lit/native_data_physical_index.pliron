@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_data_physical_index: builtin.function <(builtin.integer ui32) -> ()>
+{
+  ^entry(x: builtin.integer ui32):
+    index = gpu.cast (x) [] [gpu_cast_kind: gpu.cast_kind ZeroExtend]: <(builtin.integer ui32) -> (gpu.index)>;
+    kernel.br_args (index) [^exit] []: <(gpu.index) -> ()>
+  ^exit(transported_index: gpu.index):
+    kernel.return () [] []: <() -> ()>
+}

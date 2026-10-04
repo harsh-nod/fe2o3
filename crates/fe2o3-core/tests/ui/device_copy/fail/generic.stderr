@@ -1,0 +1,5 @@
+error: DeviceCopy can only be derived for non-generic structs
+ --> tests/ui/device_copy/fail/generic.rs:5:15
+  |
+5 | struct Generic<T> {
+  |               ^^^

@@ -1,0 +1,17 @@
+error[E0451]: fields `prepared`, `admission` and `_registration` of struct `ArgumentAdmittedLaunch` are private
+  --> tests/ui/prepared_launch/admission_token_fields_are_private.rs:14:9
+   |
+13 |     ArgumentAdmittedLaunch {
+   |     ---------------------- in this type
+14 |         prepared,
+   |         ^^^^^^^^ private field
+15 |         admission,
+   |         ^^^^^^^^^ private field
+16 |         _registration: impossible(),
+   |         ^^^^^^^^^^^^^ private field
+
+error: type `fe2o3_host::argument_alias::InFlightRegionRegistration<'_>` is private
+  --> tests/ui/prepared_launch/admission_token_fields_are_private.rs:16:24
+   |
+16 |         _registration: impossible(),
+   |                        ^^^^^^^^^^^^ private type

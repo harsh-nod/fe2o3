@@ -1,0 +1,27 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @progress_multiblock_forwarding: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 64]: <() -> (kernel.index )>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 16]: <() -> (kernel.index )>;
+    kernel.br_args (v0) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^header_block2v1(i_v3: kernel.index ):
+    kernel.index_lt_br_args (i_v3, v1, i_v3) [^first_block3v1, ^exit_block6v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>
+
+  ^first_block3v1(first_i_v4: kernel.index ):
+    kernel.br_args (first_i_v4) [^second_block4v1] []: <(kernel.index ) -> ()>
+
+  ^second_block4v1(second_i_v5: kernel.index ):
+    kernel.br_args (second_i_v5) [^latch_block5v1] []: <(kernel.index ) -> ()>
+
+  ^latch_block5v1(latch_i_v6: kernel.index ):
+    v7 = kernel.index_binary (latch_i_v6, v2) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.br_args (v7) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^exit_block6v1():
+    kernel.return () [] []: <() -> ()>
+}

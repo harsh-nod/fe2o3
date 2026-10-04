@@ -1,0 +1,16 @@
+profile=fe2o3.runtime.gfx942-vecadd-qualification.v1
+target=gfx942:xnack-
+code-object-version=6
+kernel=vecadd
+workgroup=256,1,1
+element=f32
+element-count=1048576
+arg0=offset:0,length-offset:8,name:arg0.data,effect:read-only,alignment:4
+arg1=offset:16,length-offset:24,name:arg1.data,effect:read-only,alignment:4
+arg2=offset:32,length-offset:40,name:arg2.data,effect:write-only,alignment:4
+aliasing=three-distinct-whole-host-visible-allocations
+initial-left=f32((index%1024))/2
+initial-right=f32((index%256))/4
+initial-output=0x7fc00000
+expected-output=initial-left+initial-right
+completion=successful-dispatch-before-output-read-or-reuse

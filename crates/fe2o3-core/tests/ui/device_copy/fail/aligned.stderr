@@ -1,0 +1,5 @@
+error: DeviceCopy requires exactly #[repr(C)] or #[repr(transparent)]
+ --> tests/ui/device_copy/fail/aligned.rs:4:11
+  |
+4 | #[repr(C, align(8))]
+  |           ^^^^^

@@ -1,0 +1,13 @@
+error[E0505]: cannot move out of `loaded` because it is borrowed
+  --> tests/ui/worker_v3_verification_admission/unload_while_prepared.rs:24:21
+   |
+ 8 |     mut loaded: LoadedWorkerV3HsaExecutableV1<K, A>,
+   |     ---------- binding `loaded` declared here
+...
+17 |     let prepared = loaded
+   |                    ------ borrow of `loaded` occurs here
+...
+24 |     let _unloaded = loaded.unload();
+   |                     ^^^^^^ move out of `loaded` occurs here
+25 |     drop(prepared);
+   |          -------- borrow later used here

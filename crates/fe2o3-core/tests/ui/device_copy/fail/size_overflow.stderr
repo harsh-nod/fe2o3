@@ -1,0 +1,13 @@
+error[E0080]: evaluation panicked: DeviceCopy derive field-size sum overflow for `SizeOverflow`
+ --> tests/ui/device_copy/fail/size_overflow.rs:5:23
+  |
+5 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^ evaluation of `_::__FE2O3_FIELD_SIZE_SUM` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/device_copy/fail/size_overflow.rs:5:23
+  |
+5 | #[derive(Clone, Copy, DeviceCopy)]
+  |                       ^^^^^^^^^^
+  |
+  = note: this note originates in the derive macro `DeviceCopy` (in Nightly builds, run with -Z macro-backtrace for more info)

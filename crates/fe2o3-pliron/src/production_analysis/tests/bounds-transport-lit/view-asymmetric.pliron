@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=memory-bounds %s
+// EXPECT: CLEAN
+builtin.func @bounds_transport_view_asymmetric: builtin.function <(kernel.index, kernel.index, kernel.index) -> ()>
+{
+  ^entry(i: kernel.index, n: kernel.index, choice: kernel.index):
+    source_view = kernel.ranked_view (n) [] [kernel_memory_space: kernel.memory_space Global]: <(kernel.index) -> (kernel.ranked_view <32,false,[0]>)>;
+    kernel.index_lt_br_args (i, n, i, source_view, choice) [^split, ^exit] []: <(kernel.index, kernel.index, kernel.index, kernel.ranked_view <32,false,[0]>, kernel.index) -> ()>
+  ^split(x: kernel.index, carried: kernel.ranked_view <32,false,[0]>, selector: kernel.index):
+    kernel.index_eq_br_args (selector, x, carried, x, x, selector, carried) [^left, ^right] []: <(kernel.index, kernel.index, kernel.ranked_view <32,false,[0]>, kernel.index, kernel.index, kernel.index, kernel.ranked_view <32,false,[0]>) -> ()>
+  ^left(lv: kernel.ranked_view <32,false,[0]>, lx: kernel.index):
+    kernel.br_args (lx, lv) [^access] []: <(kernel.index, kernel.ranked_view <32,false,[0]>) -> ()>
+  ^right(rx: kernel.index, tag: kernel.index, rv: kernel.ranked_view <32,false,[0]>):
+    kernel.br_args (rx, rv) [^access] []: <(kernel.index, kernel.ranked_view <32,false,[0]>) -> ()>
+  ^access(ax: kernel.index, av: kernel.ranked_view <32,false,[0]>):
+    kernel.access (av, ax) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[0]>, kernel.index) -> ()>;
+    kernel.return () [] []: <() -> ()>
+  ^exit():
+    kernel.return () [] []: <() -> ()>
+}

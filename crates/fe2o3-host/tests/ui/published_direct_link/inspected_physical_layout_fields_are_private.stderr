@@ -1,0 +1,5 @@
+error[E0451]: field `inspected` of struct `InspectedPublishedDirectLinkPhysicalLayoutV1` is private
+ --> tests/ui/published_direct_link/inspected_physical_layout_fields_are_private.rs:4:56
+  |
+4 |     let InspectedPublishedDirectLinkPhysicalLayoutV1 { inspected, .. } = token;
+  |                                                        ^^^^^^^^^ private field

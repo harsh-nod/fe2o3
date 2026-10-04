@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @native_data_float: builtin.function <(builtin.fp32, builtin.fp32) -> ()>
+{
+  ^entry(x: builtin.fp32, y: builtin.fp32):
+    sum = gpu.binary (x, y) [] [gpu_binary_kind: gpu.binary_kind Add]: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    negative = gpu.unary (sum) [] [gpu_unary_kind: gpu.unary_kind Negate]: <(builtin.fp32) -> (builtin.fp32)>;
+    kernel.return () [] []: <() -> ()>
+}

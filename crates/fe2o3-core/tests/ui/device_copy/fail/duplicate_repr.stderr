@@ -1,0 +1,5 @@
+error: DeviceCopy does not support duplicate or conflicting repr hints
+ --> tests/ui/device_copy/fail/duplicate_repr.rs:4:11
+  |
+4 | #[repr(C, C)]
+  |           ^

@@ -1,0 +1,17 @@
+[package]
+name = "fe2o3-ordinary-bitwise-promotion-v1-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[lib]
+name = "fe2o3_ordinary_bitwise_promotion_v1_fixture"
+path = "src/lib.rs"

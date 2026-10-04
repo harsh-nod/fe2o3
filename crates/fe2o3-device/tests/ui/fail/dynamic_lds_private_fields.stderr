@@ -1,0 +1,17 @@
+error[E0451]: fields `ptr`, `len`, `byte_len`, `_borrow`, `_state` and `_not_send_sync` of struct `DynamicLds` are private
+  --> tests/ui/fail/dynamic_lds_private_fields.rs:7:9
+   |
+ 6 |     let _ = DynamicLds::<u32, LdsUninitialized> {
+   |             ----------------------------------- in this type
+ 7 |         ptr: NonNull::dangling(),
+   |         ^^^ private field
+ 8 |         len: 0,
+   |         ^^^ private field
+ 9 |         byte_len: 0,
+   |         ^^^^^^^^ private field
+10 |         _borrow: PhantomData,
+   |         ^^^^^^^ private field
+11 |         _state: PhantomData,
+   |         ^^^^^^ private field
+12 |         _not_send_sync: PhantomData,
+   |         ^^^^^^^^^^^^^^ private field

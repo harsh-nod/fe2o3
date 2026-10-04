@@ -1,0 +1,49 @@
+{
+  "schema": "fe2o3-simulation-expectation-v1",
+  "arguments": [
+    {
+      "kind": "buffer",
+      "value": {
+        "element": "f32",
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x0000803f000000400000404000008040",
+        "initialized": "0xffff"
+      }
+    },
+    {
+      "kind": "buffer",
+      "value": {
+        "element": "f32",
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x0000a0400000c0400000e040000000410000104100002041",
+        "initialized": "0xffffff"
+      }
+    },
+    {
+      "kind": "buffer_view",
+      "backing": 7,
+      "element": "f32",
+      "access": "read_write",
+      "alignment": 4,
+      "byte_offset": 4,
+      "elements": 6
+    },
+    {"kind": "scalar", "type": "u32", "bits": "0x00000002"},
+    {"kind": "scalar", "type": "u32", "bits": "0x00000003"},
+    {"kind": "scalar", "type": "u32", "bits": "0x00000002"}
+  ],
+  "shared_buffers": [
+    {
+      "id": 7,
+      "buffer": {
+        "element": "f32",
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a50000a8410000c0410000d84100003c420000584200007442deadbeef",
+        "initialized": "0xffffffff"
+      }
+    }
+  ]
+}

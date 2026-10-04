@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/write_only_tiled_rejects_row_witness.rs:7:35
+  |
+7 |     let _ = output.write_tiled_2d(stripe, 0, 1, 1, 1, 1);
+  |                    -------------- ^^^^^^ expected `&DisjointTile2D<Index1D, 64, 16, 16, 4>`, found `&DisjointRowStripe2D<Index1D, 16, 4>`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected reference `&DisjointTile2D<Index1D, 64, 16, 16, 4>`
+             found reference `&DisjointRowStripe2D<Index1D, 16, 4>`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn write_tiled_2d(
+  |            ^^^^^^^^^^^^^^

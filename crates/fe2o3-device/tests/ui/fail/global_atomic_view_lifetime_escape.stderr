@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing function parameter `pointer`
+ --> tests/ui/fail/global_atomic_view_lifetime_escape.rs:5:5
+  |
+5 |     pointer.as_atomic()
+  |     -------^^^^^^^^^^^^
+  |     |
+  |     returns a value referencing data owned by the current function
+  |     `pointer` is borrowed here

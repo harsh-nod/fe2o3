@@ -1,0 +1,14 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+// ATOMIC-CAPABILITY: 32 Global Device
+builtin.func @ownership_collective_complete: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 41, gpu_execution_global_x: gpu.execution_extent 4, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 4, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 2, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 17, kernel_noalias_class: kernel.noalias_class 17]: <() -> (kernel.ranked_view <32,true,[1]>)>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    kernel.ownership_contract (v0) [] [kernel_ownership_coverage: kernel.ownership_coverage CollectiveContributions, kernel_ownership_partition: kernel.ownership_partition ExactSets]: <(kernel.ranked_view <32,true,[1]>) -> ()>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind AtomicReadModifyWrite, kernel_atomic_ordering: kernel.atomic_ordering AcquireRelease, kernel_atomic_scope: kernel.atomic_scope Device]: <(kernel.ranked_view <32,true,[1]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `synthetic_for_test_only` found for struct `WorkerV3CompilerExecutionVerificationV1` in the current scope
+ --> tests/ui/worker_v3_verification_admission/compiler_execution_synthetic_constructor_is_unavailable.rs:4:54
+  |
+4 |     let _ = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+  |                                                      ^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `WorkerV3CompilerExecutionVerificationV1`

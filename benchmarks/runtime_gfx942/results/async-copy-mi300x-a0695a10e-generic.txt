@@ -1,0 +1,44 @@
+
+running 1 test
+test sdma::tests::sdma_copy_manifest_digest_is_frozen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 292 filtered out; finished in 0.00s
+
+context schema=fe2o3.async-copy-benchmark.v1 git_commit=a0695a10e49ea6c4a211811e88a0f4da8ca46044 target=gfx942:xnack- gpu_indices=0,1 unique_ids=0x6ced1647a296545c,0xab83d2ffef0d3cdf bytes=1048576 depths=1,16 warmups=10 samples=30 kfd_profile=generic max_busy_percent=5 phase_timeout_seconds=120 rocm_version=7.2.4 rustc=rustc_1.97.1_(8bab26f4f_2026-07-14) sdma_manifest_sha256=e794d249b2d4a585a30cb4f22caa39931319784b824df344627560d4248ef914
+context phase=kfd depth=1 gpu_busy_start_percent=0
+context phase=kfd depth=1 gpu_busy_end_percent=0
+backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id=6ced1647a296545c profile=generic bytes=1048576 depth=1 warmups=10 samples=30 h2d_engine_index=4294967295 d2h_engine_index=4294967295 h2d_p50_ns=130476 h2d_p95_ns=137666 h2d_submit_p50_ns=72038 h2d_wait_p50_ns=58438 h2d_p50_GBps=8.037 d2h_p50_ns=129954 d2h_p95_ns=134661 d2h_submit_p50_ns=71567 d2h_wait_p50_ns=58267 d2h_p50_GBps=8.069 combined_h2d_p50_ns=116144 combined_h2d_p50_GBps=9.028 combined_d2h_p50_ns=103875 combined_d2h_p50_GBps=10.095 pool_checkout_recycle_pair_ns=105 pool_reuse_count=20000 pool_trimmed=3
+context phase=hsa depth=1 gpu_busy_start_percent=0
+context phase=hsa depth=1 gpu_busy_end_percent=0
+backend=hsa schema=fe2o3.async-copy-benchmark.v1 gpu_index=0 unique_id=6ced1647a296545c target=gfx942 xnack=disabled bytes=1048576 depth=1 warmups=10 samples=30 h2d_p50_ns=45889 h2d_p95_ns=46770 h2d_p50_GBps=22.850 d2h_p50_ns=26008 d2h_p95_ns=26260 d2h_p50_GBps=40.317 device_pool_allocate_free_pair_ns=106
+context phase=hip depth=1 gpu_busy_start_percent=0
+context phase=hip depth=1 gpu_busy_end_percent=0
+backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=0 unique_id=6ced1647a296545c target=gfx942:sramecc+:xnack- xnack=disabled bytes=1048576 depth=1 warmups=10 samples=30 h2d_p50_ns=47180 h2d_p95_ns=49084 h2d_p50_GBps=22.225 d2h_p50_ns=26700 d2h_p95_ns=34421 d2h_p50_GBps=39.273 device_pool_alloc_free_pair_ns=12354
+context phase=kfd depth=16 gpu_busy_start_percent=0
+context phase=kfd depth=16 gpu_busy_end_percent=0
+backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id=6ced1647a296545c profile=generic bytes=1048576 depth=16 warmups=10 samples=30 h2d_engine_index=4294967295 d2h_engine_index=4294967295 h2d_p50_ns=739866 h2d_p95_ns=771944 h2d_submit_p50_ns=150926 h2d_wait_p50_ns=589452 h2d_p50_GBps=22.676 d2h_p50_ns=625375 d2h_p95_ns=673417 d2h_submit_p50_ns=149433 d2h_wait_p50_ns=474830 d2h_p50_GBps=26.827 combined_h2d_p50_ns=760257 combined_h2d_p50_GBps=22.068 combined_d2h_p50_ns=647659 combined_d2h_p50_GBps=25.904 pool_checkout_recycle_pair_ns=652 pool_reuse_count=20000 pool_trimmed=48
+context phase=hsa depth=16 gpu_busy_start_percent=0
+context phase=hsa depth=16 gpu_busy_end_percent=0
+backend=hsa schema=fe2o3.async-copy-benchmark.v1 gpu_index=0 unique_id=6ced1647a296545c target=gfx942 xnack=disabled bytes=1048576 depth=16 warmups=10 samples=30 h2d_p50_ns=676622 h2d_p95_ns=686366 h2d_p50_GBps=24.796 d2h_p50_ns=445005 d2h_p95_ns=445677 d2h_p50_GBps=37.701 device_pool_allocate_free_pair_ns=302
+context phase=hip depth=16 gpu_busy_start_percent=0
+context phase=hip depth=16 gpu_busy_end_percent=0
+backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=0 unique_id=6ced1647a296545c target=gfx942:sramecc+:xnack- xnack=disabled bytes=1048576 depth=16 warmups=10 samples=30 h2d_p50_ns=521961 h2d_p95_ns=538456 h2d_p50_GBps=32.143 d2h_p50_ns=308722 d2h_p95_ns=309423 d2h_p50_GBps=54.344 device_pool_alloc_free_pair_ns=6698
+context phase=kfd-multi depth_per_device=1 gpu_busy_start_percent=0,0
+context phase=kfd-multi depth_per_device=1 gpu_busy_end_percent=0,0
+backend=kfd schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf bytes=1048576 depth_per_device=1 warmups=10 samples=30 h2d_p50_ns=276133 h2d_p95_ns=341400 h2d_aggregate_p50_GBps=7.595 d2h_p50_ns=274771 d2h_p95_ns=281081 d2h_aggregate_p50_GBps=7.632
+context phase=hsa-multi depth_per_device=1 gpu_busy_start_percent=0,0
+context phase=hsa-multi depth_per_device=1 gpu_busy_end_percent=0,0
+backend=hsa schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 gpu_indices=0,1 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf targets=gfx942,gfx942 xnack=disabled bytes=1048576 depth_per_device=1 warmups=10 samples=30 h2d_p50_ns=82113 h2d_p95_ns=84076 h2d_aggregate_p50_GBps=25.540 d2h_p50_ns=31988 d2h_p95_ns=34602 d2h_aggregate_p50_GBps=65.561
+context phase=hip-multi depth_per_device=1 gpu_busy_start_percent=0,0
+context phase=hip-multi depth_per_device=1 gpu_busy_end_percent=0,0
+backend=hip schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 device_indices=0,1 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf targets=gfx942:sramecc+:xnack-,gfx942:sramecc+:xnack- xnack=disabled host_context=single-thread-device-switching bytes=1048576 depth_per_device=1 warmups=10 samples=30 h2d_p50_ns=84847 h2d_p95_ns=86990 h2d_aggregate_p50_GBps=24.717 d2h_p50_ns=33790 d2h_p95_ns=35263 d2h_aggregate_p50_GBps=62.064
+context phase=kfd-multi depth_per_device=16 gpu_busy_start_percent=0,0
+context phase=kfd-multi depth_per_device=16 gpu_busy_end_percent=0,0
+backend=kfd schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf bytes=1048576 depth_per_device=16 warmups=10 samples=30 h2d_p50_ns=874608 h2d_p95_ns=882179 h2d_aggregate_p50_GBps=38.365 d2h_p50_ns=875899 d2h_p95_ns=889159 d2h_aggregate_p50_GBps=38.309
+context phase=hsa-multi depth_per_device=16 gpu_busy_start_percent=0,0
+context phase=hsa-multi depth_per_device=16 gpu_busy_end_percent=0,0
+backend=hsa schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 gpu_indices=0,1 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf targets=gfx942,gfx942 xnack=disabled bytes=1048576 depth_per_device=16 warmups=10 samples=30 h2d_p50_ns=590703 h2d_p95_ns=621019 h2d_aggregate_p50_GBps=56.804 d2h_p50_ns=481099 d2h_p95_ns=485466 d2h_aggregate_p50_GBps=69.745
+context phase=hip-multi depth_per_device=16 gpu_busy_start_percent=0,0
+context phase=hip-multi depth_per_device=16 gpu_busy_end_percent=0,0
+backend=hip schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 device_indices=0,1 unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf targets=gfx942:sramecc+:xnack-,gfx942:sramecc+:xnack- xnack=disabled host_context=single-thread-device-switching bytes=1048576 depth_per_device=16 warmups=10 samples=30 h2d_p50_ns=525345 h2d_p95_ns=535030 h2d_aggregate_p50_GBps=63.871 d2h_p50_ns=442471 d2h_p95_ns=446097 d2h_aggregate_p50_GBps=75.834
+context gpu_busy_after_percent=0,0

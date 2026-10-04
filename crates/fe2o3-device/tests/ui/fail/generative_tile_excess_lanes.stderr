@@ -1,0 +1,31 @@
+error[E0080]: evaluation panicked: tile invocation count exceeds the contract
+ --> src/tile.rs
+  |
+  |         const { assert_tile_geometry::<L, E>() };
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `fe2o3_device::MaskedTile1D::<'_, u32, 257, 2, ()>::load_masked::{constant#0}` failed inside this call
+  |
+note: inside `tile::assert_tile_geometry::<257, 2>`
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/tile.rs
+  |
+  | /     assert!(
+  | |         L <= MAX_MASKED_TILE_LANES_V1,
+  | |         "tile invocation count exceeds the contract"
+  | |     );
+  | |_____- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/tile.rs
+  |
+  |         const { assert_tile_geometry::<L, E>() };
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn MaskedTile1D::<'_, u32, 257, 2, ()>::load_masked`
+ --> tests/ui/fail/generative_tile_excess_lanes.rs:4:13
+  |
+4 |     let _ = MaskedTile1D::<u32, 257, 2, ()>::load_masked(context, &[1, 2], 0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

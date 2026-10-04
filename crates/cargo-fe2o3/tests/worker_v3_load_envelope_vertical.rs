@@ -1,0 +1,3155 @@
+#![cfg(all(
+    target_os = "linux",
+    feature = "worker-v3-envelope-integration-test-only"
+))]
+
+use std::{
+    convert::Infallible,
+    fs,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+use ed25519_dalek::SigningKey;
+use fe2o3_amd_target::AmdTargetId;
+use fe2o3_artifact_transaction::{
+    BuildAttempt, DurablePublishedClaimReacquisitionErrorV3, DurablePublishedHsacoClaimV3,
+    InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    reacquire_current_hsaco_publication_lease_v3,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
+};
+use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
+use fe2o3_device::KernelMarkerV1;
+use fe2o3_host::__generated::load_admitted_worker_v3_application_v1;
+use fe2o3_host::{
+    __hardware_test::application_handoff_observed_context_fixture_v1,
+    AuthenticatedWorkerV3ExecutableV1, AuthenticatedWorkerV3RosterV1,
+    CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedKernelProfileV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
+    HsaDispatchObservationV1, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ProductionWorkerV3ApplicationLoadErrorV1,
+    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, WorkerV3AuditorV1,
+    WorkerV3CompilerExecutionVerificationV1, WorkerV3HsaLoadAuthorizationErrorV1,
+    WorkerV3ProtectedRosterEntryEvidenceV1, WorkerV3ProtectedRosterVerificationEvidenceV1,
+    WorkerV3ProtectedRosterVerifierAdapterV1, WorkerV3ProtectedRosterVerifierBackendV1,
+    WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, WorkerV3ProtectedVerificationEvidenceV1,
+    WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
+    WorkerV3RefiningProtectedVerifierAdapterV1, WorkerV3RefiningProtectedVerifierErrorV1,
+    WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterVerificationDecisionErrorV1, WorkerV3RosterVerificationRequestV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3SemanticMachineRefinementBackendV1,
+    WorkerV3SemanticMachineRefinementRequestV1, WorkerV3SyntheticVerifierAdapterV1,
+    WorkerV3SyntheticVerifierV1, WorkerV3VerificationAuthenticationErrorV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, admit_recovered_worker_v3_descriptor_v1,
+    admit_recovered_worker_v3_roster_v1, audit_recovered_worker_v3_verification_v1,
+};
+use fe2o3_hsaco_finalize::RevalidatedProtectedWorkerV3FinalizerDerivationV1;
+use fe2o3_kernel_descriptor::KernelId;
+use fe2o3_runtime_protocol::{
+    CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
+    RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV2,
+    recover_worker_v3_load_envelope_v2,
+};
+use sha2::{Digest as _, Sha256};
+
+#[path = "fixtures/worker_v3_hsaco_admission.rs"]
+mod worker_v3_fixture;
+
+const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
+const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
+const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
+const SYNTHETIC_SECOND_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
+
+fn carriage_for_subject(
+    subject: &InertCompilerExecutionSubjectV1,
+    seed: u8,
+) -> CompilerExecutionReceiptCarriageV1 {
+    let signing_key = SigningKey::from_bytes(&[seed; 32]);
+    let policy = CompilerExecutionIssuerPolicyV1::new(
+        u64::from(seed),
+        CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
+        CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
+        signing_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+            .verifying_key()
+            .to_bytes(),
+    )
+    .unwrap();
+    let challenge =
+        CompilerExecutionAttestationChallengeV1::new(&policy, subject, [seed + 3; 32], 1, [0; 32])
+            .unwrap();
+    let request = CompilerExecutionAttestationRequestV1::new(challenge, subject.clone()).unwrap();
+    let receipt =
+        CompilerExecutionAttestationReceiptV1::issue(&policy, &request, &signing_key).unwrap();
+    let publication =
+        CompilerExecutionReceiptPublicationV1::new([seed + 4; 32], [seed + 5; 32], receipt)
+            .unwrap();
+    let acknowledgment =
+        CompilerExecutionReceiptPublicationAckV1::new(&publication, [seed + 6; 32]).unwrap();
+    CompilerExecutionReceiptCarriageV1::new(policy, request, publication, acknowledgment).unwrap()
+}
+
+struct StaticV3ApplicationFixtures {
+    host_consumer: PathBuf,
+    hostile: PathBuf,
+    no_protocol: PathBuf,
+}
+
+fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
+    static FIXTURES: OnceLock<StaticV3ApplicationFixtures> = OnceLock::new();
+    FIXTURES.get_or_init(|| {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-v3-static-host-consumer-{}",
+            std::process::id()
+        ));
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut static_rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
+        if !static_rustflags.is_empty() {
+            static_rustflags.push(" ");
+        }
+        static_rustflags.push("-C target-feature=+crt-static -C debuginfo=0");
+        let built = Command::new(cargo)
+            .current_dir(workspace)
+            .env_remove("RUSTFLAGS")
+            // Encoded flags, even empty, override the explicit static target flags.
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
+            .env(
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+                static_rustflags,
+            )
+            .env("FE2O3_HIP_SYS_DISABLE", "1")
+            .args([
+                "build",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--target-dir",
+            ])
+            .arg(&target)
+            .args([
+                "-p",
+                "cargo-fe2o3",
+                "--features",
+                "worker-v3-host-consumer-fixture,application-handoff-adversarial-fixture",
+                "--bin",
+                "cargo-fe2o3-worker-v3-host-consumer-app-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-app-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-chain-fixture",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "failed to build static V3 host consumer: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let directory = target.join("x86_64-unknown-linux-gnu/debug");
+        StaticV3ApplicationFixtures {
+            host_consumer: directory.join("cargo-fe2o3-worker-v3-host-consumer-app-fixture"),
+            hostile: directory.join("cargo-fe2o3-runner-app-fixture"),
+            no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
+        }
+    })
+}
+
+fn static_host_consumer_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().host_consumer
+}
+
+fn static_hostile_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().hostile
+}
+
+fn static_no_protocol_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().no_protocol
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+struct WorkerV3VecAddMarker;
+
+fn worker_v3_marker_function() {}
+
+unsafe impl KernelMarkerV1 for WorkerV3VecAddMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "vecadd";
+    const EXPORT_NAME: &'static str = "vecadd";
+    const FUNCTION: Self::Function = worker_v3_marker_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3VecAddRoster = [WorkerV3VecAddMarker];
+}
+
+struct WorkerV3SyntheticFirstTransformMarker;
+
+fn worker_v3_synthetic_first_transform_function() {}
+
+// SAFETY: this hand-authored marker is confined to a synthetic hostile fixture. It exactly mirrors
+// that fixture's names and binding, but does not claim compiler production or verification.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticFirstTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "synthetic_first_transform";
+    const EXPORT_NAME: &'static str = "synthetic_first_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_first_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+// SAFETY: the values match only the explicit synthetic descriptor constructed by this test suite.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticFirstTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xb2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = SYNTHETIC_FIRST_TRANSFORM_BINDING;
+}
+
+struct WorkerV3SyntheticSecondTransformMarker;
+
+fn worker_v3_synthetic_second_transform_function() {}
+
+// SAFETY: this hand-authored marker is confined to a synthetic hostile fixture. It exactly mirrors
+// that fixture's names and binding, but does not claim compiler production or verification.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticSecondTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "synthetic_second_transform";
+    const EXPORT_NAME: &'static str = "synthetic_second_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_second_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+// SAFETY: the values match only the explicit synthetic descriptor constructed by this test suite.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticSecondTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xc2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = SYNTHETIC_SECOND_TRANSFORM_BINDING;
+}
+
+struct WorkerV3SyntheticSubstitutedTransformMarker;
+
+fn worker_v3_synthetic_substituted_transform_function() {}
+
+// SAFETY: this deliberately substituted marker is confined to negative synthetic-fixture coverage.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticSubstitutedTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "synthetic_substituted_transform";
+    const EXPORT_NAME: &'static str = "synthetic_substituted_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_substituted_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+// SAFETY: this mismatch is intentional and is admitted only far enough to prove fail-closed roster
+// substitution; it is not used to authorize loading or dispatch.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticSubstitutedTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xd2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = [0xd1; 32];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3SyntheticTwoTransformRoster = [
+        WorkerV3SyntheticSecondTransformMarker,
+        WorkerV3SyntheticFirstTransformMarker,
+    ];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3SyntheticReorderedTransformRoster = [
+        WorkerV3SyntheticFirstTransformMarker,
+        WorkerV3SyntheticSecondTransformMarker,
+    ];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3SyntheticSubstitutedTransformRoster = [
+        WorkerV3SyntheticSecondTransformMarker,
+        WorkerV3SyntheticSubstitutedTransformMarker,
+    ];
+}
+
+#[derive(Clone, Copy)]
+enum ReviewedTestWorkerV3VerifierFault {
+    None,
+    FinalizedHsaco,
+    CompilerSubject,
+    CompilerCarriage,
+    CompilerPolicy,
+    IssuerJournal,
+    CompilerOccurrence,
+    Receipt,
+    Publication,
+    Acknowledgment,
+    WorkerLedger,
+    Sequence,
+    PriorRollbackAnchor,
+    CurrentRollbackAnchor,
+    ZeroCurrentRecordVerification,
+    ZeroCurrentRecordAttestation,
+    ZeroProtectedPolicyVerification,
+    ZeroProtectedWorkerLedgerVerification,
+    ZeroExternalRollbackVerification,
+}
+
+struct ReviewedTestWorkerV3Verifier {
+    fault: ReviewedTestWorkerV3VerifierFault,
+}
+
+struct CurrentnessProbingWorkerV3Verifier {
+    output_dir: PathBuf,
+    claim: DurablePublishedHsacoClaimV3,
+    observed_busy: bool,
+}
+
+struct ReviewedTestWorkerV3Auditor;
+
+impl<K> WorkerV3AuditorV1<K> for ReviewedTestWorkerV3Auditor
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+    type Evidence = ([u8; 32], u64);
+
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error> {
+        let finalized_sha256: [u8; 32] = Sha256::digest(request.finalized_hsaco_bytes()).into();
+        assert_eq!(finalized_sha256, request.finalized_hsaco_sha256());
+        assert_eq!(
+            u64::try_from(request.finalized_hsaco_bytes().len()).unwrap(),
+            request.finalized_hsaco_length()
+        );
+        Ok((finalized_sha256, request.finalized_hsaco_length()))
+    }
+}
+
+struct FinalizerCapturingWorkerV3Auditor;
+
+impl<K> WorkerV3AuditorV1<K> for FinalizerCapturingWorkerV3Auditor
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+    type Evidence = RevalidatedProtectedWorkerV3FinalizerDerivationV1;
+
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error> {
+        Ok(request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay"))
+    }
+}
+
+// SAFETY: this synthetic verifier is confined to test-only fixtures. It mirrors every requested
+// identity and must never be used as production proof authority.
+unsafe impl<K> WorkerV3SyntheticVerifierV1<K> for ReviewedTestWorkerV3Verifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_synthetic(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        let capsule = request.semantic_compiler_handoff().capsule();
+        assert_eq!(*capsule.identity().sha256(), request.capsule_sha256());
+        assert_eq!(capsule.canonical_bytes(), request.semantic_capsule_bytes());
+        let finalized_sha256: [u8; 32] = Sha256::digest(request.finalized_hsaco_bytes()).into();
+        assert_eq!(finalized_sha256, request.finalized_hsaco_sha256());
+        assert_eq!(
+            u64::try_from(request.finalized_hsaco_bytes().len()).unwrap(),
+            request.finalized_hsaco_length()
+        );
+        assert_eq!(
+            *capsule.receipts().formal_memory().identity().sha256(),
+            request.formal_memory_receipt_sha256()
+        );
+        assert_eq!(
+            capsule.receipts().formal_memory().canonical_preimage(),
+            request.formal_memory_receipt_bytes()
+        );
+        assert_eq!(
+            *capsule.receipts().proof_binding().identity().sha256(),
+            request.proof_binding_receipt_sha256()
+        );
+        assert_eq!(
+            capsule.receipts().proof_binding().canonical_preimage(),
+            request.proof_binding_receipt_bytes()
+        );
+        let proof_inputs = request.validate_compiler_proof_inputs_v4().unwrap();
+        assert!(proof_inputs.has_exact_decoded_input_association());
+        assert!(proof_inputs.has_structural_mir_to_kir_correspondence());
+        assert!(proof_inputs.authenticates_signed_verus_receipt_under_embedded_key());
+        assert!(!proof_inputs.authenticates_compiler_origin());
+        assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
+        assert!(!proof_inputs.grants_runtime_authority());
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .unwrap();
+        assert!(target_lineage.has_exact_receipt_association());
+        assert!(target_lineage.has_exact_kir_to_llvm_replay());
+        assert!(!target_lineage.establishes_semantic_refinement());
+        assert!(!target_lineage.establishes_llvm_to_machine_refinement());
+        assert!(!target_lineage.authenticates_producer());
+        assert!(!target_lineage.grants_runtime_authority());
+        assert_eq!(
+            request
+                .compiler_execution_receipt_carriage()
+                .request()
+                .subject(),
+            request.compiler_execution_subject()
+        );
+        assert!(
+            request
+                .compiler_execution_subject()
+                .identity()
+                .matches_canonical_bytes(request.compiler_execution_subject_bytes())
+        );
+        let decoded_carriage =
+            CompilerExecutionReceiptCarriageV1::decode(request.compiler_execution_receipt_bytes())
+                .unwrap();
+        assert!(decoded_carriage == *request.compiler_execution_receipt_carriage());
+        let mut finalized = request.finalized_hsaco_sha256();
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut carriage = request.compiler_execution_carriage_sha256();
+        let mut policy = request.compiler_execution_policy_sha256();
+        let mut issuer_journal = request.compiler_execution_issuer_journal_sha256();
+        let mut compiler_occurrence = request.compiler_occurrence_sha256();
+        let mut receipt = request.compiler_execution_receipt_sha256();
+        let mut publication = request.compiler_execution_publication_sha256();
+        let mut acknowledgment = request.compiler_execution_acknowledgment_sha256();
+        let mut worker_ledger = request.compiler_execution_worker_ledger_record_sha256();
+        let mut sequence = request.compiler_execution_sequence();
+        let mut prior_rollback = request.compiler_execution_prior_rollback_anchor();
+        let mut current_rollback = request.compiler_execution_current_rollback_anchor();
+        let mut current_record_verification = [0xd4; 32];
+        let mut current_record_attestation = [0xd5; 32];
+        let mut protected_policy_verification = [0xd1; 32];
+        let mut protected_worker_ledger_verification = [0xd2; 32];
+        let mut external_rollback_verification = [0xd3; 32];
+        match self.fault {
+            ReviewedTestWorkerV3VerifierFault::None => {}
+            ReviewedTestWorkerV3VerifierFault::FinalizedHsaco => finalized[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerCarriage => carriage[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerPolicy => policy[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::IssuerJournal => issuer_journal[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerOccurrence => {
+                compiler_occurrence[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::Receipt => receipt[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Publication => publication[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Acknowledgment => acknowledgment[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::WorkerLedger => worker_ledger[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Sequence => sequence = sequence.wrapping_add(1),
+            ReviewedTestWorkerV3VerifierFault::PriorRollbackAnchor => {
+                prior_rollback[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor => {
+                current_rollback[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification => {
+                current_record_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation => {
+                current_record_attestation = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification => {
+                protected_policy_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedWorkerLedgerVerification => {
+                protected_worker_ledger_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroExternalRollbackVerification => {
+                external_rollback_verification = [0; 32];
+            }
+        }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            subject,
+            carriage,
+            policy,
+            issuer_journal,
+            compiler_occurrence,
+            receipt,
+            publication,
+            acknowledgment,
+            worker_ledger,
+            sequence,
+            prior_rollback,
+            current_rollback,
+            current_record_verification,
+            current_record_attestation,
+            protected_policy_verification,
+            protected_worker_ledger_verification,
+            external_rollback_verification,
+        );
+        let finalizer_derivation = request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay");
+        Ok(WorkerV3VerificationDecisionV1::synthetic_for_test_only(
+            request.challenge_identity(),
+            request.lineage_identity(),
+            request.descriptor().kernel_id(),
+            request.marker_binding_identity(),
+            request.generated_host_contract_identity(),
+            request.capsule_sha256(),
+            request.formal_memory_receipt_sha256(),
+            request.proof_binding_receipt_sha256(),
+            finalized,
+            request.finalized_hsaco_length(),
+            request.target(),
+            request.code_object_version(),
+            finalizer_derivation,
+            compiler_execution,
+            [0xc1; 32],
+            [0xc2; 32],
+            [0xc3; 32],
+            [0xc4; 32],
+            [0xc5; 32],
+            WorkerV3SafetyPropertiesV1::required(),
+        ))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReviewedTestProtectedVerifierFault {
+    None,
+    CompilerSubject,
+    ZeroVerificationTranscript,
+}
+
+struct ReviewedTestProtectedVerifier {
+    fault: ReviewedTestProtectedVerifierFault,
+    foreign_finalizer: Option<RevalidatedProtectedWorkerV3FinalizerDerivationV1>,
+}
+
+// SAFETY: this request-echoing backend exists only in the receipt-bearing integration-test
+// binary. It deliberately exercises the production adapter's field mapping and rejection paths
+// and must never be represented as protected compiler, ledger, rollback, or proof authority.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for ReviewedTestProtectedVerifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut verification_transcript = [0xc2; 32];
+        match self.fault {
+            ReviewedTestProtectedVerifierFault::None => {}
+            ReviewedTestProtectedVerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestProtectedVerifierFault::ZeroVerificationTranscript => {
+                verification_transcript = [0; 32];
+            }
+        }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            subject,
+            request.compiler_execution_carriage_sha256(),
+            request.compiler_execution_policy_sha256(),
+            request.compiler_execution_issuer_journal_sha256(),
+            request.compiler_occurrence_sha256(),
+            request.compiler_execution_receipt_sha256(),
+            request.compiler_execution_publication_sha256(),
+            request.compiler_execution_acknowledgment_sha256(),
+            request.compiler_execution_worker_ledger_record_sha256(),
+            request.compiler_execution_sequence(),
+            request.compiler_execution_prior_rollback_anchor(),
+            request.compiler_execution_current_rollback_anchor(),
+            [0xd1; 32],
+            [0xd2; 32],
+            [0xd3; 32],
+            [0xd4; 32],
+            [0xd5; 32],
+        );
+        let proof_inputs = request
+            .validate_compiler_proof_inputs_v4()
+            .expect("the integration fixture carries canonical compiler proof inputs");
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .expect("the integration fixture carries canonical target lineage");
+        let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
+            request
+                .independently_revalidate_finalizer_derivation()
+                .expect("the exact fixture finalizer derivation must replay")
+        });
+        // SAFETY: this test-only backend deliberately supplies complete synthetic identities so
+        // the sealed adapter's exact mapping and fail-closed validation can be exercised. The
+        // proof-input owner was decoded from the exact borrowed request above.
+        Ok(unsafe {
+            WorkerV3ProtectedVerificationEvidenceV1::new(
+                finalizer_derivation,
+                compiler_execution,
+                proof_inputs,
+                target_lineage,
+                [0xc1; 32],
+                verification_transcript,
+                [0xc3; 32],
+                [0xc4; 32],
+                [0xc5; 32],
+                WorkerV3SafetyPropertiesV1::required(),
+            )
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RefiningTestProtectedVerifierAction {
+    Admit,
+    Reject,
+    Panic,
+    SubstituteCompilerSubject,
+}
+
+struct RefiningTestPanicPayload;
+
+impl Drop for RefiningTestPanicPayload {
+    fn drop(&mut self) {
+        panic!("refining verifier panic payload destructor");
+    }
+}
+
+struct RefiningTestProtectedVerifier {
+    action: RefiningTestProtectedVerifierAction,
+    calls: usize,
+}
+
+// SAFETY: this backend is compiled only under the integration-test feature. The explicitly unsafe
+// synthetic-currentness constructor below exists solely to make the otherwise production-only
+// refinement join reachable for adversarial transition tests.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for RefiningTestProtectedVerifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        match self.action {
+            RefiningTestProtectedVerifierAction::Reject => {
+                return Err("protected verifier rejected request");
+            }
+            RefiningTestProtectedVerifierAction::Panic => {
+                std::panic::panic_any(RefiningTestPanicPayload);
+            }
+            RefiningTestProtectedVerifierAction::Admit
+            | RefiningTestProtectedVerifierAction::SubstituteCompilerSubject => {}
+        }
+
+        let mut subject = request.compiler_execution_subject_sha256();
+        if matches!(
+            self.action,
+            RefiningTestProtectedVerifierAction::SubstituteCompilerSubject
+        ) {
+            subject[0] ^= 0xff;
+        }
+        // SAFETY: this constructor is an explicit non-production test hook. The integration test
+        // needs a positive currentness prerequisite to exercise the exact refining-adapter join.
+        let compiler_execution = unsafe {
+            WorkerV3CompilerExecutionVerificationV1::synthetic_authenticated_refining_adapter_test_only(
+                subject,
+                request.compiler_execution_carriage_sha256(),
+                request.compiler_execution_policy_sha256(),
+                request.compiler_execution_issuer_journal_sha256(),
+                request.compiler_occurrence_sha256(),
+                request.compiler_execution_receipt_sha256(),
+                request.compiler_execution_publication_sha256(),
+                request.compiler_execution_acknowledgment_sha256(),
+                request.compiler_execution_worker_ledger_record_sha256(),
+                request.compiler_execution_sequence(),
+                request.compiler_execution_prior_rollback_anchor(),
+                request.compiler_execution_current_rollback_anchor(),
+                [0xe1; 32],
+                [0xe2; 32],
+                [0xe3; 32],
+                [0xe4; 32],
+                [0xe5; 32],
+            )
+        };
+        let proof_inputs = request
+            .validate_compiler_proof_inputs_v4()
+            .expect("the integration fixture carries canonical compiler proof inputs");
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .expect("the integration fixture carries canonical target lineage");
+        let finalizer_derivation = request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay");
+        // SAFETY: this test backend supplies the exact decoded request owners and nonzero synthetic
+        // protected identities. It never represents the result as production evidence.
+        Ok(unsafe {
+            WorkerV3ProtectedVerificationEvidenceV1::new(
+                finalizer_derivation,
+                compiler_execution,
+                proof_inputs,
+                target_lineage,
+                [0xf1; 32],
+                [0xf2; 32],
+                [0xf3; 32],
+                [0xf4; 32],
+                [0xf5; 32],
+                WorkerV3SafetyPropertiesV1::required(),
+            )
+        })
+    }
+}
+
+enum RefiningTestSemanticAction {
+    Admit,
+    Reject,
+    Panic,
+    InvalidatePublication { root: PathBuf, moved: PathBuf },
+}
+
+#[derive(Debug)]
+struct RefiningTestSemanticObservation {
+    final_llvm_sha256: [u8; 32],
+    final_llvm_bytes: usize,
+    selected_isa_sha256: [u8; 32],
+    selected_isa_bytes: usize,
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_bytes: usize,
+    selected_isa_offset: usize,
+}
+
+struct RefiningTestSemanticBackend {
+    action: RefiningTestSemanticAction,
+    calls: usize,
+    observation: Option<RefiningTestSemanticObservation>,
+}
+
+// SAFETY: this backend is a deterministic integration fixture. It first proves that the adapter
+// supplied the exact final LLVM, descriptor-selected ISA range, and complete retained HSACO, then
+// returns fixed non-authoritative proof bytes for receipt-custody tests.
+unsafe impl<K> WorkerV3SemanticMachineRefinementBackendV1<K> for RefiningTestSemanticBackend
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_semantic_machine_refinement(
+        &mut self,
+        request: &WorkerV3SemanticMachineRefinementRequestV1<'_, '_, K>,
+    ) -> Result<WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, Self::Error> {
+        self.calls += 1;
+        let verification_request = request.verification_request();
+        let binding = verification_request.descriptor_binding();
+        let start = usize::try_from(binding.entry_file_offset())
+            .expect("fixture ISA file offset fits usize");
+        let bytes = usize::try_from(binding.entry_size()).expect("fixture ISA size fits usize");
+        let end = start
+            .checked_add(bytes)
+            .expect("fixture ISA range does not overflow");
+        assert_eq!(
+            request.selected_isa_bytes(),
+            &verification_request.finalized_hsaco_bytes()[start..end]
+        );
+        assert_eq!(
+            request.final_llvm_bytes(),
+            verification_request.final_llvm_bytes()
+        );
+        assert_eq!(
+            request.finalized_hsaco_bytes(),
+            verification_request.finalized_hsaco_bytes()
+        );
+        self.observation = Some(RefiningTestSemanticObservation {
+            final_llvm_sha256: Sha256::digest(request.final_llvm_bytes()).into(),
+            final_llvm_bytes: request.final_llvm_bytes().len(),
+            selected_isa_sha256: Sha256::digest(request.selected_isa_bytes()).into(),
+            selected_isa_bytes: request.selected_isa_bytes().len(),
+            finalized_hsaco_sha256: Sha256::digest(request.finalized_hsaco_bytes()).into(),
+            finalized_hsaco_bytes: request.finalized_hsaco_bytes().len(),
+            selected_isa_offset: start,
+        });
+
+        match &self.action {
+            RefiningTestSemanticAction::Reject => {
+                return Err("semantic refinement rejected request");
+            }
+            RefiningTestSemanticAction::Panic => {
+                std::panic::panic_any(RefiningTestPanicPayload);
+            }
+            RefiningTestSemanticAction::InvalidatePublication { root, moved } => {
+                fs::rename(root, moved).expect("move current publication for stale-token test");
+                fs::create_dir(root).expect("replace current publication for stale-token test");
+            }
+            RefiningTestSemanticAction::Admit => {}
+        }
+
+        WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+            vec![0x91; 257].into_boxed_slice(),
+            vec![0x92; 513].into_boxed_slice(),
+            [0x93; 32],
+            [0x94; 32],
+        )
+        .map_err(|_| "semantic refinement fixture evidence is invalid")
+    }
+}
+
+fn refining_test_verifier(
+    protected_action: RefiningTestProtectedVerifierAction,
+    semantic_action: RefiningTestSemanticAction,
+) -> WorkerV3RefiningProtectedVerifierAdapterV1<
+    RefiningTestProtectedVerifier,
+    RefiningTestSemanticBackend,
+> {
+    WorkerV3RefiningProtectedVerifierAdapterV1::new(
+        RefiningTestProtectedVerifier {
+            action: protected_action,
+            calls: 0,
+        },
+        RefiningTestSemanticBackend {
+            action: semantic_action,
+            calls: 0,
+            observation: None,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ReviewedTestProtectedRosterVerifierFault {
+    None,
+    CompilerSubject,
+    ZeroVerificationTranscript,
+    MissingEntry,
+    SwappedEntries,
+    SubstitutedMarkerBinding,
+    SubstitutedEntryLineage,
+    SubstitutedGeneratedHostContract,
+    ZeroProofExecutableBinding,
+    ZeroEntryLayout,
+    ZeroEntryEffect,
+    MissingEntrySafetyProperty,
+}
+
+struct ReviewedTestProtectedRosterVerifier {
+    fault: ReviewedTestProtectedRosterVerifierFault,
+    calls: usize,
+    foreign_finalizer: Option<RevalidatedProtectedWorkerV3FinalizerDerivationV1>,
+}
+
+// SAFETY: this request-echoing aggregate backend is confined to the receipt-bearing integration
+// test. It exercises the production adapter's exact ordered mapping and rejection paths and does
+// not represent protected compiler, proof, executable, layout, effect, or runtime authority.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for ReviewedTestProtectedRosterVerifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        let envelope = request.load_envelope_evidence_view();
+        let exact_envelope = envelope.exact_canonical_bytes();
+        let exact_envelope_sha256: [u8; 32] = Sha256::digest(exact_envelope).into();
+        assert_eq!(
+            envelope.binding().byte_length(),
+            exact_envelope.len() as u64
+        );
+        assert_eq!(envelope.binding().sha256(), exact_envelope_sha256);
+        assert_eq!(
+            WorkerV3LoadEnvelopeWireV2::decode_canonical(exact_envelope)
+                .unwrap()
+                .encode_canonical()
+                .unwrap(),
+            exact_envelope
+        );
+        assert!(!envelope.grants_authority());
+        assert!(!envelope.grants_verification_authority());
+        assert!(!envelope.grants_publication_authority());
+        assert!(!envelope.grants_currentness_authority());
+        assert!(!envelope.grants_load_authority());
+        assert!(!envelope.grants_launch_authority());
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut verification_transcript = [0xc2; 32];
+        match self.fault {
+            ReviewedTestProtectedRosterVerifierFault::None
+            | ReviewedTestProtectedRosterVerifierFault::MissingEntry
+            | ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+            | ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+            | ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty => {}
+            ReviewedTestProtectedRosterVerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestProtectedRosterVerifierFault::ZeroVerificationTranscript => {
+                verification_transcript = [0; 32];
+            }
+        }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            subject,
+            request.compiler_execution_carriage_sha256(),
+            request.compiler_execution_policy_sha256(),
+            request.compiler_execution_issuer_journal_sha256(),
+            request.compiler_occurrence_sha256(),
+            request.compiler_execution_receipt_sha256(),
+            request.compiler_execution_publication_sha256(),
+            request.compiler_execution_acknowledgment_sha256(),
+            request.compiler_execution_worker_ledger_record_sha256(),
+            request.compiler_execution_sequence(),
+            request.compiler_execution_prior_rollback_anchor(),
+            request.compiler_execution_current_rollback_anchor(),
+            [0xd1; 32],
+            [0xd2; 32],
+            [0xd3; 32],
+            [0xd4; 32],
+            [0xd5; 32],
+        );
+        let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
+            request
+                .independently_revalidate_finalizer_derivation()
+                .expect("the exact fixture finalizer derivation must replay")
+        });
+        let mut entries = request
+            .marker_entries()
+            .iter()
+            .enumerate()
+            .map(|(ordinal, expected)| {
+                let seed = 0x20_u8
+                    .wrapping_add(u8::try_from(ordinal).expect("synthetic roster ordinal fits u8"));
+                let lineage_ordinal = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+                ) && ordinal == 1
+                {
+                    0
+                } else {
+                    ordinal
+                };
+                let mut marker_binding = expected.kernel_binding_id();
+                if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
+                ) && ordinal == 1
+                {
+                    marker_binding[0] ^= 0xff;
+                }
+                let mut generated_host_contract = expected.generated_host_contract_identity();
+                if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+                ) && ordinal == 1
+                {
+                    generated_host_contract[0] ^= 0xff;
+                }
+                let proof_executable = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed; 32]
+                };
+                let layout = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed.wrapping_add(1); 32]
+                };
+                let effect = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed.wrapping_add(2); 32]
+                };
+                let safety_properties = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty
+                ) && ordinal == 1
+                {
+                    WorkerV3SafetyPropertiesV1::new(u8::MAX - 1)
+                        .expect("the synthetic safety bitset uses only known bits")
+                } else {
+                    WorkerV3SafetyPropertiesV1::required()
+                };
+                // SAFETY: this explicit hostile test seam supplies synthetic nonzero identities;
+                // host promotion still checks all request coordinates and rejection cases.
+                unsafe {
+                    WorkerV3ProtectedRosterEntryEvidenceV1::new(
+                        request
+                            .entry_lineage_identity(lineage_ordinal)
+                            .expect("request retains every roster lineage"),
+                        marker_binding,
+                        generated_host_contract,
+                        proof_executable,
+                        layout,
+                        effect,
+                        safety_properties,
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        if matches!(
+            self.fault,
+            ReviewedTestProtectedRosterVerifierFault::MissingEntry
+        ) {
+            entries.pop();
+        }
+        if matches!(
+            self.fault,
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+        ) {
+            entries.swap(0, 1);
+        }
+        // SAFETY: this test-only backend deliberately supplies synthetic evidence so the exact
+        // aggregate promotion and fail-closed field validation can be exercised.
+        Ok(unsafe {
+            WorkerV3ProtectedRosterVerificationEvidenceV1::synthetic_for_test_only(
+                finalizer_derivation,
+                compiler_execution,
+                [0xc1; 32],
+                verification_transcript,
+                entries,
+            )
+        })
+    }
+}
+
+#[derive(Default)]
+struct RejectingTestProtectedRosterVerifier {
+    calls: usize,
+}
+
+// SAFETY: this test-only backend never returns protected evidence. Its rejection exercises owner
+// recovery after the complete protected call and host-side currentness revalidation.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for RejectingTestProtectedRosterVerifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        _request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        Err("synthetic protected roster verifier rejection")
+    }
+}
+
+// SAFETY: this test-only protected backend probes the cooperative publication lock before
+// delegating to the complete protected-evidence fixture above.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for CurrentnessProbingWorkerV3Verifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations satisfy the same test-only protected-backend contract.
+        unsafe {
+            ReviewedTestProtectedVerifier {
+                fault: ReviewedTestProtectedVerifierFault::None,
+                foreign_finalizer: None,
+            }
+            .verify_protected(request)
+        }
+    }
+}
+
+// SAFETY: this test-only aggregate backend probes the same cooperative publication lock while the
+// one roster-wide currentness token is retained, then delegates to the complete synthetic
+// aggregate evidence fixture above.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for CurrentnessProbingWorkerV3Verifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations satisfy the same test-only aggregate-backend contract.
+        unsafe {
+            ReviewedTestProtectedRosterVerifier {
+                fault: ReviewedTestProtectedRosterVerifierFault::None,
+                calls: 0,
+                foreign_finalizer: None,
+            }
+            .verify_protected_roster(request)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReviewedTestHsaExecutable {
+    identity: HsaExecutableObjectIdentityV1,
+}
+
+#[derive(Debug)]
+struct ReviewedTestHsaKernel {
+    identity: HsaKernelObjectIdentityV1,
+}
+
+#[derive(Default)]
+struct ReviewedTestHsaState {
+    environment_observations: AtomicUsize,
+    loads: AtomicUsize,
+    unloads: AtomicUsize,
+    implicit_initializations: AtomicUsize,
+    dispatches: AtomicUsize,
+}
+
+struct ReviewedTestHsaAdapter {
+    environment: HsaEnvironmentObservationV1,
+    state: Arc<ReviewedTestHsaState>,
+    substitute_load_digest: bool,
+}
+
+impl ReviewedTestHsaAdapter {
+    fn new() -> (Self, Arc<ReviewedTestHsaState>) {
+        let target = AmdTargetId::parse("gfx942:sramecc+:xnack-").unwrap();
+        let runtime = HsaRuntimeIdentityV1::new(
+            "test-hsa",
+            "v1",
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0xd1; 32])),
+            [0xd2; 16],
+        )
+        .unwrap();
+        let physical = HsaPhysicalDeviceIdentityV1::new([0xd3; 16], 1, 0, target).unwrap();
+        let agent =
+            HsaAgentIdentityV1::new(runtime.instance(), 0xd4, physical.uuid(), target).unwrap();
+        let environment = HsaEnvironmentObservationV1::new(runtime, physical, agent).unwrap();
+        let state = Arc::new(ReviewedTestHsaState::default());
+        (
+            Self {
+                environment,
+                state: state.clone(),
+                substitute_load_digest: false,
+            },
+            state,
+        )
+    }
+
+    fn with_substituted_load_digest() -> (Self, Arc<ReviewedTestHsaState>) {
+        let (mut adapter, state) = Self::new();
+        adapter.substitute_load_digest = true;
+        (adapter, state)
+    }
+
+    fn executable_identity() -> HsaExecutableObjectIdentityV1 {
+        HsaExecutableObjectIdentityV1::new([0xd5; 32]).unwrap()
+    }
+}
+
+// SAFETY: this test adapter is deterministic, synchronous, and retains no native authority.
+unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
+    type Executable = ReviewedTestHsaExecutable;
+    type Kernel = ReviewedTestHsaKernel;
+    type Error = &'static str;
+
+    unsafe fn observe_environment(&mut self) -> Result<HsaEnvironmentObservationV1, Self::Error> {
+        self.state
+            .environment_observations
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(self.environment.clone())
+    }
+
+    unsafe fn load_executable(
+        &mut self,
+        bytes: &[u8],
+        finalized_digest: PayloadDigest,
+    ) -> Result<(Self::Executable, HsaCodeObjectLoadObservationV1), Self::Error> {
+        self.state.loads.fetch_add(1, Ordering::SeqCst);
+        let identity = Self::executable_identity();
+        let observed_digest = if self.substitute_load_digest {
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0xdf; 32]))
+        } else {
+            finalized_digest
+        };
+        Ok((
+            ReviewedTestHsaExecutable { identity },
+            HsaCodeObjectLoadObservationV1::new(
+                observed_digest,
+                u64::try_from(bytes.len()).unwrap(),
+                self.environment.runtime().instance(),
+                self.environment.agent().agent_handle(),
+                identity,
+            ),
+        ))
+    }
+
+    unsafe fn resolve_kernel(
+        &mut self,
+        executable: &Self::Executable,
+        export_symbol: &str,
+    ) -> Result<(Self::Kernel, HsaKernelResolutionObservationV1), Self::Error> {
+        let identity = HsaKernelObjectIdentityV1::new([0xd6; 32]).unwrap();
+        Ok((
+            ReviewedTestHsaKernel { identity },
+            HsaKernelResolutionObservationV1::new(
+                executable.identity,
+                identity,
+                export_symbol,
+                272,
+                16,
+                0,
+                0,
+            )
+            .unwrap(),
+        ))
+    }
+
+    unsafe fn launch_and_wait(
+        &mut self,
+        executable: &Self::Executable,
+        kernel: &Self::Kernel,
+        geometry: HsaLaunchGeometryV1,
+        kernarg: &mut [u8],
+    ) -> Result<HsaDispatchObservationV1, Self::Error> {
+        self.state.dispatches.fetch_add(1, Ordering::SeqCst);
+        let _ = kernarg;
+        HsaDispatchObservationV1::new(
+            [0xd7; 16],
+            executable.identity,
+            kernel.identity,
+            geometry,
+            true,
+        )
+        .map_err(|_| "invalid fixture dispatch observation")
+    }
+
+    unsafe fn unload_executable(
+        &mut self,
+        executable: Self::Executable,
+    ) -> Result<HsaUnloadObservationV1, Self::Error> {
+        self.state.unloads.fetch_add(1, Ordering::SeqCst);
+        Ok(HsaUnloadObservationV1::new(
+            executable.identity,
+            self.environment.runtime().instance(),
+            self.environment.agent().agent_handle(),
+            true,
+        ))
+    }
+}
+
+// SAFETY: this fake initializer preserves the explicit prefix, initializes the complete supplied
+// suffix synchronously, and reports only identities derived from the exact private handles.
+unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedTestHsaAdapter {
+    unsafe fn initialize_implicit_kernarg(
+        &mut self,
+        executable: &Self::Executable,
+        kernel: &Self::Kernel,
+        geometry: HsaLaunchGeometryV1,
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+        kernarg: &mut [u8],
+    ) -> Result<HsaImplicitKernargInitializationObservationV1, Self::Error> {
+        self.state
+            .implicit_initializations
+            .fetch_add(1, Ordering::SeqCst);
+        kernarg[implicit_byte_offset..implicit_byte_offset + implicit_byte_len].fill(0xa5);
+        Ok(HsaImplicitKernargInitializationObservationV1::new(
+            executable.identity,
+            kernel.identity,
+            geometry,
+            u64::try_from(explicit_byte_len).unwrap(),
+            u64::try_from(implicit_byte_offset).unwrap(),
+            u64::try_from(implicit_byte_len).unwrap(),
+            true,
+        ))
+    }
+}
+
+fn assert_hsa_adapter_unreached(state: &ReviewedTestHsaState) {
+    assert_eq!(state.environment_observations.load(Ordering::SeqCst), 0);
+    assert_eq!(state.loads.load(Ordering::SeqCst), 0);
+    assert_eq!(state.implicit_initializations.load(Ordering::SeqCst), 0);
+    assert_eq!(state.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(state.unloads.load(Ordering::SeqCst), 0);
+}
+
+fn recovered_host_fixture() -> (
+    worker_v3_fixture::TestDirectory,
+    RecoveredWorkerV3LoadEnvelopeV2,
+) {
+    recover_published_worker_v3_fixture(worker_v3_fixture::published_worker_v3_fixture())
+}
+
+fn recovered_synthetic_two_kernel_host_fixture() -> (
+    worker_v3_fixture::TestDirectory,
+    RecoveredWorkerV3LoadEnvelopeV2,
+) {
+    recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_synthetic_two_kernel_worker_v3_fixture(),
+    )
+}
+
+fn recover_published_worker_v3_fixture(
+    fixture: worker_v3_fixture::PublishedWorkerV3Fixture,
+) -> (
+    worker_v3_fixture::TestDirectory,
+    RecoveredWorkerV3LoadEnvelopeV2,
+) {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = fixture;
+    let subject = published.compiler_execution_subject_v1().unwrap();
+    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        published,
+        carriage_for_subject(&subject, 0x71),
+    )
+    .unwrap();
+    let intent = envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let readiness = envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &producer,
+        attempt,
+        intent,
+        readiness.receipt(),
+    )
+    .unwrap();
+    drop(envelope);
+    let recovered = recover_worker_v3_load_envelope_v2(&directory.0, attempt).unwrap();
+    (directory, recovered)
+}
+
+struct PreparedV3ApplicationFixture {
+    directory: worker_v3_fixture::TestDirectory,
+    attempt: BuildAttempt,
+    readiness: WorkerV3LoadReadinessReceiptV1,
+    envelope_path: PathBuf,
+    exact_envelope: Vec<u8>,
+    kernel: PathBuf,
+}
+
+fn prepared_v3_application_fixture() -> PreparedV3ApplicationFixture {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = worker_v3_fixture::published_worker_v3_fixture();
+    let subject = published.compiler_execution_subject_v1().unwrap();
+    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        published,
+        carriage_for_subject(&subject, 0x72),
+    )
+    .unwrap();
+    let intent = envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let exact_envelope = envelope.encode_canonical().unwrap();
+    let readiness = envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    let readiness_receipt = readiness.receipt();
+    let envelope_path = readiness.envelope_path().to_path_buf();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &producer,
+        attempt,
+        intent,
+        readiness_receipt,
+    )
+    .unwrap();
+    drop(envelope);
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = b"fe2o3-owned-v1\0".to_vec();
+    owner.extend_from_slice(&[0x55; 16]);
+    let owner_path = directory.0.join(".fe2o3-owned-v1");
+    fs::write(&owner_path, owner).unwrap();
+    fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let kernel = directory.0.join("v3-application.kernel-id");
+    fs::write(&kernel, "a1".repeat(32)).unwrap();
+    PreparedV3ApplicationFixture {
+        directory,
+        attempt,
+        readiness: readiness_receipt,
+        envelope_path,
+        exact_envelope,
+        kernel,
+    }
+}
+
+fn v3_application_runner_command_for(
+    fixture: &PreparedV3ApplicationFixture,
+    application: &Path,
+) -> Command {
+    v3_application_runner_command_for_context(fixture, application, "3-test-envelope-only")
+}
+
+fn v3_application_runner_command_for_context(
+    fixture: &PreparedV3ApplicationFixture,
+    application: &Path,
+    runner_context: &str,
+) -> Command {
+    let metadata = fs::metadata(&fixture.directory.0).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .arg("__fe2o3-runner-v1")
+        .arg(runner_context)
+        .arg(lower_hex(
+            fixture.directory.0.as_os_str().as_encoded_bytes(),
+        ))
+        .arg(metadata.dev().to_string())
+        .arg(metadata.ino().to_string())
+        .arg("required")
+        .arg("0")
+        .arg(application);
+    command
+}
+
+fn v3_application_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+    let mut command =
+        v3_application_runner_command_for(fixture, static_host_consumer_application_fixture());
+    command
+        .arg(&fixture.kernel)
+        .arg("gfx942:xnack-")
+        .arg(report);
+    command
+}
+
+fn v3_hostile_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+    let mut command =
+        v3_application_runner_command_for(fixture, static_hostile_application_fixture());
+    command.arg(report).arg("worker-v3-application-payload");
+    command
+}
+
+fn v3_fast_failure_hostile_runner_command(
+    fixture: &PreparedV3ApplicationFixture,
+    report: &Path,
+) -> Command {
+    let mut command = v3_application_runner_command_for_context(
+        fixture,
+        static_hostile_application_fixture(),
+        "3-test-fast-failures",
+    );
+    command.arg(report).arg("worker-v3-application-payload");
+    command
+}
+
+#[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("v3-application-report.json");
+    let completed = v3_application_runner_command(&fixture, &report)
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "strict V3 application handoff failed: {}; report: {}",
+        String::from_utf8_lossy(&completed.stderr),
+        fs::read_to_string(&report).unwrap_or_else(|error| format!("unavailable ({error})"))
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["current"], true);
+
+    let recovered =
+        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_roster_handoff() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture
+        .directory
+        .0
+        .join("v3-application-roster-report.json");
+    let completed = v3_application_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-consume-roster")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "strict V3 application roster handoff failed: {}; report: {}",
+        String::from_utf8_lossy(&completed.stderr),
+        fs::read_to_string(&report).unwrap_or_else(|error| format!("unavailable ({error})"))
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["current"], true);
+    assert_eq!(report["roster"], true);
+
+    let recovered =
+        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
+fn strict_v3_host_consumer_rejects_substituted_commitment() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("substituted-commitment.json");
+    let rejected = v3_application_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-substitute-commitment")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], false);
+}
+
+#[test]
+fn strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = prepared_v3_application_fixture();
+    let saved = fixture.envelope_path.with_extension("saved");
+    fs::rename(&fixture.envelope_path, &saved).unwrap();
+    symlink(saved.file_name().unwrap(), &fixture.envelope_path).unwrap();
+    let report = fixture.directory.0.join("symlinked-envelope.json");
+    let rejected = v3_application_runner_command(&fixture, &report)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(!report.exists(), "application must not be spawned");
+}
+
+#[test]
+fn strict_v3_handoff_rejects_truncated_and_extended_envelopes_before_spawn() {
+    for trailing_byte in [false, true] {
+        let fixture = prepared_v3_application_fixture();
+        let bytes = if trailing_byte {
+            let mut bytes = fixture.exact_envelope.clone();
+            bytes.push(0);
+            bytes
+        } else {
+            fixture.exact_envelope[..fixture.exact_envelope.len() - 1].to_vec()
+        };
+        fs::write(&fixture.envelope_path, bytes).unwrap();
+        let report = fixture.directory.0.join(if trailing_byte {
+            "extended-envelope.json"
+        } else {
+            "truncated-envelope.json"
+        });
+        let rejected = v3_application_runner_command(&fixture, &report)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(!report.exists(), "application must not be spawned");
+    }
+}
+
+#[test]
+fn strict_v3_handoff_closes_unrelated_inheritable_descriptors() {
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    const PROBE_FD: i32 = 199;
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("close-range-report.json");
+    let source = File::open("/dev/null").unwrap();
+    let source_fd = source.as_raw_fd();
+    let mut command = v3_hostile_runner_command(&fixture, &report);
+    command
+        .arg("--fe2o3-test-probe-fd")
+        .arg(PROBE_FD.to_string());
+    // SAFETY: the callback creates one intentionally inheritable descriptor in the runner child.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(source_fd, PROBE_FD) != PROBE_FD
+                || libc::fcntl(PROBE_FD, libc::F_SETFD, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let completed = command.output().unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["probe_fd_open"], false);
+    assert_eq!(report["handoff"]["acknowledged"], true);
+}
+
+#[test]
+fn strict_v3_public_ack_does_not_claim_child_currentness_authority() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("public-ack-report.json");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-public-ack-without-reacquire")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["acknowledged"], true);
+    assert_eq!(report["handoff"]["child_reacquired_currentness"], false);
+}
+
+#[test]
+fn strict_v3_seccomp_rejects_process_and_session_escape() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("seccomp-process-report.json");
+    let escape_marker = fixture.directory.0.join("double-fork-setsid-escaped");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-seccomp-process-probe")
+        .arg(&escape_marker)
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    for probe in [
+        "fork",
+        "vfork",
+        "clone",
+        "clone3",
+        "unshare",
+        "setns",
+        "setsid",
+        "io_uring",
+        "double_fork_setsid",
+    ] {
+        assert_eq!(report["handoff"]["process_creation"][probe], "EPERM");
+    }
+    assert!(!escape_marker.exists());
+}
+
+#[test]
+fn strict_v3_seccomp_rejects_static_and_dynamic_exec_replacement() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("seccomp-exec-report.json");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-exec-replacement-probe")
+        .arg(static_no_protocol_application_fixture())
+        .arg("/bin/true")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    for probe in [
+        "static_execve",
+        "static_execveat",
+        "dynamic_execve",
+        "dynamic_execveat",
+    ] {
+        assert_eq!(report["handoff"]["exec_replacement"][probe], "EPERM");
+    }
+}
+
+#[test]
+fn strict_v3_handoff_rejects_child_protocol_substitution_and_omission() {
+    let fixture = prepared_v3_application_fixture();
+    for probe in [
+        "--fe2o3-test-reuse-handoff-fd",
+        "--fe2o3-test-reuse-artifact-dir-fd",
+        "--fe2o3-test-substitute-commitment",
+        "--fe2o3-test-ignore-handoff",
+        "--fe2o3-test-premature-close-ack",
+        "--fe2o3-test-extra-ack-byte",
+    ] {
+        let report = fixture.directory.0.join(format!("rejected-{probe}.json"));
+        let rejected = v3_fast_failure_hostile_runner_command(&fixture, &report)
+            .arg(probe)
+            .output()
+            .unwrap();
+        assert!(
+            !rejected.status.success(),
+            "{probe} unexpectedly passed: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
+
+    let report = fixture.directory.0.join("absent-child-protocol.json");
+    let rejected = v3_application_runner_command_for_context(
+        &fixture,
+        static_no_protocol_application_fixture(),
+        "3-test-fast-failures",
+    )
+    .arg(&report)
+    .output()
+    .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("acknowledgment"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+}
+
+#[test]
+fn strict_v3_handoff_rejects_replaced_generation_directory() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("replaced-generation-report.json");
+    let mut command = v3_hostile_runner_command(&fixture, &report);
+    let original = fixture.directory.0.clone();
+    let moved = original.with_extension("original");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+    let rejected = command.output().unwrap();
+    fs::remove_dir(&original).unwrap();
+    fs::rename(&moved, &original).unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("identity was substituted"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+}
+
+#[test]
+fn strict_v3_stalled_ack_times_out_without_spinning_and_reaps_application() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("stalled-ack-report.json");
+    let ready = fixture.directory.0.join("stalled-ack-ready");
+    let rejected = v3_application_runner_command_for_context(
+        &fixture,
+        static_hostile_application_fixture(),
+        "3-test-short-timeouts",
+    )
+    .arg(&report)
+    .arg("worker-v3-application-payload")
+    .arg("--fe2o3-test-stall-before-ack")
+    .arg(&ready)
+    .output()
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr.contains("application handoff acknowledgment timed out"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("application containment failed"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("supervisor shutdown failed"), "{stderr}");
+    assert!(
+        ready.exists(),
+        "application did not publish stalled-ACK readiness\n{stderr}"
+    );
+    let application = fs::read_to_string(&ready)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(
+        !Path::new(&format!("/proc/{application}")).exists(),
+        "timed-out application was not killed and reaped"
+    );
+}
+
+#[test]
+fn strict_v3_handoff_rejects_stale_envelope_after_publication_turnover() {
+    let directory = worker_v3_fixture::TestDirectory::new();
+    let first = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x61);
+    let first_subject = first.published.compiler_execution_subject_v1().unwrap();
+    let first_envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        first.published,
+        carriage_for_subject(&first_subject, 0x74),
+    )
+    .unwrap();
+    let first_intent = first_envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let first_exact_envelope = first_envelope.encode_canonical().unwrap();
+    let first_readiness = first_envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    let first_path = first_readiness.envelope_path().to_path_buf();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &first.producer,
+        first.attempt,
+        first_intent,
+        first_readiness.receipt(),
+    )
+    .unwrap();
+    drop(first_envelope);
+
+    let second = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x62);
+    let second_subject = second.published.compiler_execution_subject_v1().unwrap();
+    let second_envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        second.published,
+        carriage_for_subject(&second_subject, 0x75),
+    )
+    .unwrap();
+    let second_intent = second_envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let exact_envelope = second_envelope.encode_canonical().unwrap();
+    let second_readiness = second_envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    let second_path = second_readiness.envelope_path().to_path_buf();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &second.producer,
+        second.attempt,
+        second_intent,
+        second_readiness.receipt(),
+    )
+    .unwrap();
+    drop(second_envelope);
+    assert_ne!(first_path, second_path);
+    fs::write(&first_path, first_exact_envelope).unwrap();
+    fs::set_permissions(&first_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = b"fe2o3-owned-v1\0".to_vec();
+    owner.extend_from_slice(&[0x55; 16]);
+    let owner_path = directory.0.join(".fe2o3-owned-v1");
+    fs::write(&owner_path, owner).unwrap();
+    fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let kernel = directory.0.join("v3-application.kernel-id");
+    fs::write(&kernel, "a1".repeat(32)).unwrap();
+    let fixture = PreparedV3ApplicationFixture {
+        directory,
+        attempt: second.attempt,
+        readiness: second_readiness.receipt(),
+        envelope_path: second_path,
+        exact_envelope,
+        kernel,
+    };
+
+    let current_report = fixture.directory.0.join("current-after-turnover.json");
+    let current = v3_hostile_runner_command(&fixture, &current_report)
+        .output()
+        .unwrap();
+    assert!(
+        current.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+
+    fs::remove_file(&fixture.envelope_path).unwrap();
+    let stale_report = fixture.directory.0.join("stale-after-turnover.json");
+    let stale = v3_hostile_runner_command(&fixture, &stale_report)
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    assert!(!stale_report.exists());
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("current"),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+}
+
+#[test]
+fn completed_v3_publication_is_inert_and_synthetic_verification_cannot_reach_hsa() {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = worker_v3_fixture::published_worker_v3_fixture();
+    let output_dir = directory.0.clone();
+    let exact_artifact = published
+        .recovered_evidence()
+        .exact_finalized_hsaco()
+        .to_vec();
+
+    let subject = published.compiler_execution_subject_v1().unwrap();
+    let compiler_execution = carriage_for_subject(&subject, 0x73);
+    let envelope =
+        WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution.clone())
+            .unwrap();
+    assert_eq!(envelope.exact_artifact_bytes(), exact_artifact);
+    assert!(!envelope.grants_load_authority());
+    assert!(!envelope.grants_launch_authority());
+
+    let canonical = envelope.encode_canonical().unwrap();
+    let inert = WorkerV3LoadEnvelopeWireV2::decode_canonical(&canonical).unwrap();
+    inert
+        .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
+        .unwrap();
+    assert_eq!(inert.encode_canonical().unwrap(), canonical);
+    assert_eq!(inert.compiler_execution_receipt(), &compiler_execution);
+    assert!(!inert.replay().grants_publication_authority());
+    assert!(!inert.grants_load_authority());
+    assert!(!inert.grants_launch_authority());
+
+    let intent = inert.replay().publication_intent_record().identity();
+    let readiness = envelope
+        .persist_durable_replay_custody_v2(&output_dir)
+        .unwrap();
+    assert_eq!(readiness.exact_envelope_bytes(), canonical);
+    assert!(!readiness.authenticates_descriptor_source());
+    assert!(!readiness.establishes_hsa_readiness());
+    assert!(!readiness.grants_load_authority());
+    assert!(!readiness.grants_launch_authority());
+
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &output_dir,
+        &producer,
+        attempt,
+        intent,
+        readiness.receipt(),
+    )
+    .unwrap();
+    drop(envelope);
+
+    let recovered = recover_worker_v3_load_envelope_v2(&output_dir, attempt).unwrap();
+    assert_eq!(recovered.receipt(), readiness.receipt());
+    assert_eq!(recovered.wire().encode_canonical().unwrap(), canonical);
+    assert_eq!(
+        recovered.wire().compiler_execution_receipt(),
+        &compiler_execution
+    );
+    assert_eq!(recovered.exact_artifact_bytes(), exact_artifact);
+    assert!(!recovered.authenticates_compiler_origin());
+    assert!(!recovered.grants_load_authority());
+    assert!(!recovered.grants_launch_authority());
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    assert_eq!(admitted.descriptor().entry_name().as_str(), "vecadd");
+    assert_eq!(
+        admitted.descriptor().descriptor_symbol().as_str(),
+        "vecadd.kd"
+    );
+    assert_eq!(admitted.physical_kernel().name(), "vecadd");
+    assert_eq!(admitted.physical_kernel().symbol(), "vecadd.kd");
+    assert_eq!(admitted.descriptor_binding().kernel_index(), 0);
+    assert_eq!(admitted.target().to_string(), "gfx942:xnack-");
+    assert_eq!(admitted.code_object_version().number(), 6);
+    assert!(admitted.authenticates_descriptor_source());
+    assert!(!admitted.authenticates_compiler_origin());
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+    admitted.revalidate_currentness().unwrap();
+
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let denied = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+        admitted,
+        &observed,
+        &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+            fault: ReviewedTestWorkerV3VerifierFault::None,
+        }),
+        adapter,
+    );
+    assert!(matches!(
+        denied,
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
+        ))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}
+
+#[test]
+fn v3_host_admission_rejects_an_unknown_kernel_identity() {
+    let (_directory, recovered) = recovered_host_fixture();
+    assert!(matches!(
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xff; 32])),
+        Err(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)
+    ));
+}
+
+#[test]
+fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_roster_v1::<WorkerV3VecAddRoster>(recovered).unwrap();
+    assert_eq!(admitted.entrypoints().len(), 1);
+    assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
+    assert_eq!(
+        admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
+        &TEST_MARKER_BINDING
+    );
+    assert_eq!(admitted.physical_kernel(0).unwrap().name(), "vecadd");
+    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 0);
+    assert!(admitted.descriptor(1).is_none());
+    assert!(admitted.physical_kernel(1).is_none());
+    assert!(admitted.descriptor_binding(1).is_none());
+    assert!(admitted.authenticates_descriptor_source());
+    assert!(!admitted.authenticates_compiler_origin());
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+    admitted.revalidate_currentness().unwrap();
+}
+
+#[test]
+fn v3_host_roster_admission_uses_canonical_descriptor_order_not_source_or_elf_order() {
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    assert_eq!(admitted.entrypoints().len(), 2);
+    assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
+    assert_eq!(admitted.entrypoints()[1].ordinal(), 1);
+    assert_ne!(
+        admitted.entrypoints()[0].lineage_identity(),
+        admitted.entrypoints()[1].lineage_identity()
+    );
+    assert_eq!(
+        admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
+        &SYNTHETIC_SECOND_TRANSFORM_BINDING
+    );
+    assert_eq!(
+        admitted.descriptor(1).unwrap().kernel_id().as_bytes(),
+        &SYNTHETIC_FIRST_TRANSFORM_BINDING
+    );
+    assert_eq!(
+        admitted.descriptor(0).unwrap().logical_name().as_str(),
+        "synthetic_second_transform"
+    );
+    assert_eq!(
+        admitted.descriptor(1).unwrap().logical_name().as_str(),
+        "synthetic_first_transform"
+    );
+    assert_eq!(
+        admitted.physical_kernel(0).unwrap().symbol(),
+        "synthetic_second_transform.kd"
+    );
+    assert_eq!(
+        admitted.physical_kernel(1).unwrap().symbol(),
+        "synthetic_first_transform.kd"
+    );
+    // The fixture registers and emits first then second, while the descriptor table canonicalizes
+    // the lower second binding before the first. Exact name/symbol selection must cross the axes.
+    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 1);
+    assert_eq!(admitted.descriptor_binding(1).unwrap().kernel_index(), 0);
+    assert!(admitted.authenticates_descriptor_source());
+    assert!(!admitted.authenticates_compiler_origin());
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+    admitted.revalidate_currentness().unwrap();
+
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    assert!(matches!(
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticReorderedTransformRoster>(recovered),
+        Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
+            expected_ordinal: 0,
+            actual_ordinal: 1,
+        })
+    ));
+
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    assert!(matches!(
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticSubstitutedTransformRoster>(
+            recovered
+        ),
+        Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal: 1 })
+    ));
+}
+
+#[test]
+fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entries() {
+    let (directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let admitted_lineage = admitted.lineage_identity();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: None,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap();
+    assert_eq!(verifier.into_inner().calls, 1);
+    assert_eq!(authenticated.entry_count(), 2);
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
+    assert_eq!(authenticated.verification().entries().len(), 2);
+    let finalizer = authenticated.verification().finalizer_derivation();
+    assert_eq!(
+        finalizer.finalized_hsaco_identity().sha256(),
+        &authenticated.verification().finalized_hsaco_sha256(),
+    );
+    assert!(!finalizer.proves_llvm_to_machine_semantic_refinement());
+    assert!(!finalizer.grants_compiler_authority());
+    assert!(!finalizer.grants_publication_authority());
+    assert!(!finalizer.grants_load_authority());
+    assert!(!finalizer.grants_launch_authority());
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_proof_inputs()
+            .is_none()
+    );
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_target_lineage()
+            .is_none()
+    );
+    assert!(
+        !authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
+    assert!(!authenticated.grants_load_authority());
+    assert!(!authenticated.grants_launch_authority());
+
+    {
+        let second = authenticated
+            .entry::<WorkerV3SyntheticSecondTransformMarker>()
+            .unwrap();
+        let first = authenticated
+            .entry::<WorkerV3SyntheticFirstTransformMarker>()
+            .unwrap();
+        assert_eq!(second.ordinal(), 0);
+        assert_eq!(first.ordinal(), 1);
+        assert_eq!(
+            second.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_SECOND_TRANSFORM_BINDING
+        );
+        assert_eq!(
+            first.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_FIRST_TRANSFORM_BINDING
+        );
+        assert_eq!(second.descriptor_binding().kernel_index(), 1);
+        assert_eq!(first.descriptor_binding().kernel_index(), 0);
+        assert_eq!(
+            second.physical_kernel().name(),
+            "synthetic_second_transform"
+        );
+        assert_eq!(first.physical_kernel().name(), "synthetic_first_transform");
+        assert_eq!(
+            second
+                .aggregate_verification()
+                .finalizer_derivation()
+                .identity(),
+            authenticated
+                .verification()
+                .finalizer_derivation()
+                .identity(),
+        );
+        assert_eq!(
+            second.entry_verification().marker_binding_identity(),
+            SYNTHETIC_SECOND_TRANSFORM_BINDING,
+        );
+        assert_eq!(
+            first.entry_verification().marker_binding_identity(),
+            SYNTHETIC_FIRST_TRANSFORM_BINDING,
+        );
+        assert!(second.authenticates_verification_authority());
+        assert!(!second.grants_load_authority());
+        assert!(!second.grants_launch_authority());
+    }
+    assert!(matches!(
+        authenticated.entry::<WorkerV3VecAddMarker>(),
+        Err(WorkerV3RosterEntryErrorV1::MarkerNotInRoster)
+    ));
+    authenticated.revalidate_currentness().unwrap();
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+    drop(authenticated);
+    drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
+}
+
+#[test]
+fn protected_roster_verifier_rejection_retains_exact_owner_for_retry() {
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let admitted_lineage = admitted.lineage_identity();
+    let admitted_publication = admitted.published();
+    let admitted_entry_count = admitted.entrypoints().len();
+    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
+        RejectingTestProtectedRosterVerifier::default(),
+    );
+
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, admitted) = failure.into_parts();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Verifier(
+            "synthetic protected roster verifier rejection"
+        )
+    ));
+    assert_eq!(admitted.lineage_identity(), admitted_lineage);
+    assert_eq!(admitted.published(), admitted_publication);
+    assert_eq!(admitted.entrypoints().len(), admitted_entry_count);
+    admitted.revalidate_currentness().unwrap();
+    assert_eq!(verifier.into_inner().calls, 1);
+
+    let mut retry_verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: None,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut retry_verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
+    assert_eq!(retry_verifier.into_inner().calls, 1);
+}
+
+#[test]
+fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
+    let (_primary_directory, primary) = recovered_synthetic_two_kernel_host_fixture();
+    let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity(
+            "upstream-llvm-test-build-foreign-roster",
+        ),
+    );
+    assert_eq!(
+        primary.exact_artifact_bytes(),
+        foreign.exact_artifact_bytes()
+    );
+    assert_ne!(
+        primary.wire().replay().transcript(),
+        foreign.wire().replay().transcript(),
+    );
+
+    let foreign_admission = admit_recovered_worker_v3_descriptor_v1(
+        foreign,
+        KernelId::from_bytes(SYNTHETIC_SECOND_TRANSFORM_BINDING),
+    )
+    .unwrap();
+    let foreign_finalizer = audit_recovered_worker_v3_verification_v1::<
+        WorkerV3SyntheticSecondTransformMarker,
+        _,
+    >(&foreign_admission, &mut FinalizerCapturingWorkerV3Auditor)
+    .unwrap();
+    drop(foreign_admission);
+
+    let primary_admission =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(primary)
+            .unwrap();
+    let primary_lineage = primary_admission.lineage_identity();
+    let primary_publication = primary_admission.published();
+    let primary_entry_count = primary_admission.entrypoints().len();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: Some(foreign_finalizer),
+        });
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, primary_admission) = failure.into_parts();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Decision(
+            WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
+        )
+    ));
+    assert_eq!(primary_admission.lineage_identity(), primary_lineage);
+    assert_eq!(primary_admission.published(), primary_publication);
+    assert_eq!(primary_admission.entrypoints().len(), primary_entry_count);
+    primary_admission.revalidate_currentness().unwrap();
+
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        primary_lineage
+    );
+    assert_eq!(verifier.into_inner().calls, 2);
+}
+
+#[test]
+fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
+    for (fault, expected) in [
+        (
+            ReviewedTestProtectedRosterVerifierFault::CompilerSubject,
+            WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution subject",
+            ),
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroVerificationTranscript,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "verification transcript",
+            ),
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::MissingEntry,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
+                expected: 2,
+                actual: 1,
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 0,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "marker binding",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "generated host contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "proof/executable binding",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "Rust type/layout contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "Rust effect contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty,
+            WorkerV3RosterVerificationDecisionErrorV1::MissingEntrySafetyProperty {
+                ordinal: 1,
+                property: fe2o3_host::WorkerV3SafetyPropertyV1::Bounds,
+            },
+        ),
+    ] {
+        let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+        let admitted =
+            admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+                .unwrap();
+        let mut verifier =
+            WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+                fault,
+                calls: 0,
+                foreign_finalizer: None,
+            });
+        let failure =
+            AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+                admitted,
+                &mut verifier,
+            )
+            .unwrap_err();
+        let (error, admitted) = failure.into_parts();
+        assert!(matches!(
+            error,
+            WorkerV3RosterVerificationAuthenticationErrorV1::Decision(actual)
+                if actual == expected
+        ));
+        admitted.revalidate_currentness().unwrap();
+        assert_eq!(verifier.into_inner().calls, 1);
+    }
+}
+
+#[test]
+fn authenticated_v3_roster_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(CurrentnessProbingWorkerV3Verifier {
+            output_dir: directory.0.clone(),
+            claim: claim.clone(),
+            observed_busy: false,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap();
+    assert!(verifier.into_inner().observed_busy);
+    authenticated.revalidate_currentness().unwrap();
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+    drop(authenticated);
+    drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
+}
+
+#[test]
+fn synthetic_v3_hsa_authorization_fails_before_environment_validation() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack+");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    assert!(matches!(
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
+            &observed,
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+                fault: ReviewedTestWorkerV3VerifierFault::None,
+            }),
+            adapter,
+        ),
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
+        ))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}
+
+#[test]
+fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let lineage = admitted.lineage_identity();
+    let (finalized_sha256, finalized_length) = audit_recovered_worker_v3_verification_v1::<
+        WorkerV3VecAddMarker,
+        _,
+    >(&admitted, &mut ReviewedTestWorkerV3Auditor)
+    .unwrap();
+    assert_ne!(finalized_sha256, [0; 32]);
+    assert_ne!(finalized_length, 0);
+    assert_eq!(admitted.lineage_identity(), lineage);
+    admitted.revalidate_currentness().unwrap();
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+}
+
+#[test]
+fn protected_verifier_without_current_compiler_evidence_cannot_reach_hsa() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+        fault: ReviewedTestProtectedVerifierFault::None,
+        foreign_finalizer: None,
+    });
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    assert!(authenticated.authenticates_verification_authority());
+    let proof_inputs = authenticated
+        .verification()
+        .validated_compiler_proof_inputs()
+        .expect("the protected adapter retains exact V4 proof inputs");
+    assert!(proof_inputs.authenticates_signed_verus_receipt_under_embedded_key());
+    assert!(!proof_inputs.authenticates_compiler_origin());
+    assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
+    assert!(!proof_inputs.grants_runtime_authority());
+    let finalizer = authenticated.verification().finalizer_derivation();
+    assert_eq!(
+        finalizer.finalized_hsaco_identity().sha256(),
+        &authenticated.verification().finalized_hsaco_sha256()
+    );
+    assert!(!finalizer.proves_llvm_to_machine_semantic_refinement());
+    assert!(!finalizer.grants_compiler_authority());
+    assert!(!finalizer.grants_publication_authority());
+    assert!(!finalizer.grants_load_authority());
+    assert!(!finalizer.grants_launch_authority());
+    assert!(
+        !authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
+    assert!(!authenticated.grants_load_authority());
+    assert!(!authenticated.grants_launch_authority());
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    assert!(matches!(
+        authenticated.authorize_hsa_load(observed, adapter),
+        Err(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}
+
+#[test]
+fn stale_authenticated_v3_transition_cannot_reach_hsa_authorization() {
+    let (directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+            fault: ReviewedTestWorkerV3VerifierFault::None,
+        }),
+    )
+    .unwrap();
+    authenticated.revalidate_currentness().unwrap();
+
+    let original = directory.0.clone();
+    let moved = original.with_extension("stale-hsa-original");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let denied = authenticated.authorize_hsa_load(observed, adapter);
+
+    fs::remove_dir(&original).unwrap();
+    fs::rename(&moved, &original).unwrap();
+
+    assert!(matches!(
+        denied,
+        Err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication(_))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}
+
+#[test]
+fn protected_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
+    let (_primary_directory, primary) = recovered_host_fixture();
+    let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_worker_v3_fixture_with_llvm_build_identity(
+            "upstream-llvm-test-build-foreign",
+        ),
+    );
+    assert_eq!(
+        primary.exact_artifact_bytes(),
+        foreign.exact_artifact_bytes()
+    );
+    assert_ne!(
+        primary.wire().replay().transcript(),
+        foreign.wire().replay().transcript()
+    );
+
+    let foreign_admission =
+        admit_recovered_worker_v3_descriptor_v1(foreign, KernelId::from_bytes(TEST_MARKER_BINDING))
+            .unwrap();
+    let foreign_finalizer = audit_recovered_worker_v3_verification_v1::<WorkerV3VecAddMarker, _>(
+        &foreign_admission,
+        &mut FinalizerCapturingWorkerV3Auditor,
+    )
+    .unwrap();
+    drop(foreign_admission);
+
+    let primary_admission =
+        admit_recovered_worker_v3_descriptor_v1(primary, KernelId::from_bytes(TEST_MARKER_BINDING))
+            .unwrap();
+    let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+        fault: ReviewedTestProtectedVerifierFault::None,
+        foreign_finalizer: Some(foreign_finalizer),
+    });
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        primary_admission,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::Decision(
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
+        )
+    ));
+}
+
+#[test]
+fn protected_verifier_adapter_rejects_substituted_and_zero_evidence() {
+    for (fault, expected) in [
+        (
+            ReviewedTestProtectedVerifierFault::CompilerSubject,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution subject"),
+        ),
+        (
+            ReviewedTestProtectedVerifierFault::ZeroVerificationTranscript,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "verification transcript",
+            ),
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+            fault,
+            foreign_finalizer: None,
+        });
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerV3VerificationAuthenticationErrorV1::Decision(actual) if actual == expected
+        ));
+    }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_joins_exact_isa_and_consumes_receipt() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let binding = admitted.descriptor_binding();
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::Admit,
+    );
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    assert!(
+        authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
+    let finalized_hsaco_sha256 = authenticated.verification().finalized_hsaco_sha256();
+    let finalized_hsaco_bytes =
+        usize::try_from(authenticated.verification().finalized_hsaco_length()).unwrap();
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    let observation = semantic
+        .observation
+        .expect("semantic backend must observe the exact joined request");
+    assert_ne!(observation.final_llvm_sha256, [0; 32]);
+    assert_ne!(observation.final_llvm_bytes, 0);
+    assert_ne!(observation.selected_isa_sha256, [0; 32]);
+    assert_eq!(
+        observation.selected_isa_bytes,
+        usize::try_from(binding.entry_size()).unwrap()
+    );
+    assert_eq!(
+        observation.selected_isa_offset,
+        usize::try_from(binding.entry_file_offset()).unwrap()
+    );
+    assert_eq!(observation.finalized_hsaco_sha256, finalized_hsaco_sha256);
+    assert_eq!(observation.finalized_hsaco_bytes, finalized_hsaco_bytes);
+    assert!(observation.selected_isa_bytes < observation.finalized_hsaco_bytes);
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let authorized = authenticated.authorize_hsa_load(observed, adapter).unwrap();
+    assert!(authorized.retains_semantic_machine_refinement_receipt());
+    assert_ne!(
+        authorized.semantic_machine_refinement_receipt_identity(),
+        &[0; 32]
+    );
+    assert_eq!(
+        adapter_state
+            .environment_observations
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(adapter_state.loads.load(Ordering::SeqCst), 0);
+    drop(authorized);
+}
+
+#[test]
+fn refining_protected_verifier_adapter_rejects_protected_failure_and_substitution() {
+    for action in [
+        RefiningTestProtectedVerifierAction::Reject,
+        RefiningTestProtectedVerifierAction::SubstituteCompilerSubject,
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier = refining_test_verifier(action, RefiningTestSemanticAction::Admit);
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        match action {
+            RefiningTestProtectedVerifierAction::Reject => assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifier(
+                        "protected verifier rejected request"
+                    )
+                )
+            )),
+            RefiningTestProtectedVerifierAction::SubstituteCompilerSubject => assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedDecision(
+                        WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                            "compiler-execution subject"
+                        )
+                    )
+                )
+            )),
+            RefiningTestProtectedVerifierAction::Admit
+            | RefiningTestProtectedVerifierAction::Panic => unreachable!(),
+        }
+        let (protected, semantic) = verifier.into_inner();
+        assert_eq!(protected.calls, 1);
+        assert_eq!(semantic.calls, 0);
+        assert!(semantic.observation.is_none());
+    }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_propagates_semantic_rejection_without_receipt() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::Reject,
+    );
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::Verifier(
+            WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinement(
+                "semantic refinement rejected request"
+            )
+        )
+    ));
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    assert!(semantic.observation.is_some());
+}
+
+#[test]
+fn refining_protected_verifier_adapter_contains_backend_panics() {
+    for (protected_action, semantic_action, protected_panics) in [
+        (
+            RefiningTestProtectedVerifierAction::Panic,
+            RefiningTestSemanticAction::Admit,
+            true,
+        ),
+        (
+            RefiningTestProtectedVerifierAction::Admit,
+            RefiningTestSemanticAction::Panic,
+            false,
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier = refining_test_verifier(protected_action, semantic_action);
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        if protected_panics {
+            assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifierPanicked
+                )
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinementPanicked
+                )
+            ));
+        }
+    }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_revalidates_currentness_after_semantic_backend() {
+    let (directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let root = directory.0.clone();
+    let moved = root.with_extension("stale-refining-adapter-original");
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::InvalidatePublication {
+            root: root.clone(),
+            moved: moved.clone(),
+        },
+    );
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap_err();
+
+    fs::remove_dir(&root).unwrap();
+    fs::rename(&moved, &root).unwrap();
+
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::CurrentPublication(_)
+    ));
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    assert!(semantic.observation.is_some());
+}
+
+#[test]
+fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedVerifierAdapterV1::new(CurrentnessProbingWorkerV3Verifier {
+            output_dir: directory.0.clone(),
+            claim: claim.clone(),
+            observed_busy: false,
+        });
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    let verifier = verifier.into_inner();
+    assert!(verifier.observed_busy);
+    authenticated.revalidate_currentness().unwrap();
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_proof_inputs()
+            .is_some()
+    );
+    assert!(
+        !authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
+
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+
+    drop(authenticated);
+    reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap();
+}
+
+#[test]
+fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    assert!(matches!(
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
+            &observed,
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+                fault: ReviewedTestWorkerV3VerifierFault::FinalizedHsaco,
+            }),
+            ReviewedTestHsaAdapter::new().0,
+        ),
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::Verification(
+            WorkerV3VerificationAuthenticationErrorV1::Decision(
+                WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalized HSACO")
+            )
+        ))
+    ));
+}
+
+#[test]
+fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_authority() {
+    for (fault, expected) in [
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerSubject,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution subject"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerCarriage,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution carriage"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerPolicy,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution policy"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::IssuerJournal,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution issuer journal",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerOccurrence,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler occurrence"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Receipt,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution receipt"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Publication,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution receipt publication",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Acknowledgment,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution publication acknowledgment",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::WorkerLedger,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution Worker ledger record",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Sequence,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution rollback sequence",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::PriorRollbackAnchor,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution prior rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution current rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record attestation",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "protected compiler policy verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedWorkerLedgerVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "protected Worker ledger verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroExternalRollbackVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "external rollback verification",
+            ),
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier { fault }),
+        )
+        .unwrap_err();
+        match error {
+            WorkerV3VerificationAuthenticationErrorV1::Decision(actual) => {
+                assert_eq!(actual, expected);
+            }
+            other => panic!("unexpected verification failure: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn synthetic_v3_evidence_cannot_probe_a_substituting_hsa_adapter() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::with_substituted_load_digest();
+    assert!(matches!(
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
+            &observed,
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+                fault: ReviewedTestWorkerV3VerifierFault::None,
+            }),
+            adapter,
+        ),
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
+        ))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}

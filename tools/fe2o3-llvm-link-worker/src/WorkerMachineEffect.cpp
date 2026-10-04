@@ -1,0 +1,2842 @@
+#include "WorkerMachineEffect.h"
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportTestV1.h"
+#endif
+
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/BinaryFormat/AMDGPUMetadataVerifier.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MsgPackDocument.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrAnalysis.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/SHA256.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#ifndef FE2O3_LLVM_BUILD_ID
+#error "FE2O3_LLVM_BUILD_ID must be supplied by CMake"
+#endif
+#ifndef FE2O3_WORKER_BUILD_ID
+#error "FE2O3_WORKER_BUILD_ID must be supplied by CMake"
+#endif
+
+using namespace llvm;
+using namespace llvm::object;
+
+namespace fe2o3::worker {
+namespace {
+
+template <size_t N>
+constexpr StringRef nulTerminatedDomain(const char (&Value)[N]) {
+  return StringRef(Value, N - 1);
+}
+
+constexpr StringRef RequestDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0");
+constexpr StringRef EvidenceDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0");
+constexpr StringRef EvidenceIdentityDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0");
+constexpr StringRef TraceEvidenceDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0");
+constexpr StringRef AnalysisBundleDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0");
+constexpr StringRef IdentityChallengeDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0");
+constexpr StringRef IdentityResponseDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0");
+constexpr StringRef RequestIdentityDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0");
+constexpr StringRef AnalyzerIdentityDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-ANALYZER/V1\0");
+constexpr StringRef ToolchainIdentityDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-TOOLCHAIN/V1\0");
+constexpr StringLiteral PhysicalProfileMetadataTarget =
+    "amdgcn-amd-amdhsa--gfx942:xnack-";
+constexpr uint32_t PhysicalProfileElfFlags =
+    ELF::EF_AMDGPU_MACH_AMDGCN_GFX942 | ELF::EF_AMDGPU_FEATURE_XNACK_OFF_V4 |
+    ELF::EF_AMDGPU_FEATURE_SRAMECC_ANY_V4;
+constexpr uint16_t SchemaVersion = 1;
+constexpr size_t MaxEntries = 64;
+constexpr size_t MaxEdges = 256;
+constexpr size_t MaxSymbolBytes = 256;
+constexpr size_t MaxElfSections = 256;
+constexpr size_t MaxProgramHeaders = 32;
+constexpr size_t MaxSymbolsPerTable = 4096;
+constexpr size_t MaxStringTableBytes = 1024 * 1024;
+constexpr size_t MaxMetadataBytes = 1024 * 1024;
+constexpr size_t MaxInstructionBytes = 32;
+constexpr size_t MaxInstructionOperands = 64;
+constexpr size_t MaxInstructionRegisters = 64;
+constexpr uint16_t NoTiedOperand = std::numeric_limits<uint16_t>::max();
+
+constexpr uint16_t InstructionMayLoad = 1 << 0;
+constexpr uint16_t InstructionMayStore = 1 << 1;
+constexpr uint16_t InstructionTerminator = 1 << 2;
+constexpr uint16_t InstructionBarrier = 1 << 3;
+constexpr uint16_t InstructionPredicable = 1 << 4;
+constexpr uint16_t InstructionMayTrap = 1 << 5;
+
+Error analysisError(const Twine &Message) {
+  return createStringError(inconvertibleErrorCode(),
+                           Twine("gfx942 physical machine-effect: ") + Message);
+}
+
+std::array<uint8_t, 32> domainHash(StringRef Domain, ArrayRef<uint8_t> Bytes) {
+  SHA256 Hash;
+  Hash.update(arrayRefFromStringRef(Domain));
+  Hash.update(Bytes);
+  return Hash.final();
+}
+
+std::array<uint8_t, 32> domainHash(StringRef Domain, StringRef Text) {
+  return domainHash(Domain, arrayRefFromStringRef(Text));
+}
+
+class Reader {
+public:
+  explicit Reader(ArrayRef<uint8_t> Bytes) : Bytes(Bytes) {}
+
+  Expected<ArrayRef<uint8_t>> take(size_t Count) {
+    if (Count > Bytes.size() - Position)
+      return analysisError("truncated request");
+    ArrayRef<uint8_t> Result = Bytes.slice(Position, Count);
+    Position += Count;
+    return Result;
+  }
+
+  Expected<uint16_t> u16() {
+    auto Value = take(2);
+    if (!Value)
+      return Value.takeError();
+    return support::endian::read16le(Value->data());
+  }
+
+  Expected<uint32_t> u32() {
+    auto Value = take(4);
+    if (!Value)
+      return Value.takeError();
+    return support::endian::read32le(Value->data());
+  }
+
+  Expected<uint64_t> u64() {
+    auto Value = take(8);
+    if (!Value)
+      return Value.takeError();
+    return support::endian::read64le(Value->data());
+  }
+
+  Expected<std::array<uint8_t, 32>> digest() {
+    auto Value = take(32);
+    if (!Value)
+      return Value.takeError();
+    std::array<uint8_t, 32> Result{};
+    llvm::copy(*Value, Result.begin());
+    return Result;
+  }
+
+  Expected<std::string> symbol() {
+    auto Length = u16();
+    if (!Length)
+      return Length.takeError();
+    if (*Length == 0 || *Length > MaxSymbolBytes)
+      return analysisError("invalid symbol length");
+    auto Value = take(*Length);
+    if (!Value)
+      return Value.takeError();
+    std::string Result(reinterpret_cast<const char *>(Value->data()),
+                       Value->size());
+    if (!validSymbol(Result))
+      return analysisError("invalid symbol text");
+    return Result;
+  }
+
+  Error finish() const {
+    if (Position != Bytes.size())
+      return analysisError("request has trailing bytes");
+    return Error::success();
+  }
+
+  static bool validSymbol(StringRef Symbol) {
+    if (Symbol.empty() || Symbol.size() > MaxSymbolBytes)
+      return false;
+    if (!isAlpha(Symbol.front()) && Symbol.front() != '_' &&
+        Symbol.front() != '.' && Symbol.front() != '$')
+      return false;
+    return llvm::all_of(Symbol, [](char Byte) {
+      return isAlnum(Byte) || Byte == '_' || Byte == '.' || Byte == '$';
+    });
+  }
+
+private:
+  ArrayRef<uint8_t> Bytes;
+  size_t Position = 0;
+};
+
+void appendU16(std::vector<uint8_t> &Output, uint16_t Value) {
+  uint8_t Bytes[2];
+  support::endian::write16le(Bytes, Value);
+  Output.insert(Output.end(), Bytes, Bytes + 2);
+}
+
+void appendU32(std::vector<uint8_t> &Output, uint32_t Value) {
+  uint8_t Bytes[4];
+  support::endian::write32le(Bytes, Value);
+  Output.insert(Output.end(), Bytes, Bytes + 4);
+}
+
+void appendU64(std::vector<uint8_t> &Output, uint64_t Value) {
+  uint8_t Bytes[8];
+  support::endian::write64le(Bytes, Value);
+  Output.insert(Output.end(), Bytes, Bytes + 8);
+}
+
+Error appendText(std::vector<uint8_t> &Output, StringRef Value) {
+  if (!Reader::validSymbol(Value))
+    return analysisError("cannot encode invalid symbol");
+  appendU16(Output, static_cast<uint16_t>(Value.size()));
+  Output.insert(Output.end(), Value.bytes_begin(), Value.bytes_end());
+  return Error::success();
+}
+
+struct MetadataKernel {
+  std::string Name;
+  std::string Descriptor;
+  uint64_t KernargSize = 0;
+  uint64_t GroupSize = 0;
+  uint64_t PrivateSize = 0;
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  bool TransportShape = false;
+#endif
+};
+
+struct LoaderSegment {
+  uint64_t FileOffset = 0;
+  uint64_t Address = 0;
+  uint64_t FileSize = 0;
+  uint64_t MemorySize = 0;
+  uint32_t Flags = 0;
+};
+
+struct LoaderView {
+  ArrayRef<uint8_t> Payload;
+  std::vector<LoaderSegment> Segments;
+  std::optional<LoaderSegment> MetadataNote;
+  std::optional<LoaderSegment> DynamicTable;
+
+  Expected<uint64_t> fileOffset(uint64_t Address, uint64_t Size,
+                                uint32_t RequiredFlags, uint32_t ForbiddenFlags,
+                                StringRef Description) const {
+    std::optional<uint64_t> Result;
+    for (const LoaderSegment &Segment : Segments) {
+      if ((Segment.Flags & RequiredFlags) != RequiredFlags ||
+          (Segment.Flags & ForbiddenFlags) != 0 || Address < Segment.Address)
+        continue;
+      uint64_t Delta = Address - Segment.Address;
+      if (Delta > Segment.FileSize || Size > Segment.FileSize - Delta)
+        continue;
+      if (Segment.FileOffset > std::numeric_limits<uint64_t>::max() - Delta)
+        return analysisError(Twine(Description) +
+                             " loader file offset overflows");
+      uint64_t Current = Segment.FileOffset + Delta;
+      if (Result && *Result != Current)
+        return analysisError(Twine(Description) +
+                             " has ambiguous PT_LOAD mappings");
+      Result = Current;
+    }
+    if (!Result)
+      return analysisError(Twine(Description) +
+                           " is outside a permitted file-backed PT_LOAD");
+    if (*Result > Payload.size() || Size > Payload.size() - *Result)
+      return analysisError(Twine(Description) +
+                           " loader bytes are outside payload");
+    return *Result;
+  }
+
+  Error validateSection(const ELF64LE::Shdr &Section,
+                        StringRef Description) const {
+    if (Section.sh_type != ELF::SHT_NOBITS &&
+        (Section.sh_offset > Payload.size() ||
+         Section.sh_size > Payload.size() - Section.sh_offset))
+      return analysisError(Twine(Description) +
+                           " section bytes are outside payload");
+    if ((Section.sh_flags & ELF::SHF_ALLOC) == 0 || Section.sh_size == 0)
+      return Error::success();
+    if (Section.sh_type == ELF::SHT_NOBITS) {
+      size_t Matches = 0;
+      for (const LoaderSegment &Segment : Segments) {
+        if (Section.sh_addr < Segment.Address)
+          continue;
+        uint64_t Delta = Section.sh_addr - Segment.Address;
+        if (Delta <= Segment.MemorySize &&
+            Section.sh_size <= Segment.MemorySize - Delta)
+          ++Matches;
+      }
+      if (Matches != 1)
+        return analysisError(Twine(Description) +
+                             " has ambiguous loader memory mapping");
+      return Error::success();
+    }
+
+    uint32_t Required = ELF::PF_R;
+    uint32_t Forbidden = 0;
+    if ((Section.sh_flags & ELF::SHF_EXECINSTR) != 0) {
+      Required |= ELF::PF_X;
+      Forbidden |= ELF::PF_W;
+    }
+    if ((Section.sh_flags & ELF::SHF_WRITE) != 0)
+      Required |= ELF::PF_W;
+    auto Offset = fileOffset(Section.sh_addr, Section.sh_size, Required,
+                             Forbidden, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != Section.sh_offset)
+      return analysisError(Twine(Description) +
+                           " section and PT_LOAD file views disagree");
+    return Error::success();
+  }
+
+  Error validateExactSegment(const ELF64LE::Shdr &Section,
+                             const LoaderSegment &Segment,
+                             StringRef Description) const {
+    if (Error ErrorValue = validateSection(Section, Description))
+      return ErrorValue;
+    if (Section.sh_offset != Segment.FileOffset ||
+        Section.sh_addr != Segment.Address ||
+        Section.sh_size != Segment.FileSize ||
+        Segment.FileSize != Segment.MemorySize)
+      return analysisError(Twine(Description) +
+                           " section and program-header views disagree");
+    if (Section.sh_type == ELF::SHT_NOBITS)
+      return analysisError(Twine(Description) + " has no file bytes");
+    return Error::success();
+  }
+
+  Expected<ArrayRef<uint8_t>> bytes(uint64_t Address, uint64_t Size,
+                                    uint32_t RequiredFlags,
+                                    uint32_t ForbiddenFlags,
+                                    uint64_t ExpectedSectionOffset,
+                                    StringRef Description) const {
+    auto Offset =
+        fileOffset(Address, Size, RequiredFlags, ForbiddenFlags, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != ExpectedSectionOffset)
+      return analysisError(Twine(Description) +
+                           " section and loader bytes disagree");
+    return Payload.slice(static_cast<size_t>(*Offset),
+                         static_cast<size_t>(Size));
+  }
+};
+
+bool rangesOverlap(uint64_t Left, uint64_t LeftSize, uint64_t Right,
+                   uint64_t RightSize) {
+  if (LeftSize == 0 || RightSize == 0)
+    return false;
+  return Left < Right + RightSize && Right < Left + LeftSize;
+}
+
+Expected<LoaderView> buildLoaderView(const ELFObjectFile<ELF64LE> &Object,
+                                     ArrayRef<uint8_t> Payload) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Headers = File.program_headers();
+  if (!Headers)
+    return Headers.takeError();
+  if (Headers->empty() || Headers->size() > MaxProgramHeaders)
+    return analysisError("program-header count is outside bounded profile");
+
+  LoaderView Result{Payload, {}, std::nullopt, std::nullopt};
+  for (const ELF64LE::Phdr &Header : *Headers) {
+    if (Header.p_filesz != 0 &&
+        (Header.p_offset > Payload.size() ||
+         Header.p_filesz > Payload.size() - Header.p_offset))
+      return analysisError("program-header file range is outside payload");
+    if (Header.p_type == ELF::PT_NOTE || Header.p_type == ELF::PT_DYNAMIC) {
+      std::optional<LoaderSegment> &Destination = Header.p_type == ELF::PT_NOTE
+                                                      ? Result.MetadataNote
+                                                      : Result.DynamicTable;
+      StringRef Description =
+          Header.p_type == ELF::PT_NOTE ? "PT_NOTE" : "PT_DYNAMIC";
+      uint32_t ExpectedFlags =
+          Header.p_type == ELF::PT_NOTE ? ELF::PF_R : ELF::PF_R | ELF::PF_W;
+      uint64_t ExpectedAlignment = Header.p_type == ELF::PT_NOTE ? 4 : 8;
+      if (Destination)
+        return analysisError(Twine("multiple ") + Description +
+                             " program headers");
+      if (Header.p_filesz == 0 || Header.p_filesz != Header.p_memsz ||
+          Header.p_flags != ExpectedFlags ||
+          Header.p_align != ExpectedAlignment)
+        return analysisError(Twine(Description) +
+                             " is outside bounded loader profile");
+      Destination =
+          LoaderSegment{Header.p_offset, Header.p_vaddr, Header.p_filesz,
+                        Header.p_memsz, Header.p_flags};
+    }
+    if (Header.p_type != ELF::PT_LOAD)
+      continue;
+    if (Header.p_memsz == 0 || Header.p_filesz > Header.p_memsz)
+      return analysisError("PT_LOAD size is invalid");
+    if ((Header.p_flags & ~(ELF::PF_R | ELF::PF_W | ELF::PF_X)) != 0 ||
+        (Header.p_flags & ELF::PF_R) == 0 ||
+        (Header.p_flags & (ELF::PF_W | ELF::PF_X)) == (ELF::PF_W | ELF::PF_X))
+      return analysisError("PT_LOAD permissions are outside bounded profile");
+    if (Header.p_vaddr > std::numeric_limits<uint64_t>::max() - Header.p_memsz)
+      return analysisError("PT_LOAD virtual range overflows");
+    if (Header.p_align > 1 &&
+        ((Header.p_align & (Header.p_align - 1)) != 0 ||
+         Header.p_offset % Header.p_align != Header.p_vaddr % Header.p_align))
+      return analysisError("PT_LOAD alignment is invalid");
+    Result.Segments.push_back({Header.p_offset, Header.p_vaddr, Header.p_filesz,
+                               Header.p_memsz, Header.p_flags});
+  }
+  if (Result.Segments.empty() ||
+      !llvm::any_of(Result.Segments, [](const LoaderSegment &Segment) {
+        return (Segment.Flags & ELF::PF_X) != 0 && Segment.FileSize != 0;
+      }))
+    return analysisError("loadable executable segment is absent");
+  if (!Result.MetadataNote || !Result.DynamicTable)
+    return analysisError(
+        "bounded loader profile requires one PT_NOTE and one PT_DYNAMIC");
+  for (size_t I = 0; I < Result.Segments.size(); ++I) {
+    const LoaderSegment &Left = Result.Segments[I];
+    for (size_t J = I + 1; J < Result.Segments.size(); ++J) {
+      const LoaderSegment &Right = Result.Segments[J];
+      if (rangesOverlap(Left.Address, Left.MemorySize, Right.Address,
+                        Right.MemorySize))
+        return analysisError("PT_LOAD virtual mappings overlap");
+      if (((Left.Flags | Right.Flags) & ELF::PF_X) != 0 &&
+          rangesOverlap(Left.FileOffset, Left.FileSize, Right.FileOffset,
+                        Right.FileSize))
+        return analysisError("executable PT_LOAD file mappings alias");
+    }
+  }
+  for (const auto &[Description, Segment] :
+       {std::pair<StringRef, const LoaderSegment *>("PT_NOTE",
+                                                    &*Result.MetadataNote),
+        std::pair<StringRef, const LoaderSegment *>("PT_DYNAMIC",
+                                                    &*Result.DynamicTable)}) {
+    uint32_t Forbidden =
+        Description == "PT_NOTE" ? ELF::PF_W | ELF::PF_X : ELF::PF_X;
+    auto Offset = Result.fileOffset(Segment->Address, Segment->FileSize,
+                                    Segment->Flags, Forbidden, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != Segment->FileOffset)
+      return analysisError(Twine(Description) +
+                           " and PT_LOAD file views disagree");
+  }
+
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  if (Sections->empty() || Sections->size() > MaxElfSections)
+    return analysisError("section count is outside bounded profile");
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (Error ErrorValue = Result.validateSection(Section, *Name))
+      return ErrorValue;
+  }
+  return Result;
+}
+
+Expected<msgpack::DocNode *> requiredField(msgpack::MapDocNode &Map,
+                                           StringRef Name) {
+  auto Field = Map.find(Name);
+  if (Field == Map.end())
+    return analysisError(Twine("metadata missing ") + Name);
+  return &Field->second;
+}
+
+Expected<StringRef> metadataString(msgpack::MapDocNode &Map, StringRef Name) {
+  auto Field = requiredField(Map, Name);
+  if (!Field)
+    return Field.takeError();
+  if (!(**Field).isString())
+    return analysisError(Twine("metadata field is not text: ") + Name);
+  return (**Field).getString();
+}
+
+Expected<uint64_t> metadataUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
+  auto Field = requiredField(Map, Name);
+  if (!Field)
+    return Field.takeError();
+  if ((**Field).getKind() == msgpack::Type::UInt)
+    return (**Field).getUInt();
+  if ((**Field).getKind() == msgpack::Type::Int && (**Field).getInt() >= 0)
+    return static_cast<uint64_t>((**Field).getInt());
+  return analysisError(Twine("metadata field is not unsigned: ") + Name);
+}
+
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportMetadataV1.inc"
+#endif
+Expected<std::vector<MetadataKernel>>
+readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+             , bool Transport = false
+#endif
+             ) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+
+  std::optional<std::string> Target;
+  std::vector<MetadataKernel> Result;
+  std::set<std::string> Names;
+  size_t MetadataNoteCount = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    if (Section.sh_type != ELF::SHT_NOTE)
+      continue;
+    if (Error ErrorValue = Loader.validateSection(Section, "metadata note"))
+      return ErrorValue;
+    Error NoteError = Error::success();
+    for (const ELF64LE::Note Note : File.notes(Section, NoteError)) {
+      if (Note.getName() != "AMDGPU" ||
+          Note.getType() != ELF::NT_AMDGPU_METADATA)
+        continue;
+      if (++MetadataNoteCount != 1)
+        return analysisError("multiple AMDGPU metadata notes");
+      if (Error ErrorValue = Loader.validateExactSegment(
+              Section, *Loader.MetadataNote, "AMDGPU metadata note"))
+        return ErrorValue;
+      if (Section.sh_addralign != 4)
+        return analysisError("metadata note alignment is not four");
+      StringRef Blob = Note.getDescAsStringRef(Section.sh_addralign);
+      if (Blob.empty() || Blob.size() > MaxMetadataBytes)
+        return analysisError("metadata note size is outside bounded profile");
+      msgpack::Document Document;
+      if (!Document.readFromBlob(Blob, false))
+        return analysisError("metadata note is malformed");
+      AMDGPU::HSAMD::V3::MetadataVerifier Verifier(true);
+      if (!Verifier.verify(Document.getRoot()))
+        return analysisError("metadata schema is invalid");
+      auto &Root = Document.getRoot().getMap();
+      auto CurrentTarget = metadataString(Root, "amdhsa.target");
+      if (!CurrentTarget)
+        return CurrentTarget.takeError();
+      if (!matchesPhysicalMachineEffectMetadataTargetV1(*CurrentTarget))
+        return analysisError(
+            "metadata target is not exact gfx942:xnack- profile");
+      if (Target && *Target != *CurrentTarget)
+        return analysisError("metadata target records disagree");
+      Target = CurrentTarget->str();
+
+      auto Kernels = requiredField(Root, "amdhsa.kernels");
+      if (!Kernels)
+        return Kernels.takeError();
+      if (!(**Kernels).isArray())
+        return analysisError("metadata kernels are not an array");
+      if ((**Kernels).getArray().empty() ||
+          (**Kernels).getArray().size() > MaxEntries)
+        return analysisError("metadata kernel count exceeds bounded profile");
+      for (msgpack::DocNode &Node : (**Kernels).getArray()) {
+        if (!Node.isMap())
+          return analysisError("metadata kernel is not a map");
+        auto &Map = Node.getMap();
+        auto Name = metadataString(Map, ".name");
+        if (!Name)
+          return Name.takeError();
+        auto Descriptor = metadataString(Map, ".symbol");
+        if (!Descriptor)
+          return Descriptor.takeError();
+        auto Kernarg = metadataUnsigned(Map, ".kernarg_segment_size");
+        if (!Kernarg)
+          return Kernarg.takeError();
+        auto Group = metadataUnsigned(Map, ".group_segment_fixed_size");
+        if (!Group)
+          return Group.takeError();
+        auto Private = metadataUnsigned(Map, ".private_segment_fixed_size");
+        if (!Private)
+          return Private.takeError();
+        if (!Reader::validSymbol(*Name) ||
+            *Descriptor != (Twine(*Name) + ".kd").str())
+          return analysisError("metadata kernel descriptor mismatch");
+        if (!Names.insert(Name->str()).second)
+          return analysisError("metadata repeats a kernel");
+        Result.push_back(
+            {Name->str(), Descriptor->str(), *Kernarg, *Group, *Private});
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+        if (Transport) Result.back().TransportShape=transportMetadataShape(Map);
+#endif
+      }
+    }
+    if (NoteError)
+      return NoteError;
+  }
+  if (!Target || Result.empty())
+    return analysisError("AMDGPU metadata is absent");
+  llvm::sort(Result,
+             [](const MetadataKernel &Left, const MetadataKernel &Right) {
+               return Left.Name < Right.Name;
+             });
+  return Result;
+}
+
+struct SymbolRecord {
+  std::string Name;
+  uint64_t Address = 0;
+  uint64_t Size = 0;
+  uint64_t FileOffset = 0;
+  uint32_t SectionIndex = 0;
+  uint8_t Type = ELF::STT_NOTYPE;
+  uint8_t Binding = ELF::STB_LOCAL;
+  uint8_t Visibility = ELF::STV_DEFAULT;
+  bool Text = false;
+  bool Data = false;
+  ArrayRef<uint8_t> Bytes;
+};
+
+struct DynamicLoaderSections {
+  size_t Dynsym = 0;
+  size_t Dynstr = 0;
+  size_t GnuHash = 0;
+  size_t Hash = 0;
+  size_t Dynamic = 0;
+};
+
+const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name);
+
+Expected<std::vector<SymbolRecord>>
+readSymbolTable(const ELFObjectFile<ELF64LE> &Object,
+                ArrayRef<ELF64LE::Shdr> Sections, const ELF64LE::Shdr &Table,
+                const LoaderView &Loader, StringRef TableName) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  if (Table.sh_entsize != sizeof(ELF64LE::Sym) ||
+      Table.sh_size % sizeof(ELF64LE::Sym) != 0 ||
+      Table.sh_size / sizeof(ELF64LE::Sym) > MaxSymbolsPerTable)
+    return analysisError(Twine(TableName) +
+                         " symbol count is outside bounded profile");
+  auto Symbols = File.symbols(&Table);
+  if (!Symbols)
+    return Symbols.takeError();
+  auto StringTable = File.getStringTableForSymtab(Table, Sections);
+  if (!StringTable)
+    return StringTable.takeError();
+  if (StringTable->size() > MaxStringTableBytes)
+    return analysisError(Twine(TableName) +
+                         " string table exceeds bounded profile");
+
+  std::vector<SymbolRecord> Result;
+  Result.reserve(Symbols->size());
+  for (const ELF64LE::Sym &Symbol : *Symbols) {
+    auto Name = Symbol.getName(*StringTable);
+    if (!Name)
+      return Name.takeError();
+    if (Name->empty())
+      continue;
+    if (Name->size() > MaxSymbolBytes || !Reader::validSymbol(*Name))
+      return analysisError(Twine(TableName) + " contains invalid symbol name");
+    if (Symbol.isUndefined() || Symbol.isAbsolute() || Symbol.isCommon())
+      continue;
+    if (Symbol.st_shndx == ELF::SHN_XINDEX ||
+        Symbol.st_shndx >= Sections.size())
+      return analysisError(Twine(TableName) +
+                           " symbol section index is unsupported");
+    const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+    if (Symbol.st_value < Section.sh_addr)
+      return analysisError(Twine(TableName) + " symbol precedes section");
+    uint64_t Delta = Symbol.st_value - Section.sh_addr;
+    if (Delta > Section.sh_size || Symbol.st_size > Section.sh_size - Delta)
+      return analysisError(Twine(TableName) +
+                           " symbol range is outside section");
+
+    bool Text = (Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) ==
+                (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR);
+    bool Data = (Section.sh_flags & ELF::SHF_ALLOC) != 0 && !Text;
+    uint64_t FileOffset = 0;
+    ArrayRef<uint8_t> Bytes;
+    if (Symbol.st_size != 0 && (Text || Data)) {
+      if (Section.sh_type == ELF::SHT_NOBITS ||
+          Section.sh_offset > std::numeric_limits<uint64_t>::max() - Delta)
+        return analysisError(Twine(TableName) +
+                             " symbol has no bounded file bytes");
+      FileOffset = Section.sh_offset + Delta;
+      uint32_t Required = ELF::PF_R;
+      uint32_t Forbidden = 0;
+      if (Text) {
+        Required |= ELF::PF_X;
+        Forbidden |= ELF::PF_W;
+      } else if ((Section.sh_flags & ELF::SHF_WRITE) != 0) {
+        Required |= ELF::PF_W;
+      }
+      auto Mapped = Loader.bytes(Symbol.st_value, Symbol.st_size, Required,
+                                 Forbidden, FileOffset, *Name);
+      if (!Mapped)
+        return Mapped.takeError();
+      Bytes = *Mapped;
+    }
+    Result.push_back({Name->str(), Symbol.st_value, Symbol.st_size, FileOffset,
+                      Symbol.st_shndx, Symbol.getType(), Symbol.getBinding(),
+                      Symbol.getVisibility(), Text, Data, Bytes});
+  }
+  llvm::sort(Result, [](const SymbolRecord &Left, const SymbolRecord &Right) {
+    return std::tie(Left.Name, Left.Address, Left.Size) <
+           std::tie(Right.Name, Right.Address, Right.Size);
+  });
+  for (size_t I = 1; I < Result.size(); ++I)
+    if (Result[I - 1].Name == Result[I].Name)
+      return analysisError(Twine(TableName) +
+                           " duplicate symbol: " + Result[I].Name);
+  return Result;
+}
+
+Expected<std::vector<SymbolRecord>>
+readSymbols(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader,
+            const DynamicLoaderSections &DynamicLoader,
+            ArrayRef<MetadataKernel> Metadata) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  const ELF64LE::Shdr *StaticTable = nullptr;
+  const ELF64LE::Shdr *DynamicTable = &(*Sections)[DynamicLoader.Dynsym];
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    if (Section.sh_type == ELF::SHT_SYMTAB) {
+      if (StaticTable)
+        return analysisError("multiple .symtab sections");
+      StaticTable = &Section;
+    }
+  }
+  if (!StaticTable)
+    return analysisError("bounded profile requires .symtab and .dynsym");
+  auto Static =
+      readSymbolTable(Object, *Sections, *StaticTable, Loader, ".symtab");
+  if (!Static)
+    return Static.takeError();
+  auto Dynamic =
+      readSymbolTable(Object, *Sections, *DynamicTable, Loader, ".dynsym");
+  if (!Dynamic)
+    return Dynamic.takeError();
+
+  std::set<std::string> ExpectedDynamicNames;
+  for (const MetadataKernel &Kernel : Metadata) {
+    ExpectedDynamicNames.insert(Kernel.Name);
+    ExpectedDynamicNames.insert(Kernel.Descriptor);
+  }
+  auto RawDynamic = File.symbols(DynamicTable);
+  if (!RawDynamic)
+    return RawDynamic.takeError();
+  if (RawDynamic->size() != ExpectedDynamicNames.size() + 1)
+    return analysisError(
+        ".dynsym entry count differs from exact metadata exports");
+  const ELF64LE::Sym &NullSymbol = (*RawDynamic)[0];
+  if (NullSymbol.st_name != 0 || NullSymbol.st_info != 0 ||
+      NullSymbol.st_other != 0 || NullSymbol.st_shndx != ELF::SHN_UNDEF ||
+      NullSymbol.st_value != 0 || NullSymbol.st_size != 0)
+    return analysisError(".dynsym null entry is not exact");
+  if (Dynamic->size() != ExpectedDynamicNames.size())
+    return analysisError(
+        ".dynsym defined symbols differ from exact metadata exports");
+  for (const SymbolRecord &Symbol : *Dynamic)
+    if (ExpectedDynamicNames.erase(Symbol.Name) == 0)
+      return analysisError(
+          ".dynsym contains a symbol outside exact metadata exports");
+  if (!ExpectedDynamicNames.empty())
+    return analysisError(".dynsym omits a symbol from exact metadata exports");
+
+  for (const MetadataKernel &Kernel : Metadata) {
+    for (StringRef Name :
+         {StringRef(Kernel.Name), StringRef(Kernel.Descriptor)}) {
+      const SymbolRecord *StaticSymbol = findSymbol(*Static, Name);
+      const SymbolRecord *DynamicSymbol = findSymbol(*Dynamic, Name);
+      if (!StaticSymbol || !DynamicSymbol)
+        return analysisError(
+            Twine("kernel export is absent from symbol view: ") + Name);
+      if (std::tie(StaticSymbol->Address, StaticSymbol->Size,
+                   StaticSymbol->SectionIndex, StaticSymbol->Type) !=
+              std::tie(DynamicSymbol->Address, DynamicSymbol->Size,
+                       DynamicSymbol->SectionIndex, DynamicSymbol->Type) ||
+          DynamicSymbol->Binding != ELF::STB_GLOBAL ||
+          (DynamicSymbol->Visibility != ELF::STV_DEFAULT &&
+           DynamicSymbol->Visibility != ELF::STV_PROTECTED))
+        return analysisError(Twine(".symtab/.dynsym export mismatch: ") + Name);
+    }
+  }
+  return Static;
+}
+
+bool isRelocationSection(uint32_t Type) {
+  return Type == ELF::SHT_REL || Type == ELF::SHT_RELA ||
+         Type == ELF::SHT_RELR || Type == ELF::SHT_CREL ||
+         Type == ELF::SHT_ANDROID_REL || Type == ELF::SHT_ANDROID_RELA ||
+         Type == ELF::SHT_ANDROID_RELR;
+}
+
+bool isRelocationDynamicTag(int64_t Tag) {
+  // Generic ELF DT_* relocation tables plus Android packed relocations.
+  switch (Tag) {
+  case 2:          // DT_PLTRELSZ
+  case 7:          // DT_RELA
+  case 8:          // DT_RELASZ
+  case 9:          // DT_RELAENT
+  case 17:         // DT_REL
+  case 18:         // DT_RELSZ
+  case 19:         // DT_RELENT
+  case 20:         // DT_PLTREL
+  case 23:         // DT_JMPREL
+  case 35:         // DT_RELRSZ
+  case 36:         // DT_RELR
+  case 37:         // DT_RELRENT
+  case 0x6000000f: // DT_ANDROID_REL
+  case 0x60000010: // DT_ANDROID_RELSZ
+  case 0x60000011: // DT_ANDROID_RELA
+  case 0x60000012: // DT_ANDROID_RELASZ
+    return true;
+  default:
+    return false;
+  }
+}
+
+Expected<DynamicLoaderSections>
+validateDynamicLoaderView(const ELFObjectFile<ELF64LE> &Object,
+                          const LoaderView &Loader) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  std::optional<size_t> Dynsym;
+  std::optional<size_t> Dynstr;
+  std::optional<size_t> GnuHash;
+  std::optional<size_t> Hash;
+  std::optional<size_t> Dynamic;
+  for (size_t Index = 0; Index < Sections->size(); ++Index) {
+    const ELF64LE::Shdr &Section = (*Sections)[Index];
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    bool Relocation = isRelocationSection(Section.sh_type);
+    bool RelocationName = *Name == ".rel" || Name->starts_with(".rel.") ||
+                          *Name == ".rela" || Name->starts_with(".rela.") ||
+                          *Name == ".relr" || Name->starts_with(".relr.");
+    if (RelocationName && !Relocation)
+      return analysisError(Twine("relocation-named section has wrong type: ") +
+                           *Name + " type=" + Twine(Section.sh_type));
+    if (Relocation && Section.sh_size != 0) {
+      if (Section.sh_info >= Sections->size() && Section.sh_info != 0)
+        return analysisError("relocation target section is invalid");
+      return analysisError(Twine("unsupported finalized-image relocations: ") +
+                           *Name);
+    }
+    auto Select = [&](StringRef ExpectedName, uint32_t ExpectedType,
+                      std::optional<size_t> &Slot) -> Error {
+      if (*Name != ExpectedName && Section.sh_type != ExpectedType)
+        return Error::success();
+      if (*Name != ExpectedName || Section.sh_type != ExpectedType)
+        return analysisError(Twine(ExpectedName) +
+                             " name/type view is inconsistent");
+      if (Slot)
+        return analysisError(Twine("multiple ") + ExpectedName + " sections");
+      Slot = Index;
+      return Error::success();
+    };
+    if (Error ErrorValue = Select(".dynsym", ELF::SHT_DYNSYM, Dynsym))
+      return ErrorValue;
+    if (*Name == ".dynstr") {
+      if (Section.sh_type != ELF::SHT_STRTAB || Dynstr)
+        return analysisError(".dynstr section view is inconsistent");
+      Dynstr = Index;
+    }
+    if (Error ErrorValue = Select(".gnu.hash", ELF::SHT_GNU_HASH, GnuHash))
+      return ErrorValue;
+    if (Error ErrorValue = Select(".hash", ELF::SHT_HASH, Hash))
+      return ErrorValue;
+    if (Error ErrorValue = Select(".dynamic", ELF::SHT_DYNAMIC, Dynamic))
+      return ErrorValue;
+  }
+  if (!Dynsym || !Dynstr || !GnuHash || !Hash || !Dynamic)
+    return analysisError(
+        "bounded dynamic loader sections are absent or incomplete");
+
+  const ELF64LE::Shdr &DynsymSection = (*Sections)[*Dynsym];
+  const ELF64LE::Shdr &DynstrSection = (*Sections)[*Dynstr];
+  const ELF64LE::Shdr &GnuHashSection = (*Sections)[*GnuHash];
+  const ELF64LE::Shdr &HashSection = (*Sections)[*Hash];
+  const ELF64LE::Shdr &DynamicSection = (*Sections)[*Dynamic];
+  if (DynsymSection.sh_link != *Dynstr || GnuHashSection.sh_link != *Dynsym ||
+      HashSection.sh_link != *Dynsym || DynamicSection.sh_link != *Dynstr)
+    return analysisError("dynamic loader section links are inconsistent");
+  if (Error ErrorValue = Loader.validateExactSegment(
+          DynamicSection, *Loader.DynamicTable, ".dynamic"))
+    return ErrorValue;
+  for (const auto &[Section, Description] :
+       {std::pair<const ELF64LE::Shdr *, StringRef>(&DynsymSection, ".dynsym"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&DynstrSection, ".dynstr"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&GnuHashSection,
+                                                    ".gnu.hash"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&HashSection, ".hash")})
+    if (Error ErrorValue = Loader.validateSection(*Section, Description))
+      return ErrorValue;
+
+  if (DynsymSection.sh_entsize != sizeof(ELF64LE::Sym) ||
+      DynsymSection.sh_size % sizeof(ELF64LE::Sym) != 0)
+    return analysisError(".dynsym has invalid entry geometry");
+  const uint64_t SymbolCount = DynsymSection.sh_size / sizeof(ELF64LE::Sym);
+  if (SymbolCount == 0 || SymbolCount > MaxSymbolsPerTable)
+    return analysisError(".dynsym symbol count is outside bounded profile");
+
+  auto HashBytes =
+      Loader.bytes(HashSection.sh_addr, HashSection.sh_size, ELF::PF_R,
+                   ELF::PF_W | ELF::PF_X, HashSection.sh_offset, ".hash");
+  if (!HashBytes)
+    return HashBytes.takeError();
+  if (HashBytes->size() < 8 || HashBytes->size() % 4 != 0)
+    return analysisError(".hash geometry is invalid");
+  uint64_t BucketCount = support::endian::read32le(HashBytes->data());
+  uint64_t ChainCount = support::endian::read32le(HashBytes->data() + 4);
+  if (BucketCount == 0 || ChainCount != SymbolCount ||
+      BucketCount >
+          (std::numeric_limits<uint64_t>::max() / 4) - ChainCount - 2 ||
+      HashBytes->size() != (2 + BucketCount + ChainCount) * 4)
+    return analysisError(".hash does not exactly describe .dynsym");
+
+  auto GnuHashBytes = Loader.bytes(
+      GnuHashSection.sh_addr, GnuHashSection.sh_size, ELF::PF_R,
+      ELF::PF_W | ELF::PF_X, GnuHashSection.sh_offset, ".gnu.hash");
+  if (!GnuHashBytes)
+    return GnuHashBytes.takeError();
+  if (GnuHashBytes->size() < 16)
+    return analysisError(".gnu.hash geometry is invalid");
+  uint64_t GnuBucketCount = support::endian::read32le(GnuHashBytes->data());
+  uint64_t SymbolOffset = support::endian::read32le(GnuHashBytes->data() + 4);
+  uint64_t BloomCount = support::endian::read32le(GnuHashBytes->data() + 8);
+  if (GnuBucketCount == 0 || BloomCount == 0 || SymbolOffset > SymbolCount ||
+      BloomCount > (std::numeric_limits<uint64_t>::max() - 16) / 8 ||
+      GnuBucketCount >
+          (std::numeric_limits<uint64_t>::max() - 16 - BloomCount * 8) / 4)
+    return analysisError(".gnu.hash header is outside bounded profile");
+  uint64_t PrefixBytes = 16 + BloomCount * 8 + GnuBucketCount * 4;
+  uint64_t ChainCountGnu = SymbolCount - SymbolOffset;
+  if (ChainCountGnu >
+          (std::numeric_limits<uint64_t>::max() - PrefixBytes) / 4 ||
+      GnuHashBytes->size() != PrefixBytes + ChainCountGnu * 4)
+    return analysisError(".gnu.hash does not exactly describe .dynsym");
+  for (uint64_t Index = 0; Index < GnuBucketCount; ++Index) {
+    uint32_t Bucket = support::endian::read32le(GnuHashBytes->data() + 16 +
+                                                BloomCount * 8 + Index * 4);
+    if (Bucket != 0 && (Bucket < SymbolOffset || Bucket >= SymbolCount))
+      return analysisError(".gnu.hash bucket is outside .dynsym");
+  }
+
+  if (DynamicSection.sh_entsize != sizeof(ELF64LE::Dyn) ||
+      DynamicSection.sh_size % sizeof(ELF64LE::Dyn) != 0 ||
+      DynamicSection.sh_size / sizeof(ELF64LE::Dyn) > 256)
+    return analysisError("dynamic table exceeds bounded profile");
+  auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(DynamicSection);
+  if (!Entries)
+    return Entries.takeError();
+  std::map<int64_t, uint64_t> Tags;
+  bool Terminated = false;
+  for (const ELF64LE::Dyn &Entry : *Entries) {
+    int64_t Tag = Entry.getTag();
+    if (Tag == ELF::DT_NULL) {
+      if (Terminated)
+        return analysisError("dynamic table has duplicate terminators");
+      Terminated = true;
+      continue;
+    }
+    if (Terminated)
+      return analysisError("dynamic table has declarations after DT_NULL");
+    if (isRelocationDynamicTag(Tag))
+      return analysisError("dynamic relocation table is unsupported");
+    if (Tag != ELF::DT_SYMTAB && Tag != ELF::DT_SYMENT &&
+        Tag != ELF::DT_STRTAB && Tag != ELF::DT_STRSZ &&
+        Tag != ELF::DT_GNU_HASH && Tag != ELF::DT_HASH && Tag != ELF::DT_FLAGS)
+      return analysisError("dynamic declaration is outside bounded profile");
+    if (Tag == ELF::DT_FLAGS && Entry.getVal() != ELF::DF_SYMBOLIC)
+      return analysisError(
+          "dynamic flags are outside exact symbolic-binding profile");
+    if (!Tags.emplace(Tag, Entry.getVal()).second)
+      return analysisError("dynamic table repeats a declaration");
+  }
+  if (!Terminated || Tags.size() != 7 ||
+      Tags[ELF::DT_SYMTAB] != DynsymSection.sh_addr ||
+      Tags[ELF::DT_SYMENT] != sizeof(ELF64LE::Sym) ||
+      Tags[ELF::DT_STRTAB] != DynstrSection.sh_addr ||
+      Tags[ELF::DT_STRSZ] != DynstrSection.sh_size ||
+      Tags[ELF::DT_GNU_HASH] != GnuHashSection.sh_addr ||
+      Tags[ELF::DT_HASH] != HashSection.sh_addr ||
+      Tags[ELF::DT_FLAGS] != ELF::DF_SYMBOLIC)
+    return analysisError(
+        "dynamic declarations disagree with loadable sections");
+
+  return DynamicLoaderSections{*Dynsym, *Dynstr, *GnuHash, *Hash, *Dynamic};
+}
+
+Expected<ArrayRef<uint8_t>> symbolBytes(const SymbolRecord &Symbol) {
+  if (Symbol.Size != Symbol.Bytes.size())
+    return analysisError(Twine("symbol has no exact loader bytes: ") +
+                         Symbol.Name);
+  return Symbol.Bytes;
+}
+
+const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name) {
+  auto Iterator = llvm::lower_bound(
+      Symbols, Name, [](const SymbolRecord &Symbol, StringRef Value) {
+        return Symbol.Name < Value;
+      });
+  if (Iterator == Symbols.end() || Iterator->Name != Name)
+    return nullptr;
+  return &*Iterator;
+}
+
+Expected<uint64_t> functionFileOffset(const SymbolRecord &Function,
+                                      uint64_t Address, uint64_t Size) {
+  if (!Function.Text || Function.Size == 0 || Address < Function.Address)
+    return analysisError(Twine("address is outside text function ") +
+                         Function.Name);
+  uint64_t Delta = Address - Function.Address;
+  if (Delta > Function.Size || Size > Function.Size - Delta ||
+      Function.FileOffset > std::numeric_limits<uint64_t>::max() - Delta)
+    return analysisError(Twine("address range is outside text function ") +
+                         Function.Name);
+  return Function.FileOffset + Delta;
+}
+
+Expected<PhysicalMachineEntryEvidence>
+validateDescriptor(const MetadataKernel &Metadata, const SymbolRecord &Entry,
+                   const SymbolRecord &Descriptor) {
+  if (Entry.Type != ELF::STT_FUNC || Entry.Size == 0 || !Entry.Text)
+    return analysisError(Twine("entry is not a bounded text function: ") +
+                         Entry.Name);
+  if (Descriptor.Type != ELF::STT_OBJECT || Descriptor.Size != 64 ||
+      !Descriptor.Data)
+    return analysisError(Twine("kernel descriptor has invalid shape: ") +
+                         Descriptor.Name);
+  auto Bytes = symbolBytes(Descriptor);
+  if (!Bytes)
+    return Bytes.takeError();
+  uint32_t Group = support::endian::read32le(Bytes->data());
+  uint32_t Private = support::endian::read32le(Bytes->data() + 4);
+  uint32_t Kernarg = support::endian::read32le(Bytes->data() + 8);
+  int64_t EntryOffset =
+      static_cast<int64_t>(support::endian::read64le(Bytes->data() + 16));
+  if (Group != Metadata.GroupSize || Private != Metadata.PrivateSize ||
+      Kernarg != Metadata.KernargSize)
+    return analysisError(Twine("kernel descriptor disagrees with metadata: ") +
+                         Entry.Name);
+  static constexpr std::pair<size_t, size_t> Reserved[] = {
+      {12, 16}, {24, 44}, {60, 64}};
+  for (auto [Begin, End] : Reserved)
+    if (llvm::any_of(Bytes->slice(Begin, End - Begin),
+                     [](uint8_t Byte) { return Byte != 0; }))
+      return analysisError(Twine("kernel descriptor reserved bytes changed: ") +
+                           Entry.Name);
+  uint64_t ExpectedEntry = 0;
+  if (EntryOffset >= 0) {
+    if (Descriptor.Address > std::numeric_limits<uint64_t>::max() -
+                                 static_cast<uint64_t>(EntryOffset))
+      return analysisError("kernel descriptor entry address overflows");
+    ExpectedEntry = Descriptor.Address + static_cast<uint64_t>(EntryOffset);
+  } else {
+    uint64_t Magnitude = static_cast<uint64_t>(-(EntryOffset + 1)) + 1;
+    if (Descriptor.Address < Magnitude)
+      return analysisError("kernel descriptor entry address underflows");
+    ExpectedEntry = Descriptor.Address - Magnitude;
+  }
+  if (ExpectedEntry != Entry.Address)
+    return analysisError(Twine("kernel descriptor points at another entry: ") +
+                         Entry.Name);
+  return PhysicalMachineEntryEvidence{Entry.Name, SHA256::hash(*Bytes),
+                                      Entry.FileOffset, Entry.Size};
+}
+
+struct DecodedInstruction {
+  uint64_t Address = 0;
+  uint64_t Size = 0;
+  MCInst Inst;
+  std::string Name;
+  std::vector<uint8_t> Encoding;
+};
+
+struct LocalEffect {
+  uint64_t Offset = 0;
+  PhysicalMachineEffectKind Kind = PhysicalMachineEffectKind::GlobalAddress;
+  uint16_t Width = 0;
+};
+
+struct AnalyzedFunction {
+  PhysicalMachineFunctionEvidence Evidence;
+  std::vector<LocalEffect> Effects;
+  // Static decoded instruction sites, not unique graph edges or dynamic calls.
+  size_t DirectCallSites = 0;
+  std::vector<PhysicalMachineBasicBlockTrace> Blocks;
+  std::vector<PhysicalMachineInstructionTrace> Instructions;
+};
+
+struct McState {
+  std::unique_ptr<MCRegisterInfo> Registers;
+  std::unique_ptr<MCAsmInfo> AsmInfo;
+  std::unique_ptr<MCSubtargetInfo> Subtarget;
+  std::unique_ptr<MCInstrInfo> Instructions;
+  std::unique_ptr<MCContext> Context;
+  std::unique_ptr<MCDisassembler> Disassembler;
+  std::unique_ptr<MCInstrAnalysis> Analysis;
+};
+
+Expected<McState> createMcState() {
+  static bool Initialized = [] {
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUDisassembler();
+    return true;
+  }();
+  (void)Initialized;
+
+  Triple TripleValue("amdgcn-amd-amdhsa");
+  std::string LookupError;
+  const Target *TargetValue =
+      TargetRegistry::lookupTarget("amdgcn", TripleValue, LookupError);
+  if (!TargetValue)
+    return analysisError(Twine("AMDGPU target unavailable: ") + LookupError);
+  McState Result;
+  Result.Registers.reset(TargetValue->createMCRegInfo(TripleValue));
+  Result.Instructions.reset(TargetValue->createMCInstrInfo());
+  Result.Subtarget.reset(
+      TargetValue->createMCSubtargetInfo(TripleValue, "gfx942", "-xnack"));
+  if (!Result.Registers || !Result.Instructions || !Result.Subtarget)
+    return analysisError("AMDGPU MC tables are unavailable");
+  MCTargetOptions Options;
+  Result.AsmInfo.reset(
+      TargetValue->createMCAsmInfo(*Result.Registers, TripleValue, Options));
+  if (!Result.AsmInfo)
+    return analysisError("AMDGPU MC assembly info is unavailable");
+  Result.Context = std::make_unique<MCContext>(
+      TripleValue, Result.AsmInfo.get(), Result.Registers.get(),
+      Result.Subtarget.get(), nullptr, &Options);
+  Result.Disassembler.reset(
+      TargetValue->createMCDisassembler(*Result.Subtarget, *Result.Context));
+  Result.Analysis.reset(
+      TargetValue->createMCInstrAnalysis(Result.Instructions.get()));
+  if (!Result.Disassembler || !Result.Analysis)
+    return analysisError("AMDGPU MC disassembler is unavailable");
+  return Result;
+}
+
+Expected<std::vector<DecodedInstruction>>
+decodeFunction(const SymbolRecord &Function, McState &Mc) {
+  auto Bytes = symbolBytes(Function);
+  if (!Bytes)
+    return Bytes.takeError();
+  std::vector<DecodedInstruction> Result;
+  uint64_t Offset = 0;
+  while (Offset < Bytes->size()) {
+    if (llvm::all_of(Bytes->drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Inst;
+    uint64_t Size = 0;
+    auto Status =
+        Mc.Disassembler->getInstruction(Inst, Size, Bytes->drop_front(Offset),
+                                        Function.Address + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > Bytes->size() - Offset)
+      return analysisError(Twine("cannot decode instruction in ") +
+                           Function.Name);
+    StringRef Name = Mc.Instructions->getName(Inst.getOpcode());
+    std::vector<uint8_t> Encoding(Bytes->begin() + Offset,
+                                  Bytes->begin() + Offset + Size);
+    Result.push_back({Function.Address + Offset, Size, Inst, Name.str(),
+                      std::move(Encoding)});
+    Offset += Size;
+    if (Result.size() > MaxPhysicalMachineEffectEffects)
+      return analysisError("instruction count exceeds bound");
+  }
+  if (Result.empty())
+    return analysisError(Twine("function has no decoded instructions: ") +
+                         Function.Name);
+  return Result;
+}
+
+std::optional<uint16_t> memoryWidth(StringRef Name) {
+  if (Name.contains("DWORDX16"))
+    return 64;
+  if (Name.contains("DWORDX8"))
+    return 32;
+  if (Name.contains("DWORDX4"))
+    return 16;
+  if (Name.contains("DWORDX3"))
+    return 12;
+  if (Name.contains("DWORDX2"))
+    return 8;
+  if (Name.contains("DWORD"))
+    return 4;
+  if (Name.contains("SHORT"))
+    return 2;
+  if (Name.contains("BYTE"))
+    return 1;
+  if (Name.contains("B64") || Name.contains("U64") || Name.contains("_X2"))
+    return 8;
+  if (Name.contains("B32") || Name.contains("U32") || Name.contains("I32"))
+    return 4;
+  return std::nullopt;
+}
+
+uint16_t supportedGlobalAtomicWidth(StringRef Name) {
+  if (!Name.consume_front("GLOBAL_ATOMIC_"))
+    return 0;
+  Name.consume_back("_vi");
+  Name.consume_back("_SADDR");
+  Name.consume_back("_RTN");
+  bool Wide = Name.consume_back("_X2");
+  bool Operation = StringSwitch<bool>(Name)
+                       .Cases("CMPSWAP", "SWAP", "ADD", true)
+                       .Cases("SUB", "AND", "OR", true)
+                       .Cases("XOR", "SMIN", "UMIN", true)
+                       .Cases("SMAX", "UMAX", true)
+                       .Default(false);
+  return Operation ? (Wide ? 8 : 4) : 0;
+}
+
+uint16_t supportedDsAtomicWidth(StringRef Name) {
+  if (!Name.consume_front("DS_"))
+    return 0;
+  Name.consume_back("_vi");
+  return StringSwitch<uint16_t>(Name)
+      .Cases("CMPST_B32", "CMPST_RTN_B32", "WRXCHG_B32", 4)
+      .Case("WRXCHG_RTN_B32", 4)
+      .Cases("CMPST_B64", "CMPST_RTN_B64", "WRXCHG_B64", 8)
+      .Case("WRXCHG_RTN_B64", 8)
+      .Cases("ADD_U32", "ADD_RTN_U32", "SUB_U32", 4)
+      .Cases("SUB_RTN_U32", "RSUB_U32", "RSUB_RTN_U32", 4)
+      .Cases("ADD_U64", "ADD_RTN_U64", "SUB_U64", 8)
+      .Cases("SUB_RTN_U64", "RSUB_U64", "RSUB_RTN_U64", 8)
+      .Cases("AND_B32", "AND_RTN_B32", "OR_B32", 4)
+      .Cases("OR_RTN_B32", "XOR_B32", "XOR_RTN_B32", 4)
+      .Cases("AND_B64", "AND_RTN_B64", "OR_B64", 8)
+      .Cases("OR_RTN_B64", "XOR_B64", "XOR_RTN_B64", 8)
+      .Cases("MIN_I32", "MIN_RTN_I32", "MIN_U32", 4)
+      .Cases("MIN_RTN_U32", "MAX_I32", "MAX_RTN_I32", 4)
+      .Cases("MAX_U32", "MAX_RTN_U32", 4)
+      .Cases("MIN_I64", "MIN_RTN_I64", "MIN_U64", 8)
+      .Cases("MIN_RTN_U64", "MAX_I64", "MAX_RTN_I64", 8)
+      .Cases("MAX_U64", "MAX_RTN_U64", 8)
+      .Default(0);
+}
+
+bool supportedDsCollectivePrimitive(StringRef Name) {
+  return StringSwitch<bool>(Name)
+      .Cases("DS_READ_B32", "DS_READ_B32_vi", true)
+      .Cases("DS_WRITE_B32", "DS_WRITE_B32_vi", true)
+      .Cases("DS_BPERMUTE_B32", "DS_BPERMUTE_B32_vi", true)
+      .Cases("DS_PERMUTE_B32", "DS_PERMUTE_B32_vi", true)
+      .Cases("DS_SWIZZLE_B32", "DS_SWIZZLE_B32_vi", true)
+      .Default(false);
+}
+
+bool supportedWorkgroupBarrier(StringRef Name) {
+  return Name == "S_BARRIER" || Name == "S_BARRIER_vi";
+}
+
+bool forbiddenOpcodeFamily(StringRef Name) {
+  return Name.starts_with("FLAT_") || Name.starts_with("BUFFER_") ||
+         Name.starts_with("TBUFFER_") || Name.starts_with("IMAGE_") ||
+         Name.starts_with("SCRATCH_") || Name.starts_with("S_SENDMSG") ||
+         Name.starts_with("S_SLEEP") || Name.starts_with("S_DEBUG") ||
+         Name.starts_with("S_SETREG") || Name.starts_with("S_SETPRIO") ||
+         Name.starts_with("S_ICACHE") || Name.starts_with("S_MEMTIME") ||
+         Name.starts_with("S_MEMREALTIME") ||
+         Name.starts_with("S_TTRACEDATA") || Name.starts_with("S_WAKEUP") ||
+         Name.starts_with("S_HALT") || Name.starts_with("S_RFE") ||
+         Name.starts_with("EXP");
+}
+
+std::string instructionDescription(const DecodedInstruction &Instruction,
+                                   const McState &Mc) {
+  std::string Result;
+  raw_string_ostream Stream(Result);
+  Stream << Instruction.Name << '(';
+  for (size_t I = 0; I < Instruction.Inst.size(); ++I) {
+    if (I != 0)
+      Stream << ',';
+    const MCOperand &Operand = Instruction.Inst.getOperand(I);
+    if (Operand.isReg())
+      Stream << Mc.Registers->getName(Operand.getReg());
+    else if (Operand.isImm())
+      Stream << Operand.getImm();
+    else if (Operand.isSFPImm())
+      Stream << "sfp:" << Operand.getSFPImm();
+    else if (Operand.isDFPImm())
+      Stream << "dfp:" << Operand.getDFPImm();
+    else if (Operand.isExpr())
+      Stream << "expr";
+    else if (Operand.isInst())
+      Stream << "inst";
+    else
+      Stream << "unsupported";
+  }
+  Stream << ')';
+  Stream.flush();
+  return Result;
+}
+
+bool definesRegister(const DecodedInstruction &Instruction, unsigned Register,
+                     const McState &Mc) {
+  const MCInstrDesc &Descriptor =
+      Mc.Instructions->get(Instruction.Inst.getOpcode());
+  size_t DefinitionCount =
+      std::min<size_t>(Descriptor.getNumDefs(), Instruction.Inst.size());
+  for (size_t I = 0; I < DefinitionCount; ++I) {
+    const MCOperand &Operand = Instruction.Inst.getOperand(I);
+    if (Operand.isReg() &&
+        Mc.Registers->regsOverlap(Operand.getReg(), Register))
+      return true;
+  }
+  return false;
+}
+
+std::optional<unsigned> registerNamed(StringRef Name, const McState &Mc) {
+  for (unsigned Register = 1; Register < Mc.Registers->getNumRegs(); ++Register)
+    if (Mc.Registers->getName(Register) == Name)
+      return Register;
+  return std::nullopt;
+}
+
+bool isRegisterOperand(const MCInst &Instruction, size_t Index,
+                       unsigned Register) {
+  return Index < Instruction.size() && Instruction.getOperand(Index).isReg() &&
+         Instruction.getOperand(Index).getReg() == Register;
+}
+
+std::optional<uint32_t>
+u32Sop2Source1Literal(const DecodedInstruction &Instruction) {
+  if (Instruction.Inst.size() != 3 || Instruction.Size != 8 ||
+      Instruction.Encoding.size() != 8)
+    return std::nullopt;
+  const MCOperand &Operand = Instruction.Inst.getOperand(2);
+  if (!Operand.isImm() && !Operand.isExpr())
+    return std::nullopt;
+  uint32_t Encoding = support::endian::read32le(Instruction.Encoding.data());
+  constexpr uint32_t Sop2ClassMask = 0xc0000000;
+  constexpr uint32_t Sop2Class = 0x80000000;
+  constexpr uint32_t LiteralSelector = 0xff;
+  if ((Encoding & Sop2ClassMask) != Sop2Class ||
+      ((Encoding >> 8) & 0xff) != LiteralSelector)
+    return std::nullopt;
+  uint32_t Literal = support::endian::read32le(Instruction.Encoding.data() + 4);
+  int64_t Value = 0;
+  if (Operand.isImm())
+    Value = Operand.getImm();
+  else if (!Operand.getExpr()->evaluateAsAbsolute(Value))
+    return std::nullopt;
+  // LLVM 22 wraps inlinable trailing values in a target `lit(...)` expression.
+  // Its public MC API exposes the absolute value but not the private AMDGPU
+  // variant. The exact SOP2 class, source selector, width, operand count, and
+  // retained bytes establish the hardware literal independently of that
+  // wrapper; only an absolute value equal to those bytes is accepted.
+  if (Value < 0 ||
+      static_cast<uint64_t>(Value) > std::numeric_limits<uint32_t>::max() ||
+      static_cast<uint32_t>(Value) != Literal)
+    return std::nullopt;
+  return Literal;
+}
+
+bool isEndProgram(const DecodedInstruction &Instruction) {
+  return StringRef(Instruction.Name).starts_with("S_ENDPGM");
+}
+
+bool isSupportedTrap(const DecodedInstruction &Instruction) {
+  if (Instruction.Name != "S_TRAP_vi" || Instruction.Size != 4 ||
+      Instruction.Encoding.size() != 4 || Instruction.Inst.size() != 1 ||
+      !Instruction.Inst.getOperand(0).isImm())
+    return false;
+  int64_t TrapId = Instruction.Inst.getOperand(0).getImm();
+  if (TrapId < 0 ||
+      TrapId > static_cast<int64_t>(std::numeric_limits<uint16_t>::max()))
+    return false;
+  uint32_t Encoding = support::endian::read32le(Instruction.Encoding.data());
+  return (Encoding & 0xffff0000) == 0xbf920000 &&
+         (Encoding & 0xffff) == static_cast<uint16_t>(TrapId);
+}
+
+bool isSetPc(const DecodedInstruction &Instruction) {
+  return Instruction.Name == "S_SETPC_B64_vi";
+}
+
+struct FunctionCfg {
+  struct Block {
+    size_t Begin = 0;
+    size_t End = 0;
+    std::vector<size_t> Successors;
+    std::vector<size_t> Predecessors;
+    bool Reachable = false;
+  };
+
+  std::vector<Block> Blocks;
+  std::vector<size_t> InstructionBlocks;
+};
+
+void appendUnique(std::vector<size_t> &Values, size_t Value) {
+  if (llvm::find(Values, Value) == Values.end())
+    Values.push_back(Value);
+}
+
+Expected<FunctionCfg>
+buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
+                 StringRef FunctionName) {
+  std::map<uint64_t, size_t> Boundaries;
+  for (size_t I = 0; I < Instructions.size(); ++I)
+    if (!Boundaries.emplace(Instructions[I].Address, I).second)
+      return analysisError(Twine("duplicate instruction boundary in ") +
+                           FunctionName);
+
+  std::set<size_t> Leaders{0};
+  std::map<size_t, size_t> BranchTargets;
+  for (size_t I = 0; I < Instructions.size(); ++I) {
+    const DecodedInstruction &Instruction = Instructions[I];
+    const MCInstrDesc &Descriptor =
+        Mc.Instructions->get(Instruction.Inst.getOpcode());
+    bool SetPc = isSetPc(Instruction);
+    if (Descriptor.isIndirectBranch() && !SetPc)
+      return analysisError(Twine("indirect branch in ") + FunctionName);
+    if (Descriptor.isBranch() && !Descriptor.isCall() && !SetPc) {
+      uint64_t Target = 0;
+      if (!Mc.Analysis->evaluateBranch(Instruction.Inst, Instruction.Address,
+                                       Instruction.Size, Target))
+        return analysisError(Twine("unknown branch target in ") + FunctionName);
+      auto Boundary = Boundaries.find(Target);
+      if (Boundary == Boundaries.end() || Target == Instruction.Address)
+        return analysisError(
+            Twine("unsupported self or external branch in ") +
+            FunctionName);
+      BranchTargets.emplace(I, Boundary->second);
+      Leaders.insert(Boundary->second);
+    }
+    if ((Descriptor.isBranch() || Descriptor.isCall() ||
+         isEndProgram(Instruction) || SetPc) &&
+        I + 1 < Instructions.size())
+      Leaders.insert(I + 1);
+  }
+
+  FunctionCfg Result;
+  Result.InstructionBlocks.resize(Instructions.size());
+  std::vector<size_t> OrderedLeaders(Leaders.begin(), Leaders.end());
+  for (size_t I = 0; I < OrderedLeaders.size(); ++I) {
+    size_t End = I + 1 < OrderedLeaders.size() ? OrderedLeaders[I + 1]
+                                               : Instructions.size();
+    size_t BlockIndex = Result.Blocks.size();
+    Result.Blocks.push_back({OrderedLeaders[I], End, {}, {}, false});
+    for (size_t Instruction = OrderedLeaders[I]; Instruction < End;
+         ++Instruction)
+      Result.InstructionBlocks[Instruction] = BlockIndex;
+  }
+
+  for (size_t BlockIndex = 0; BlockIndex < Result.Blocks.size(); ++BlockIndex) {
+    FunctionCfg::Block &Block = Result.Blocks[BlockIndex];
+    size_t LastIndex = Block.End - 1;
+    const DecodedInstruction &Last = Instructions[LastIndex];
+    const MCInstrDesc &Descriptor = Mc.Instructions->get(Last.Inst.getOpcode());
+    auto AddFallthrough = [&]() -> Error {
+      if (Block.End >= Instructions.size())
+        return Error::success();
+      appendUnique(Block.Successors, Result.InstructionBlocks[Block.End]);
+      return Error::success();
+    };
+
+    if (isEndProgram(Last) || isSetPc(Last)) {
+      // Proven terminal kind and return-pair provenance are checked below.
+    } else if (Descriptor.isCall()) {
+      if (Error ErrorValue = AddFallthrough())
+        return ErrorValue;
+    } else if (Descriptor.isBranch()) {
+      auto Target = BranchTargets.find(LastIndex);
+      if (Target == BranchTargets.end())
+        return analysisError(Twine("branch target is absent in ") +
+                             FunctionName);
+      appendUnique(Block.Successors, Result.InstructionBlocks[Target->second]);
+      if (Mc.Analysis->isConditionalBranch(Last.Inst)) {
+        if (Error ErrorValue = AddFallthrough())
+          return ErrorValue;
+      } else if (!Mc.Analysis->isUnconditionalBranch(Last.Inst)) {
+        return analysisError(Twine("unsupported branch kind in ") +
+                             FunctionName);
+      }
+    } else if (Error ErrorValue = AddFallthrough()) {
+      return ErrorValue;
+    }
+  }
+
+  for (size_t BlockIndex = 0; BlockIndex < Result.Blocks.size(); ++BlockIndex)
+    for (size_t Successor : Result.Blocks[BlockIndex].Successors)
+      appendUnique(Result.Blocks[Successor].Predecessors, BlockIndex);
+
+  std::vector<size_t> Pending{0};
+  while (!Pending.empty()) {
+    size_t BlockIndex = Pending.back();
+    Pending.pop_back();
+    FunctionCfg::Block &Block = Result.Blocks[BlockIndex];
+    if (Block.Reachable)
+      continue;
+    Block.Reachable = true;
+    Pending.insert(Pending.end(), Block.Successors.begin(),
+                   Block.Successors.end());
+  }
+  for (const FunctionCfg::Block &Block : Result.Blocks) {
+    if (!Block.Reachable || !Block.Successors.empty())
+      continue;
+    const DecodedInstruction &Last = Instructions[Block.End - 1];
+    const MCInstrDesc &Descriptor =
+        Mc.Instructions->get(Last.Inst.getOpcode());
+    if (!isEndProgram(Last) && !isSetPc(Last) &&
+        !isSupportedTrap(Last) && !Descriptor.isTrap())
+      return analysisError(Twine("reachable fallthrough exits symbol ") +
+                           FunctionName);
+  }
+  return Result;
+}
+
+struct ReachingDefinitions {
+  std::set<size_t> Instructions;
+  bool LiveIn = false;
+};
+
+Expected<ReachingDefinitions> reachingDefinitions(
+    const FunctionCfg &Cfg, ArrayRef<DecodedInstruction> Instructions,
+    size_t BeforeInstruction, unsigned Register, const McState &Mc) {
+  if (BeforeInstruction >= Instructions.size())
+    return analysisError("reaching-definition query is outside function");
+  size_t InitialBlock = Cfg.InstructionBlocks[BeforeInstruction];
+  std::vector<std::pair<size_t, size_t>> Pending{
+      {InitialBlock, BeforeInstruction}};
+  std::set<std::pair<size_t, size_t>> Visited;
+  ReachingDefinitions Result;
+  while (!Pending.empty()) {
+    auto [BlockIndex, Before] = Pending.back();
+    Pending.pop_back();
+    if (!Visited.insert({BlockIndex, Before}).second)
+      continue;
+    const FunctionCfg::Block &Block = Cfg.Blocks[BlockIndex];
+    bool Found = false;
+    for (size_t I = Before; I-- > Block.Begin;) {
+      if (definesRegister(Instructions[I], Register, Mc)) {
+        Result.Instructions.insert(I);
+        Found = true;
+        break;
+      }
+    }
+    if (Found)
+      continue;
+    if (Block.Predecessors.empty()) {
+      Result.LiveIn = true;
+      continue;
+    }
+    for (size_t Predecessor : Block.Predecessors) {
+      const FunctionCfg::Block &Previous = Cfg.Blocks[Predecessor];
+      if (Previous.Reachable)
+        Pending.push_back({Predecessor, Previous.End});
+    }
+  }
+  return Result;
+}
+
+bool isUniqueDefinition(const ReachingDefinitions &Definitions, size_t Site) {
+  return !Definitions.LiveIn && Definitions.Instructions.size() == 1 &&
+         *Definitions.Instructions.begin() == Site;
+}
+
+bool instructionDominates(const FunctionCfg &Cfg, size_t Definition,
+                          size_t Use) {
+  size_t DefinitionBlock = Cfg.InstructionBlocks[Definition];
+  size_t UseBlock = Cfg.InstructionBlocks[Use];
+  if (DefinitionBlock == UseBlock)
+    return Definition < Use;
+  std::vector<size_t> Pending{0};
+  std::set<size_t> Visited;
+  while (!Pending.empty()) {
+    size_t Block = Pending.back();
+    Pending.pop_back();
+    if (Block == DefinitionBlock || !Visited.insert(Block).second)
+      continue;
+    if (Block == UseBlock)
+      return false;
+    Pending.insert(Pending.end(), Cfg.Blocks[Block].Successors.begin(),
+                   Cfg.Blocks[Block].Successors.end());
+  }
+  return true;
+}
+
+Expected<std::pair<unsigned, unsigned>> splitSgprPair(unsigned PairRegister,
+                                                      const McState &Mc) {
+  StringRef PairName = Mc.Registers->getName(PairRegister);
+  auto PairParts = PairName.split('_');
+  if (!PairParts.first.starts_with("SGPR") ||
+      !PairParts.second.starts_with("SGPR") || PairParts.second.contains('_'))
+    return analysisError("register is not one SGPR pair");
+  auto Low = registerNamed(PairParts.first, Mc);
+  auto High = registerNamed(PairParts.second, Mc);
+  if (!Low || !High || *Low == *High)
+    return analysisError("SGPR pair is malformed");
+  return std::pair<unsigned, unsigned>{*Low, *High};
+}
+
+Expected<bool> validatePhysicalReturn(ArrayRef<DecodedInstruction> Instructions,
+                                      size_t InstructionIndex,
+                                      const FunctionCfg &Cfg,
+                                      bool ReturnPairIsLiveIn,
+                                      const McState &Mc) {
+  const DecodedInstruction &Instruction = Instructions[InstructionIndex];
+  if (isEndProgram(Instruction)) {
+    if (ReturnPairIsLiveIn)
+      return analysisError("callable helper terminates with S_ENDPGM");
+    return true;
+  }
+  if (!isSetPc(Instruction))
+    return false;
+  if (!ReturnPairIsLiveIn)
+    return analysisError("kernel entry attempts S_SETPC return");
+  if (Instruction.Inst.size() != 1 || !Instruction.Inst.getOperand(0).isReg() ||
+      StringRef(Mc.Registers->getName(
+          Instruction.Inst.getOperand(0).getReg())) != "SGPR30_SGPR31")
+    return analysisError("S_SETPC does not use the ABI return pair");
+  auto Pair = splitSgprPair(Instruction.Inst.getOperand(0).getReg(), Mc);
+  if (!Pair)
+    return Pair.takeError();
+  auto Low =
+      reachingDefinitions(Cfg, Instructions, InstructionIndex, Pair->first, Mc);
+  if (!Low)
+    return Low.takeError();
+  auto High = reachingDefinitions(Cfg, Instructions, InstructionIndex,
+                                  Pair->second, Mc);
+  if (!High)
+    return High.takeError();
+  if (!Low->LiveIn || !Low->Instructions.empty() || !High->LiveIn ||
+      !High->Instructions.empty())
+    return analysisError("S_SETPC return pair was modified or is ambiguous");
+  return true;
+}
+
+Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
+                                     size_t CallIndex, const FunctionCfg &Cfg,
+                                     McState &Mc) {
+  const DecodedInstruction &Call = Instructions[CallIndex];
+  if (Call.Inst.size() == 0 || !Call.Inst.getOperand(0).isReg() ||
+      StringRef(Mc.Registers->getName(Call.Inst.getOperand(0).getReg())) !=
+          "SGPR30_SGPR31")
+    return analysisError(
+        "call destination is not ABI return pair SGPR30_SGPR31");
+
+  uint64_t ImmediateTarget = 0;
+  if (Mc.Analysis->evaluateBranch(Call.Inst, Call.Address, Call.Size,
+                                  ImmediateTarget))
+    return ImmediateTarget;
+  if (Call.Name == "S_CALL_B64_vi") {
+    if (Call.Inst.size() != 2 || !Call.Inst.getOperand(1).isImm())
+      return analysisError("malformed immediate S_CALL_B64_vi");
+    int64_t Encoded = Call.Inst.getOperand(1).getImm();
+    if (Encoded < 0 || Encoded > std::numeric_limits<uint16_t>::max())
+      return analysisError("S_CALL_B64_vi displacement is not u16");
+    int64_t Displacement = static_cast<int16_t>(Encoded);
+    if (Call.Address >
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) - Call.Size)
+      return analysisError("S_CALL_B64_vi address is outside i64 range");
+    int64_t Base = static_cast<int64_t>(Call.Address + Call.Size);
+    int64_t Delta = Displacement * 4;
+    if ((Delta < 0 && Base < -Delta) ||
+        (Delta > 0 && Base > std::numeric_limits<int64_t>::max() - Delta))
+      return analysisError("S_CALL_B64_vi target overflows address range");
+    return static_cast<uint64_t>(Base + Delta);
+  }
+
+  if (Call.Name != "S_SWAPPC_B64_vi" || Call.Inst.size() != 2 ||
+      !Call.Inst.getOperand(1).isReg())
+    return analysisError(Twine("indirect or unknown call: ") +
+                         instructionDescription(Call, Mc));
+
+  unsigned PairRegister = Call.Inst.getOperand(1).getReg();
+  auto Pair = splitSgprPair(PairRegister, Mc);
+  if (!Pair)
+    return Pair.takeError();
+  unsigned LowRegister = Pair->first;
+  unsigned HighRegister = Pair->second;
+  auto LowAtCall =
+      reachingDefinitions(Cfg, Instructions, CallIndex, LowRegister, Mc);
+  auto HighAtCall =
+      reachingDefinitions(Cfg, Instructions, CallIndex, HighRegister, Mc);
+  if (!LowAtCall)
+    return LowAtCall.takeError();
+  if (!HighAtCall)
+    return HighAtCall.takeError();
+  if (LowAtCall->LiveIn || LowAtCall->Instructions.size() != 1 ||
+      HighAtCall->LiveIn || HighAtCall->Instructions.size() != 1)
+    return analysisError("direct-call target definitions are ambiguous");
+  size_t AddLowIndex = *LowAtCall->Instructions.begin();
+  size_t AddHighIndex = *HighAtCall->Instructions.begin();
+  const DecodedInstruction *AddLow = &Instructions[AddLowIndex];
+  const DecodedInstruction *AddHigh = &Instructions[AddHighIndex];
+  auto LowImmediate = u32Sop2Source1Literal(*AddLow);
+  auto HighImmediate = u32Sop2Source1Literal(*AddHigh);
+  if (AddLow->Name != "S_ADD_U32_vi" ||
+      !isRegisterOperand(AddLow->Inst, 0, LowRegister) ||
+      !isRegisterOperand(AddLow->Inst, 1, LowRegister) || !LowImmediate ||
+      AddHigh->Name != "S_ADDC_U32_vi" ||
+      !isRegisterOperand(AddHigh->Inst, 0, HighRegister) ||
+      !isRegisterOperand(AddHigh->Inst, 1, HighRegister) || !HighImmediate)
+    return analysisError(
+        "direct-call target has ambiguous or skipped definitions");
+  auto LowAtAdd =
+      reachingDefinitions(Cfg, Instructions, AddLowIndex, LowRegister, Mc);
+  auto HighAtAdd =
+      reachingDefinitions(Cfg, Instructions, AddHighIndex, HighRegister, Mc);
+  if (!LowAtAdd)
+    return LowAtAdd.takeError();
+  if (!HighAtAdd)
+    return HighAtAdd.takeError();
+  if (LowAtAdd->LiveIn || LowAtAdd->Instructions.size() != 1 ||
+      HighAtAdd->LiveIn || HighAtAdd->Instructions.size() != 1 ||
+      LowAtAdd->Instructions != HighAtAdd->Instructions)
+    return analysisError("direct-call GETPC definition is ambiguous");
+  size_t GetPcIndex = *LowAtAdd->Instructions.begin();
+  const DecodedInstruction *GetPc = &Instructions[GetPcIndex];
+  if (GetPc->Name != "S_GETPC_B64_vi" || GetPc->Inst.size() != 1 ||
+      !isRegisterOperand(GetPc->Inst, 0, PairRegister))
+    return analysisError("direct-call provenance is not exact GETPC");
+  if (GetPc->Address + GetPc->Size != AddLow->Address ||
+      AddLow->Address + AddLow->Size != AddHigh->Address)
+    return analysisError("direct-call carry materialization is not contiguous");
+  if (!isUniqueDefinition(*LowAtCall, AddLowIndex) ||
+      !isUniqueDefinition(*HighAtCall, AddHighIndex) ||
+      !isUniqueDefinition(*LowAtAdd, GetPcIndex) ||
+      !isUniqueDefinition(*HighAtAdd, GetPcIndex) ||
+      !instructionDominates(Cfg, GetPcIndex, CallIndex) ||
+      !instructionDominates(Cfg, AddLowIndex, CallIndex) ||
+      !instructionDominates(Cfg, AddHighIndex, CallIndex))
+    return analysisError(
+        "direct-call target definitions do not uniquely dominate call");
+
+  auto Materialize = [&](uint64_t Pc) {
+    uint64_t LowSum =
+        static_cast<uint64_t>(static_cast<uint32_t>(Pc)) + *LowImmediate;
+    uint64_t HighSum =
+        static_cast<uint32_t>(Pc >> 32) + *HighImmediate + (LowSum >> 32);
+    return (static_cast<uint64_t>(static_cast<uint32_t>(HighSum)) << 32) |
+           static_cast<uint32_t>(LowSum);
+  };
+
+  // GFX942 S_GETPC_B64 returns the address of its next instruction.
+  return Materialize(GetPc->Address + GetPc->Size);
+}
+
+Expected<std::vector<std::string>>
+registerNames(ArrayRef<MCPhysReg> Registers, const McState &Mc) {
+  if (Registers.size() > MaxInstructionRegisters)
+    return analysisError("implicit register count exceeds bound");
+  std::vector<std::string> Result;
+  Result.reserve(Registers.size());
+  for (MCPhysReg Register : Registers) {
+    if (Register == 0)
+      return analysisError("implicit register is zero");
+    StringRef Name = Mc.Registers->getName(Register);
+    if (!Reader::validSymbol(Name))
+      return analysisError("implicit register name is invalid");
+    Result.push_back(Name.str());
+  }
+  llvm::sort(Result);
+  if (std::adjacent_find(Result.begin(), Result.end()) != Result.end())
+    return analysisError("implicit register set contains duplicates");
+  return Result;
+}
+
+Expected<PhysicalMachineInstructionTrace>
+makeInstructionTrace(StringRef FunctionName,
+                     const DecodedInstruction &Instruction,
+                     uint64_t CanonicalOffset, uint32_t BlockOrdinal,
+                     const McState &Mc) {
+  const MCInstrDesc &Descriptor =
+      Mc.Instructions->get(Instruction.Inst.getOpcode());
+  if (!Reader::validSymbol(FunctionName) ||
+      !Reader::validSymbol(Instruction.Name) || Instruction.Size == 0 ||
+      Instruction.Size > MaxInstructionBytes ||
+      Instruction.Encoding.size() != Instruction.Size ||
+      Instruction.Inst.size() > MaxInstructionOperands ||
+      Descriptor.getNumDefs() > Instruction.Inst.size())
+    return analysisError("instruction trace shape exceeds bounds");
+
+  PhysicalMachineInstructionTrace Result;
+  Result.FunctionSymbol = FunctionName.str();
+  Result.InstructionOffset = CanonicalOffset;
+  Result.BlockOrdinal = BlockOrdinal;
+  Result.Opcode = Instruction.Name;
+  Result.Encoding = Instruction.Encoding;
+  Result.ExplicitDefinitionCount =
+      static_cast<uint16_t>(Descriptor.getNumDefs());
+  Result.Flags = (Descriptor.mayLoad() ? InstructionMayLoad : 0) |
+                 (Descriptor.mayStore() ? InstructionMayStore : 0) |
+                 (Descriptor.isTerminator() ? InstructionTerminator : 0) |
+                 (Descriptor.isBarrier() ? InstructionBarrier : 0) |
+                 (Descriptor.isPredicable() ? InstructionPredicable : 0) |
+                 (isSupportedTrap(Instruction) ? InstructionMayTrap : 0);
+
+  Result.Operands.reserve(Instruction.Inst.size());
+  for (size_t Index = 0; Index < Instruction.Inst.size(); ++Index) {
+    const MCOperand &Operand = Instruction.Inst.getOperand(Index);
+    PhysicalMachineOperandTrace Trace;
+    int Tied = Descriptor.getOperandConstraint(Index, MCOI::TIED_TO);
+    if (Tied >= 0) {
+      if (static_cast<size_t>(Tied) >= Instruction.Inst.size())
+        return analysisError("instruction tied operand is outside bounds");
+      Trace.TiedTo = Tied;
+    }
+    if (Operand.isReg()) {
+      if (Operand.getReg() == 0)
+        return analysisError("instruction register operand is zero");
+      StringRef Name = Mc.Registers->getName(Operand.getReg());
+      if (!Reader::validSymbol(Name))
+        return analysisError("instruction register name is invalid");
+      Trace.Kind = PhysicalMachineOperandKind::Register;
+      Trace.Register = Name.str();
+    } else if (Operand.isImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::SignedImmediate;
+      Trace.Value = static_cast<uint64_t>(Operand.getImm());
+    } else if (Operand.isSFPImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::SingleFloatImmediate;
+      Trace.Value = Operand.getSFPImm();
+    } else if (Operand.isDFPImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::DoubleFloatImmediate;
+      Trace.Value = Operand.getDFPImm();
+    } else if (Operand.isExpr()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      int64_t Absolute = 0;
+      if (!Operand.getExpr()->evaluateAsAbsolute(Absolute))
+        return analysisError("instruction expression is not absolute");
+      Trace.Kind = PhysicalMachineOperandKind::AbsoluteExpression;
+      Trace.Value = static_cast<uint64_t>(Absolute);
+    } else {
+      return analysisError("unsupported instruction operand kind");
+    }
+    Result.Operands.push_back(std::move(Trace));
+  }
+  auto ImplicitDefinitions = registerNames(Descriptor.implicit_defs(), Mc);
+  if (!ImplicitDefinitions)
+    return ImplicitDefinitions.takeError();
+  Result.ImplicitDefinitions = std::move(*ImplicitDefinitions);
+  auto ImplicitUses = registerNames(Descriptor.implicit_uses(), Mc);
+  if (!ImplicitUses)
+    return ImplicitUses.takeError();
+  Result.ImplicitUses = std::move(*ImplicitUses);
+  return Result;
+}
+
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+#include "../tests/ordered-composition-transport/TransportStateV1.inc"
+#include "../tests/ordered-composition-transport/TransportRegistersV1.inc"
+#include "../tests/ordered-composition-transport/TransportShapeV1.inc"
+#include "../tests/ordered-composition-transport/TransportRosterV1.inc"
+#include "../tests/ordered-composition-transport/TransportEvaluateV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerShapeV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerRosterV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerEvaluateV1.inc"
+#include "../tests/ordered-composition-transport/TransportCallerJoinV1.inc"
+#include "../tests/ordered-composition-transport/TransportJoinV1.inc"
+#endif
+Expected<AnalyzedFunction>
+analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
+                bool ReturnPairIsLiveIn, McState &Mc
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+                , TransportAttempt *Transport = nullptr
+#endif
+                ) {
+  auto Decoded = decodeFunction(Function, Mc);
+  if (!Decoded)
+    return Decoded.takeError();
+  auto Cfg = buildFunctionCfg(*Decoded, Mc, Function.Name);
+  if (!Cfg)
+    return Cfg.takeError();
+  if (Cfg->Blocks.size() > MaxPhysicalMachineTraceBlocks ||
+      Decoded->size() > MaxPhysicalMachineTraceInstructions ||
+      llvm::any_of(Cfg->Blocks, [](const FunctionCfg::Block &Block) {
+        return !Block.Reachable;
+      }))
+    return analysisError(Twine("function CFG is incomplete or exceeds bounds: ") +
+                         Function.Name);
+
+  AnalyzedFunction Result;
+  Result.Evidence = {Function.Name, Function.FileOffset, Function.Size, {}};
+  Result.Blocks.reserve(Cfg->Blocks.size());
+  for (size_t Ordinal = 0; Ordinal < Cfg->Blocks.size(); ++Ordinal) {
+    const FunctionCfg::Block &Block = Cfg->Blocks[Ordinal];
+    if (Ordinal > std::numeric_limits<uint32_t>::max() ||
+        Block.End <= Block.Begin ||
+        Block.End - Block.Begin > std::numeric_limits<uint32_t>::max())
+      return analysisError("machine basic block exceeds trace bounds");
+    PhysicalMachineBasicBlockTrace Trace;
+    Trace.FunctionSymbol = Function.Name;
+    Trace.Ordinal = static_cast<uint32_t>(Ordinal);
+    auto FirstOffset = functionFileOffset(
+        Function, (*Decoded)[Block.Begin].Address, (*Decoded)[Block.Begin].Size);
+    if (!FirstOffset)
+      return FirstOffset.takeError();
+    Trace.FirstInstructionOffset = *FirstOffset;
+    Trace.InstructionCount = static_cast<uint32_t>(Block.End - Block.Begin);
+    for (size_t Successor : Block.Successors) {
+      if (Successor >= Cfg->Blocks.size() ||
+          Successor > std::numeric_limits<uint32_t>::max())
+        return analysisError("machine CFG successor exceeds trace bounds");
+      Trace.Successors.push_back(static_cast<uint32_t>(Successor));
+    }
+    llvm::sort(Trace.Successors);
+    Result.Blocks.push_back(std::move(Trace));
+  }
+  Result.Instructions.reserve(Decoded->size());
+  for (size_t Index = 0; Index < Decoded->size(); ++Index) {
+    const DecodedInstruction &Instruction = (*Decoded)[Index];
+    const MCInstrDesc &Descriptor =
+        Mc.Instructions->get(Instruction.Inst.getOpcode());
+    StringRef Name = Instruction.Name;
+    size_t BlockOrdinal = Cfg->InstructionBlocks[Index];
+    if (BlockOrdinal > std::numeric_limits<uint32_t>::max())
+      return analysisError("machine instruction block exceeds trace bounds");
+    auto CanonicalOffset =
+        functionFileOffset(Function, Instruction.Address, Instruction.Size);
+    if (!CanonicalOffset)
+      return CanonicalOffset.takeError();
+    auto InstructionTrace = makeInstructionTrace(
+        Function.Name, Instruction, *CanonicalOffset,
+        static_cast<uint32_t>(BlockOrdinal), Mc);
+    if (!InstructionTrace)
+      return InstructionTrace.takeError();
+    uint16_t GlobalAtomicWidth = classifyGfx942GlobalAtomicOpcodeWidth(Name);
+    uint16_t DsAtomicWidth = classifyGfx942DsAtomicOpcodeWidth(Name);
+    bool GlobalAtomic = GlobalAtomicWidth != 0;
+    bool DsAtomic = DsAtomicWidth != 0;
+    bool DsCollective = classifyGfx942DsCollectiveOpcode(Name);
+    bool WorkgroupBarrier = classifyGfx942WorkgroupBarrierOpcode(Name);
+    if (Name.contains("ATOMIC") && !GlobalAtomic)
+      return analysisError(Twine("unsupported atomic opcode classification ") +
+                           Name + " in " + Function.Name);
+    if (Name.starts_with("DS_") && !DsAtomic && !DsCollective)
+      return analysisError(
+          Twine("unsupported collective/atomic DS opcode classification ") +
+          Name + " in " + Function.Name);
+    if (Name.starts_with("S_BARRIER") && !WorkgroupBarrier)
+      return analysisError(
+          Twine("unsupported collective barrier opcode classification ") +
+          Name + " in " + Function.Name);
+    if (forbiddenOpcodeFamily(Name))
+      return analysisError(Twine("unsupported opcode family ") + Name + " in " +
+                           Function.Name);
+    bool SupportedTrap = isSupportedTrap(Instruction);
+    if (Name.starts_with("S_TRAP") && !SupportedTrap)
+      return analysisError(Twine("unclassified trap opcode ") + Name + " in " +
+                           Function.Name);
+    auto PhysicalReturn =
+        validatePhysicalReturn(*Decoded, Index, *Cfg, ReturnPairIsLiveIn, Mc);
+    if (!PhysicalReturn)
+      return PhysicalReturn.takeError();
+    if (*PhysicalReturn) {
+      Result.Effects.push_back(
+          {*CanonicalOffset, PhysicalMachineEffectKind::Return, 0});
+      InstructionTrace->BranchKind = PhysicalMachineBranchKind::Return;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (Descriptor.isIndirectBranch())
+      return analysisError(Twine("indirect branch in ") + Function.Name);
+    if (Descriptor.isCall()) {
+      auto Target = directCallTargets(*Decoded, Index, *Cfg, Mc);
+      if (!Target)
+        return analysisError(Twine("cannot resolve call in ") + Function.Name +
+                             ": " + toString(Target.takeError()));
+      const SymbolRecord *Match = nullptr;
+      for (const SymbolRecord &Candidate : Symbols) {
+        if (Candidate.Address != *Target || Candidate.Type != ELF::STT_FUNC ||
+            Candidate.Size == 0 || !Candidate.Text)
+          continue;
+        if (Match)
+          return analysisError(Twine("call target aliases functions in ") +
+                               Function.Name);
+        Match = &Candidate;
+      }
+      if (!Match) {
+        std::string Detail;
+        raw_string_ostream Stream(Detail);
+        Stream << "call target is not one exact function in " << Function.Name
+               << "; computed=" << *Target << "; functions=";
+        for (const SymbolRecord &Candidate : Symbols)
+          if (Candidate.Type == ELF::STT_FUNC && Candidate.Size != 0 &&
+              Candidate.Text)
+            Stream << ' ' << Candidate.Name << '@' << Candidate.Address;
+        Stream.flush();
+        return analysisError(Detail);
+      }
+      if (Result.DirectCallSites == MaxEdges)
+        return analysisError("direct call-site count exceeds bound");
+      ++Result.DirectCallSites;
+      Result.Evidence.DirectCallees.push_back(Match->Name);
+      InstructionTrace->BranchKind = PhysicalMachineBranchKind::DirectCall;
+      InstructionTrace->BranchTarget = Match->FileOffset;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (Descriptor.isBranch()) {
+      uint64_t Target = 0;
+      if (!Mc.Analysis->evaluateBranch(Instruction.Inst, Instruction.Address,
+                                       Instruction.Size, Target))
+        return analysisError(Twine("unknown branch target in ") +
+                             Function.Name);
+      if (Mc.Analysis->isConditionalBranch(Instruction.Inst))
+        InstructionTrace->BranchKind =
+            PhysicalMachineBranchKind::ConditionalDirect;
+      else if (Mc.Analysis->isUnconditionalBranch(Instruction.Inst))
+        InstructionTrace->BranchKind =
+            PhysicalMachineBranchKind::UnconditionalDirect;
+      else
+        return analysisError(Twine("unsupported branch kind in ") +
+                             Function.Name);
+      auto CanonicalTarget = functionFileOffset(Function, Target, 0);
+      if (!CanonicalTarget)
+        return CanonicalTarget.takeError();
+      InstructionTrace->BranchTarget = *CanonicalTarget;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (GlobalAtomic || DsAtomic) {
+      if (!Descriptor.mayLoad() || !Descriptor.mayStore())
+        return analysisError(Twine("atomic opcode lacks read-write MC flags ") +
+                             Name + " in " + Function.Name);
+      uint16_t Width = GlobalAtomic ? GlobalAtomicWidth : DsAtomicWidth;
+      if (GlobalAtomic) {
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalAddress, 8});
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalRead, Width});
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalWrite, Width});
+        InstructionTrace->MemoryAccess = PhysicalMachineMemoryAccess::ReadWrite;
+      } else {
+        InstructionTrace->MemoryAccess =
+            PhysicalMachineMemoryAccess::WorkgroupReadWrite;
+      }
+      InstructionTrace->MemoryWidth = Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (DsCollective) {
+      auto Width = memoryWidth(Name);
+      if (!Width || *Width != 4)
+        return analysisError(Twine("unknown collective LDS width for ") + Name);
+      bool Read = Descriptor.mayLoad();
+      bool Write = Descriptor.mayStore();
+      if (!Read && !Write)
+        return analysisError(Twine("collective LDS opcode lacks MC memory flags ") +
+                             Name + " in " + Function.Name);
+      InstructionTrace->MemoryAccess =
+          Read && Write   ? PhysicalMachineMemoryAccess::WorkgroupReadWrite
+          : Read          ? PhysicalMachineMemoryAccess::WorkgroupRead
+                          : PhysicalMachineMemoryAccess::WorkgroupWrite;
+      InstructionTrace->MemoryWidth = *Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (WorkgroupBarrier) {
+      if (Descriptor.mayLoad() || Descriptor.mayStore())
+        return analysisError(Twine("collective barrier has invalid MC flags ") +
+                             Name + " in " + Function.Name);
+      // LLVM does not mark gfx942 S_BARRIER as an MC scheduling barrier. This
+      // bit records the worker's exact closed-opcode classification instead.
+      InstructionTrace->Flags |= InstructionBarrier;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (Descriptor.mayLoad() || Descriptor.mayStore()) {
+      bool Read = Descriptor.mayLoad();
+      bool Write = Descriptor.mayStore();
+      bool SupportedRead =
+          Name.starts_with("GLOBAL_LOAD_") || Name.starts_with("S_LOAD_");
+      bool SupportedWrite = Name.starts_with("GLOBAL_STORE_");
+      if ((Read && !SupportedRead) || (Write && !SupportedWrite) ||
+          (Read && Write))
+        return analysisError(Twine("unsupported memory instruction ") + Name +
+                             " in " + Function.Name);
+      auto Width = memoryWidth(Name);
+      if (!Width)
+        return analysisError(Twine("unknown memory width for ") + Name);
+      Result.Effects.push_back(
+          {*CanonicalOffset, PhysicalMachineEffectKind::GlobalAddress, 8});
+      Result.Effects.push_back({*CanonicalOffset,
+                                Read ? PhysicalMachineEffectKind::GlobalRead
+                                     : PhysicalMachineEffectKind::GlobalWrite,
+                                *Width});
+      InstructionTrace->MemoryAccess =
+          Read ? PhysicalMachineMemoryAccess::Read
+               : PhysicalMachineMemoryAccess::Write;
+      InstructionTrace->MemoryWidth = *Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (SupportedTrap) {
+      if (Descriptor.mayLoad() || Descriptor.mayStore() ||
+          Descriptor.isBranch() || Descriptor.isCall() ||
+          Descriptor.isIndirectBranch())
+        return analysisError(Twine("unsupported trap instruction ") + Name +
+                             " in " + Function.Name);
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (Descriptor.isTrap())
+      return analysisError(Twine("unsupported side-effecting instruction ") +
+                           Name + " in " + Function.Name);
+    Result.Instructions.push_back(std::move(*InstructionTrace));
+  }
+  // This wire field is unique adjacency. The full trace retains every
+  // instruction offset/target, and DirectCallSites retains multiplicity.
+  llvm::sort(Result.Evidence.DirectCallees);
+  Result.Evidence.DirectCallees.erase(
+      std::unique(Result.Evidence.DirectCallees.begin(),
+                  Result.Evidence.DirectCallees.end()),
+      Result.Evidence.DirectCallees.end());
+  if (llvm::none_of(Result.Effects, [](const LocalEffect &Effect) {
+        return Effect.Kind == PhysicalMachineEffectKind::Return;
+      }))
+    return analysisError(Twine("function has no physical return: ") +
+                         Function.Name);
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  if (Transport && !Transport->observe(Function,*Decoded,*Cfg,
+      {*Mc.Registers,*Mc.Instructions,*Mc.Analysis},Result))
+    return analysisError("typed transport function observation refused");
+#endif
+  return Result;
+}
+
+std::set<std::string>
+reachableFrom(StringRef Root,
+              const std::map<std::string, AnalyzedFunction> &Functions) {
+  std::set<std::string> Result;
+  std::vector<std::string> Pending{Root.str()};
+  while (!Pending.empty()) {
+    std::string Current = std::move(Pending.back());
+    Pending.pop_back();
+    if (!Result.insert(Current).second)
+      continue;
+    const auto &Function = Functions.at(Current);
+    Pending.insert(Pending.end(), Function.Evidence.DirectCallees.begin(),
+                   Function.Evidence.DirectCallees.end());
+  }
+  return Result;
+}
+
+bool visitAcyclicCallGraph(
+    StringRef Name, const std::map<std::string, AnalyzedFunction> &Functions,
+    std::map<std::string, uint8_t> &States) {
+  uint8_t &State = States[Name.str()];
+  if (State == 1)
+    return false;
+  if (State == 2)
+    return true;
+  State = 1;
+  for (const std::string &Callee :
+       Functions.at(Name.str()).Evidence.DirectCallees)
+    if (!visitAcyclicCallGraph(Callee, Functions, States))
+      return false;
+  State = 2;
+  return true;
+}
+
+bool hasAcyclicCallGraph(
+    const std::map<std::string, AnalyzedFunction> &Functions) {
+  std::map<std::string, uint8_t> States;
+  for (const auto &[Name, Function] : Functions) {
+    (void)Function;
+    if (!visitAcyclicCallGraph(Name, Functions, States))
+      return false;
+  }
+  return true;
+}
+
+Error validateBudget(const PhysicalMachineEffectEntryRequest &Entry,
+                     const std::set<std::string> &Closure,
+                     const std::map<std::string, AnalyzedFunction> &Functions) {
+  uint64_t Addresses = 0;
+  uint64_t Reads = 0;
+  uint64_t Writes = 0;
+  uint64_t Returns = 0;
+  uint64_t Calls = 0;
+  for (const std::string &Name : Closure) {
+    const AnalyzedFunction &Function = Functions.at(Name);
+    // Count each static site once in the unique reachable function closure.
+    // Repeated calls never multiply the callee effects into dynamic counts.
+    Calls += Function.DirectCallSites;
+    for (const LocalEffect &Effect : Function.Effects)
+      switch (Effect.Kind) {
+      case PhysicalMachineEffectKind::GlobalAddress:
+        ++Addresses;
+        break;
+      case PhysicalMachineEffectKind::GlobalRead:
+        ++Reads;
+        break;
+      case PhysicalMachineEffectKind::GlobalWrite:
+        ++Writes;
+        break;
+      case PhysicalMachineEffectKind::Return:
+        ++Returns;
+        break;
+      }
+  }
+  if (Addresses > Entry.Budget.GlobalAddresses ||
+      Reads > Entry.Budget.GlobalReads || Writes > Entry.Budget.GlobalWrites ||
+      Returns > Entry.Budget.Returns || Calls > Entry.Budget.DirectCalls)
+    return analysisError(Twine("effect expansion exceeds request for ") +
+                         Entry.Symbol);
+  return Error::success();
+}
+
+} // namespace
+
+uint16_t classifyGfx942GlobalAtomicOpcodeWidth(StringRef Name) {
+  return supportedGlobalAtomicWidth(Name);
+}
+
+uint16_t classifyGfx942DsAtomicOpcodeWidth(StringRef Name) {
+  return supportedDsAtomicWidth(Name);
+}
+
+bool classifyGfx942DsCollectiveOpcode(StringRef Name) {
+  return supportedDsCollectivePrimitive(Name);
+}
+
+bool classifyGfx942WorkgroupBarrierOpcode(StringRef Name) {
+  return supportedWorkgroupBarrier(Name);
+}
+
+bool matchesPhysicalMachineEffectMetadataTargetV1(StringRef Target) {
+  return Target == PhysicalProfileMetadataTarget;
+}
+
+PhysicalMachineEffectIdentities physicalMachineEffectIdentities() {
+  std::string Analyzer =
+      (Twine(FE2O3_WORKER_BUILD_ID) + "|target=gfx942:xnack-|cov=6|profile="
+                                      "bounded-generic-v1")
+          .str();
+  std::string Toolchain =
+      (Twine(FE2O3_LLVM_BUILD_ID) + "|llvm=" + LLVM_VERSION_STRING).str();
+  return {domainHash(AnalyzerIdentityDomain, Analyzer),
+          domainHash(ToolchainIdentityDomain, Toolchain)};
+}
+
+Error initializePhysicalMachineEffectRuntime() {
+  auto Mc = createMcState();
+  if (!Mc)
+    return Mc.takeError();
+  return Error::success();
+}
+
+Expected<std::vector<uint8_t>>
+encodePhysicalMachineEffectIdentityResponse(ArrayRef<uint8_t> Request) {
+  Reader Input(Request);
+  auto Domain = Input.take(IdentityChallengeDomain.size());
+  if (!Domain)
+    return Domain.takeError();
+  if (*Domain != arrayRefFromStringRef(IdentityChallengeDomain))
+    return analysisError("identity challenge domain mismatch");
+  auto Length = Input.u32();
+  if (!Length)
+    return Length.takeError();
+  if (*Length != Request.size())
+    return analysisError("identity challenge length mismatch");
+  auto Version = Input.u16();
+  if (!Version)
+    return Version.takeError();
+  if (*Version != SchemaVersion)
+    return analysisError("identity challenge version mismatch");
+  auto Challenge = Input.digest();
+  if (!Challenge)
+    return Challenge.takeError();
+  if (*Challenge == std::array<uint8_t, 32>{})
+    return analysisError("identity challenge is zero");
+  if (Error ErrorValue = Input.finish())
+    return ErrorValue;
+
+  PhysicalMachineEffectIdentities Identities =
+      physicalMachineEffectIdentities();
+  std::vector<uint8_t> Output;
+  Output.insert(Output.end(), IdentityResponseDomain.bytes_begin(),
+                IdentityResponseDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  Output.insert(Output.end(), Challenge->begin(), Challenge->end());
+  Output.insert(Output.end(), Identities.Analyzer.begin(),
+                Identities.Analyzer.end());
+  Output.insert(Output.end(), Identities.Toolchain.begin(),
+                Identities.Toolchain.end());
+  support::endian::write32le(Output.data() + IdentityResponseDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+Expected<PhysicalMachineEffectRequest>
+decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
+  if (Bytes.size() > MaxPhysicalMachineEffectPayloadBytes + 1024)
+    return analysisError("request exceeds byte bound");
+  Reader Input(Bytes);
+  auto Domain = Input.take(RequestDomain.size());
+  if (!Domain)
+    return Domain.takeError();
+  if (*Domain != arrayRefFromStringRef(RequestDomain))
+    return analysisError("request domain mismatch");
+  auto Length = Input.u32();
+  if (!Length)
+    return Length.takeError();
+  if (*Length != Bytes.size())
+    return analysisError("request length mismatch");
+  auto Version = Input.u16();
+  if (!Version)
+    return Version.takeError();
+  if (*Version != SchemaVersion)
+    return analysisError("unsupported request version");
+
+  PhysicalMachineEffectRequest Result;
+  auto ExecutionChallenge = Input.digest();
+  if (!ExecutionChallenge)
+    return ExecutionChallenge.takeError();
+  if (*ExecutionChallenge == std::array<uint8_t, 32>{})
+    return analysisError("execution challenge is zero");
+  Result.ExecutionChallenge = *ExecutionChallenge;
+  auto Analyzer = Input.digest();
+  if (!Analyzer)
+    return Analyzer.takeError();
+  Result.AnalyzerIdentity = *Analyzer;
+  auto Toolchain = Input.digest();
+  if (!Toolchain)
+    return Toolchain.takeError();
+  Result.ToolchainIdentity = *Toolchain;
+  auto PayloadDigest = Input.digest();
+  if (!PayloadDigest)
+    return PayloadDigest.takeError();
+  Result.PayloadDigest = *PayloadDigest;
+  auto PayloadBytes = Input.u64();
+  if (!PayloadBytes)
+    return PayloadBytes.takeError();
+  Result.PayloadBytes = *PayloadBytes;
+  if (Result.PayloadBytes == 0 ||
+      Result.PayloadBytes > MaxPhysicalMachineEffectPayloadBytes)
+    return analysisError("payload length exceeds bound");
+
+  auto EntryCount = Input.u16();
+  if (!EntryCount)
+    return EntryCount.takeError();
+  if (*EntryCount == 0 || *EntryCount > MaxEntries)
+    return analysisError("entry count exceeds bound");
+  for (uint16_t I = 0; I < *EntryCount; ++I) {
+    auto Symbol = Input.symbol();
+    if (!Symbol)
+      return Symbol.takeError();
+    PhysicalMachineEffectBudget Budget;
+    auto Addresses = Input.u32();
+    if (!Addresses)
+      return Addresses.takeError();
+    Budget.GlobalAddresses = *Addresses;
+    auto Reads = Input.u32();
+    if (!Reads)
+      return Reads.takeError();
+    Budget.GlobalReads = *Reads;
+    auto Writes = Input.u32();
+    if (!Writes)
+      return Writes.takeError();
+    Budget.GlobalWrites = *Writes;
+    auto Returns = Input.u32();
+    if (!Returns)
+      return Returns.takeError();
+    Budget.Returns = *Returns;
+    auto Calls = Input.u32();
+    if (!Calls)
+      return Calls.takeError();
+    Budget.DirectCalls = *Calls;
+    Result.Entries.push_back({std::move(*Symbol), Budget});
+  }
+  for (size_t I = 1; I < Result.Entries.size(); ++I)
+    if (Result.Entries[I - 1].Symbol >= Result.Entries[I].Symbol)
+      return analysisError("entries are duplicate or noncanonical");
+  auto Payload = Input.take(static_cast<size_t>(Result.PayloadBytes));
+  if (!Payload)
+    return Payload.takeError();
+  if (Error ErrorValue = Input.finish())
+    return ErrorValue;
+  if (SHA256::hash(*Payload) != Result.PayloadDigest)
+    return analysisError("payload digest mismatch");
+  Result.Payload.assign(Payload->begin(), Payload->end());
+
+  PhysicalMachineEffectIdentities Measured = physicalMachineEffectIdentities();
+  if (Result.AnalyzerIdentity != Measured.Analyzer)
+    return analysisError("analyzer identity mismatch");
+  if (Result.ToolchainIdentity != Measured.Toolchain)
+    return analysisError("toolchain identity mismatch");
+  Result.RequestIdentity = domainHash(RequestIdentityDomain, Bytes);
+  Result.RequestBytes = Bytes.size();
+  return Result;
+}
+
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+static Expected<PhysicalMachineEffectEvidence> analyzeTransportMachineEffectsV1(
+    const PhysicalMachineEffectRequest &Request, TransportAttempt *Transport) {
+#else
+Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
+    const PhysicalMachineEffectRequest &Request) {
+#endif
+  if (Request.Entries.empty() || Request.Entries.size() > MaxEntries)
+    return analysisError("request entry count exceeds bound");
+  for (size_t I = 0; I < Request.Entries.size(); ++I) {
+    StringRef Symbol = Request.Entries[I].Symbol;
+    if (!Reader::validSymbol(Symbol))
+      return analysisError("request entry symbol is invalid");
+    if (I != 0 && Request.Entries[I - 1].Symbol >= Symbol)
+      return analysisError("request entries are not canonical");
+  }
+  if (Request.Payload.empty() ||
+      SHA256::hash(Request.Payload) != Request.PayloadDigest ||
+      Request.Payload.size() != Request.PayloadBytes)
+    return analysisError("request payload binding is invalid");
+  PhysicalMachineEffectIdentities Measured = physicalMachineEffectIdentities();
+  if (Request.AnalyzerIdentity != Measured.Analyzer ||
+      Request.ToolchainIdentity != Measured.Toolchain)
+    return analysisError("request measured identity is invalid");
+
+  StringRef Data(reinterpret_cast<const char *>(Request.Payload.data()),
+                 Request.Payload.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<exact-hsaco>"));
+  if (!ObjectOrError)
+    return analysisError(Twine("payload is not an object: ") +
+                         toString(ObjectOrError.takeError()));
+  auto *Base = dyn_cast<ELFObjectFileBase>(ObjectOrError->get());
+  auto *Object = dyn_cast<ELFObjectFile<ELF64LE>>(ObjectOrError->get());
+  if (!Base || !Object || Base->getEMachine() != ELF::EM_AMDGPU ||
+      Base->getEType() != ELF::ET_DYN || Base->getBytesInAddress() != 8 ||
+      !Base->isLittleEndian())
+    return analysisError("payload is not an AMDGPU ELF64LE shared object");
+  if (Request.Payload.size() < ELF::EI_NIDENT ||
+      Request.Payload[ELF::EI_OSABI] != ELF::ELFOSABI_AMDGPU_HSA ||
+      Base->getEIdentABIVersion() != ELF::ELFABIVERSION_AMDGPU_HSA_V6)
+    return analysisError("payload is not AMDHSA code object V6");
+  if (Base->getPlatformFlags() != PhysicalProfileElfFlags)
+    return analysisError("ELF target is not exact gfx942:xnack- profile");
+
+  auto Loader = buildLoaderView(*Object, Request.Payload);
+  if (!Loader)
+    return Loader.takeError();
+  auto DynamicLoader = validateDynamicLoaderView(*Object, *Loader);
+  if (!DynamicLoader)
+    return DynamicLoader.takeError();
+
+  auto Metadata = readMetadata(*Object, *Loader
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+                               , Transport != nullptr
+#endif
+                               );
+  if (!Metadata)
+    return Metadata.takeError();
+  if (Metadata->size() != Request.Entries.size())
+    return analysisError("metadata entry set differs from request");
+  for (size_t I = 0; I < Metadata->size(); ++I)
+    if ((*Metadata)[I].Name != Request.Entries[I].Symbol)
+      return analysisError("metadata entry symbol differs from request");
+
+  auto Symbols = readSymbols(*Object, *Loader, *DynamicLoader, *Metadata);
+  if (!Symbols)
+    return Symbols.takeError();
+
+  PhysicalMachineEffectEvidence Evidence;
+  Evidence.ExecutionChallenge = Request.ExecutionChallenge;
+  Evidence.RequestIdentity = Request.RequestIdentity;
+  Evidence.RequestBytes = Request.RequestBytes;
+  Evidence.PayloadDigest = Request.PayloadDigest;
+  Evidence.PayloadBytes = Request.PayloadBytes;
+  Evidence.AnalyzerIdentity = Request.AnalyzerIdentity;
+  Evidence.ToolchainIdentity = Request.ToolchainIdentity;
+
+  for (const MetadataKernel &Kernel : *Metadata) {
+    const SymbolRecord *Entry = findSymbol(*Symbols, Kernel.Name);
+    const SymbolRecord *Descriptor = findSymbol(*Symbols, Kernel.Descriptor);
+    if (!Entry || !Descriptor)
+      return analysisError(Twine("entry or descriptor symbol is absent: ") +
+                           Kernel.Name);
+    auto EntryEvidence = validateDescriptor(Kernel, *Entry, *Descriptor);
+    if (!EntryEvidence)
+      return EntryEvidence.takeError();
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+    if (Transport) {
+      auto DescriptorBytes=symbolBytes(*Descriptor);
+      if (!DescriptorBytes) return DescriptorBytes.takeError();
+      if (!Transport->bind(Kernel,*Entry,*DescriptorBytes))
+        return analysisError("typed transport descriptor join refused");
+    }
+#endif
+    Evidence.Entries.push_back(std::move(*EntryEvidence));
+  }
+
+  auto Mc = createMcState();
+  if (!Mc)
+    return Mc.takeError();
+  std::map<std::string, AnalyzedFunction> Functions;
+  size_t DirectCallSites = 0;
+  std::vector<std::string> Pending;
+  std::set<std::string> KernelEntries;
+  for (const auto &Entry : Request.Entries)
+    KernelEntries.insert(Entry.Symbol);
+  for (const auto &Entry : Request.Entries)
+    Pending.push_back(Entry.Symbol);
+  while (!Pending.empty()) {
+    std::string Name = std::move(Pending.back());
+    Pending.pop_back();
+    if (Functions.contains(Name))
+      continue;
+    if (Functions.size() >= MaxPhysicalMachineEffectFunctions)
+      return analysisError("reachable function count exceeds bound");
+    const SymbolRecord *Function = findSymbol(*Symbols, Name);
+    if (!Function)
+      return analysisError(Twine("reachable function symbol is absent: ") +
+                           Name);
+    auto Analyzed = analyzeFunction(
+        *Function, *Symbols, !KernelEntries.contains(Name), *Mc
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+        , Transport
+#endif
+        );
+    if (!Analyzed)
+      return Analyzed.takeError();
+    // Enforce the old pre-deduplication edge cap on actual call sites, even
+    // when several entries share a helper. The subtraction cannot wrap.
+    if (Analyzed->DirectCallSites > MaxEdges - DirectCallSites)
+      return analysisError("direct call-site count exceeds bound");
+    DirectCallSites += Analyzed->DirectCallSites;
+    for (const std::string &Callee : Analyzed->Evidence.DirectCallees)
+      Pending.push_back(Callee);
+    Functions.emplace(Name, std::move(*Analyzed));
+  }
+  if (!hasAcyclicCallGraph(Functions))
+    return analysisError("recursive direct-call graph is unsupported");
+
+  for (const auto &[Name, Function] : Functions) {
+    Evidence.Functions.push_back(Function.Evidence);
+    if (Evidence.Blocks.size() >
+            MaxPhysicalMachineTraceBlocks - Function.Blocks.size() ||
+        Evidence.Instructions.size() >
+            MaxPhysicalMachineTraceInstructions - Function.Instructions.size())
+      return analysisError("machine trace count exceeds bound");
+    Evidence.Blocks.insert(Evidence.Blocks.end(), Function.Blocks.begin(),
+                           Function.Blocks.end());
+    Evidence.Instructions.insert(Evidence.Instructions.end(),
+                                 Function.Instructions.begin(),
+                                 Function.Instructions.end());
+  }
+
+  for (const auto &Entry : Request.Entries) {
+    std::set<std::string> Closure = reachableFrom(Entry.Symbol, Functions);
+    if (Error ErrorValue = validateBudget(Entry, Closure, Functions))
+      return ErrorValue;
+    for (const std::string &Name : Closure)
+      for (const LocalEffect &Effect : Functions.at(Name).Effects) {
+        if (Evidence.Effects.size() >= MaxPhysicalMachineEffectEffects)
+          return analysisError("effect count exceeds bound");
+        Evidence.Effects.push_back(
+            {Entry.Symbol, Name, Effect.Offset, Effect.Kind, Effect.Width});
+      }
+  }
+  llvm::sort(Evidence.Effects, [](const PhysicalMachineEffect &Left,
+                                  const PhysicalMachineEffect &Right) {
+    return std::tie(Left.EntrySymbol, Left.FunctionSymbol,
+                    Left.InstructionOffset, Left.Kind, Left.ByteWidth) <
+           std::tie(Right.EntrySymbol, Right.FunctionSymbol,
+                    Right.InstructionOffset, Right.Kind, Right.ByteWidth);
+  });
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+  if (Transport && !Transport->finish(Evidence))
+    return analysisError("typed transport aggregate commit refused");
+#endif
+  return Evidence;
+}
+
+#ifdef FE2O3_PRIVATE_COMPOSITION_TRANSPORT_V1
+Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
+    const PhysicalMachineEffectRequest &Request) {
+  return analyzeTransportMachineEffectsV1(Request,nullptr);
+}
+namespace transport_test_v1 {
+std::optional<Reservation> Reservation::acquire(Account &A) {
+  const auto denied=[&](Refusal Reason)->std::optional<Reservation> {
+    if(A.Denials!=UINT64_MAX)++A.Denials;
+    A.LastDenial=Reason;
+    return std::nullopt;
+  };
+  if(A.Storage>A.StorageLimit || StorageBytes>A.StorageLimit-A.Storage)
+    return denied(Refusal::ResourceStorage);
+  if(A.Work>A.WorkLimit || WorkUnits>A.WorkLimit-A.Work)
+    return denied(Refusal::ResourceWork);
+  A.Storage+=StorageBytes;A.Work+=WorkUnits;
+  if(A.Storage>A.Peak)A.Peak=A.Storage;
+  return Reservation(A);
+}
+Expected<Result> analyze(const PhysicalMachineEffectRequest &Request,
+                         const SourceProjection &Source,Account &Account) {
+  auto Held=Reservation::acquire(Account);
+  if(!Held)return analysisError("transport fixed logical prepayment refused");
+  // No retained transport state exists before the exact prepayment above.
+  TransportAttempt Attempt(Source);
+  if(!Attempt.good())return analysisError("transport source projection refused");
+  if(Request.Entries.size()!=1 || Request.Entries[0].Symbol!=Source.Root ||
+     Request.Payload.size()>1024*1024)
+    return analysisError("transport fixed entry/payload profile refused");
+  auto Evidence=analyzeTransportMachineEffectsV1(Request,&Attempt);
+  if(!Evidence)return Evidence.takeError();
+  return Result(std::move(*Evidence),Attempt.summary(),std::move(*Held));
+}
+} // namespace transport_test_v1
+#endif
+
+Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
+    const PhysicalMachineEffectEvidence &Evidence) {
+  if (Evidence.Entries.empty() || Evidence.Entries.size() > MaxEntries ||
+      Evidence.Functions.empty() ||
+      Evidence.Functions.size() > MaxPhysicalMachineEffectFunctions ||
+      Evidence.Effects.size() > MaxPhysicalMachineEffectEffects)
+    return analysisError("evidence count exceeds bound");
+
+  std::vector<uint8_t> Output;
+  Output.insert(Output.end(), EvidenceDomain.bytes_begin(),
+                EvidenceDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  Output.insert(Output.end(), Evidence.ExecutionChallenge.begin(),
+                Evidence.ExecutionChallenge.end());
+  Output.insert(Output.end(), Evidence.RequestIdentity.begin(),
+                Evidence.RequestIdentity.end());
+  appendU64(Output, Evidence.RequestBytes);
+  Output.insert(Output.end(), Evidence.PayloadDigest.begin(),
+                Evidence.PayloadDigest.end());
+  appendU64(Output, Evidence.PayloadBytes);
+  Output.insert(Output.end(), Evidence.AnalyzerIdentity.begin(),
+                Evidence.AnalyzerIdentity.end());
+  Output.insert(Output.end(), Evidence.ToolchainIdentity.begin(),
+                Evidence.ToolchainIdentity.end());
+  appendU16(Output, 1);
+
+  appendU16(Output, static_cast<uint16_t>(Evidence.Entries.size()));
+  for (const PhysicalMachineEntryEvidence &Entry : Evidence.Entries) {
+    if (Error ErrorValue = appendText(Output, Entry.Symbol))
+      return ErrorValue;
+    Output.insert(Output.end(), Entry.DescriptorIdentity.begin(),
+                  Entry.DescriptorIdentity.end());
+    appendU64(Output, Entry.CodeOffset);
+    appendU64(Output, Entry.CodeSize);
+  }
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Functions.size()));
+  size_t EdgeCount = 0;
+  for (const PhysicalMachineFunctionEvidence &Function : Evidence.Functions) {
+    if (Error ErrorValue = appendText(Output, Function.Symbol))
+      return ErrorValue;
+    appendU64(Output, Function.CodeOffset);
+    appendU64(Output, Function.CodeSize);
+    EdgeCount += Function.DirectCallees.size();
+    if (EdgeCount > MaxEdges ||
+        Function.DirectCallees.size() > std::numeric_limits<uint16_t>::max())
+      return analysisError("evidence call edge count exceeds bound");
+    appendU16(Output, static_cast<uint16_t>(Function.DirectCallees.size()));
+    for (const std::string &Callee : Function.DirectCallees)
+      if (Error ErrorValue = appendText(Output, Callee))
+        return ErrorValue;
+  }
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Effects.size()));
+  for (const PhysicalMachineEffect &Effect : Evidence.Effects) {
+    if (Error ErrorValue = appendText(Output, Effect.EntrySymbol))
+      return ErrorValue;
+    if (Error ErrorValue = appendText(Output, Effect.FunctionSymbol))
+      return ErrorValue;
+    appendU64(Output, Effect.InstructionOffset);
+    Output.push_back(static_cast<uint8_t>(Effect.Kind));
+    appendU16(Output, Effect.ByteWidth);
+  }
+  if (Output.size() > MaxPhysicalMachineEffectEvidenceBytes ||
+      Output.size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("evidence bytes exceed bound");
+  support::endian::write32le(Output.data() + EvidenceDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
+    const PhysicalMachineEffectEvidence &Evidence,
+    ArrayRef<uint8_t> CanonicalEffectEvidence) {
+  if (Evidence.Blocks.empty() ||
+      Evidence.Blocks.size() > MaxPhysicalMachineTraceBlocks ||
+      Evidence.Instructions.empty() ||
+      Evidence.Instructions.size() > MaxPhysicalMachineTraceInstructions ||
+      CanonicalEffectEvidence.empty())
+    return analysisError("machine trace count or effect binding is invalid");
+
+  std::vector<uint8_t> Output;
+  Output.insert(Output.end(), TraceEvidenceDomain.bytes_begin(),
+                TraceEvidenceDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  Output.insert(Output.end(), Evidence.ExecutionChallenge.begin(),
+                Evidence.ExecutionChallenge.end());
+  Output.insert(Output.end(), Evidence.RequestIdentity.begin(),
+                Evidence.RequestIdentity.end());
+  appendU64(Output, Evidence.RequestBytes);
+  auto EffectIdentity =
+      domainHash(EvidenceIdentityDomain, CanonicalEffectEvidence);
+  Output.insert(Output.end(), EffectIdentity.begin(), EffectIdentity.end());
+  appendU64(Output, CanonicalEffectEvidence.size());
+  Output.insert(Output.end(), Evidence.PayloadDigest.begin(),
+                Evidence.PayloadDigest.end());
+  appendU64(Output, Evidence.PayloadBytes);
+  Output.insert(Output.end(), Evidence.AnalyzerIdentity.begin(),
+                Evidence.AnalyzerIdentity.end());
+  Output.insert(Output.end(), Evidence.ToolchainIdentity.begin(),
+                Evidence.ToolchainIdentity.end());
+  appendU16(Output, 1);
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Blocks.size()));
+  for (const PhysicalMachineBasicBlockTrace &Block : Evidence.Blocks) {
+    if (Error ErrorValue = appendText(Output, Block.FunctionSymbol))
+      return ErrorValue;
+    appendU32(Output, Block.Ordinal);
+    appendU64(Output, Block.FirstInstructionOffset);
+    appendU32(Output, Block.InstructionCount);
+    if (Block.Successors.size() > 2)
+      return analysisError("machine trace block successor count is invalid");
+    appendU16(Output, static_cast<uint16_t>(Block.Successors.size()));
+    for (uint32_t Successor : Block.Successors)
+      appendU32(Output, Successor);
+  }
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Instructions.size()));
+  for (const PhysicalMachineInstructionTrace &Instruction :
+       Evidence.Instructions) {
+    if (Error ErrorValue = appendText(Output, Instruction.FunctionSymbol))
+      return ErrorValue;
+    appendU64(Output, Instruction.InstructionOffset);
+    appendU32(Output, Instruction.BlockOrdinal);
+    if (Error ErrorValue = appendText(Output, Instruction.Opcode))
+      return ErrorValue;
+    if (Instruction.Encoding.empty() ||
+        Instruction.Encoding.size() > MaxInstructionBytes ||
+        Instruction.Operands.size() > MaxInstructionOperands ||
+        Instruction.ImplicitDefinitions.size() > MaxInstructionRegisters ||
+        Instruction.ImplicitUses.size() > MaxInstructionRegisters)
+      return analysisError("machine instruction trace exceeds bounds");
+    appendU16(Output, static_cast<uint16_t>(Instruction.Encoding.size()));
+    Output.insert(Output.end(), Instruction.Encoding.begin(),
+                  Instruction.Encoding.end());
+    appendU16(Output, Instruction.ExplicitDefinitionCount);
+    appendU16(Output, static_cast<uint16_t>(Instruction.Operands.size()));
+    for (const PhysicalMachineOperandTrace &Operand : Instruction.Operands) {
+      Output.push_back(static_cast<uint8_t>(Operand.Kind));
+      if (Operand.TiedTo < -1 ||
+          Operand.TiedTo > std::numeric_limits<uint16_t>::max())
+        return analysisError("machine tied operand exceeds bounds");
+      appendU16(Output, Operand.TiedTo < 0
+                            ? NoTiedOperand
+                            : static_cast<uint16_t>(Operand.TiedTo));
+      switch (Operand.Kind) {
+      case PhysicalMachineOperandKind::Register:
+        if (Error ErrorValue = appendText(Output, Operand.Register))
+          return ErrorValue;
+        break;
+      case PhysicalMachineOperandKind::SignedImmediate:
+      case PhysicalMachineOperandKind::DoubleFloatImmediate:
+      case PhysicalMachineOperandKind::AbsoluteExpression:
+        appendU64(Output, Operand.Value);
+        break;
+      case PhysicalMachineOperandKind::SingleFloatImmediate:
+        if (Operand.Value > std::numeric_limits<uint32_t>::max())
+          return analysisError("single-float immediate exceeds u32");
+        appendU32(Output, static_cast<uint32_t>(Operand.Value));
+        break;
+      }
+    }
+    appendU16(Output,
+              static_cast<uint16_t>(Instruction.ImplicitDefinitions.size()));
+    for (const std::string &Register : Instruction.ImplicitDefinitions)
+      if (Error ErrorValue = appendText(Output, Register))
+        return ErrorValue;
+    appendU16(Output,
+              static_cast<uint16_t>(Instruction.ImplicitUses.size()));
+    for (const std::string &Register : Instruction.ImplicitUses)
+      if (Error ErrorValue = appendText(Output, Register))
+        return ErrorValue;
+    Output.push_back(static_cast<uint8_t>(Instruction.BranchKind));
+    appendU64(Output, Instruction.BranchTarget);
+    appendU16(Output, Instruction.Flags);
+    Output.push_back(static_cast<uint8_t>(Instruction.MemoryAccess));
+    appendU16(Output, Instruction.MemoryWidth);
+  }
+  if (Output.size() > MaxPhysicalMachineTraceBytes ||
+      Output.size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine trace bytes exceed bound");
+  support::endian::write32le(Output.data() + TraceEvidenceDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+Expected<std::vector<uint8_t>> encodePhysicalMachineAnalysisBundle(
+    const PhysicalMachineEffectEvidence &Evidence) {
+  auto Effects = encodePhysicalMachineEffectEvidence(Evidence);
+  if (!Effects)
+    return Effects.takeError();
+  auto Trace = encodePhysicalMachineTraceEvidence(Evidence, *Effects);
+  if (!Trace)
+    return Trace.takeError();
+  if (Effects->size() > std::numeric_limits<uint32_t>::max() ||
+      Trace->size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine analysis component exceeds u32");
+
+  std::vector<uint8_t> Output;
+  Output.reserve(AnalysisBundleDomain.size() + 14 + Effects->size() +
+                 Trace->size());
+  Output.insert(Output.end(), AnalysisBundleDomain.bytes_begin(),
+                AnalysisBundleDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  appendU32(Output, static_cast<uint32_t>(Effects->size()));
+  Output.insert(Output.end(), Effects->begin(), Effects->end());
+  appendU32(Output, static_cast<uint32_t>(Trace->size()));
+  Output.insert(Output.end(), Trace->begin(), Trace->end());
+  if (Output.size() > MaxPhysicalMachineAnalysisBundleBytes ||
+      Output.size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine analysis bundle exceeds bound");
+  support::endian::write32le(Output.data() + AnalysisBundleDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+} // namespace fe2o3::worker

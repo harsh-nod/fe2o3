@@ -1,0 +1,5 @@
+error[E0451]: field `context` of struct `CooperativeLaunchCapability` is private
+ --> tests/ui/cooperative_peer/capability_fields_are_private.rs:5:35
+  |
+5 |     CooperativeLaunchCapability { context }
+  |                                   ^^^^^^^ private field

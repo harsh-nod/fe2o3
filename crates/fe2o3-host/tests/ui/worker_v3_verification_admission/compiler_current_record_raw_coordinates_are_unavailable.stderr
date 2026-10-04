@@ -1,0 +1,14 @@
+error[E0624]: method `audit_exact` is private
+  --> tests/ui/worker_v3_verification_admission/compiler_current_record_raw_coordinates_are_unavailable.rs:10:21
+   |
+10 |       let _ = auditor.audit_exact(subject, carriage);
+   |                       ^^^^^^^^^^^ private method
+   |
+  ::: src/compiler_execution_current_record_audit.rs
+   |
+   | /     fn audit_exact(
+   | |         &mut self,
+   | |         subject: &InertCompilerExecutionSubjectV1,
+   | |         carriage: &CompilerExecutionReceiptCarriageV1,
+   | |     ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+   | |________________________________________________________________________________________________- private method defined here

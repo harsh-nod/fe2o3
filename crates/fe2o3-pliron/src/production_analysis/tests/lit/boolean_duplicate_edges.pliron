@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @boolean_duplicate_edges: builtin.function <(builtin.integer i1, kernel.index, kernel.index) -> ()>
+{
+  ^entry(b: builtin.integer i1, left: kernel.index, right: kernel.index):
+    gpu.cond_branch (b, left, right) [^join, ^join] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, kernel.index, kernel.index) -> ()>
+  ^join(i: kernel.index):
+    kernel.return () [] []: <() -> ()>
+}

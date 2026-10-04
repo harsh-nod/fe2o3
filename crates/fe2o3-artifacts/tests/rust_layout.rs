@@ -1,0 +1,817 @@
+use fe2o3_artifacts::{
+    MAX_RUST_LAYOUT_ALIGNMENT, MAX_RUST_LAYOUT_BYTES, MAX_RUST_LAYOUT_COMPONENTS, PointerWidth,
+    RustDisjointIndexSpaceV1, RustLayoutEvidenceError, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+};
+
+fn pointer(
+    offset: u64,
+    width: u64,
+    alignment: u32,
+    mutability: RustPointerMutabilityV1,
+    pointee: RustScalarElementTypeV1,
+) -> RustPhysicalComponentV1 {
+    RustPhysicalComponentV1::new(
+        offset,
+        width,
+        alignment,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability,
+            pointee,
+        },
+    )
+    .unwrap()
+}
+
+fn usize_component(offset: u64, width: u64, alignment: u32) -> RustPhysicalComponentV1 {
+    RustPhysicalComponentV1::new(offset, width, alignment, RustPhysicalComponentKindV1::Usize)
+        .unwrap()
+}
+
+fn zst(offset: u64, alignment: u32) -> RustPhysicalComponentV1 {
+    RustPhysicalComponentV1::new(offset, 0, alignment, RustPhysicalComponentKindV1::Zst).unwrap()
+}
+
+fn scalar_layout(
+    scalar: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let size = scalar.size_bytes();
+    let alignment = size as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(scalar)),
+        RustcAbiClassV1::Scalar,
+        pointer_width,
+        size,
+        alignment,
+        vec![
+            RustPhysicalComponentV1::new(
+                0,
+                size,
+                alignment,
+                RustPhysicalComponentKindV1::Scalar { scalar },
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn shared_slice(
+    element: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
+    let alignment = width as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(element)),
+        RustcAbiClassV1::ScalarPair,
+        pointer_width,
+        width * 2,
+        alignment,
+        vec![
+            pointer(0, width, alignment, RustPointerMutabilityV1::Const, element),
+            usize_component(width, width, alignment),
+        ],
+    )
+    .unwrap()
+}
+
+fn disjoint_slice(
+    element: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
+    let size = width * 2;
+    let alignment = width as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+            element,
+            RustDisjointIndexSpaceV1::Index1D,
+        )),
+        RustcAbiClassV1::ScalarPair,
+        pointer_width,
+        size,
+        alignment,
+        vec![
+            pointer(0, width, alignment, RustPointerMutabilityV1::Mut, element),
+            usize_component(width, width, alignment),
+        ],
+    )
+    .unwrap()
+}
+
+fn global_mut_pointer(
+    pointee: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
+    let alignment = width as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(pointee)),
+        RustcAbiClassV1::Scalar,
+        pointer_width,
+        width,
+        alignment,
+        vec![pointer(
+            0,
+            width,
+            alignment,
+            RustPointerMutabilityV1::Mut,
+            pointee,
+        )],
+    )
+    .unwrap()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[test]
+fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
+    let shared = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+    let disjoint = disjoint_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+
+    assert_eq!(
+        hex(&shared.rust_type().canonical_bytes()),
+        "1c0000004645324f332f525553542d545950452d45564944454e43452f563100010002000000010a"
+    );
+    assert_eq!(
+        hex(&shared.canonical_bytes()),
+        concat!(
+            "1e0000004645324f332f525553542d4c41594f55542d45564944454e43452f563100010028000000",
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f563100010002000000010a",
+            "020210000000000000000800000002000000170000000000000000000000080000000000000008",
+            "00000001010a15000000080000000000000008000000000000000800000002"
+        )
+    );
+    assert_eq!(
+        hex(shared.type_identity().rust_type().bytes().as_bytes()),
+        "f83042f005ac664ce0b7db51ac20b97ec0bc7b84973b4ac87fb68d6cda76e2fd"
+    );
+    assert_eq!(
+        hex(shared.type_identity().layout().bytes().as_bytes()),
+        "ab5caf6e3317ef750fbb80e27c837da3800541adcf0f324baf59681c23740956"
+    );
+
+    assert_eq!(
+        hex(&disjoint.rust_type().canonical_bytes()),
+        "1c0000004645324f332f525553542d545950452d45564944454e43452f563100010003000000020a01"
+    );
+    assert_eq!(
+        hex(&disjoint.canonical_bytes()),
+        concat!(
+            "1e0000004645324f332f525553542d4c41594f55542d45564944454e43452f563100010029000000",
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f563100010003000000020a",
+            "010202100000000000000008000000020000001700000000000000000000000800000000000000",
+            "0800000001020a15000000080000000000000008000000000000000800000002"
+        )
+    );
+    assert_eq!(
+        hex(disjoint.type_identity().rust_type().bytes().as_bytes()),
+        "703f1c0c127467c3ec189a806662ba37dd153ecd0b81b45c9b6aa8cb0f695ebf"
+    );
+    assert_eq!(
+        hex(disjoint.type_identity().layout().bytes().as_bytes()),
+        "d12579e2b46502e88aa0b663d986f4dd34b8f167c1b7796e7ea0e272398686ce"
+    );
+}
+
+#[test]
+fn shifted_disjoint_index_space_has_a_distinct_bounded_identity() {
+    let identity = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::Index1D,
+    ));
+    let shifted = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::ShiftedIndex1D { offset: 7 },
+    ));
+
+    assert_eq!(
+        hex(&shifted.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "0b000000020a020700000000000000"
+        )
+    );
+    assert_ne!(identity.declared_identity(), shifted.declared_identity());
+
+    let grid_exclusive = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::GridExclusive,
+    ));
+    assert_eq!(
+        hex(&grid_exclusive.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "03000000020a03"
+        )
+    );
+    assert_ne!(
+        identity.declared_identity(),
+        grid_exclusive.declared_identity()
+    );
+    assert_ne!(
+        shifted.declared_identity(),
+        grid_exclusive.declared_identity()
+    );
+
+    let blocked = RustDisjointIndexSpaceV1::blocked_index_1d(16, 4).unwrap();
+    let blocked = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        blocked,
+    ));
+    assert_eq!(
+        hex(&blocked.canonical_bytes()),
+        concat!(
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100",
+            "13000000020a0410000000000000000400000000000000"
+        )
+    );
+    assert_ne!(identity.declared_identity(), blocked.declared_identity());
+    assert_ne!(shifted.declared_identity(), blocked.declared_identity());
+    assert_ne!(
+        grid_exclusive.declared_identity(),
+        blocked.declared_identity()
+    );
+
+    let blocked_other_lanes = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::blocked_index_1d(8, 4).unwrap(),
+    ));
+    let blocked_other_elements = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::blocked_index_1d(16, 2).unwrap(),
+    ));
+    assert_ne!(
+        blocked.declared_identity(),
+        blocked_other_lanes.declared_identity()
+    );
+    assert_ne!(
+        blocked.declared_identity(),
+        blocked_other_elements.declared_identity()
+    );
+    assert_eq!(RustDisjointIndexSpaceV1::blocked_index_1d(0, 4), None);
+    assert_eq!(RustDisjointIndexSpaceV1::blocked_index_1d(16, 0), None);
+}
+
+#[test]
+fn scalar_evidence_has_stable_golden_encodings_and_identities() {
+    let scalar = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+
+    assert_eq!(
+        hex(&scalar.rust_type().canonical_bytes()),
+        "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100020000000306"
+    );
+    assert_eq!(
+        hex(&scalar.canonical_bytes()),
+        concat!(
+            "1e0000004645324f332f525553542d4c41594f55542d45564944454e43452f563100010028000000",
+            "1c0000004645324f332f525553542d545950452d45564944454e43452f5631000100020000000306",
+            "010204000000000000000400000001000000160000000000000000000000040000000000000004",
+            "0000000506"
+        )
+    );
+    assert_eq!(
+        hex(scalar.type_identity().rust_type().bytes().as_bytes()),
+        "e312b413d7890a7147b229b57a42d7935d015dee58f0fb610d46999e62659a08"
+    );
+    assert_eq!(
+        hex(scalar.type_identity().layout().bytes().as_bytes()),
+        "801df7d2b519e75f693078558936feb7813b577c6306110c21c0075b7fceddb2"
+    );
+}
+
+#[test]
+fn scalar_identity_mutations_are_domain_separated() {
+    let u32_64 = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+    let u32_32 = scalar_layout(RustScalarElementTypeV1::U32, PointerWidth::Bits32);
+    let i32_64 = scalar_layout(RustScalarElementTypeV1::I32, PointerWidth::Bits64);
+    let shared_u32 = shared_slice(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+
+    assert_eq!(
+        u32_64.type_identity().rust_type(),
+        u32_32.type_identity().rust_type()
+    );
+    assert_ne!(
+        u32_64.type_identity().layout(),
+        u32_32.type_identity().layout()
+    );
+    assert_ne!(u32_64.type_identity(), i32_64.type_identity());
+    assert_ne!(u32_64.type_identity(), shared_u32.type_identity());
+}
+
+#[test]
+fn global_mut_pointer_requires_one_exact_mutable_pointer_component() {
+    let exact = global_mut_pointer(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+    assert_eq!(exact.abi_class(), RustcAbiClassV1::Scalar);
+    assert_eq!(exact.size(), 8);
+    assert_eq!(exact.abi_alignment(), 8);
+    assert_eq!(exact.components().len(), 1);
+    assert_eq!(
+        exact.components()[0].kind(),
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: RustPointerMutabilityV1::Mut,
+            pointee: RustScalarElementTypeV1::U32,
+        }
+    );
+    assert_ne!(
+        exact.type_identity(),
+        scalar_layout(RustScalarElementTypeV1::U64, PointerWidth::Bits64).type_identity()
+    );
+    assert_ne!(
+        exact.type_identity(),
+        shared_slice(RustScalarElementTypeV1::U32, PointerWidth::Bits64).type_identity()
+    );
+
+    let source = || {
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(
+            RustScalarElementTypeV1::U32,
+        ))
+    };
+    let mutable_pointer = || {
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Mut,
+            RustScalarElementTypeV1::U32,
+        )
+    };
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![mutable_pointer()],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Const,
+                RustScalarElementTypeV1::U32,
+            )],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Mut,
+                RustScalarElementTypeV1::I32,
+            )],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![mutable_pointer(), usize_component(8, 8, 8)],
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn scalar_evidence_fails_closed_on_inconsistent_facts() {
+    let rust_type =
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(RustScalarElementTypeV1::U32));
+    let scalar_component = |scalar| {
+        RustPhysicalComponentV1::new(0, 4, 4, RustPhysicalComponentKindV1::Scalar { scalar })
+            .unwrap()
+    };
+
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Aggregate,
+            PointerWidth::Bits64,
+            4,
+            4,
+            vec![scalar_component(RustScalarElementTypeV1::U32)],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            4,
+            4,
+            vec![scalar_component(RustScalarElementTypeV1::I32)],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Scalar {
+                        scalar: RustScalarElementTypeV1::U64,
+                    },
+                )
+                .unwrap()
+            ],
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+}
+
+#[test]
+fn construction_is_deterministic_and_exposes_validated_evidence() {
+    let first = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+    let second = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+
+    assert_eq!(first, second);
+    assert_eq!(first.canonical_bytes(), second.canonical_bytes());
+    assert_eq!(first.type_identity(), second.type_identity());
+    assert_eq!(first.abi_class(), RustcAbiClassV1::ScalarPair);
+    assert_eq!(first.pointer_width(), PointerWidth::Bits64);
+    assert_eq!(first.size(), 16);
+    assert_eq!(first.abi_alignment(), 8);
+    assert_eq!(first.components().len(), 2);
+    assert_eq!(first.rust_type().source_type().element().size_bytes(), 4);
+
+    let disjoint = disjoint_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+    assert_eq!(disjoint.abi_class(), RustcAbiClassV1::ScalarPair);
+    assert_eq!(disjoint.components().len(), 2);
+    assert_eq!(
+        disjoint.rust_type().source_type(),
+        RustSourceTypeShapeV1::disjoint_slice(
+            RustScalarElementTypeV1::F32,
+            RustDisjointIndexSpaceV1::Index1D,
+        )
+    );
+}
+
+#[test]
+fn every_meaningful_valid_mutation_changes_the_appropriate_identity() {
+    let shared_64 = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+    let shared_32 = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits32);
+    let shared_u32 = shared_slice(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+    let disjoint_64 = disjoint_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
+
+    assert_eq!(
+        shared_64.type_identity().rust_type(),
+        shared_32.type_identity().rust_type()
+    );
+    assert_ne!(
+        shared_64.type_identity().layout(),
+        shared_32.type_identity().layout()
+    );
+    assert_ne!(shared_64.type_identity(), shared_u32.type_identity());
+    assert_ne!(shared_64.type_identity(), disjoint_64.type_identity());
+}
+
+#[test]
+fn component_constructor_rejects_malformed_values() {
+    let pointer_kind = RustPhysicalComponentKindV1::Pointer {
+        mutability: RustPointerMutabilityV1::Const,
+        pointee: RustScalarElementTypeV1::F32,
+    };
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 8, 0, pointer_kind),
+        Err(RustLayoutEvidenceError::InvalidAlignment { .. })
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 8, 3, pointer_kind),
+        Err(RustLayoutEvidenceError::InvalidAlignment { .. })
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 8, MAX_RUST_LAYOUT_ALIGNMENT * 2, pointer_kind),
+        Err(RustLayoutEvidenceError::InvalidAlignment { .. })
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(4, 8, 8, pointer_kind),
+        Err(RustLayoutEvidenceError::MisalignedOffset { .. })
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 0, 8, pointer_kind),
+        Err(RustLayoutEvidenceError::InvalidComponent(_))
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 1, 1, RustPhysicalComponentKindV1::Zst),
+        Err(RustLayoutEvidenceError::InvalidComponent(_))
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(0, 1, 2, RustPhysicalComponentKindV1::Padding),
+        Err(RustLayoutEvidenceError::InvalidComponent(_))
+    ));
+    assert!(matches!(
+        RustPhysicalComponentV1::new(
+            MAX_RUST_LAYOUT_BYTES,
+            8,
+            8,
+            RustPhysicalComponentKindV1::Usize,
+        ),
+        Err(RustLayoutEvidenceError::BoundExceeded { .. })
+    ));
+}
+
+#[test]
+fn layout_constructor_enforces_bounds_and_alignment() {
+    let rust_type = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(
+        RustScalarElementTypeV1::F32,
+    ));
+    let valid_components = || {
+        vec![
+            pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Const,
+                RustScalarElementTypeV1::F32,
+            ),
+            usize_component(8, 8, 8),
+        ]
+    };
+
+    for alignment in [0, 3, MAX_RUST_LAYOUT_ALIGNMENT * 2] {
+        assert!(matches!(
+            RustLayoutEvidenceV1::new(
+                rust_type,
+                RustcAbiClassV1::ScalarPair,
+                PointerWidth::Bits64,
+                16,
+                alignment,
+                valid_components(),
+            ),
+            Err(RustLayoutEvidenceError::InvalidAlignment { .. })
+        ));
+    }
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            0,
+            8,
+            valid_components(),
+        ),
+        Err(RustLayoutEvidenceError::BoundExceeded { .. })
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            MAX_RUST_LAYOUT_BYTES + 8,
+            8,
+            valid_components(),
+        ),
+        Err(RustLayoutEvidenceError::BoundExceeded { .. })
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            15,
+            8,
+            valid_components(),
+        ),
+        Err(RustLayoutEvidenceError::InvalidLayout(_))
+    ));
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![],
+        ),
+        Err(RustLayoutEvidenceError::EmptyComponents)
+    ));
+
+    let too_many = vec![zst(0, 1); MAX_RUST_LAYOUT_COMPONENTS + 1];
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            too_many,
+        ),
+        Err(RustLayoutEvidenceError::TooManyComponents { .. })
+    ));
+}
+
+#[test]
+fn layout_constructor_requires_order_non_overlap_and_full_coverage() {
+    let rust_type = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(
+        RustScalarElementTypeV1::F32,
+    ));
+    let make = |components| {
+        RustLayoutEvidenceV1::new(
+            rust_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            components,
+        )
+    };
+
+    let gap = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Const,
+            RustScalarElementTypeV1::F32,
+        ),
+        usize_component(12, 4, 4),
+    ];
+    assert!(matches!(
+        make(gap),
+        Err(RustLayoutEvidenceError::InvalidLayout(_))
+    ));
+
+    let overlap = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Const,
+            RustScalarElementTypeV1::F32,
+        ),
+        usize_component(4, 4, 4),
+        RustPhysicalComponentV1::new(8, 8, 1, RustPhysicalComponentKindV1::Padding).unwrap(),
+    ];
+    assert!(matches!(
+        make(overlap),
+        Err(RustLayoutEvidenceError::InvalidLayout(_))
+    ));
+
+    let incomplete = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Const,
+            RustScalarElementTypeV1::F32,
+        ),
+        zst(8, 1),
+    ];
+    assert!(matches!(
+        make(incomplete),
+        Err(RustLayoutEvidenceError::InvalidLayout(_))
+    ));
+
+    let out_of_bounds = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Const,
+            RustScalarElementTypeV1::F32,
+        ),
+        usize_component(8, 16, 8),
+    ];
+    assert!(matches!(
+        make(out_of_bounds),
+        Err(RustLayoutEvidenceError::InvalidLayout(_))
+    ));
+}
+
+#[test]
+fn semantic_validation_rejects_descriptive_but_inconsistent_evidence() {
+    let shared_type = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(
+        RustScalarElementTypeV1::F32,
+    ));
+    let shared_components = || {
+        vec![
+            pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Const,
+                RustScalarElementTypeV1::F32,
+            ),
+            usize_component(8, 8, 8),
+        ]
+    };
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            shared_type,
+            RustcAbiClassV1::Aggregate,
+            PointerWidth::Bits64,
+            16,
+            8,
+            shared_components(),
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+
+    let wrong_mutability = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Mut,
+            RustScalarElementTypeV1::F32,
+        ),
+        usize_component(8, 8, 8),
+    ];
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            shared_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            wrong_mutability,
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+
+    let wrong_pointee = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Const,
+            RustScalarElementTypeV1::U32,
+        ),
+        usize_component(8, 8, 8),
+    ];
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            shared_type,
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            wrong_pointee,
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+}
+
+#[test]
+fn disjoint_slice_rejects_aggregate_source_field_topology_as_abi_evidence() {
+    let disjoint_type = RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
+        RustScalarElementTypeV1::F32,
+        RustDisjointIndexSpaceV1::Index1D,
+    ));
+    let source_field_topology = vec![
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Mut,
+            RustScalarElementTypeV1::F32,
+        ),
+        usize_component(8, 8, 8),
+        zst(16, 1),
+    ];
+    assert!(matches!(
+        RustLayoutEvidenceV1::new(
+            disjoint_type,
+            RustcAbiClassV1::Aggregate,
+            PointerWidth::Bits64,
+            16,
+            8,
+            source_field_topology,
+        ),
+        Err(RustLayoutEvidenceError::SemanticMismatch(_))
+    ));
+}

@@ -1,0 +1,38 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-PIPELINE-001]
+// CHECK: event uses the wrong epoch
+// CHECK: help[FE2O3-FIX-PIPELINE]
+builtin.func @pipeline_dynamic_wrong_future_epoch: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(bound_v5: kernel.index ):
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <16,true,[2,32]>)>;
+    p1 = kernel.pipeline_create (v0) [] []: <(kernel.ranked_view <16,true,[2,32]>) -> (kernel.pipeline <2,1>)>;
+    zero_v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    one_v3 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;
+    two_v4 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 2]: <() -> (kernel.index )>;
+    kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Stage]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Commit]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.br_args (zero_v2) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^header_block2v1(i_v6: kernel.index ):
+    kernel.index_lt_br_args (i_v6, bound_v5, i_v6) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>
+
+  ^body_block3v1(body_i_v7: kernel.index ):
+    future_v8 = kernel.index_binary (body_i_v7, one_v3) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    future_slot_v9 = kernel.index_binary (future_v8, two_v4) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    current_slot_v10 = kernel.index_binary (body_i_v7, two_v4) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Stage]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Commit]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Wait]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Consume]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Release]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.br_args (future_v8) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^exit_block4v1():
+    drain_slot_v11 = kernel.index_binary (bound_v5, two_v4) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.pipeline_event (p1, bound_v5, drain_slot_v11) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Wait]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, bound_v5, drain_slot_v11) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Discard]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, bound_v5, drain_slot_v11) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Release]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

@@ -1,0 +1,219 @@
+struct InvocationSourceDescriptorReferenceV51 {
+    loan: InvocationSourceReferenceV38,
+    reference_type: int,
+    mutable: bool,
+    metadata_bits: int,
+    width: int,
+}
+
+struct InvocationSourceDescriptorRecipeV51 {
+    origin: int,
+    source_type: int,
+    reference_type: int,
+    generation: int,
+    instance: int,
+    block: int,
+    statement: int,
+    mutable: bool,
+    metadata_bits: int,
+    width: int,
+}
+
+enum InvocationSourceDescriptorEventV51 {
+    Borrow { destination: int, recipe: InvocationSourceDescriptorRecipeV51,
+        parent: Option<(int, InvocationSourceDescriptorRecipeV51)> },
+    Transfer { destination: int, input: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
+}
+
+spec fn invocation_source_descriptor_reference_shape_v51(
+    reference: InvocationSourceDescriptorReferenceV51, count: int,
+) -> bool {
+    0 <= reference.loan.origin < count && reference.loan.version >= 0
+        && reference.loan.source_type >= 0 && reference.reference_type >= 0
+        && reference.loan.origin_generation >= 0 && reference.loan.borrow_instance >= 0
+        && reference.loan.borrow_block >= 0 && reference.loan.borrow_statement >= 0
+        && (reference.metadata_bits == 32 || reference.metadata_bits == 64)
+        && ordinary_memory_width_v30(reference.width)
+}
+
+spec fn invocation_source_descriptor_carrier_v51(
+    source: InvocationSourceByteStateV36, value: MemoryValueV30,
+    metadata_bits: int, width: int,
+) -> bool {
+    (metadata_bits == 32 || metadata_bits == 64) && ordinary_memory_width_v30(width)
+        && match value {
+            MemoryValueV30::Slice(slice) =>
+                byte_pointer_type_v30(slice.pointer, 2, 8)
+                    && 0 <= slice.length < memory_value_modulus_v30(metadata_bits / 8)
+                    && slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8)
+                    && byte_range_live_v30(source.machine.memory, slice.pointer, slice.length * width),
+            _ => false,
+        }
+}
+
+spec fn invocation_source_descriptor_reference_current_v51(
+    source: InvocationSourceByteStateV36, local: int,
+    recipe: InvocationSourceDescriptorRecipeV51,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && 0 <= local < source.machine.values.len()
+        && source.logical.descriptor_references.contains_key(local)
+        && ({ let reference = source.logical.descriptor_references[local];
+            reference.loan.origin == recipe.origin
+                && reference.loan.source_type == recipe.source_type
+                && reference.loan.origin_generation == recipe.generation
+                && reference.loan.borrow_instance == recipe.instance
+                && reference.loan.borrow_block == recipe.block
+                && reference.loan.borrow_statement == recipe.statement
+                && reference.reference_type == recipe.reference_type
+                && reference.mutable == recipe.mutable
+                && reference.metadata_bits == recipe.metadata_bits && reference.width == recipe.width
+                && source.logical.versions[recipe.origin] == reference.loan.version
+                && source.machine.values[local] == source.machine.values[recipe.origin]
+                && invocation_source_descriptor_carrier_v51(source, source.machine.values[local],
+                    recipe.metadata_bits, recipe.width)
+                && exists|i: int| 0 <= i < source.machine.frames.active.len()
+                    && source.machine.frames.active[i] == reference.loan.frame })
+}
+
+spec fn invocation_source_descriptor_install_v51(
+    source: InvocationSourceByteStateV36, destination: int, value: MemoryValueV30,
+    reference: InvocationSourceDescriptorReferenceV51,
+) -> InvocationSourceByteStateV36 {
+    let changed = invocation_source_byte_put_local_v36(source, destination, value);
+    InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+        descriptor_references: changed.logical.descriptor_references.insert(destination, reference),
+        ..changed.logical }, ..changed }
+}
+
+spec fn invocation_source_descriptor_step_v51(
+    source: InvocationSourceByteStateV36, event: InvocationSourceDescriptorEventV51,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) {
+        invocation_source_byte_refused_v36(source)
+    } else { match event {
+        InvocationSourceDescriptorEventV51::Borrow { destination, recipe, parent } => {
+            if destination == recipe.origin || !(0 <= recipe.origin < source.machine.values.len())
+                || source.machine.frames.active.len() == 0 || recipe.source_type < 0
+                || recipe.reference_type < 0 || recipe.generation < 0 || recipe.instance < 0
+                || recipe.block < 0 || recipe.statement < 0
+                || !invocation_source_descriptor_carrier_v51(source, source.machine.values[recipe.origin],
+                    recipe.metadata_bits, recipe.width) {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                let origin_loan = InvocationSourceReferenceV38 {
+                    origin: recipe.origin, version: source.logical.versions[recipe.origin],
+                    frame: source.machine.frames.active.last(), source_type: recipe.source_type,
+                    origin_generation: recipe.generation, borrow_instance: recipe.instance,
+                    borrow_block: recipe.block, borrow_statement: recipe.statement };
+                let loan = match parent {
+                    None => Some(origin_loan),
+                    Some((local, expected)) => {
+                        if !invocation_source_descriptor_reference_current_v51(source, local, expected)
+                            || expected.origin != recipe.origin || expected.source_type != recipe.source_type
+                            || expected.generation != recipe.generation
+                            || expected.metadata_bits != recipe.metadata_bits || expected.width != recipe.width
+                            || recipe.mutable && !expected.mutable {
+                            None
+                        } else { Some(InvocationSourceReferenceV38 {
+                            borrow_instance: recipe.instance, borrow_block: recipe.block,
+                            borrow_statement: recipe.statement,
+                            ..source.logical.descriptor_references[local].loan }) }
+                    },
+                };
+                match loan {
+                    None => invocation_source_byte_refused_v36(source),
+                    Some(loan) => invocation_source_descriptor_install_v51(source, destination,
+                        source.machine.values[recipe.origin], InvocationSourceDescriptorReferenceV51 {
+                            loan, reference_type: recipe.reference_type, mutable: recipe.mutable,
+                            metadata_bits: recipe.metadata_bits, width: recipe.width }),
+                }
+            }
+        },
+        InvocationSourceDescriptorEventV51::Transfer { destination, input, recipe, moved } => {
+            if destination == recipe.origin || recipe.mutable && !moved
+                || !invocation_source_descriptor_reference_current_v51(source, input, recipe) {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                let value = source.machine.values[input];
+                let reference = source.logical.descriptor_references[input];
+                let consumed = if moved {
+                    invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+                } else { source };
+                invocation_source_descriptor_install_v51(consumed, destination, value, reference)
+            }
+        },
+    } }
+}
+
+spec fn invocation_source_descriptor_length_v51(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    if recipe.mutable && !moved
+        || !invocation_source_descriptor_reference_current_v51(source, input, recipe) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let value = source.machine.values[input];
+        let consumed = if moved {
+            invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+        } else { source };
+        match value {
+            MemoryValueV30::Slice(slice) => invocation_source_byte_put_local_v36(consumed,
+                destination, MemoryValueV30::Scalar(slice.length)),
+            _ => invocation_source_byte_refused_v36(consumed),
+        }
+    }
+}
+
+proof fn descriptor_loan_replacement_invalidates_equal_slice_bits_v51(
+    source: InvocationSourceByteStateV36, local: int, recipe: InvocationSourceDescriptorRecipeV51,
+)
+    requires source.machine.valid, invocation_source_byte_state_well_formed_v36(source),
+        invocation_source_descriptor_reference_current_v51(source, local, recipe),
+        local != recipe.origin,
+    ensures !invocation_source_descriptor_reference_current_v51(
+        invocation_source_byte_put_local_v36(source, recipe.origin, source.machine.values[recipe.origin]),
+        local, recipe),
+{}
+
+proof fn descriptor_mutable_copy_is_not_loan_transport_v51(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    recipe: InvocationSourceDescriptorRecipeV51,
+)
+    requires recipe.mutable,
+    ensures !invocation_source_descriptor_step_v51(source,
+        InvocationSourceDescriptorEventV51::Transfer { destination, input, recipe, moved: false }).machine.valid,
+{}
+
+proof fn descriptor_reborrow_cannot_upgrade_shared_origin_v51(
+    source: InvocationSourceByteStateV36, destination: int, parent_local: int,
+    parent: InvocationSourceDescriptorRecipeV51, recipe: InvocationSourceDescriptorRecipeV51,
+)
+    requires !parent.mutable, recipe.mutable,
+    ensures !invocation_source_descriptor_step_v51(source,
+        InvocationSourceDescriptorEventV51::Borrow { destination, recipe,
+            parent: Some((parent_local, parent)) }).machine.valid,
+{}
+
+proof fn descriptor_loan_use_requires_origin_frame_v51(
+    source: InvocationSourceByteStateV36, local: int, recipe: InvocationSourceDescriptorRecipeV51,
+)
+    requires source.logical.descriptor_references.contains_key(local),
+        forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+            source.machine.frames.active[i] != source.logical.descriptor_references[local].loan.frame,
+    ensures !invocation_source_descriptor_reference_current_v51(source, local, recipe),
+{}
+
+proof fn descriptor_length_reads_metadata_without_reading_element_bytes_v51(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    recipe: InvocationSourceDescriptorRecipeV51, slice: MemorySliceV30,
+)
+    requires invocation_source_descriptor_reference_current_v51(source, input, recipe),
+        !recipe.mutable, 0 <= destination < source.machine.values.len(),
+        source.machine.values[input] == MemoryValueV30::Slice(slice),
+    ensures invocation_source_descriptor_length_v51(source, destination, input, recipe, false)
+            .machine.values[destination] == MemoryValueV30::Scalar(slice.length),
+        invocation_source_descriptor_length_v51(source, destination, input, recipe, false)
+            .machine.memory == source.machine.memory,
+{}

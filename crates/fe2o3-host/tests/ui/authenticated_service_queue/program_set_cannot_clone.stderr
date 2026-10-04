@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AuthenticatedWorkerV3ProgramSetV1` in the current scope
+ --> tests/ui/authenticated_service_queue/program_set_cannot_clone.rs:4:31
+  |
+4 |     let _duplicate = programs.clone();
+  |                               ^^^^^ method not found in `AuthenticatedWorkerV3ProgramSetV1`

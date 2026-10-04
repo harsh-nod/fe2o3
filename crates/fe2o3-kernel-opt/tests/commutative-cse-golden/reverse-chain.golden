@@ -1,0 +1,37 @@
+CASE: reverse-chain
+CHECK-BEFORE: module commutative-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-BEFORE: f0:b0 block-id=0
+CHECK-BEFORE: f0:b0:o0 [v10:U32] BitXor v0,v1
+CHECK-BEFORE: f0:b0:o1 [v11:U32] BitXor v10,v1
+CHECK-BEFORE: f0:b0:o2 [v12:U32] BitXor v11,v1
+CHECK-BEFORE: f0:b0:term Branch block-id=1 []
+CHECK-BEFORE: f0:b1 block-id=3
+CHECK-BEFORE: f0:b1:o0 [v1002:U32] BitXor v1,v1001
+CHECK-BEFORE: f0:b1:term Return [v1002]
+CHECK-BEFORE: f0:b2 block-id=2
+CHECK-BEFORE: f0:b2:o0 [v1001:U32] BitXor v1,v1000
+CHECK-BEFORE: f0:b2:term Branch block-id=3 []
+CHECK-BEFORE: f0:b3 block-id=1
+CHECK-BEFORE: f0:b3:o0 [v1000:U32] BitXor v1,v0
+CHECK-BEFORE: f0:b3:term Branch block-id=2 []
+CHECK-AFTER: module commutative-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-AFTER: f0:b0 block-id=0
+CHECK-AFTER: f0:b0:o0 [v10:U32] BitXor v0,v1
+CHECK-AFTER: f0:b0:o1 [v11:U32] BitXor v10,v1
+CHECK-AFTER: f0:b0:o2 [v12:U32] BitXor v11,v1
+CHECK-AFTER: f0:b0:term Branch block-id=1 []
+CHECK-AFTER: f0:b1 block-id=3
+CHECK-AFTER: f0:b1:term Return [v12]
+CHECK-AFTER: f0:b2 block-id=2
+CHECK-AFTER: f0:b2:term Branch block-id=3 []
+CHECK-AFTER: f0:b3 block-id=1
+CHECK-AFTER: f0:b3:term Branch block-id=2 []
+CHECK-REMARK: proved=3 changed=true independently-checked=true authority=false
+CHECK-REMARK: f0:b0:o0 retained f0:b0:o0
+CHECK-REMARK: f0:b0:o1 retained f0:b0:o1
+CHECK-REMARK: f0:b0:o2 retained f0:b0:o2
+CHECK-REMARK: f0:b1:o0:r0 substituted f0:b0:o2:r0
+CHECK-REMARK: f0:b2:o0:r0 substituted f0:b0:o1:r0
+CHECK-REMARK: f0:b3:o0:r0 substituted f0:b0:o0:r0

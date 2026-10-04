@@ -1,0 +1,27 @@
+error: cannot construct `PreparedLaunch<Kernel>` with struct literal syntax due to private fields
+  --> tests/ui/prepared_launch/prepared_fields_are_private.rs:9:19
+   |
+ 9 |       let _forged = PreparedLaunch::<Kernel> {
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+10 |           kernel: KernelId::from_bytes([0; 32]),
+   |           ------------------------------------- private field
+11 |           context,
+   |           ------- private field
+12 | /         geometry: PreparedGeometry {
+13 | |             rank: 1,
+14 | |             grid: CheckedDimensions {
+15 | |                 dimensions: [1, 1, 1],
+...  |
+22 | |             total_threads: 1,
+23 | |         },
+   | |_________- private field
+24 | /         resources: PreparedResources {
+25 | |             static_shared_memory_bytes: 0,
+26 | |             dynamic_shared_memory_bytes: 0,
+27 | |             total_shared_memory_bytes: 0,
+28 | |         },
+   | |_________- private field
+29 |           marker: std::marker::PhantomData,
+   |           -------------------------------- private field
+   |
+   = note: ...and other private field `seal` that was not provided

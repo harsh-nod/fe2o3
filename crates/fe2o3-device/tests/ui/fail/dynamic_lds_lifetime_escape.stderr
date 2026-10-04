@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/dynamic_lds_lifetime_escape.rs:7:14
+  |
+3 | unsafe fn escape<'workgroup>(
+  |                  ---------- lifetime `'workgroup` defined here
+...
+7 |     unsafe { DynamicLds::from_raw_parts(scope, base, 4).unwrap() }
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'workgroup` must outlive `'static`

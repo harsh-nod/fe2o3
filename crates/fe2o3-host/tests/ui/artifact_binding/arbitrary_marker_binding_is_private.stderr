@@ -1,0 +1,5 @@
+error[E0599]: no method named `bind_marker` found for reference `&ValidatedArtifactSelectionV1` in the current scope
+ --> tests/ui/artifact_binding/arbitrary_marker_binding_is_private.rs:6:28
+  |
+6 |     let _brand = validated.bind_marker::<ArbitraryKernel>();
+  |                            ^^^^^^^^^^^ method not found in `&ValidatedArtifactSelectionV1`

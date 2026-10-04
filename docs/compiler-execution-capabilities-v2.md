@@ -1,0 +1,421 @@
+# Native Trust Capabilities V2
+
+## Status
+
+`CompilerExecutionPolicyCapabilityV2` and
+`CompilerExecutionClientProfileCapabilityV2` transport the native public trust
+records in immutable descriptors. They are move-only, expose no `AsFd`, and
+never decode or upgrade V1 records. A policy/profile remains public configuration,
+not signing custody, protected execution, publication, GPU load, or launch authority.
+
+`CompilerExecutionServiceLaunchCapabilityV2` transports the 112-byte identity-only
+launch frame through the same private sealed-image machinery. Its wire deliberately
+remains V1: it contains a policy digest, not a policy or subject encoding. Structural
+decoding therefore accepts either opaque policy binding. A consumer must match an
+independently admitted PolicyV2; structural admission is not a policy upgrade.
+
+`CompilerExecutionSigningKeyCapabilityV2` freshly admits a seed or transferred
+secret image under a pinned PolicyV2. It retains that complete typed policy
+identity and exposes bounded signing, revalidation and read-only transfer, not
+direct seed/key getters. Signing authenticates bytes, not a protected compiler
+occurrence. It cannot be constructed from a V1 key owner.
+
+`ProtectedExternalAnchorServiceAdmissionV2` separately admits the anchor endpoint
+and live service pidfd through bounded, allocation-free inspection. It preserves
+the shared continuity checks and requires a distinct service UID. See the
+[anchor custody contract](compiler-execution-anchor-custody-v2.md) for ownership,
+resource accounting and the difference between transport custody and authority.
+
+These APIs do not activate the native producer, service handlers, or launcher.
+No protected proof or GPU execution is credited. M0-M7 and 47/47 remain open.
+See the [native publication contract](compiler-execution-publication-v2.md)
+for the other completed inert protocol boundaries and remaining integration.
+
+## Admission Invariants
+
+The shared sealed-image validator checks metadata, exact regular mode0400,
+exact length, exact WRITE/GROW/SHRINK/SEAL seals, and CLOEXEC, in that order.
+Revalidation also checks the retained device/inode and compares every byte to
+the private immutable native record. Identical bytes in another inode are not
+a substitute. Mode and descriptor flags are rechecked because seals do not
+freeze them. Validation is an observation, not perpetual metadata protection.
+
+Policy and profile images are 216 and 280 bytes, respectively, just like V1.
+Length or a memfd name cannot identify their family: the actual strict native
+decoder admits transferred images. Creation instead consumes an already admitted
+native record. Revalidation needs no second decode because byte equality preserves
+that immutable record's admission invariant. No owner is cloned or projected.
+
+Native reads and writes are positional, fixed-size, single-attempt operations.
+Short transfers and EINTR fail; there are no retry loops or dynamically sized
+content buffers. Errors retain static operation/reason labels and an errno or
+typed decoder error. V1 retains its existing allocating APIs and diagnostic order.
+
+Policy inherited admission borrows an fd >= 3 with CLOEXEC clear and creates a
+private CLOEXEC duplicate. It never closes or changes the original descriptor.
+The caller must keep that original slot live and unchanged during admission.
+Transfer produces another CLOEXEC File referring to the same sealed object.
+Raw File interoperability does not meter subsequent arbitrary File operations.
+
+## Native Deployment Transport
+
+`CompilerExecutionSupervisorDeploymentCapabilityV2` and its V3 counterpart use
+the same sealed-record transport, with distinct 184-byte native deployment wires.
+Creation consumes an already constructed native deployment. File and inherited
+admission require the actual same-family policy and reject another complete
+policy identity, including correctly rehashed records from another family.
+No identity-only, context-free, V1-upgrade or fallback admission is provided.
+
+The private transport decoder has an explicit borrowed context. Existing policy,
+profile and launch adapters use an empty context, preserving their public APIs
+and quotas. Deployment decoding borrows the policy on the original ledger; it
+does not clone that owner, reconstruct it from a digest, or create a child budget.
+The contextual decoder's returned record is reserved through outer cleanup.
+
+Using the charge notation below, deployment operations have these obligations:
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create | consumed Drecord | Dcap - Drecord |
+| from_file | consumed Dfile + borrowed policy | Dcap - Dfile |
+| from_inherited_at | borrowed Dfile + policy | full Dcap |
+| revalidate / try_clone_for_transfer | borrowed Dcap | none / full Dfile |
+| validate_transfer | borrowed Dcap + Dfile | none |
+
+Create, revalidate and transfer charge `IO_WORK = 38664`. File and inherited
+admission charge `ADMISSION_WORK = 44560`, including the native deployment
+decoder. `ADMISSION_STORAGE` is outer `IO_STORAGE` plus native decoder scratch;
+all input reservations stay separately live. Inherited admission borrows an
+fd >= 3 with CLOEXEC clear and returns private CLOEXEC custody without closing
+or changing the source slot. No slot is installed by these APIs.
+
+These owners establish immutable, exact-object transport of inert configuration,
+not trusted provisioning origin, measured process custody or launch authority.
+The protected parent must independently pin the deployment and policy. Production
+coordinator/startup integration remains incomplete.
+
+### External Anchor Deployment
+
+The native external-anchor deployment records bind an actual same-family
+supervisor deployment and policy, the exact anchor UID/GID and verification key,
+and an executable digest/length bounded at 128 MiB. They use distinct 168-byte
+V2/V3 frames and identity domains. Decoding verifies the complete supervisor
+identity and policy relationship; an independently rehashed record cannot replace
+either context owner. Publicly constructed configuration still requires trusted
+provisioning provenance and an independently pinned executable measurement.
+
+The supervisor-policy comparison runs on the same ledger as record decoding.
+Record operations charge 11280 work units including that nested comparison;
+their fixed peak includes both scopes. A digest or nominal family alone cannot
+substitute for the two actual borrowed owners.
+
+`CompilerExecutionExternalAnchorDeploymentCapabilityV2/V3` reuse the same sealed
+transport as supervisor deployment capabilities. File and inherited recovery take
+both `&Supervisor` and `&Policy`; their full retained charges stay borrowed on the
+original ledger. File recovery returns only growth above the consumed
+`FILE_STORAGE`. Inherited recovery leaves the source descriptor untouched, owns a
+private CLOEXEC duplicate, and returns its full retained charge. Revalidation and
+transfer validation require the exact admitted object, metadata, seals and bytes.
+
+Anchor capability I/O charges 38152 work units. Full recovery charges 49432 units
+including contextual decoding, with `ADMISSION_STORAGE = IO_STORAGE +
+COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_STORAGE_V2/V3`. Exact and one-short
+tests cover all three nested admission stages. These are logical quotas, not
+wall-clock, stack or RSS bounds. Neither a correctly rehashed executable
+measurement nor a sealed descriptor proves independently trusted provenance.
+
+### External Anchor Provisioning
+
+`CompilerExecutionExternalAnchorProvisioningV2/V3` bind the actual same-family
+anchor deployment and a helper executable digest/nonzero length bounded at
+128 MiB. Their distinct 128-byte frames and identity domains reject V1 and
+cross-family substitutions. Public recovery requires the actual deployment,
+not its digest; that owner already binds the supervisor and policy. All record
+operations cost 4104 logical work units on the original ledger.
+
+`CompilerExecutionExternalAnchorProvisioningCapabilityV2/V3` carry these records
+through the existing contextual sealed transport. Creation consumes the native
+record. Recovery borrows the complete deployment charge and either consumes a
+File charge (returning growth) or borrows an inherited File charge (returning
+full private CLOEXEC custody). I/O costs 36872 work units; full recovery costs
+40976, with outer I/O scratch plus native decoder scratch. Revalidation requires
+the exact admitted inode, metadata, seals and bytes.
+
+A correctly rehashed helper change describes different inert configuration; it
+does not authenticate an executable. Before protected use, the trusted parent
+must independently pin provenance and compare the actual measured helper with
+`matches_deployment_and_helper`.
+
+### External Anchor Signing Keys
+
+`CompilerExecutionExternalAnchorSigningKeyCapabilityV2/V3` freshly admit a seed
+or native secret image under the actual same-family anchor deployment. Their
+88-byte images contain a 24-byte role/family header, the complete 32-byte
+deployment identity and a 32-byte seed. They reject legacy raw-seed images,
+issuer owners and substituted deployments, even when the verification key is
+unchanged. They expose no raw key/seed getter, `AsFd`, clone or legacy upgrade.
+
+Secret staging shares the issuer's wiping guards. Guards precede admission and
+partial I/O and wipe on ordinary return and unwind. Sealed images must be
+anonymous, read-only, mode0400, and owned by the current UID/GID. A transferred
+File remains readable secret material requiring trusted custody; kernel-page
+erasure, prior copies, abort and termination are not covered.
+
+Root-template reissue additionally requires source ownership 0:0 and the exact
+nonroot service credentials from the deployment. It creates a fresh service-owned
+image and rechecks both images and credentials before returning. Root ownership
+alone does not authenticate provisioning provenance. Local tests exercise fresh
+reissue mechanics through a private expected-owner hook; genuine root-to-service
+reissue remains unexecuted in this checkpoint.
+
+`sign_observation` uses the existing fixed domain-separated anchor transcript,
+checks the challenge's pinned key and validates key custody before and after
+signing. It authenticates the caller's reported position, not persistence or
+currentness. The durable service must establish the position before signing.
+
+The key's I/O, admission, reissue and observation work quotas are 68360, 133896,
+142088 and 267792 respectively. Borrowed deployment, key and challenge charges
+remain prepaid as applicable; consuming File operations return growth, inherited
+admission returns full custody, and signing returns the full observation charge.
+Scopes preserve prior work, peak and first-denial history. These are logical
+quotas, not timing, generated-stack or RSS bounds.
+
+The protected root coordinator still launches the V1 provisioning path. The
+[native durable service](compiler-execution-native-anchor-state.md) retains the
+native key and persists before signing through the shared state engine. Its peer
+loop uses shared transport/scheduling with original-ledger accounting. Dedicated
+native V2/V3 inherited entrypoints now compose that loop with process, namespace,
+running-image and lifecycle admission. Dedicated native V2/V3 helpers now compose
+actual same-family context admission, measured helper/daemon images, native key
+reissue, open-or-initialize, metered transfers and terminal native-daemon exec.
+They preserve key custody without extracting V1 raw keys. Native root-coordinator
+preparation/revalidation now retains actual capabilities, images, root and lease
+on the original ledger. Its native launch method is still absent; launch
+integration and successful protected startup remain unvalidated. See the
+[root preparation checkpoint](evidence/conditional-native-root-preparation-20260926.md)
+and the preceding
+[helper checkpoint](evidence/conditional-native-anchor-helper-20260926.md).
+Passing local tests does not establish protected startup
+or production compiler integration. See the
+[anchor provisioning checkpoint](evidence/conditional-native-anchor-provisioning-20260926.md)
+for exact validation and remaining gates.
+
+## Production Profile
+
+The only production native profile is
+`/etc/fe2o3/compiler-execution/client-profile-v2`. There is no configurable root,
+environment override, basename selector, or fallback to `client-profile-v1`.
+
+The fixed walk opens `/`, `etc`, `fe2o3`, and `compiler-execution` relative to
+pinned directory descriptors, without following symlinks. All must be owned by
+uid/gid 0, owner-traversable, non-group/world-writable directories. The final
+RDONLY/NONBLOCK/CLOEXEC object must be a regular, single-link, root-owned,
+exact mode0444 file of the expected length. Every directory and both final-file
+checks probe `security.capability`, `system.posix_acl_access`, and
+`system.posix_acl_default` with a one-byte buffer; presence, including ERANGE,
+fails. NODATA and unsupported-xattr filesystems are accepted, as in V1.
+
+The final file's metadata snapshot must match before and after reading. It
+includes dev/ino, mode, ownership, links, length, mtime, and ctime, excluding atime.
+The result is decoded and sealed. This trusts the protected root-owned tree;
+it does not prove exclusion of a privileged writer, immutable ancestors, or
+perpetual pathname currentness. Tests use private synthetic trees, never a
+public alternate production path.
+
+## Resources And Ownership
+
+All operations use the caller's resource ledger. The shared
+`Budget::with_prepaid_scope` prepays outer work and scratch; actual nested native
+decoders charge that same ledger. No unlimited child budget is created.
+Scope cleanup restores the full entry reservation on success, failure, and
+unwind, without refunding work or clearing peaks/first denials. Replaced ledgers
+are not released. This is accounting, not an authority gate.
+
+Let `N` be the image length, `S` the capability storage-receipt type, `C` the
+capability type, and `Drecord` the native record's retained charge:
+
+```text
+Dfile = N + size_of::<(File, S)>()
+Dcap  = N + size_of::<(C, S)>()
+```
+
+Tuple sizes include alignment padding. Every descriptor conservatively pays
+for its complete logical image even when duplicates share one backing inode.
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create(record) | consumed Drecord | Dcap - Drecord |
+| from_file(file) | consumed Dfile | Dcap - Dfile |
+| revalidate | borrowed Dcap | none |
+| try_clone_for_transfer | borrowed Dcap | full Dfile |
+| from_inherited_at | borrowed Dfile | full Dcap |
+| from_production_profile | none | full Dcap |
+
+Keep consumed inputs' reservations and reserve the returned delta before
+retaining the result. On consuming failure, retire the dropped input's old
+reservation after return. On eventual drop or transfer, retire the full owner's
+charge, not its construction delta. Unrelated entry owners remain prepaid.
+
+Outer work is `8 + 32*1024 + 32*N`: at most 32 descriptor syscalls with a fixed
+logical weight, plus byte processing. The trusted-root walk adds `64*1024`.
+The exported `IO_STORAGE` and `PRODUCTION_STORAGE` constants cover outer frames;
+admission additionally peaks at the larger of native decoder scratch and its
+returned record retention. That record is reserved immediately and kept through
+outer cleanup. Actual work totals are:
+
+| Operation | Policy | Profile |
+|---|---:|---:|
+| create, revalidate, transfer | 39688 | 41736 |
+| from_file; policy from_inherited_at | 54800 | 65808 |
+| from_production_profile | n/a | 131344 |
+
+For the launch capability, create/revalidate/transfer cost 36360 units and
+file/inherited admission costs 39952 units including the native manifest decoder.
+The manifest API costs 3592 units for construction, decoding, or policy matching.
+Its fixed scratch is exported as `COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_STORAGE_V2`;
+borrowed policy/manifest inputs stay separately prepaid.
+
+These logical quotas do not bound syscall latency, kernel allocation, generated
+instructions/stack, allocator behavior, page cache, or process RSS.
+
+## Native Signing-Key Custody
+
+The issuer key image is exactly 32 bytes. In addition to the shared mode, length, seal,
+CLOEXEC and retained-inode checks, it must be anonymous, owned by the current
+effective UID/GID, RDONLY and not O_PATH. Creation seals a writable memfd, then
+reopens that same retained inode read-only using a fixed stack path buffer.
+These secret-specific restrictions do not change the public-record images.
+
+Fresh admission derives one Ed25519 key using pinned Dalek and checks the policy's
+public key. Revalidation compares the guarded image bytes to the retained seed
+with `subtle::ConstantTimeEq`, without deriving a second key, and requires the
+complete retained PolicyIdentityV2. Same-key changes to generation, executable,
+runtime or anchor key therefore reject. Raw seed bytes have no protocol-family
+tag: fresh V2 admission can use the same seed as V1 without upgrading a V1 owner.
+
+The caller seed is borrowed by a wiping guard before entry-work or storage
+admission. Read scratch is guarded before I/O, including partial/error reads and
+post-read refusal. Guards run on ordinary return and unwind; Dalek's owned key
+has `ZeroizeOnDrop`. This covers the explicit owned userspace buffers, not prior
+caller copies, compiler-generated temporaries, abort/termination, or erasure of
+kernel pages when the sealed memfd closes. Debug reveals no seed, fd or path.
+The transferred File contains readable secret material. Its recipient must be
+trusted and must protect any copies it makes; this API is not a secrecy boundary
+against an owner of that File. Read-only transport prevents writes, not reads.
+
+Let `Dkey = 32 + size_of::<(KeyCapabilityV2, StorageV2)>()`, `Dfile` use the same
+formula with `File`, and `P` be the borrowed native policy's retained charge:
+
+| Operation | Prepaid Input | Additional Returned Charge |
+|---|---|---|
+| create_and_zeroize | borrowed 32-byte seed + P | full Dkey |
+| from_file | consumed Dfile + borrowed P | Dkey - Dfile |
+| from_inherited_at | borrowed Dfile + P | full Dkey |
+| revalidate | borrowed Dkey + P | none |
+| try_clone_for_transfer | borrowed Dkey | full Dfile |
+
+Key `IO_WORK` is 66568 logical units, allowing at most 64 descriptor, credential
+and cleanup calls plus fixed byte processing. Fresh admission prepays one named
+65536-unit crypto derivation allowance, for `ADMISSION_WORK = 132104`.
+These methods prepay `IO_STORAGE` for fixed owners, guarded seed buffers, metadata,
+control frames and crypto scratch. These are named logical admission quotas,
+not instruction, generated-stack or physical-memory bounds. Returned deltas
+and consumed inputs follow the same ledger discipline as public capabilities.
+The raw seed wire and destination slot 7 remain unchanged; custody alone does
+not authenticate an issuer service or activate a native launch.
+
+### Root Template Reissue
+
+Both native key families also provide `reissue_root_template_for_current_service`.
+This consumes an anonymous mode-0400, exactly sealed, read-only CLOEXEC template
+owned by UID/GID 0:0. Current effective UID/GID must be nonroot and equal the
+same-family deployment record; that record must match the complete native policy.
+The result is a fresh service-owned key image, checked before return. Source and
+output metadata are rechecked, and seed staging is guarded before any read.
+
+Prepay the consumed `FILE_STORAGE` plus the borrowed deployment and policy charges.
+Returned growth is `Dkey - Dfile`; error closes the File but leaves its reservation
+for caller retirement. `REISSUE_WORK` includes fixed I/O, one key derivation and
+the nested native deployment-policy match. `REISSUE_STORAGE` is the additional
+peak of the I/O frame plus deployment-match scratch, all on the same ledger.
+
+The deployment record remains inert: this operation does not establish trusted
+parent provenance, a protected process profile, startup/recovery or execution.
+Rootless tests use a private expected-template-owner helper for positive mechanics
+and the public API for rejecting non-root-owned templates. They are not successful
+protected-root reissue evidence. A private observation point in the real reissue
+scope also exercises late image/template refusal and unwind after fresh-image
+allocation. It checks seed wiping, both descriptors' retirement, restored storage,
+and preserved cumulative work and denial history. The inherited production entry
+point remains V1.
+
+## Native Supervisor Binding
+
+`ProtectedIssuerSupervisorV2` consumes a fresh native program, policy-bound key,
+strict native anchor transport, credential profile and root File. It preserves
+the V1 order: current effective UID/GID, program, exact-policy key, anchor, root
+admission, then full revalidation. The root is inspected twice on admission and
+once in the final chain. Shared root checks retain descriptor/status/stat query
+order, exact mode0700 and UID/GID, directory/link requirements, and one-byte
+capability/access/default-ACL probes. Root snapshots compare every identity and
+security field, not just the path or mode. No new authority is obtained from V1.
+
+Let `P`, `K` and `A` be the complete program, key and anchor retained charges:
+
+```text
+F = size_of::<(File, SupervisorStorageV2)>()
+G = size_of::<(RootSnapshot, Credentials, usize, SupervisorStorageV2)>()
+    + align_of::<SupervisorV2>()
+input_floor = P + K + A + F
+retained = input_floor + G
+```
+
+Binding returns only G; borrowed revalidation requires the complete retained
+charge and returns no storage. Checked arithmetic precedes any inspection.
+The outer work allowance is 65544 units and scratch is
+`4*size_of::<(SupervisorV2, SupervisorStorageV2)>() + 4096`. Nested operations
+charge the same ledger, not fresh budgets. If C is the sum of program, key and
+anchor revalidation work, bind costs `65544 + 2*C` and revalidation `65544 + C`.
+Binding reserves G before final revalidation; this extra retention contributes
+to the composite peak. Unrelated entry storage, consumed charges, sticky work
+and denial history follow the existing scope contract. These logical quotas
+do not bound generated stack, RSS, kernel allocation or syscall latency.
+
+This checks effective identity and pre-session custody, not the full child
+confinement profile, authenticated native handoff, process launch, readiness or
+serving. Successful distinct-UID tests use separate real non-root processes in
+an explicitly opted-in isolated container, never an exported same-UID bypass.
+Synthetic ELF fixture admission is not execution of the production issuer.
+
+## Remaining Integration
+
+The issuer's explicit native input reader now independently admits policy and
+launch capabilities from fixed slots 6/8 and revalidates both before requiring
+their native policy match. It borrows the installed sources, returning private
+CLOEXEC owners and their full retained charge. Nested admission and comparison
+use the same ledger; partial failures drop private duplicates and restore the
+entry floor. The caller remains responsible for closing the original sources.
+Agreement is not an external policy pin: a consistently replaced native pair
+also agrees. Trusted installation and native program admission must supply that
+pin before activation.
+The reader grants no client/anchor/process/key authentication or readiness, and
+the serving entrypoint does not call it yet. Tests exercise a real process exec
+with native, mismatched, mixed-family and corrupt inputs, without invoking the
+protected launcher or crediting a protected service occurrence.
+
+Native child installation needs an owned launcher that retains descriptor
+capture charges and prepays each spawn. Attaching a callback to a reusable
+external `Command` would not meter its future spawns; no such native adapter
+is exposed here. Service handlers, native durable-state families, broker V4
+observation, anchor/Worker/ACK ordering, Cargo restart paths, runtime/host joins,
+and coherent provisioning remain required before producer activation.
+
+Fresh native program custody consumes the pinned policy with independently
+sealed launcher/issuer images through bounded shared executable mechanics.
+Native supervisor binding joins that program to key, anchor, credentials and
+root. Native accepted handoff custody now joins the canonical frame to actual
+control/service peers and a single live client pidfd on that same ledger;
+prepared launch and consuming process lifecycle remain open. See the
+[handoff contract](compiler-execution-handoff-v2.md).
+See the [program status](../crates/fe2o3-compiler-execution-supervisor/README.md)
+and [image accounting](../crates/fe2o3-protected-static-executable/README.md).

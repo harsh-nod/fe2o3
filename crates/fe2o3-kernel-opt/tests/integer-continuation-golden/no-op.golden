@@ -1,0 +1,15 @@
+CASE: no-op
+CHECK-BEFORE: function f parameters=[u32] results=[u32,bool] trap-declarations=0
+CHECK-BEFORE: f:b0:o0 Constant U32(1) results=[u32]
+CHECK-BEFORE: f:b0:o1 Binary Checked(Add) arg0,b0:o0:r0 results=[u32,bool]
+CHECK-BEFORE: f:b0:o2 Binary BitOr b0:o1:r0,b0:o0:r0 results=[u32]
+CHECK-BEFORE: f:b0:term Return [b0:o2:r0,b0:o1:r1]
+CHECK-AFTER: function f parameters=[u32] results=[u32,bool] trap-declarations=0
+CHECK-AFTER: f:b0:o0 Constant U32(1) results=[u32]
+CHECK-AFTER: f:b0:o1 Binary Checked(Add) arg0,b0:o0:r0 results=[u32,bool]
+CHECK-AFTER: f:b0:o2 Binary BitOr b0:o1:r0,b0:o0:r0 results=[u32]
+CHECK-AFTER: f:b0:term Return [b0:o2:r0,b0:o1:r1]
+CHECK-REMARK: passes=integer-neutral-canonicalization,dead-code-elimination changed=false,false independently-checked=true authority=false
+CHECK-REMARK: f:b0:o0 retained f:b0:o0
+CHECK-REMARK: f:b0:o1 retained f:b0:o1
+CHECK-REMARK: f:b0:o2 retained f:b0:o2

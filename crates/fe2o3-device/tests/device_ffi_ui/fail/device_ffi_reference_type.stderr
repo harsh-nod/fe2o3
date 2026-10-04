@@ -1,0 +1,5 @@
+error: unsupported device FFI type; use fixed-width scalars or fe2o3 address-space pointer wrappers (references, aggregates, trait objects, and function pointers are rejected)
+  --> tests/device_ffi_ui/fail/device_ffi_reference_type.rs:10:42
+   |
+10 | pub unsafe extern "C" fn exported(value: &u32) -> u32 {
+   |                                          ^^^^

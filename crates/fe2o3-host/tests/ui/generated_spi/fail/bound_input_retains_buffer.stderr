@@ -1,0 +1,35 @@
+error[E0502]: cannot borrow `state` as immutable because it is also borrowed as mutable
+  --> tests/ui/generated_spi/fail/bound_input_retains_buffer.rs:12:13
+   |
+ 9 |     let capability = GeneratedReadWriteDeviceSlice::new(observed, &mut state).unwrap();
+   |                                                                   ---------- mutable borrow occurs here
+...
+12 |     let _ = state.len();
+   |             ^^^^^ immutable borrow occurs here
+13 |     drop(input);
+   |          ----- mutable borrow later used here
+
+error[E0505]: cannot move out of `state` because it is borrowed
+  --> tests/ui/generated_spi/fail/bound_input_retains_buffer.rs:24:10
+   |
+19 |     mut state: DeviceBuffer<f32>,
+   |     --------- binding `state` declared here
+20 | ) {
+21 |     let capability = GeneratedReadWriteDeviceSlice::new(observed, &mut state).unwrap();
+   |                                                                   ---------- borrow of `state` occurs here
+...
+24 |     drop(state);
+   |          ^^^^^ move out of `state` occurs here
+25 |     drop(input);
+   |          ----- borrow later used here
+
+error[E0499]: cannot borrow `state` as mutable more than once at a time
+  --> tests/ui/generated_spi/fail/bound_input_retains_buffer.rs:36:26
+   |
+33 |     let capability = GeneratedReadWriteDeviceSlice::new(observed, &mut state).unwrap();
+   |                                                                   ---------- first mutable borrow occurs here
+...
+36 |     let _second_borrow = &mut state;
+   |                          ^^^^^^^^^^ second mutable borrow occurs here
+37 |     drop(input);
+   |          ----- first borrow later used here

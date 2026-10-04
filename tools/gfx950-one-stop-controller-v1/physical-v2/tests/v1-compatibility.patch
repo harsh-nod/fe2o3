@@ -1,0 +1,42 @@
+--- a/tests.rs
++++ b/tests.rs
+@@ -625,3 +625,39 @@
+ // Independently send-gated async transcript controls; no native transport.
+ #[path = "async_stop_tests.rs"]
+ mod async_stop_tests;
++
++// Test-only successor appended to the exact immutable V1 test postimage.
++#[test]
++fn physical_v2_domain_is_not_accepted_as_v1_success() {
++    observe(&mut Fake::new(script())).unwrap(); // Actual old parser baseline first.
++    let mut changed = script();
++    let mut memory = [0_u8; 272];
++    memory[..8].copy_from_slice(&0x0123_4567_89ab_cdef_u64.to_le_bytes());
++    for lane in 0..64_u32 {
++        let at = 8 + lane as usize * 4;
++        memory[at..at + 4].copy_from_slice(&(0x1357_9bdf_u32 ^ lane).to_le_bytes());
++    }
++    memory[264..].copy_from_slice(&0xfedc_ba98_7654_3210_u64.to_le_bytes());
++    let payload: String = memory.iter().map(|b| format!("{b:02x}")).collect();
++    for line in &mut changed {
++        if line.starts_with(b"=fe2o3-owned-one-stop-v1") {
++            let old = String::from_utf8(line.clone()).unwrap();
++            let mut row = old
++                .strip_suffix('\n')
++                .unwrap()
++                .replace("fe2o3-owned-one-stop-v1", "fe2o3-owned-one-stop-v2");
++            row.push_str(",start=\"100\"");
++            if row.contains(",p=\"8\",") {
++                row.push_str(&format!(",g=\"2\",w=\"3\",wg=\"4\",d=\"5\",q=\"6\",ag=\"7\",ar=\"8\",pc=\"2097232\",c=\"262144\",cp=\"327680\",co=\"9\",entry=\"2097152\",desc=\"2092992\",kernarg=\"393216\",out=\"458752\",regid=\"10\",dwarf=\"44\",rbytes=\"4\",mbytes=\"272\",status=\"available\",reg=\"df9b5713\",mem=\"{payload}\""));
++            }
++            row.push('\n');
++            *line = row.into_bytes();
++        }
++    }
++    let mut peer = Fake::new(changed);
++    assert!(observe(&mut peer).is_err());
++    assert_eq!(peer.cleanup, 1);
++    assert_eq!(peer.finish, 0);
++    // Deliberately no assertion about immediate refusal or exact read count:
++    // the old implementation may ignore a notify then lack its required witness.
++}

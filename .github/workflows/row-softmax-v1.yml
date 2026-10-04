@@ -1,0 +1,121 @@
+name: Row softmax V1 formal contract
+
+on:
+  merge_group:
+    types: [checks_requested]
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: row-softmax-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof-contract:
+    name: Pinned Verus real and ownership proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install Verus Rust toolchain
+        run: >-
+          rustup toolchain install 1.97.1-x86_64-unknown-linux-gnu
+          --profile minimal --no-self-update
+
+      - name: Install exact pinned Verus release closure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          readonly expected_version="0.2026.08.02.b677dd5"
+          readonly expected_archive_sha256="4c769256e888ee84bde85aae44d95c46bccbb8cf70e1d09f537b0d05fe965dee"
+          readonly release_url="https://github.com/verus-lang/verus/releases/download/release/0.2026.08.02.b677dd5/verus-0.2026.08.02.b677dd5-x86-linux.zip"
+          readonly version_file="examples/row_softmax_v1/verus/VERUS_VERSION"
+          readonly executable_sha256_file="examples/row_softmax_v1/verus/VERUS_SHA256"
+          readonly closure_manifest="examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST"
+          readonly closure_manifest_sha256="d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019"
+          readonly archive="${RUNNER_TEMP}/verus-0.2026.08.02.b677dd5-x86-linux.zip"
+          readonly install_dir="${RUNNER_TEMP}/pinned-verus"
+          readonly parser_source="${RUNNER_TEMP}/verus-attributes.rs"
+          readonly parser_source_url="https://raw.githubusercontent.com/verus-lang/verus/b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/rust_verify/src/attributes.rs"
+          readonly builtin_source="${RUNNER_TEMP}/verus-builtin-lib.rs"
+          readonly builtin_source_url="https://raw.githubusercontent.com/verus-lang/verus/b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/builtin/src/lib.rs"
+
+          [[ "$(<"${version_file}")" == "${expected_version}" ]]
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${archive}" "${release_url}"
+          printf '%s  %s\n' "${expected_archive_sha256}" "${archive}" \
+            | sha256sum --check --strict -
+          mkdir -p "${install_dir}"
+          unzip -q "${archive}" -d "${install_dir}"
+
+          readonly verus="${install_dir}/verus-x86-linux/verus"
+          readonly expected_executable_sha256="$(<"${executable_sha256_file}")"
+          [[ "$(sha256sum "${verus}" | awk '{print $1}')" == "${expected_executable_sha256}" ]]
+          [[ "$(sha256sum "${closure_manifest}" | awk '{print $1}')" == "${closure_manifest_sha256}" ]]
+          examples/row_softmax_v1/verify-verus-closure.sh \
+            "${install_dir}/verus-x86-linux" "${closure_manifest}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${parser_source}" "${parser_source_url}"
+          examples/row_softmax_v1/check-proof-source.sh \
+            --audit-parser-source "${parser_source}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${builtin_source}" "${builtin_source_url}"
+          examples/row_softmax_v1/check-proof-source.sh \
+            --audit-builtin-source "${builtin_source}"
+          examples/row_softmax_v1/check-proof-source.sh \
+            --test-builtin-drift "${builtin_source}"
+          printf 'VERUS=%s\n' "${verus}" >> "${GITHUB_ENV}"
+
+      - name: Verify proof and reject mutations
+        run: examples/row_softmax_v1/run-verus.sh
+
+      - name: Verify RoPE and paged KV conditional integer proof
+        run: sh examples/qwen3_rope_kv_v1/run-verus.sh
+
+  host-contract:
+    name: Host contract and fail-closed source checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '1'
+      CARGO_PROFILE_TEST_DEBUG: '1'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Check hosted CI resource contracts
+        run: python3 -I -B scripts/tests/ci-workflow-resources.py
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check formatting
+        run: >-
+          cargo fmt --manifest-path examples/row_softmax_v1/Cargo.toml
+          --package fe2o3-row-softmax-v1 -- --check
+
+      - name: Build binding-aware Cargo driver
+        run: cargo build --locked -p cargo-fe2o3
+
+      - name: Run debug tests
+        run: >-
+          target/debug/cargo-fe2o3 test --locked --all-targets
+          --manifest-path examples/row_softmax_v1/Cargo.toml
+
+      - name: Run release tests
+        run: >-
+          target/debug/cargo-fe2o3 test --release --locked --all-targets
+          --manifest-path examples/row_softmax_v1/Cargo.toml
+
+      - name: Run strict Clippy
+        run: >-
+          target/debug/cargo-fe2o3 clippy --locked --all-targets --all-features
+          --manifest-path examples/row_softmax_v1/Cargo.toml -- -D warnings

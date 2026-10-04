@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+    printf 'Verus\n  Version: 0.2026.08.09.92f466f\n'
+    exit 0
+fi
+printf 'verification results:: 16 verified, 0 errors\n'

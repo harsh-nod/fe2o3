@@ -1,0 +1,557 @@
+name: Developer preview source release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Annotated developer-preview tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: developer-preview-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-source:
+    name: Validate and build source artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CANONICAL_REPOSITORY: harsh-nod/fe2o3
+      RELEASE_OPERATOR: harsh-nod
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release authority and tag
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "${CANONICAL_REPOSITORY}" ]]; then
+            printf 'releases are authorized only from %s\n' "${CANONICAL_REPOSITORY}" >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_REF}" != refs/heads/main ]]; then
+            printf 'release workflow must be dispatched from canonical main\n' >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_ACTOR}" != "${RELEASE_OPERATOR}" ]] ||
+            [[ "${GITHUB_TRIGGERING_ACTOR}" != "${RELEASE_OPERATOR}" ]]; then
+            printf 'release workflow dispatch and reruns require %s\n' \
+              "${RELEASE_OPERATOR}" >&2
+            exit 2
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[1-9][0-9]*$ ]]; then
+            printf 'invalid developer-preview tag: %s\n' "${RELEASE_TAG}" >&2
+            exit 2
+          fi
+          git check-ref-format "refs/tags/${RELEASE_TAG}" >/dev/null
+          git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          if [[ "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" != tag ]]; then
+            printf 'release tag must be annotated\n' >&2
+            exit 2
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            printf 'checkout does not match release tag\n' >&2
+            exit 2
+          fi
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor \
+            "${head_commit}" refs/remotes/origin/main; then
+            printf 'release commit is not reachable from canonical main\n' >&2
+            exit 2
+          fi
+          release_tree="$(git rev-parse "${head_commit}^{tree}")"
+          bash scripts/check-release-mirror.sh \
+            --commit "${head_commit}" \
+            --tree "${release_tree}"
+          if [[ -s .gitmodules ]]; then
+            printf 'source release does not support populated submodules\n' >&2
+            exit 2
+          fi
+          readonly version="${RELEASE_TAG#v}"
+          readonly escaped_version="${version//./\\.}"
+          if ! grep -Eq \
+            "^## \\[${escaped_version}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" \
+            CHANGELOG.md; then
+            printf 'CHANGELOG.md lacks a dated entry for %s\n' "${version}" >&2
+            exit 2
+          fi
+
+      - name: Require successful full CI for exact commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          commit="$(git rev-parse HEAD)"
+          run_record="$(
+            gh run list \
+              --repo "${CANONICAL_REPOSITORY}" \
+              --workflow ci.yml \
+              --event push \
+              --branch main \
+              --commit "${commit}" \
+              --limit 1 \
+              --json conclusion,databaseId,headBranch,headSha,status \
+              --jq '
+                if length == 1 then
+                  .[0] |
+                  [.databaseId, .headBranch, .headSha, .status, .conclusion] |
+                  @tsv
+                else
+                  empty
+                end
+              '
+          )"
+          IFS=$'\t' read -r \
+            run_id run_head_branch run_head_sha run_status run_conclusion \
+            <<<"${run_record}"
+          if [[ ! "${run_id}" =~ ^[1-9][0-9]*$ ]] ||
+            [[ "${run_head_branch}" != main ]] ||
+            [[ "${run_head_sha}" != "${commit}" ]] ||
+            [[ "${run_status}" != completed ]] ||
+            [[ "${run_conclusion}" != success ]]; then
+            printf 'latest exact-commit main push CI is not successful for %s\n' \
+              "${commit}" >&2
+            exit 2
+          fi
+          job_record="$(
+            gh run view "${run_id}" \
+              --repo "${CANONICAL_REPOSITORY}" \
+              --json jobs \
+              --jq '
+                [.jobs[] | select(.name == "Generic validation")] as $matches |
+                if ($matches | length) == 1 then
+                  $matches[0] |
+                  [.databaseId, .status, .conclusion] |
+                  @tsv
+                else
+                  empty
+                end
+              '
+          )"
+          IFS=$'\t' read -r \
+            job_id job_status job_conclusion <<<"${job_record}"
+          if [[ ! "${job_id}" =~ ^[1-9][0-9]*$ ]] ||
+            [[ "${job_status}" != completed ]] ||
+            [[ "${job_conclusion}" != success ]]; then
+            printf 'Generic validation did not succeed exactly once in CI run %s\n' \
+              "${run_id}" >&2
+            exit 2
+          fi
+          {
+            printf 'QUALIFIED_CI_RUN_ID=%s\n' "${run_id}"
+            printf 'QUALIFIED_GENERIC_VALIDATION_JOB_ID=%s\n' "${job_id}"
+          } >>"${GITHUB_ENV}"
+
+      - name: Validate locked package metadata
+        run: cargo metadata --locked --no-deps --format-version 1 >/dev/null
+
+      - name: Build source archive and SPDX SBOM
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 022
+          export LC_ALL=C
+          commit="$(git rev-parse HEAD)"
+          readonly version="${RELEASE_TAG#v}"
+          readonly name="fe2o3-${version}"
+          readonly dist="${GITHUB_WORKSPACE}/dist"
+          readonly files_jsonl="${RUNNER_TEMP}/spdx-files.jsonl"
+          readonly file_sha1s="${RUNNER_TEMP}/spdx-file-sha1s"
+          mkdir -p "${dist}"
+          : >"${files_jsonl}"
+          : >"${file_sha1s}"
+
+          scripts/check-release-archive-attributes.sh "${commit}"
+          git archive --format=tar --prefix="${name}/" "${commit}" |
+            gzip -n -9 >"${dist}/${name}.tar.gz"
+          tar -tzf "${dist}/${name}.tar.gz" |
+            awk -v prefix="${name}/" '
+              index($0, prefix) != 1 || $0 ~ /(^|\/\.\.\/)/ { exit 1 }
+            '
+
+          counter=0
+          while IFS= read -r -d '' entry; do
+            metadata="${entry%%$'\t'*}"
+            path="${entry#*$'\t'}"
+            IFS=' ' read -r mode object_type object_id <<<"${metadata}"
+            if [[ "${object_type}" != blob ]] ||
+              [[ "${mode}" != 100644 && "${mode}" != 100755 ]]; then
+              printf 'unsupported tracked object: mode=%s type=%s path=%q\n' \
+                "${mode}" "${object_type}" "${path}" >&2
+              exit 2
+            fi
+            counter=$((counter + 1))
+            sha256="$(
+              git cat-file blob "${object_id}" | sha256sum | awk '{print $1}'
+            )"
+            sha1="$(
+              git cat-file blob "${object_id}" | sha1sum | awk '{print $1}'
+            )"
+            printf '%s\n' "${sha1}" >>"${file_sha1s}"
+            jq -cn \
+              --arg fileName "./${path}" \
+              --arg id "SPDXRef-File-${counter}-${sha256:0:16}" \
+              --arg sha1 "${sha1}" \
+              --arg sha256 "${sha256}" \
+              '{
+                fileName: $fileName,
+                SPDXID: $id,
+                checksums: [
+                  {algorithm: "SHA1", checksumValue: $sha1},
+                  {algorithm: "SHA256", checksumValue: $sha256}
+                ],
+                licenseConcluded: "NOASSERTION",
+                copyrightText: "NOASSERTION"
+              }' >>"${files_jsonl}"
+          done < <(git ls-tree -r -z --full-tree "${commit}")
+
+          verification_code="$(
+            sort "${file_sha1s}" | tr -d '\n' | sha1sum | awk '{print $1}'
+          )"
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg name "${name}" \
+            --arg version "${version}" \
+            --arg commit "${commit}" \
+            --arg created "${created}" \
+            --arg verificationCode "${verification_code}" \
+            --slurpfile files "${files_jsonl}" \
+            '{
+              spdxVersion: "SPDX-2.3",
+              dataLicense: "CC0-1.0",
+              SPDXID: "SPDXRef-DOCUMENT",
+              name: ($name + "-source"),
+              documentNamespace: (
+                "https://github.com/harsh-nod/fe2o3/releases/tag/v" +
+                $version + "/spdx/" + $commit
+              ),
+              creationInfo: {
+                created: $created,
+                creators: ["Tool: fe2o3-release-workflow"]
+              },
+              packages: [{
+                name: "fe2o3",
+                SPDXID: "SPDXRef-Package-fe2o3",
+                versionInfo: $version,
+                downloadLocation: (
+                  "https://github.com/harsh-nod/fe2o3/releases/download/v" +
+                  $version + "/" + $name + ".tar.gz"
+                ),
+                filesAnalyzed: true,
+                packageVerificationCode: {
+                  packageVerificationCodeValue: $verificationCode
+                },
+                licenseConcluded: "NOASSERTION",
+                licenseDeclared: "NOASSERTION",
+                copyrightText: "NOASSERTION"
+              }],
+              files: $files,
+              relationships: (
+                [{
+                  spdxElementId: "SPDXRef-DOCUMENT",
+                  relationshipType: "DESCRIBES",
+                  relatedSpdxElement: "SPDXRef-Package-fe2o3"
+                }] +
+                ($files | map({
+                  spdxElementId: "SPDXRef-Package-fe2o3",
+                  relationshipType: "CONTAINS",
+                  relatedSpdxElement: .SPDXID
+                }))
+              )
+            }' >"${dist}/${name}.spdx.json"
+
+          jq -e --argjson expectedFileCount "${counter}" '
+            .spdxVersion == "SPDX-2.3" and
+            .dataLicense == "CC0-1.0" and
+            (.files | length) == $expectedFileCount and
+            all(.files[];
+              ([.checksums[] | select(.algorithm == "SHA1")] | length) == 1 and
+              ([.checksums[] | select(.algorithm == "SHA256")] | length) == 1
+            ) and
+            (.packages | length) == 1 and
+            .packages[0].filesAnalyzed == true and
+            .packages[0].licenseDeclared == "NOASSERTION"
+          ' "${dist}/${name}.spdx.json" >/dev/null
+
+          jq -n \
+            --arg tag "${RELEASE_TAG}" \
+            --arg commit "${commit}" \
+            --arg tree "$(git rev-parse "${commit}^{tree}")" \
+            --arg ciRunId "${QUALIFIED_CI_RUN_ID}" \
+            --arg genericValidationJobId \
+              "${QUALIFIED_GENERIC_VALIDATION_JOB_ID}" \
+            '{
+              schema: "fe2o3-source-release-v1",
+              canonical_repository: "https://github.com/harsh-nod/fe2o3",
+              mirror_repository: "https://github.com/powderluv/fe2o3",
+              protected_parity_design_repository: "https://github.com/powderluv/fe2o3",
+              protected_parity_deployed: false,
+              tag: $tag,
+              commit: $commit,
+              tree: $tree,
+              qualified_ci_run_id: $ciRunId,
+              qualified_generic_validation_job_id: $genericValidationJobId,
+              source_only: true,
+              crates_io_published: false
+            }' >"${dist}/${name}.release.json"
+
+          (
+            cd "${dist}"
+            sha256sum \
+              "${name}.tar.gz" \
+              "${name}.spdx.json" \
+              "${name}.release.json" >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload validated source artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fe2o3-source-release-${{ inputs.tag }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    name: Attest and create draft prerelease
+    needs: build-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      CANONICAL_REPOSITORY: harsh-nod/fe2o3
+      RELEASE_OPERATOR: harsh-nod
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download validated source artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: fe2o3-source-release-${{ inputs.tag }}
+          path: dist
+
+      - name: Revalidate artifact identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "${CANONICAL_REPOSITORY}" ]]; then
+            printf 'releases are authorized only from %s\n' "${CANONICAL_REPOSITORY}" >&2
+            exit 2
+          fi
+          readonly version="${RELEASE_TAG#v}"
+          readonly name="fe2o3-${version}"
+          expected_commit="$(git rev-parse HEAD)"
+          recorded_commit="$(
+            jq -er '.commit' "dist/${name}.release.json"
+          )"
+          recorded_tree="$(
+            jq -er '.tree' "dist/${name}.release.json"
+          )"
+          if [[ "${recorded_commit}" != "${expected_commit}" ]]; then
+            printf 'artifact commit does not match checked-out tag\n' >&2
+            exit 2
+          fi
+          expected_tree="$(git rev-parse "${expected_commit}^{tree}")"
+          if [[ "${recorded_tree}" != "${expected_tree}" ]]; then
+            printf 'artifact tree does not match checked-out tag\n' >&2
+            exit 2
+          fi
+          (
+            cd dist
+            sha256sum --check SHA256SUMS
+          )
+          if gh release view "${RELEASE_TAG}" \
+            --repo "${CANONICAL_REPOSITORY}" >/dev/null 2>&1; then
+            printf 'release already exists for %s\n' "${RELEASE_TAG}" >&2
+            exit 2
+          fi
+
+      - name: Authorize attestation and revalidate mirror
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "${CANONICAL_REPOSITORY}" ]]; then
+            printf 'releases are authorized only from %s\n' "${CANONICAL_REPOSITORY}" >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_REF}" != refs/heads/main ]]; then
+            printf 'release workflow must be dispatched from canonical main\n' >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_ACTOR}" != "${RELEASE_OPERATOR}" ]] ||
+            [[ "${GITHUB_TRIGGERING_ACTOR}" != "${RELEASE_OPERATOR}" ]]; then
+            printf 'release workflow dispatch and reruns require %s\n' \
+              "${RELEASE_OPERATOR}" >&2
+            exit 2
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[1-9][0-9]*$ ]]; then
+            printf 'invalid developer-preview tag: %s\n' "${RELEASE_TAG}" >&2
+            exit 2
+          fi
+          git check-ref-format "refs/tags/${RELEASE_TAG}" >/dev/null
+          git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          if [[ "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" != tag ]]; then
+            printf 'release tag must be annotated\n' >&2
+            exit 2
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            printf 'checkout does not match release tag\n' >&2
+            exit 2
+          fi
+          release_tree="$(git rev-parse "${head_commit}^{tree}")"
+          bash scripts/check-release-mirror.sh \
+            --commit "${head_commit}" \
+            --tree "${release_tree}"
+          canonical_url="https://github.com/${CANONICAL_REPOSITORY}.git"
+          git fetch --quiet --no-tags --force "${canonical_url}" \
+            +refs/heads/main:refs/remotes/release-canonical/main
+          remote_tag_record="$(
+            git ls-remote --exit-code --refs "${canonical_url}" \
+              "refs/tags/${RELEASE_TAG}"
+          )" || {
+            printf 'release tag is absent from canonical repository\n' >&2
+            exit 2
+          }
+          IFS=$'\t' read -r remote_tag_object remote_tag_ref \
+            <<<"${remote_tag_record}"
+          local_tag_object="$(git rev-parse "refs/tags/${RELEASE_TAG}")"
+          if [[ ! "${remote_tag_object}" =~ ^[0-9a-f]{40}$ ]] ||
+            [[ "${remote_tag_ref}" != "refs/tags/${RELEASE_TAG}" ]] ||
+            [[ "${remote_tag_object}" != "${local_tag_object}" ]]; then
+            printf 'canonical release tag does not match checked-out tag object\n' >&2
+            exit 2
+          fi
+          if ! git merge-base --is-ancestor \
+            "${head_commit}" refs/remotes/release-canonical/main; then
+            printf 'release commit is no longer reachable from canonical main\n' >&2
+            exit 2
+          fi
+
+      - name: Attest source artifacts
+        id: attest
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.spdx.json
+            dist/*.release.json
+            dist/SHA256SUMS
+
+      - name: Create draft prerelease
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -Eeuo pipefail
+          readonly version="${RELEASE_TAG#v}"
+          readonly name="fe2o3-${version}"
+          if [[ ! -f "${ATTESTATION_BUNDLE}" ]]; then
+            printf 'attestation bundle was not produced\n' >&2
+            exit 2
+          fi
+          cp -- "${ATTESTATION_BUNDLE}" \
+            "dist/${name}.sigstore.json"
+          if [[ "${GITHUB_REPOSITORY}" != "${CANONICAL_REPOSITORY}" ]]; then
+            printf 'releases are authorized only from %s\n' "${CANONICAL_REPOSITORY}" >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_REF}" != refs/heads/main ]]; then
+            printf 'release workflow must be dispatched from canonical main\n' >&2
+            exit 2
+          fi
+          if [[ "${GITHUB_ACTOR}" != "${RELEASE_OPERATOR}" ]] ||
+            [[ "${GITHUB_TRIGGERING_ACTOR}" != "${RELEASE_OPERATOR}" ]]; then
+            printf 'release workflow dispatch and reruns require %s\n' \
+              "${RELEASE_OPERATOR}" >&2
+            exit 2
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[1-9][0-9]*$ ]]; then
+            printf 'invalid developer-preview tag: %s\n' "${RELEASE_TAG}" >&2
+            exit 2
+          fi
+          git check-ref-format "refs/tags/${RELEASE_TAG}" >/dev/null
+          git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          if [[ "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" != tag ]]; then
+            printf 'release tag must be annotated\n' >&2
+            exit 2
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            printf 'checkout does not match release tag\n' >&2
+            exit 2
+          fi
+          release_tree="$(git rev-parse "${head_commit}^{tree}")"
+          bash scripts/check-release-mirror.sh \
+            --commit "${head_commit}" \
+            --tree "${release_tree}"
+          canonical_url="https://github.com/${CANONICAL_REPOSITORY}.git"
+          git fetch --quiet --no-tags --force "${canonical_url}" \
+            +refs/heads/main:refs/remotes/release-canonical/main
+          remote_tag_record="$(
+            git ls-remote --exit-code --refs "${canonical_url}" \
+              "refs/tags/${RELEASE_TAG}"
+          )" || {
+            printf 'release tag is absent from canonical repository\n' >&2
+            exit 2
+          }
+          IFS=$'\t' read -r remote_tag_object remote_tag_ref \
+            <<<"${remote_tag_record}"
+          local_tag_object="$(git rev-parse "refs/tags/${RELEASE_TAG}")"
+          if [[ ! "${remote_tag_object}" =~ ^[0-9a-f]{40}$ ]] ||
+            [[ "${remote_tag_ref}" != "refs/tags/${RELEASE_TAG}" ]] ||
+            [[ "${remote_tag_object}" != "${local_tag_object}" ]]; then
+            printf 'canonical release tag does not match checked-out tag object\n' >&2
+            exit 2
+          fi
+          if ! git merge-base --is-ancestor \
+            "${head_commit}" refs/remotes/release-canonical/main; then
+            printf 'release commit is no longer reachable from canonical main\n' >&2
+            exit 2
+          fi
+          if gh release view "${RELEASE_TAG}" \
+            --repo "${CANONICAL_REPOSITORY}" >/dev/null 2>&1; then
+            printf 'release already exists for %s\n' "${RELEASE_TAG}" >&2
+            exit 2
+          fi
+          gh release create "${RELEASE_TAG}" dist/* \
+            --repo "${CANONICAL_REPOSITORY}" \
+            --verify-tag \
+            --draft \
+            --prerelease \
+            --title "fe2o3 ${version} developer preview" \
+            --generate-notes \
+            --notes "Source-only developer preview. No crates.io packages or prebuilt GPU binaries are published by this release."
