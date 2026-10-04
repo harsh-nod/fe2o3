@@ -35,7 +35,13 @@ fn run_continuation(
             )?;
             let prefix_floor = budget.storage();
             let result = (|| -> Result<(), Error> {
-                assert_eq!(prefix.checked_prefix_v29(budget)?.policy_version(), 11);
+                assert_eq!(
+                    prefix
+                        .checked_prefix_v29(budget)?
+                        .execution()
+                        .policy_version(),
+                    11
+                );
                 let motion = prefix.prepare_predicated_fixedpoint_licm_v90(budget)?;
                 let motion_floor = budget.storage();
                 let result = (|| -> Result<(), Error> {
