@@ -16,13 +16,13 @@ pub(super) fn connect_machine_output_v87(
     command: &mut Command,
     destination: impl AsFd,
 ) -> Result<(), DeploymentVerificationErrorV1> {
-    let stdout = rustix::fs::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
+    let stdout = rustix::io::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
         io_error(
             "duplicate bounded systemd machine console destination",
             source,
         )
     })?;
-    let stderr = rustix::fs::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
+    let stderr = rustix::io::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
         io_error(
             "duplicate bounded systemd machine stderr destination",
             source,
