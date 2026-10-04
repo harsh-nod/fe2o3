@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+mod application;
 #[allow(unsafe_code)]
 mod clone_compat;
 

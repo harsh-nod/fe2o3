@@ -47,7 +47,10 @@ pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1, ProtectedIssuerDeploymentErrorV1,
     run_inherited_protected_issuer_service_v1,
 };
-pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
+pub use handoff::{
+    AcceptedApplicationHandoffV1, AcceptedCompilerExecutionHandoffV1,
+    ProtectedApplicationHandoffErrorV1, ProtectedIssuerHandoffErrorV1,
+};
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use listener::{
     ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,

@@ -137,6 +137,8 @@ impl PreparedApplicationProofChannelV1 {
                 "prepared pair creator or endpoint association differs",
             ));
         }
+        let child_descriptor = child.as_raw_fd();
+        let child_object = child_snapshot.object;
         Ok(Self {
             setup: ApplicationProofChildSetupV1 {
                 descriptor: child.as_raw_fd(),
@@ -146,6 +148,8 @@ impl PreparedApplicationProofChannelV1 {
             peer: ApplicationProofTransferPeerV1 {
                 peer,
                 snapshot: peer_snapshot,
+                child_descriptor,
+                child_object,
             },
         })
     }
@@ -222,6 +226,8 @@ impl ApplicationProofChildSetupV1 {
 pub struct ApplicationProofTransferPeerV1 {
     peer: OwnedFd,
     snapshot: EndpointSnapshot,
+    child_descriptor: RawFd,
+    child_object: (u64, u64, u32),
 }
 
 impl ApplicationProofTransferPeerV1 {
@@ -232,6 +238,27 @@ impl ApplicationProofTransferPeerV1 {
             return Err(invalid("Cargo-side endpoint continuity changed"));
         }
         Ok(())
+    }
+
+    pub(crate) fn into_registration_descriptor(
+        self,
+        binding: &fe2o3_runtime_protocol::WorkerV3ApplicationRegistrationBindingV1,
+    ) -> Result<OwnedFd> {
+        self.revalidate()?;
+        let (device, inode, mode) = self.child_object;
+        let input =
+            fe2o3_runtime_protocol::WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(
+                4, device, inode, mode,
+            )
+            .map_err(|_| invalid("invalid original application endpoint occurrence"))?;
+        if binding.descriptors().as_array()[3] != self.child_descriptor
+            || binding.occurrence().inputs().get(3) != Some(&input)
+        {
+            return Err(invalid(
+                "binding does not name this pair's original child endpoint",
+            ));
+        }
+        Ok(self.peer)
     }
 }
 

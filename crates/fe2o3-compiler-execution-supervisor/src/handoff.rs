@@ -23,6 +23,9 @@ use rustix::net::{
 
 use crate::{ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1};
 
+mod application;
+pub use application::{AcceptedApplicationHandoffV1, ProtectedApplicationHandoffErrorV1};
+
 /// Move-only, fully admitted rustc descriptors and their authenticated control connection.
 ///
 /// The value exposes no descriptor, signing, receipt, publication, loading, or execution API. It
@@ -161,6 +164,30 @@ impl ProtectedIssuerSupervisorV1 {
         let (payload, service_peer, client_pidfd) = receive_handoff(&control, deadline)?;
         let handoff = CompilerExecutionSupervisorHandoffV1::decode(&payload)
             .map_err(ProtectedIssuerHandoffErrorV1::CanonicalHandoff)?;
+        self.admit_received_handoff::<REQUIRE_DISTINCT_UID>(
+            control,
+            handoff,
+            service_peer,
+            client_pidfd,
+            control_snapshot,
+        )
+    }
+
+    fn admit_received_handoff<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        handoff: CompilerExecutionSupervisorHandoffV1,
+        service_peer: OwnedFd,
+        client_pidfd: OwnedFd,
+        control_snapshot: DescriptorSnapshotV1,
+    ) -> Result<AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1> {
+        self.revalidate()
+            .map_err(ProtectedIssuerHandoffErrorV1::Supervisor)?;
+        validate_control_shape(&control)?;
+        let submitter = control_peer_identity(&control)?;
+        if REQUIRE_DISTINCT_UID && submitter.uid() == self.credentials().uid() {
+            return Err(ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch);
+        }
         if !handoff.launch_manifest().matches_policy(self.policy()) {
             return Err(ProtectedIssuerHandoffErrorV1::PolicyMismatch);
         }

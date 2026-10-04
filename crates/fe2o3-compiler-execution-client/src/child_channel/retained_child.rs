@@ -97,6 +97,18 @@ impl RetainedCompilerExecutionChildV1 {
         Ok(duplicate)
     }
 
+    pub(super) fn clone_parent_for_live_transfer(
+        &self,
+    ) -> Result<OwnedFd, CompilerExecutionChildChannelErrorV1> {
+        self.validate_live_transfer()?;
+        let duplicate = rustix::io::fcntl_dupfd_cloexec(&self.parent_pidfd, 3)
+            .map_err(|error| CompilerExecutionChildChannelErrorV1::Descriptor(error.into()))?;
+        require_close_on_exec(&duplicate)?;
+        require_pidfd_live(&duplicate)?;
+        self.validate_live_transfer()?;
+        Ok(duplicate)
+    }
+
     fn require_original_child_waitable(&self) -> Result<(), CompilerExecutionChildChannelErrorV1> {
         // P_PIDFD keeps the wait bound to the retained process even after numeric PID reuse.
         require_waitable(

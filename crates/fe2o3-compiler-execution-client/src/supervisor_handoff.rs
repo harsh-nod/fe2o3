@@ -26,6 +26,9 @@ use crate::{CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunch
 
 const INVALID_ID: u32 = u32::MAX;
 
+mod application;
+pub use application::{ApplicationSupervisorHandoffErrorV1, PendingApplicationSupervisorV1};
+
 /// Maximum connect-and-transfer bound accepted by the production supervisor client.
 pub const MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1: Duration = Duration::from_secs(120);
 

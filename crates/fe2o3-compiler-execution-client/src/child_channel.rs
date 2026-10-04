@@ -105,6 +105,56 @@ impl CompilerExecutionServiceLaunchV1 {
     }
 }
 
+/// Application-only launch custody using duplicates of the original child and Cargo pidfds.
+///
+/// There is no conversion to compiler-only launch custody. This owner does not establish
+/// application observation, proof custody, readiness, or launch authority.
+///
+/// ```compile_fail
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1>();
+/// ```
+/// ```compile_fail
+/// fn descriptor<T: std::os::fd::AsFd>() {}
+/// descriptor::<fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1>();
+/// ```
+/// ```compile_fail
+/// fn downgrade(value: fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1)
+///     -> fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1 {
+///     value.into()
+/// }
+/// ```
+pub struct RetainedApplicationServiceLaunchV1 {
+    pub(crate) compiler: CompilerExecutionServiceLaunchV1,
+    pub(crate) parent_pidfd: OwnedFd,
+}
+
+impl fmt::Debug for RetainedApplicationServiceLaunchV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RetainedApplicationServiceLaunchV1")
+            .field("client", &self.client())
+            .field("submitter", &self.submitter())
+            .field("authority", &"none")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetainedApplicationServiceLaunchV1 {
+    pub const fn client(&self) -> CompilerExecutionClientProcessIdentityV1 {
+        self.compiler.client()
+    }
+
+    pub const fn submitter(&self) -> CompilerExecutionClientProcessIdentityV1 {
+        self.compiler.submitter()
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+        self.compiler.revalidate_for_supervisor_handoff()?;
+        require_close_on_exec(&self.parent_pidfd)?;
+        require_pidfd_live(&self.parent_pidfd)
+    }
+}
+
 /// Prepared one-use parent receiver for a socketpair created by the rustc child itself.
 ///
 /// Preparation registers one async-signal-safe `pre_exec` callback. The command is one-use after
@@ -207,6 +257,25 @@ impl PendingCompilerExecutionChildChannelV1 {
         let client_pidfd = child.clone_for_live_transfer()?;
         let launch =
             self.finish_with_pidfd(child.child_pid(), client_pidfd, child.submitter(), deadline)?;
+        child.validate_live_transfer()?;
+        require_child_channel_deadline(deadline)?;
+        Ok(launch)
+    }
+
+    /// Constructs application-only custody without reopening either process by numeric PID.
+    pub fn finish_application_until(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        deadline: Instant,
+    ) -> Result<RetainedApplicationServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        require_child_channel_deadline(deadline)?;
+        let parent_pidfd = child.clone_parent_for_live_transfer()?;
+        let compiler = self.finish_until_with_retained_child(child, deadline)?;
+        let launch = RetainedApplicationServiceLaunchV1 {
+            compiler,
+            parent_pidfd,
+        };
+        launch.revalidate()?;
         child.validate_live_transfer()?;
         require_child_channel_deadline(deadline)?;
         Ok(launch)
@@ -448,7 +517,7 @@ fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelEr
 
 #[cfg(test)]
 thread_local! {
-    static PIDFD_OPEN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static PIDFD_OPEN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn wait_for_transfer(

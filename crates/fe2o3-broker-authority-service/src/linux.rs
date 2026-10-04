@@ -280,7 +280,11 @@ impl LiveClientPidfdIdentityV1 {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn validate_parent(&self, parent: &Self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+    /// Checks the direct-parent relationship of two original, live process owners.
+    ///
+    /// This descriptive check grants no service or execution authority. Both retained pidfds
+    /// and the child's original start time are checked before and after observing parentage.
+    pub fn validate_parent(&self, parent: &Self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         self.validate_liveness()?;
         parent.validate_liveness()?;
         let contents = read_process_stat(self.expected_client.pid)?;
