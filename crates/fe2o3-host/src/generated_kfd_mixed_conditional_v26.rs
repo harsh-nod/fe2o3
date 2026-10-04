@@ -145,7 +145,8 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
                     .and_then(|n| n.checked_add(256))
                     .ok_or(Resource::Arithmetic)?;
                 budget.charge_work(observation_work)?;
-                if packing_observation_identity(&self.packing_observation).map_err(Error::Packing)?
+                if packing_observation_identity(&self.packing_observation)
+                    .map_err(Error::Packing)?
                     != *self.packing_observation.identity()
                     || self.packing_observation.kernarg_alignment() != self.alignment
                 {
@@ -419,7 +420,21 @@ fn prepare_rows(
         .ok_or(Resource::Arithmetic)?;
     budget.charge_work(work)?;
     let subjects = contract.subjects();
-    Ok(Premises::new_with_unused_slices_v26(
+    budget.charge_work(32)?;
+    let launch = kernel.launch();
+    let max_grid = launch.max_grid();
+    if subjects.source_rank != launch.rank()
+        || [max_grid.x(), max_grid.y(), max_grid.z()]
+            .into_iter()
+            .zip(geometry.workgroup())
+            .zip(subjects.exact_grid)
+            .any(|((groups, workgroup), envelope)| {
+                u64::from(groups) * u64::from(workgroup) != envelope
+            })
+    {
+        return Err(binding("mixed physical envelope and exact workgroup"));
+    }
+    Ok(Premises::new_for_physical_envelope_v26(
         *contract.identity(),
         *packed.packing_observation.identity(),
         *packed.kernel_id.as_bytes(),

@@ -332,11 +332,29 @@ fn mixed_contract_complete_census_order_and_layout_checks_are_fail_closed() {
     s.index_width = 16;
     invalid(&args, &rows, s);
     s = subjects();
-    s.exact_grid[0] = u64::from(u32::MAX) + 1;
+    s.exact_grid[0] = 0;
     invalid(&args, &rows, s);
     s = subjects();
     s.kernarg_alignment = 3;
     invalid(&args, &rows, s);
+}
+
+#[test]
+fn mixed_contract_physical_envelopes_are_not_limited_to_one_aql_grid() {
+    let args = [argument(0, 0, 1)];
+    let rows = [occurrence(0, 1, true)];
+    for extent in [u64::from(u32::MAX) + 1, 64 * u64::from(u32::MAX), u64::MAX] {
+        let mut s = subjects();
+        s.source_rank = 1;
+        s.index_width = 64;
+        s.exact_grid = [extent, 1, 1];
+        let bytes = encoded(s, &args, &rows);
+        let decoded = decode_mixed_contract_v26(&bytes, &mut pay).unwrap();
+        assert_eq!(decoded.subjects(), &s);
+        // Decoding is structural, not a proof that this envelope matches the
+        // owning descriptor. That equality remains a verifier obligation.
+        assert_eq!(encoded(*decoded.subjects(), &args, &rows), bytes);
+    }
 }
 
 #[test]

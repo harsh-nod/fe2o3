@@ -76,6 +76,8 @@ fn descriptor(owner: &Owner, profile: ProductionAmdTargetProfileV1, mode: usize)
                     32
                 } else if mode == 13 {
                     2
+                } else if (14..=16).contains(&mode) {
+                    u32::MAX
                 } else {
                     1024
                 },
@@ -123,7 +125,17 @@ fn descriptor(owner: &Owner, profile: ProductionAmdTargetProfileV1, mode: usize)
                 output_function: i as u32,
                 source_rank: k.launch().rank(),
                 index_width: 64,
-                exact_grid: [if mode == 13 { 128 } else { 64 * 1024 }, 1, 1],
+                exact_grid: [
+                    if mode == 13 {
+                        128
+                    } else if (14..=16).contains(&mode) {
+                        64 * u64::from(u32::MAX)
+                    } else {
+                        64 * 1024
+                    },
+                    1,
+                    1,
+                ],
                 source_argument_count: k.argument_count() as u32,
                 generated_field_count: k.component_count() as u32,
                 explicit_argument_bytes: k.abi_layout().explicit_argument_size(),
@@ -143,6 +155,12 @@ fn descriptor(owner: &Owner, profile: ProductionAmdTargetProfileV1, mode: usize)
             }
             if mode == 5 {
                 subjects.exact_grid = [32, 1, 1];
+            }
+            if mode == 15 {
+                subjects.exact_grid[0] += 1;
+            }
+            if mode == 16 {
+                subjects.exact_grid[0] -= 1;
             }
             let input = MixedContractInputV26 {
                 subjects,
@@ -322,6 +340,38 @@ fn mixed_selection_keeps_padded_and_extra_physical_grid_without_static_clamping(
             "static graph exceeds physical invocation envelope"
         ))
     ));
+}
+
+#[test]
+fn mixed_selection_authenticates_wide_physical_envelopes_without_clamping() {
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        let (owner, retained) = owner_with_extent(1, false, LaunchExtent::Dynamic);
+        for mode in 14..=16 {
+            let descriptor = descriptor(&owner, profile, mode);
+            let subject = subject(&owner, &descriptor, profile);
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            let floor = retained + descriptor.len();
+            budget.reserve_storage(floor).unwrap();
+            let result = with_mixed_target_selection_v53(&subject, &mut budget, |_, _| Ok(()));
+            if mode == 14 {
+                result.unwrap();
+                let bytes = wire(&subject, retained);
+                budget.reserve_storage(bytes.len()).unwrap();
+                check_mixed_target_selection_v53(&subject, &bytes, &mut budget).unwrap();
+                budget.release_storage(bytes.len()).unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Error::Binding("complete V26 physical invocation envelope"))
+                ));
+            }
+            assert_eq!(budget.storage(), floor);
+        }
+    }
 }
 
 #[test]

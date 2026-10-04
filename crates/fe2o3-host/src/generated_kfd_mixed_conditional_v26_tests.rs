@@ -265,7 +265,7 @@ fn contract(
         output_function: 2,
         source_rank: 1,
         index_width: 64,
-        exact_grid: [64, 1, 1],
+        exact_grid: [64 * u64::from(u32::MAX), 1, 1],
         source_argument_count: 3,
         generated_field_count: 3,
         explicit_argument_bytes: 40,
@@ -518,6 +518,48 @@ fn generated_mixed_launch_access_domain_and_empty_bindings_remain_distinct() {
             drop((value, premises));
         } else {
             assert!(result.is_err());
+        }
+        assert_eq!(budget.storage(), floor);
+        budget.release_storage(floor).unwrap();
+    }
+}
+
+#[test]
+fn generated_mixed_physical_envelope_binds_workgroup_and_each_actual_dispatch() {
+    let descriptor = descriptor();
+    let table = decode_device_descriptor_table_v3(&descriptor, &mut free).unwrap();
+    for (grid, group, wrong_envelope, admitted) in [
+        (64, 64, false, true),
+        (65, 64, false, true),
+        (128, 64, false, true),
+        (u32::MAX, 64, false, true),
+        (64, 32, false, false),
+        (128, 128, false, false),
+        (64, 64, true, false),
+    ] {
+        let bytes = contract(&table, false, |subjects, _, _| {
+            if wrong_envelope {
+                subjects.exact_grid[0] -= 1;
+            }
+        });
+        let contract = decode_mixed_contract_v26(&bytes, &mut free).unwrap();
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        let input = [1, 2, 3];
+        let mut output = [0; 3];
+        let value = packed(&input, &mut output, &mut budget);
+        let floor = budget.storage();
+        let geometry = AqlDispatchGeometryV1::new([grid, 1, 1], [group, 1, 1]).unwrap();
+        let result =
+            value.bind_mixed_conditional_premises_v26(&table, &contract, geometry, &mut budget);
+        assert_eq!(result.is_ok(), admitted, "grid={grid}, workgroup={group}");
+        if let Ok(bound) = result {
+            let (runtime, completion) = bound.into_runtime_inputs(geometry, 0, 1000).unwrap();
+            assert!(matches!(runtime.invocation_binding(),
+                fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { contract_identity, .. }
+                if contract_identity == *contract.identity()
+            ));
+            drop((runtime, completion));
         }
         assert_eq!(budget.storage(), floor);
         budget.release_storage(floor).unwrap();

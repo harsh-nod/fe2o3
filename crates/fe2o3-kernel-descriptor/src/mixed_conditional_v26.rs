@@ -124,6 +124,10 @@ wire_struct! {
         output_function: u32,
         source_rank: u8,
         index_width: u8,
+        /// Historical field name: the complete physical invocation envelope,
+        /// not an AQL dispatch grid. Owning admission binds it to the product
+        /// of the descriptor's workgroup count and workgroup size. It can
+        /// exceed u32 even though an individual AQL grid cannot.
         exact_grid: [u64; 3],
         source_argument_count: u32,
         generated_field_count: u32,
@@ -549,9 +553,7 @@ fn validate(rows: &impl Rows) -> Format<()> {
         || !matches!(s.index_width, 32 | 64)
         || !s.kernarg_alignment.is_power_of_two()
         || s.explicit_argument_bytes > 64 * 1024
-        || s.exact_grid
-            .iter()
-            .any(|n| *n == 0 || *n > u64::from(u32::MAX))
+        || s.exact_grid.contains(&0)
         || s.exact_grid[usize::from(s.source_rank)..]
             .iter()
             .any(|n| *n != 1)

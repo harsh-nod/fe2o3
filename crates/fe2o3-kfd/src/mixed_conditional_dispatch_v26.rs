@@ -58,6 +58,7 @@ pub struct MixedConditionalDispatchPremisesV26 {
     explicit_kernarg_sha256: [u8; 32],
     grid: [u32; 3],
     workgroup: [u16; 3],
+    invocation_extents: [u64; 3],
     source_rank: u8,
     index_width: u8,
     slices: Vec<Slice>,
@@ -66,6 +67,51 @@ pub struct MixedConditionalDispatchPremisesV26 {
 }
 
 impl MixedConditionalDispatchPremisesV26 {
+    /// Instantiate an authenticated physical proof envelope at one live grid.
+    /// The envelope itself remains inert data; the owning compiler/Worker must
+    /// bind it to the source theorem and descriptor. Partial workgroups are
+    /// conservatively covered in full, including pointer formation bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_physical_envelope_v26(
+        contract_identity: [u8; 32],
+        packing_identity: [u8; 32],
+        kernel_id: [u8; 32],
+        explicit_kernarg: &[u8],
+        geometry: AqlDispatchGeometryV1,
+        source_rank: u8,
+        physical_envelope: [u64; 3],
+        index_width: u8,
+        slices: &[Slice],
+        accesses: &[MixedConditionalAccessV26],
+        unused_slices: &[MixedConditionalUnusedSliceV26],
+    ) -> Result<Self> {
+        if !(1..=3).contains(&source_rank)
+            || physical_envelope.contains(&0)
+            || physical_envelope[usize::from(source_rank)..]
+                .iter()
+                .any(|extent| *extent != 1)
+            || physical_invocation_extents(geometry)
+                .into_iter()
+                .zip(physical_envelope)
+                .any(|(actual, proved)| actual > proved)
+        {
+            return Err(Error::Geometry);
+        }
+        Self::new_with_unused_slices_v26(
+            contract_identity,
+            packing_identity,
+            kernel_id,
+            explicit_kernarg,
+            geometry,
+            source_rank,
+            geometry.grid().map(u64::from),
+            index_width,
+            slices,
+            accesses,
+            unused_slices,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         contract_identity: [u8; 32],
@@ -124,6 +170,7 @@ impl MixedConditionalDispatchPremisesV26 {
         }
         let grid = geometry.grid();
         let workgroup = geometry.workgroup();
+        let invocation_extents = physical_invocation_extents(geometry);
         if !(1..=3).contains(&source_rank)
             || !matches!(index_width, 32 | 64)
             || grid.map(u64::from) != exact_grid
@@ -133,6 +180,9 @@ impl MixedConditionalDispatchPremisesV26 {
             || geometry.dimensions() > u16::from(source_rank)
         {
             return Err(Error::Geometry);
+        }
+        if index_width == 32 && invocation_extents.iter().any(|n| *n > 1_u64 << 32) {
+            return Err(Error::Arithmetic);
         }
         for (i, slice) in slices.iter().enumerate() {
             if !matches!(slice.element_bytes, 1 | 2 | 4 | 8 | 16)
@@ -186,7 +236,13 @@ impl MixedConditionalDispatchPremisesV26 {
             let slice = slices
                 .get(usize::from(access.slice))
                 .ok_or(Error::Binding)?;
-            let last = maximum_index(access.access_domain, slices, grid, source_rank, index_width)?;
+            let last = maximum_index(
+                access.access_domain,
+                slices,
+                invocation_extents,
+                source_rank,
+                index_width,
+            )?;
             if last.is_some_and(|last| last >= slice.length) {
                 return Err(if access.writing {
                     Error::OutputExtent
@@ -197,7 +253,7 @@ impl MixedConditionalDispatchPremisesV26 {
             maximum_index(
                 access.address_domain,
                 slices,
-                grid,
+                invocation_extents,
                 source_rank,
                 index_width,
             )?;
@@ -208,7 +264,7 @@ impl MixedConditionalDispatchPremisesV26 {
             }
             if access.writing {
                 let axis = access.invocation_axis.ok_or(Error::Binding)?;
-                if grid
+                if invocation_extents
                     .iter()
                     .enumerate()
                     .any(|(i, n)| i != usize::from(axis) && *n != 1)
@@ -292,6 +348,7 @@ impl MixedConditionalDispatchPremisesV26 {
             explicit_kernarg_sha256,
             grid,
             workgroup,
+            invocation_extents,
             source_rank,
             index_width,
             slices: bounded_copy(slices)?,
@@ -399,7 +456,7 @@ impl MixedConditionalDispatchPremisesV26 {
             if let Some(index) = maximum_index(
                 access.address_domain,
                 &self.slices,
-                self.grid,
+                self.invocation_extents,
                 self.source_rank,
                 self.index_width,
             )? {
@@ -416,10 +473,21 @@ impl MixedConditionalDispatchPremisesV26 {
     }
 }
 
+fn physical_invocation_extents(geometry: AqlDispatchGeometryV1) -> [u64; 3] {
+    // Checked AQL geometry has nonzero u16 workgroup axes. Rounding a u32
+    // grid up to a complete workgroup fits u64, including at u32::MAX.
+    let grid = geometry.grid();
+    let workgroup = geometry.workgroup();
+    std::array::from_fn(|axis| {
+        let group = u64::from(workgroup[axis]);
+        u64::from(grid[axis]).div_ceil(group) * group
+    })
+}
+
 fn maximum_index(
     domain: MixedConditionalIndexDomainV26,
     slices: &[Slice],
-    grid: [u32; 3],
+    invocation_extents: [u64; 3],
     rank: u8,
     width: u8,
 ) -> Result<Option<u64>> {
@@ -430,7 +498,7 @@ fn maximum_index(
             .length
             .checked_sub(1),
         MixedConditionalIndexDomainV26::InvocationAxis { axis } if axis < rank => {
-            u64::from(grid[usize::from(axis)]).checked_sub(1)
+            invocation_extents[usize::from(axis)].checked_sub(1)
         }
         MixedConditionalIndexDomainV26::UnsignedWidth { bits }
             if (1..=64).contains(&bits) && bits <= width =>

@@ -228,6 +228,196 @@ fn mixed_exact_launch_projection_width_and_complete_roster_are_required() {
 }
 
 #[test]
+fn mixed_physical_envelope_instantiates_smaller_grids_without_relaxing_exact_api() {
+    let slices = slices();
+    let rows = accesses();
+    for grid in [64, 65, 128, 192] {
+        let geometry = AqlDispatchGeometryV1::new([grid, 1, 1], [64, 1, 1]).unwrap();
+        let result = MixedConditionalDispatchPremisesV26::new_for_physical_envelope_v26(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            &bytes(&slices),
+            geometry,
+            1,
+            [192, 1, 1],
+            64,
+            &slices,
+            &rows,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(result.grid, [grid, 1, 1]);
+        assert_eq!(
+            result.invocation_extents,
+            [u64::from(grid).div_ceil(64) * 64, 1, 1]
+        );
+        let exact = MixedConditionalDispatchPremisesV26::new_with_unused_slices_v26(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            &bytes(&slices),
+            geometry,
+            1,
+            [u64::from(grid), 1, 1],
+            64,
+            &slices,
+            &rows,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(result.identity(), exact.identity());
+        assert_eq!(
+            request(&slices)
+                .with_mixed_conditional_premises_v26(result)
+                .is_ok(),
+            grid == 64
+        );
+        if grid != 192 {
+            assert!(matches!(
+                MixedConditionalDispatchPremisesV26::new_with_unused_slices_v26(
+                    [1; 32],
+                    [2; 32],
+                    [3; 32],
+                    &bytes(&slices),
+                    geometry,
+                    1,
+                    [192, 1, 1],
+                    64,
+                    &slices,
+                    &rows,
+                    &[],
+                ),
+                Err(Error::Geometry)
+            ));
+        }
+    }
+    let geometry = AqlDispatchGeometryV1::new([65, 1, 1], [64, 1, 1]).unwrap();
+    for (rank, envelope) in [
+        (0, [128, 1, 1]),
+        (4, [128, 1, 1]),
+        (1, [0, 1, 1]),
+        (1, [65, 1, 1]),
+        (1, [127, 1, 1]),
+        (1, [128, 2, 1]),
+    ] {
+        assert!(matches!(
+            MixedConditionalDispatchPremisesV26::new_for_physical_envelope_v26(
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                &bytes(&slices),
+                geometry,
+                rank,
+                envelope,
+                64,
+                &slices,
+                &rows,
+                &[],
+            ),
+            Err(Error::Geometry)
+        ));
+    }
+}
+
+#[test]
+fn mixed_partial_workgroups_keep_formation_and_access_domains_conservative() {
+    let geometry = AqlDispatchGeometryV1::new([65, 1, 1], [64, 1, 1]).unwrap();
+    let mut slices = [slices()[0]];
+    let mut rows = [access(0, true, 1)];
+    let make = |slices: &[Slice], rows: &[MixedConditionalAccessV26]| {
+        MixedConditionalDispatchPremisesV26::new_for_physical_envelope_v26(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            &bytes(slices),
+            geometry,
+            1,
+            [128, 1, 1],
+            64,
+            slices,
+            rows,
+            &[],
+        )
+    };
+    let premises = make(&slices, &rows).unwrap();
+    assert_eq!(
+        premises.check_live(&[facts(u64::MAX - 299, 12, 1)]),
+        Err(Error::Arithmetic)
+    );
+    rows[0].address_domain = Domain::LogicalExtent { slice: 0 };
+    assert!(
+        make(&slices, &rows)
+            .unwrap()
+            .check_live(&[facts(u64::MAX - 299, 12, 1)])
+            .is_ok()
+    );
+    rows[0].access_domain = Domain::InvocationAxis { axis: 0 };
+    slices[0].length = 65;
+    assert!(matches!(make(&slices, &rows), Err(Error::OutputExtent)));
+    slices[0].length = 128;
+    assert!(make(&slices, &rows).is_ok());
+}
+
+#[test]
+fn mixed_physical_envelope_handles_wide_and_multidimensional_boundaries() {
+    let make = |grid, group, rank, envelope, width| {
+        MixedConditionalDispatchPremisesV26::new_for_physical_envelope_v26(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            &[],
+            AqlDispatchGeometryV1::new(grid, group).unwrap(),
+            rank,
+            envelope,
+            width,
+            &[],
+            &[],
+            &[],
+        )
+    };
+    let wide = [64 * u64::from(u32::MAX), 1, 1];
+    for width in [32, 64] {
+        let result = make([u32::MAX, 1, 1], [64, 1, 1], 1, wide, width).unwrap();
+        assert_eq!(result.invocation_extents, [1_u64 << 32, 1, 1]);
+    }
+    assert!(matches!(
+        make([u32::MAX, 1, 1], [63, 1, 1], 1, wide, 32),
+        Err(Error::Arithmetic)
+    ));
+    assert!(make([u32::MAX, 1, 1], [63, 1, 1], 1, wide, 64).is_ok());
+    let result = make([65, 5, 3], [64, 4, 2], 3, [128, 8, 4], 64).unwrap();
+    assert_eq!(result.invocation_extents, [128, 8, 4]);
+    for envelope in [[127, 8, 4], [128, 7, 4], [128, 8, 3]] {
+        assert!(matches!(
+            make([65, 5, 3], [64, 4, 2], 3, envelope, 64),
+            Err(Error::Geometry)
+        ));
+    }
+    let slices = [slices()[0]];
+    for writing in [false, true] {
+        let result = MixedConditionalDispatchPremisesV26::new_for_physical_envelope_v26(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            &bytes(&slices),
+            AqlDispatchGeometryV1::new([64, 2, 1], [64, 2, 1]).unwrap(),
+            2,
+            [128, 4, 1],
+            64,
+            &slices,
+            &[access(0, writing, 1)],
+            &[],
+        );
+        if writing {
+            assert!(matches!(result, Err(Error::Geometry)));
+        } else {
+            assert!(result.is_ok());
+        }
+    }
+}
+
+#[test]
 fn mixed_request_substitution_and_replacement_are_closed() {
     let slices = slices();
     let p = payload(&slices, &accesses()).unwrap();
