@@ -2,7 +2,7 @@
 
 use core::cmp::Ordering;
 
-use crate::contract::{
+use super::contract::{
     DROP_ROUTE_V1, MOE_EXPERT_CAPACITY_V1, MOE_EXPERTS_V1, MOE_LOGIT_ELEMENTS_V1,
     MOE_ROUTES_PER_TOKEN_V1, MOE_ROUTES_V1, MOE_TOKENS_V1,
 };

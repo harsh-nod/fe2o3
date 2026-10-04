@@ -1,6 +1,6 @@
+use crate::host_cpu::gpt as cpu;
 use crate::protocol::{Output, Request, buffer, floats, unsigned};
 use crate::references::{READ, WRITE, output};
-use fe2o3_gfx950_gpt_oss_decode::reference as cpu;
 
 pub const KERNELS: [&str; 4] = [
     "gfx950_gpt_oss_120b_decode_megakernel_v1",

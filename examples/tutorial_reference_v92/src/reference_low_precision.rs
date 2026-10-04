@@ -1,6 +1,6 @@
+use crate::host_cpu::low_precision::reference::{self as cpu, LowPrecisionFormat as Format};
 use crate::protocol::{Output, Request, buffer};
 use crate::references::{READ, output};
-use fe2o3_gfx950_low_precision::reference::{self as cpu, LowPrecisionFormat as Format};
 
 pub const KERNELS: [&str; 4] = [
     "gfx950_fp4_gemm_rust",

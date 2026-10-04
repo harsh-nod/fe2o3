@@ -140,9 +140,7 @@ pub fn evaluate(request: &Request) -> Result<Vec<Output>, String> {
     };
     let (index, result, tolerance) = match request.kernel.as_str() {
         "gemm_autoresearch_v1" => {
-            use fe2o3_gemm_autoresearch_v1::reference::{
-                ReferenceProblemV1, evaluate_reference_v1,
-            };
+            use crate::host_cpu::gemm::{ReferenceProblemV1, evaluate_reference_v1};
             exact_count(11)?;
             let result = evaluate_reference_v1(
                 &request.u16s(0)?,
@@ -163,9 +161,7 @@ pub fn evaluate(request: &Request) -> Result<Vec<Output>, String> {
             (2, result, 0.00001)
         }
         "tiled_gemm_general_v1" => {
-            use fe2o3_tiled_gemm_general_v1::reference::{
-                ReferenceProblemV1, evaluate_reference_v1,
-            };
+            use crate::host_cpu::tiled_gemm::{ReferenceProblemV1, evaluate_reference_v1};
             exact_count(11)?;
             let result = evaluate_reference_v1(
                 &request.u16s(0)?,
@@ -186,9 +182,7 @@ pub fn evaluate(request: &Request) -> Result<Vec<Output>, String> {
             (2, result, 0.00001)
         }
         "row_softmax_general_v1" => {
-            use fe2o3_row_softmax_general_v1::reference::{
-                ReferenceLayoutV1, evaluate_reference_v1,
-            };
+            use crate::host_cpu::row_softmax::{ReferenceLayoutV1, evaluate_reference_v1};
             exact_count(6)?;
             let result = evaluate_reference_v1(
                 &request.f32s(0)?,
@@ -204,9 +198,7 @@ pub fn evaluate(request: &Request) -> Result<Vec<Output>, String> {
             (1, result, 0.00001)
         }
         "flash_attention_general_v1" => {
-            use fe2o3_flash_attention_general_v1::reference::{
-                ReferenceLayoutV1, evaluate_reference_v1,
-            };
+            use crate::host_cpu::flash_attention::{ReferenceLayoutV1, evaluate_reference_v1};
             exact_count(21)?;
             if n(19)?
                 != n(5)?
@@ -243,9 +235,7 @@ pub fn evaluate(request: &Request) -> Result<Vec<Output>, String> {
             (4, result, 0.0001)
         }
         "moe_grouped_expert_general_v1" => {
-            use fe2o3_moe_grouped_expert_general_v1::reference::{
-                ReferenceLayoutV1, evaluate_reference_v1,
-            };
+            use crate::host_cpu::moe_grouped::{ReferenceLayoutV1, evaluate_reference_v1};
             exact_count(15)?;
             let result = evaluate_reference_v1(
                 &request.u16s(0)?,
