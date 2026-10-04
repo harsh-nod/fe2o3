@@ -83,18 +83,17 @@ spec fn invocation_source_enum_value_typed_v47(
 }
 
 spec fn invocation_source_enum_well_formed_v47(value: InvocationSourceEnumV47) -> bool {
-    value.fields.dom().finite()
-        && match invocation_source_enum_field_count_v47(value.source_type, value.variant) {
-            Some(count) => count >= 0
-                && (forall|field: int| value.fields.contains_key(field) ==>
-                    0 <= field < count
-                        && match invocation_source_enum_field_type_v47(
-                            value.source_type, value.variant, field) {
-                            Some(ty) => invocation_source_enum_value_typed_v47(ty, value.fields[field]),
-                            None => false,
-                        }),
-            None => false,
-        }
+    match invocation_source_enum_field_count_v47(value.source_type, value.variant) {
+        Some(count) => count >= 0
+            && (forall|field: int| value.fields.contains_key(field) ==>
+                0 <= field < count
+                    && match invocation_source_enum_field_type_v47(
+                        value.source_type, value.variant, field) {
+                        Some(ty) => invocation_source_enum_value_typed_v47(ty, value.fields[field]),
+                        None => false,
+                    }),
+        None => false,
+    }
 }
 
 spec fn invocation_source_enum_complete_v47(value: InvocationSourceEnumV47) -> bool {

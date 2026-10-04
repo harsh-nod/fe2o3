@@ -59,7 +59,6 @@ spec fn invocation_source_aggregate_type_at_v42(source_type: int, path: Seq<int>
 
 spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSourceAggregateV42) -> bool {
     invocation_source_aggregate_leaf_count_v42(value.source_type) > 0
-        && value.leaves.dom().finite()
         && (forall|path: Seq<int>| value.leaves.contains_key(path) ==>
             exists|ordinal: int| 0 <= ordinal < invocation_source_aggregate_leaf_count_v42(value.source_type)
                 && path == invocation_source_aggregate_leaf_path_v42(value.source_type, ordinal)

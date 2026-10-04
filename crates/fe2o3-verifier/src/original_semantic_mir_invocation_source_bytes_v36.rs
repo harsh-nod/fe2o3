@@ -1719,8 +1719,6 @@ spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByt
         && byte_frame_runtime_well_formed_v30(source.machine.frames)
         && byte_private_frames_live_v30(source.machine.memory, source.machine.frames)
         && private_generation_counters_valid_v30(source.machine.generations, source.machine.memory)
-        && source.slots.dom().finite()
-        && source.objects.dom().finite()
         && (forall|local: int| source.objects.contains_key(local) ==>
             0 <= local < source.machine.values.len()
                 && source.objects[local].activation >= 0
@@ -1781,6 +1779,8 @@ enum InvocationSourceByteDestinationV36 {
     Memory(InvocationSourceByteAccessV36),
 }
 
+// Named destinations deliberately distinguish aggregate places, locals, and memory.
+#[allow(inconsistent_fields)]
 enum InvocationSourceByteEventV36 {
     AggregateDeinitialize(InvocationSourceAggregatePlaceV42),
     AggregateReset { local: int },

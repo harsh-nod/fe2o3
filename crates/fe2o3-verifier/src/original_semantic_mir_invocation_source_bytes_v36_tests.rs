@@ -499,7 +499,8 @@ fn original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_stat
         .split("enum InvocationSourceByteBaseV36")
         .next()
         .unwrap();
-    assert!(predicate.contains("source.slots.dom().finite()"));
+    assert!(!predicate.contains(".finite()"));
+    assert!(predicate.contains("source.slots.contains_key(descriptor)"));
     assert!(predicate.contains("private_generation_counters_valid_v30"));
     assert!(predicate.contains("source.machine.frames.active[i].invocation == invocation"));
     assert!(

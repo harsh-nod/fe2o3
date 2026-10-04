@@ -30,15 +30,11 @@ spec fn invocation_source_logical_well_formed_v38(
 ) -> bool {
     logical.versions.len() == count
         && (forall|i: int| 0 <= i < count ==> logical.versions[i] >= 0)
-        && logical.witnesses.dom().finite() && logical.references.dom().finite()
-        && logical.descriptor_references.dom().finite()
         && (forall|i: int| logical.descriptor_references.contains_key(i) ==>
             0 <= i < count
                 && invocation_source_descriptor_reference_shape_v51(logical.descriptor_references[i], count)
                 && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
                 && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i))
-        && logical.aggregates.dom().finite()
-        && logical.enums.dom().finite()
         && (forall|i: int| logical.enums.contains_key(i) ==>
             0 <= i < count && invocation_source_enum_well_formed_v47(logical.enums[i])
                 && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
