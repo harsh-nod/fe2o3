@@ -11,7 +11,7 @@ macro_rules! mixed_descriptor_family {
         $contract:ident, $contract_error:ident, $max_contract:ident, $codec_storage:ident,
         $decode_contract:ident, $decode:ident, $encoded_len:ident, $encode:ident
     ) => {
-        use crate::mixed_conditional_v26::{MixedContractErrorV26, mixed_descriptor_subject_v26};
+        use crate::mixed_conditional_v26::mixed_descriptor_subject_v26;
         use crate::nominal_v3::{Output, pay};
         use crate::wire_common::Reader;
         use crate::*;
@@ -182,8 +182,12 @@ macro_rules! mixed_descriptor_family {
         ) -> Result<[u8; 32], E> {
             mixed_descriptor_subject_v26(nominal, charge).map_err(|error| {
                 $error::Contract(match error {
-                    MixedContractErrorV26::Resource(error) => $contract_error::Resource(error),
-                    MixedContractErrorV26::Invalid(rule) => $contract_error::Invalid(rule),
+                    crate::mixed_conditional_v26::MixedContractErrorV26::Resource(error) => {
+                        $contract_error::Resource(error)
+                    }
+                    crate::mixed_conditional_v26::MixedContractErrorV26::Invalid(rule) => {
+                        $contract_error::Invalid(rule)
+                    }
                 })
             })
         }
