@@ -191,7 +191,36 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let row = &input.functions()[function];
         emit!(
             out,
-            "spec fn typed_licm_cursor_related_{function}_v49(before_cursor: TypedPrefixCursorV49, after_cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let before = before_cursor.micro.state; let after = after_cursor.micro.state;\n typed_prefix_cursor_valid_{function}_v49(before_cursor, little_endian) && typed_relocated_cursor_valid_{function}_v49(after_cursor, little_endian)\n && before_cursor.segment == after_cursor.segment && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n"
+            "spec fn typed_licm_arguments_{function}_v102(before: MemoryStateV30, after: MemoryStateV30) -> bool {{ true"
+        );
+        for definition in row.definitions.clone() {
+            self.bridge.charge(1, out)?;
+            if !matches!(
+                input.definitions()[definition].coordinate,
+                Definition::FunctionArgument { .. }
+            ) {
+                continue;
+            }
+            let (target, moved) =
+                relocated_definition(input, output, self.bridge.licm, definition, out)?;
+            if moved {
+                return Err(mismatch());
+            }
+            emit!(
+                out,
+                "\n && before.values[{definition}] == after.values[{target}] && "
+            );
+            super::super::super::byte_function_v30::emit_value_type(
+                output.definitions()[target].ty,
+                width,
+                format_args!("after.values[{target}]"),
+                out,
+            )?;
+        }
+        emit!(out, "\n}}\n");
+        emit!(
+            out,
+            "spec fn typed_licm_cursor_related_{function}_v49(before_cursor: TypedPrefixCursorV49, after_cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let before = before_cursor.micro.state; let after = after_cursor.micro.state;\n typed_prefix_cursor_valid_{function}_v49(before_cursor, little_endian) && typed_relocated_cursor_valid_{function}_v49(after_cursor, little_endian)\n && before_cursor.segment == after_cursor.segment && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{ typed_licm_arguments_{function}_v102(before, after) && (\n"
         );
         super::models::with_dominance(output, function, out, |output_flow, out| {
             let text = std::mem::take(&mut out.text);
@@ -243,6 +272,17 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                             {
                                 return Err(mismatch());
                             }
+                            // Retain both availability checks before sharing the
+                            // argument predicate across all nonterminal segments.
+                            if matches!(
+                                input.definitions()[definition].coordinate,
+                                Definition::FunctionArgument { .. }
+                            ) {
+                                if !present || !target_present || moved {
+                                    return Err(mismatch());
+                                }
+                                continue;
+                            }
                             if present {
                                 emit!(
                                     out,
@@ -274,7 +314,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             out.failure = failure;
             Ok(())
         })?;
-        emit!(out, " {{ false }} }})\n}}\n");
+        emit!(out, " {{ false }}) }})\n}}\n");
         self.check(out)
     }
 

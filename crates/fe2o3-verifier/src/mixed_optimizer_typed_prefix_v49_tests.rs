@@ -321,6 +321,24 @@ fn typed_prefix_removed_original_block_has_no_fabricated_cursor_or_runtime_state
 #[test]
 fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results() {
     let mut module = fixture();
+    for argument in 0..24 {
+        let scalar = match argument % 4 {
+            0 => ScalarType::Index,
+            1 => ScalarType::U64,
+            2 => ScalarType::Bool,
+            _ => ScalarType::U32,
+        };
+        module.functions[0]
+            .signature
+            .parameters
+            .push(Type::Scalar(scalar));
+        module.functions[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .parameters
+            .push(ValueId(100 + argument));
+    }
     let body = &mut module.functions[0].body.as_mut().unwrap().blocks[3];
     body.operations.insert(
         0,
@@ -351,130 +369,202 @@ fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results
         else_target: BlockId(2),
         else_arguments: vec![],
     });
-    with_chain_module(&module, |prefix, licm, output, floor| {
-        let origins = Origins {
-            inventory: prefix.input(),
-            duplicate: false,
-        };
-        let generate = |out: &mut Writer<'_, '_>| -> Result<()> {
-            let limits = fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
-                max_boundaries: 4096,
+    for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+        with_chain_module(&module, |prefix, licm, output, floor| {
+            let origins = Origins {
+                inventory: prefix.input(),
+                duplicate: false,
             };
-            let (original_physical, storage) =
-                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
-                    prefix.input(),
-                    limits,
-                    out.budget,
+            let generate = |out: &mut Writer<'_, '_>| -> Result<()> {
+                let limits = fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                    max_boundaries: 4096,
+                };
+                let (original_physical, storage) =
+                    fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                        prefix.input(),
+                        limits,
+                        out.budget,
+                    )?;
+                out.budget.reserve_storage(storage.retained_storage())?;
+                let (prefix_physical, storage) =
+                    fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                        prefix.output(),
+                        limits,
+                        out.budget,
+                    )?;
+                out.budget.reserve_storage(storage.retained_storage())?;
+                let (output_physical, storage) =
+                    fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                        output, limits, out.budget,
+                    )?;
+                out.budget.reserve_storage(storage.retained_storage())?;
+                let original_contracts =
+                    target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                        prefix.input(),
+                        width,
+                        out,
+                    )?;
+                let prefix_contracts =
+                    target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                        prefix.output(),
+                        width,
+                        out,
+                    )?;
+                let output_contracts =
+                    target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                        output, width, out,
+                    )?;
+                let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+                bridge.emit_typed_prefix_licm_v49(
+                    &original_physical,
+                    &prefix_physical,
+                    &output_physical,
+                    &original_contracts,
+                    &prefix_contracts,
+                    &output_contracts,
+                    width,
+                    7,
+                    out,
                 )?;
-            out.budget.reserve_storage(storage.retained_storage())?;
-            let (prefix_physical, storage) =
-                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                let mut checked = 0;
+                for (operation, row) in prefix.output().operations().iter().enumerate() {
+                    if matches!(
+                        row.operation.kind,
+                        OperationKind::Binary {
+                            op: BinaryOp::Checked(_),
+                            ..
+                        }
+                    ) && licm.origins()[operation].hoist.is_some()
+                    {
+                        checked += 1;
+                        assert_eq!(row.results.len(), 2);
+                        for result in row.results.clone() {
+                            assert!(out.text.contains(&format!(
+                                "typed_relocation_result_0_v48({result}, before, little_endian)"
+                            )));
+                        }
+                    }
+                }
+                assert_eq!(checked, 1);
+                Ok(())
+            };
+            let measured = run(floor, LIMIT, LIMIT, generate);
+            let expected = measured.0.unwrap();
+            for (helper, relation, inventory) in [
+                (
+                    "typed_prefix_arguments_0_v102",
+                    "typed_prefix_related_0_v49",
                     prefix.output(),
-                    limits,
-                    out.budget,
-                )?;
-            out.budget.reserve_storage(storage.retained_storage())?;
-            let (output_physical, storage) =
-                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
-                    output, limits, out.budget,
-                )?;
-            out.budget.reserve_storage(storage.retained_storage())?;
-            let original_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
-                prefix.input(),
-                FormalIndexWidth::Bits64,
-                out,
-            )?;
-            let prefix_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
-                prefix.output(),
-                FormalIndexWidth::Bits64,
-                out,
-            )?;
-            let output_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
-                output,
-                FormalIndexWidth::Bits64,
-                out,
-            )?;
-            let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
-            bridge.emit_typed_prefix_licm_v49(
-                &original_physical,
-                &prefix_physical,
-                &output_physical,
-                &original_contracts,
-                &prefix_contracts,
-                &output_contracts,
-                FormalIndexWidth::Bits64,
-                7,
-                out,
-            )?;
-            let mut checked = 0;
-            for (operation, row) in prefix.output().operations().iter().enumerate() {
-                if matches!(
-                    row.operation.kind,
-                    OperationKind::Binary {
-                        op: BinaryOp::Checked(_),
-                        ..
+                ),
+                (
+                    "typed_licm_arguments_0_v102",
+                    "typed_licm_cursor_related_0_v49",
+                    output,
+                ),
+            ] {
+                assert_eq!(expected.matches(&format!("spec fn {helper}(")).count(), 1);
+                let body = expected
+                    .split_once(&format!("spec fn {helper}("))
+                    .unwrap()
+                    .1
+                    .split_once("\n}\n")
+                    .unwrap()
+                    .0;
+                let relation_body = expected
+                    .split_once(&format!("spec fn {relation}("))
+                    .unwrap()
+                    .1
+                    .split_once("\n}\n")
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    relation_body
+                        .matches(&format!("{helper}(before, after)"))
+                        .count(),
+                    1
+                );
+                assert!(relation_body.contains("before.pc == -1 || before.pc == -2"));
+                assert!(
+                    relation_body.find("else {").unwrap() < relation_body.find(helper).unwrap()
+                );
+                let mut arguments = 0;
+                for (index, definition) in inventory.definitions().iter().enumerate() {
+                    if !matches!(definition.coordinate, Definition::FunctionArgument { .. }) {
+                        assert!(!body.contains(&format!("after.values[{index}]")));
+                        continue;
                     }
-                ) && licm.origins()[operation].hoist.is_some()
+                    arguments += 1;
+                    let Type::Scalar(scalar) = definition.ty else {
+                        panic!("fixture scalar argument");
+                    };
+                    let modulus = match scalar {
+                        ScalarType::Bool => "2",
+                        ScalarType::U32 => "memory_value_modulus_v30(4)",
+                        ScalarType::U64 => "memory_value_modulus_v30(8)",
+                        ScalarType::Index if width == FormalIndexWidth::Bits32 => {
+                            "memory_value_modulus_v30(4)"
+                        }
+                        ScalarType::Index => "memory_value_modulus_v30(8)",
+                        _ => panic!("fixture scalar argument"),
+                    };
+                    let predicate = format!(
+                        "before.values[{index}] == after.values[{index}] && byte_scalar_type_v57(after.values[{index}], {modulus})"
+                    );
+                    assert_eq!(body.matches(&predicate).count(), 1);
+                    assert!(
+                        !relation_body
+                            .contains(&format!("byte_scalar_type_v57(after.values[{index}],"))
+                    );
+                }
+                assert_eq!(arguments, 26);
+                assert_eq!(body.matches("byte_scalar_type_v57(").count(), arguments);
+            }
+            for text in [
+                "typed_composed_entry_relation_0_v49",
+                "typed_composed_step_0_v49",
+                "typed_composed_trace_0_v49",
+                "typed_licm_cursor_related_0_v49(middle, actual, little_endian)",
+                "before_cursor.segment == after_cursor.segment",
+                "typed_relocated_event_v49(right).observations.is_some()",
+            ] {
+                assert!(expected.contains(text), "missing {text}");
+            }
+            assert_eq!(
+                expected.matches("struct TypedMemoryObservationV48").count(),
+                1
+            );
+            assert_eq!(
+                expected
+                    .matches("spec fn typed_relocated_event_v49(")
+                    .count(),
+                1
+            );
+            assert!(!expected.contains("assume("));
+            assert!(!expected.contains("external_body"));
+            let exact = run(floor, measured.1, measured.2, generate);
+            assert_eq!(exact.0.unwrap(), expected);
+            assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+            for work in [true, false] {
+                let work_limit = measured.1 - usize::from(work);
+                let storage_limit = measured.2 - usize::from(!work);
+                match run(floor, work_limit, storage_limit, generate)
+                    .0
+                    .err()
+                    .unwrap()
                 {
-                    checked += 1;
-                    assert_eq!(row.results.len(), 2);
-                    for result in row.results.clone() {
-                        assert!(out.text.contains(&format!(
-                            "typed_relocation_result_0_v48({result}, before, little_endian)"
-                        )));
+                    Error::Resource(Resource::Work(error)) if work => {
+                        assert_eq!(error.limit(), work_limit);
+                        assert_eq!(error.actual(), measured.1);
                     }
+                    Error::Resource(Resource::Storage(error)) if !work => {
+                        assert_eq!(error.limit(), storage_limit);
+                        assert_eq!(error.actual(), measured.2);
+                    }
+                    other => panic!("wrong exact composed resource boundary: {other:?}"),
                 }
             }
-            assert_eq!(checked, 1);
-            Ok(())
-        };
-        let measured = run(floor, LIMIT, LIMIT, generate);
-        let expected = measured.0.unwrap();
-        for text in [
-            "typed_composed_entry_relation_0_v49",
-            "typed_composed_step_0_v49",
-            "typed_composed_trace_0_v49",
-            "typed_licm_cursor_related_0_v49(middle, actual, little_endian)",
-            "before_cursor.segment == after_cursor.segment",
-            "typed_relocated_event_v49(right).observations.is_some()",
-        ] {
-            assert!(expected.contains(text), "missing {text}");
-        }
-        assert_eq!(
-            expected.matches("struct TypedMemoryObservationV48").count(),
-            1
-        );
-        assert_eq!(
-            expected
-                .matches("spec fn typed_relocated_event_v49(")
-                .count(),
-            1
-        );
-        assert!(!expected.contains("assume("));
-        assert!(!expected.contains("external_body"));
-        let exact = run(floor, measured.1, measured.2, generate);
-        assert_eq!(exact.0.unwrap(), expected);
-        assert_eq!((exact.1, exact.2), (measured.1, measured.2));
-        for work in [true, false] {
-            let work_limit = measured.1 - usize::from(work);
-            let storage_limit = measured.2 - usize::from(!work);
-            match run(floor, work_limit, storage_limit, generate)
-                .0
-                .err()
-                .unwrap()
-            {
-                Error::Resource(Resource::Work(error)) if work => {
-                    assert_eq!(error.limit(), work_limit);
-                    assert_eq!(error.actual(), measured.1);
-                }
-                Error::Resource(Resource::Storage(error)) if !work => {
-                    assert_eq!(error.limit(), storage_limit);
-                    assert_eq!(error.actual(), measured.2);
-                }
-                other => panic!("wrong exact composed resource boundary: {other:?}"),
-            }
-        }
-    });
+        });
+    }
 }
 
 #[test]

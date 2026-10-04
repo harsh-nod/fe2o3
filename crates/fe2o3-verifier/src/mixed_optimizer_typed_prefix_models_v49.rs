@@ -200,7 +200,35 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let output_row = &output.functions()[function];
         emit!(
             out,
-            "spec fn typed_prefix_related_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let after = cursor.micro.state;\n before.valid && after.valid && before.values.len() == {} && after.values.len() == {}\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && byte_state_memory_well_formed_v30(before) && typed_prefix_cursor_valid_{function}_v49(cursor, little_endian)\n && typed_allocation_environment_0_v48(before) == typed_allocation_environment_1_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ cursor.segment == before.pc && after.pc == before.pc }} else {{ before.pc == cursor.segment && (\n",
+            "spec fn typed_prefix_arguments_{function}_v102(before: MemoryStateV30, after: MemoryStateV30) -> bool {{ true"
+        );
+        for target in output_row.definitions.clone() {
+            self.bridge.charge(1, out)?;
+            if !matches!(
+                output.definitions()[target].coordinate,
+                Definition::FunctionArgument { .. }
+            ) {
+                continue;
+            }
+            let anchor = self.anchors[target];
+            if anchor == NONE {
+                return Err(mismatch());
+            }
+            emit!(
+                out,
+                "\n && before.values[{anchor}] == after.values[{target}] && "
+            );
+            super::super::super::byte_function_v30::emit_value_type(
+                output.definitions()[target].ty,
+                width,
+                format_args!("after.values[{target}]"),
+                out,
+            )?;
+        }
+        emit!(out, "\n}}\n");
+        emit!(
+            out,
+            "spec fn typed_prefix_related_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let after = cursor.micro.state;\n before.valid && after.valid && before.values.len() == {} && after.values.len() == {}\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && byte_state_memory_well_formed_v30(before) && typed_prefix_cursor_valid_{function}_v49(cursor, little_endian)\n && typed_allocation_environment_0_v48(before) == typed_allocation_environment_1_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ cursor.segment == before.pc && after.pc == before.pc }} else {{ before.pc == cursor.segment && typed_prefix_arguments_{function}_v102(before, after) && (\n",
             input.definitions().len(),
             output.definitions().len()
         );
@@ -236,6 +264,14 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                                 segment.start,
                                 out,
                             )? {
+                                continue;
+                            }
+                            // Function arguments are available at every nonterminal
+                            // boundary; their complete predicates are shared above.
+                            if matches!(
+                                output.definitions()[target].coordinate,
+                                Definition::FunctionArgument { .. }
+                            ) {
                                 continue;
                             }
                             let anchor = self.anchors[target];
