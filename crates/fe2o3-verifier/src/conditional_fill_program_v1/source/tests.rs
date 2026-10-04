@@ -165,31 +165,40 @@ fn terminal_witness_copy_consumes_and_invalidates_borrows_without_allowing_dupli
         .iter()
         .position(|l| l.role() == SemanticLocalRoleV1::Argument(0))
         .unwrap();
-    let fresh = || SourceState {
-        source,
-        function,
-        output,
-        locals: BTreeMap::from([
-            (index, Local::Index),
-            (
-                borrowed,
-                Local::SharedIndex {
-                    referent: index,
-                    generation: 0,
-                },
-            ),
-        ]),
-        generations: BTreeMap::new(),
+    let fresh = || {
+        let origin = Origin([id, 0, 0, index as u32, place.ty().index()]);
+        let mut recipe = Recipe::default();
+        let witness = recipe.push(origin, Expr::ThreadIndex).unwrap();
+        let reference = recipe.push(origin, Expr::SharedBorrow(witness)).unwrap();
+        SourceState {
+            source,
+            function,
+            output,
+            locals: BTreeMap::from([
+                (index, Local::Index),
+                (
+                    borrowed,
+                    Local::SharedIndex {
+                        referent: index,
+                        generation: 0,
+                    },
+                ),
+            ]),
+            generations: BTreeMap::new(),
+            expressions: BTreeMap::from([(index, witness), (borrowed, reference)]),
+            recipe,
+            origin,
+        }
     };
     let witness = SemanticOperandV1::Copy(place.clone());
     let reference = SemanticOperandV1::Copy(borrow.clone());
     let mut state = fresh();
     assert!(state.operand(&witness).is_err());
     assert!(state.operand(&reference).is_ok());
-    assert_eq!(state.consume_index(&witness).unwrap(), Local::Index);
+    assert_eq!(state.consume_index(&witness).unwrap().0, Local::Index);
     assert!(state.consume_index(&witness).is_err());
     assert!(state.operand(&reference).is_err());
-    state.assign(index, Local::Index).unwrap();
+    state.assign(index, (Local::Index, Id(0))).unwrap();
     assert!(
         state.operand(&reference).is_err(),
         "rebinding cannot revive the old borrow"
@@ -202,7 +211,7 @@ fn terminal_witness_copy_consumes_and_invalidates_borrows_without_allowing_dupli
         state
             .statement(&SemanticStatementV1::new(function.source(), kind))
             .unwrap();
-        state.assign(index, Local::Index).unwrap();
+        state.assign(index, (Local::Index, Id(0))).unwrap();
         assert!(state.operand(&reference).is_err());
     }
     let mut state = fresh();
@@ -214,7 +223,8 @@ fn terminal_witness_copy_consumes_and_invalidates_borrows_without_allowing_dupli
     assert_eq!(
         state
             .consume_index(&SemanticOperandV1::Move(place.clone()))
-            .unwrap(),
+            .unwrap()
+            .0,
         Local::Index
     );
     assert!(state.consume_index(&witness).is_err());

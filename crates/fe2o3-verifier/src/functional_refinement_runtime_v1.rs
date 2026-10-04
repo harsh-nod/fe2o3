@@ -12,6 +12,40 @@ use crate::retained_functional_refinement_runtime_v1::{
     RetainedGeneratedVerusRuntimeBackendV1, open_retained_generated_verus_runtime_v1,
 };
 
+/// Private execution profiles selected by the verifier-owned proof boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneratedVerusExecutionProfileV1 {
+    Ranked,
+    ClosedFill,
+}
+
+impl GeneratedVerusExecutionProfileV1 {
+    pub(crate) const fn solver_processes(self) -> usize {
+        match self {
+            Self::Ranked => 1,
+            Self::ClosedFill => 12,
+        }
+    }
+
+    pub(crate) const fn verifier_configuration(self) -> &'static [u8] {
+        match self {
+            Self::Ranked => b"sealed-generated-source-fd;fixed-env",
+            Self::ClosedFill => {
+                b"sealed-generated-source-fd;fixed-env;closed-fill-v1;no-bv-simplify"
+            }
+        }
+    }
+
+    pub(crate) const fn solver_configuration(self) -> &'static [u8] {
+        match self {
+            Self::Ranked => b"rust_verify-managed-z3;fixed-env",
+            Self::ClosedFill => {
+                b"rust_verify-managed-z3;fixed-env;closed-fill-v1;exact-processes=12"
+            }
+        }
+    }
+}
+
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -76,10 +110,11 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
+        profile: GeneratedVerusExecutionProfileV1,
     ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
     {
         self.backend
-            .execute_generated_rust_verify(source, deadline, output_limit)
+            .execute_generated_rust_verify(source, deadline, output_limit, profile)
             .map(FunctionalRefinementRuntimeProcessOutputV1::from)
             .map_err(runtime_error_from_backend)
     }
@@ -123,6 +158,8 @@ impl Error for FunctionalRefinementRuntimeErrorV1 {}
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
+    #[cfg(test)]
+    eprintln!("retained runtime diagnostic: {error}");
     FunctionalRefinementRuntimeErrorV1 {
         detail: format!(
             "retained generated-proof runtime failed: {:?}",

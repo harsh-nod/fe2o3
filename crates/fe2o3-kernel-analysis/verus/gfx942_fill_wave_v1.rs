@@ -110,8 +110,9 @@ proof fn index_arithmetic(group: u32, local: u32)
         (group as u64) * 64 + (local as u64) < 0x40_0000_0000u64,
 {
     assert(
-        pair_spec((((group as u64) << 6) as u32) | local,
-            (((group as u64) << 6) >> 32) as u32) == (group as u64) * 64 + local as u64
+        (((((group as u64) << 6) as u32) | local) as u64)
+            | (((((group as u64) << 6) >> 32) as u32 as u64) << 32)
+            == (group as u64) * 64 + local as u64
     ) by (bit_vector) requires local < 64;
     assert(
         ((((group as u64) << 6) as u32) | local) == ((group as u64) * 64 + local as u64) as u32
@@ -127,7 +128,7 @@ proof fn mask_insert(mask: u64, lane: usize)
         forall|other: int| 0 <= other < 64 && other != lane
             ==> active(mask | (1u64 << lane), other) == active(mask, other),
 {
-    assert(active(mask | (1u64 << lane), lane as int)) by (bit_vector)
+    assert((mask | (1u64 << lane)) & (1u64 << lane) != 0) by (bit_vector)
         requires lane < 64;
     assert forall|other: int| 0 <= other < 64 && other != lane
         implies active(mask | (1u64 << lane), other) == active(mask, other) by {
@@ -162,7 +163,7 @@ proof fn mask_subset(incoming: u64, comparison: u64)
 proof fn pair_roundtrip(value: u64)
     ensures pair_spec(value as u32, (value >> 32) as u32) == value,
 {
-    assert(pair_spec(value as u32, (value >> 32) as u32) == value) by (bit_vector);
+    assert(((value as u32) as u64) | (((value >> 32) as u32 as u64) << 32) == value) by (bit_vector);
 }
 
 proof fn address_arithmetic(index: u64, base: u64, length: u64)

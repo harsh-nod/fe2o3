@@ -503,9 +503,10 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
+    profile: crate::functional_refinement_runtime_v1::GeneratedVerusExecutionProfileV1,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
-    functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit)
+    functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit, profile)
 }
 
 struct SealedGeneratedProofSourceV3 {

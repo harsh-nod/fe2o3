@@ -1,3 +1,4 @@
+use super::recipe::{Effect, Expr, Id, Origin, Recipe};
 use super::{ConditionalFillProgramErrorV1 as Error, ProgramShape, Value};
 use crate::ValidatedConditionalCompilerProofInputsV1;
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -19,7 +20,7 @@ pub(super) fn check_source(
     inputs: &ValidatedConditionalCompilerProofInputsV1,
     kir: &ProgramShape,
     symbol: &str,
-) -> Result<(), Error> {
+) -> Result<Recipe, Error> {
     let source = inputs.semantic_mir();
     let [root] = source.roots() else {
         return Err(Error::Source("root"));
@@ -43,7 +44,7 @@ fn check_body(
     kir: &ProgramShape,
     function_id: u32,
     function: &SemanticFunctionDeclV1,
-) -> Result<(), Error> {
+) -> Result<Recipe, Error> {
     let source = inputs.semantic_mir();
     if function.abi().source_input_types().len() != 1
         || function.abi().source_argument_ownership()
@@ -120,12 +121,24 @@ fn check_body(
             return Err(Error::Source("duplicate terminator span"));
         }
     }
+    let mut recipe = Recipe::default();
+    let origin = Origin([
+        function_id,
+        u32::MAX,
+        0,
+        output as u32,
+        output_local.ty().index(),
+    ]);
+    let parameter = recipe.push(origin, Expr::Output)?;
     let mut state = SourceState {
         source,
         function,
         output,
         locals: BTreeMap::from([(output, Local::Output)]),
         generations: BTreeMap::new(),
+        expressions: BTreeMap::from([(output, parameter)]),
+        recipe,
+        origin,
     };
     let mut visited = BTreeSet::new();
     let mut consumed = BTreeSet::new();
@@ -142,15 +155,25 @@ fn check_body(
             .get(block_index as usize)
             .ok_or(Error::Source("block"))?;
         for (index, statement) in block.statements().iter().enumerate() {
+            state.origin = Origin([function_id, block_index, index as u32, u32::MAX, u32::MAX]);
             let expected = state.statement(statement)?;
             let span = statement_spans
                 .remove(&(block_index, index as u32))
                 .ok_or(Error::Source("statement span"))?;
             check_span(kir, span, expected, &mut consumed)?;
+            state.recipe.span(state.origin, span)?;
         }
         let span = terminator_spans
             .remove(&block_index)
             .ok_or(Error::Source("terminator span"))?;
+        state.origin = Origin([
+            function_id,
+            block_index,
+            block.statements().len() as u32,
+            u32::MAX,
+            u32::MAX,
+        ]);
+        state.recipe.span(state.origin, span)?;
         match block.terminator().kind() {
             SemanticTerminatorKindV1::Goto(edge) if edge.role() == SemanticEdgeRoleV1::Goto => {
                 check_span(kir, span, &[], &mut consumed)?;
@@ -173,6 +196,8 @@ fn check_body(
                     return Err(Error::Source("call edge"));
                 }
                 let local = state.plain(destination.place())?;
+                state.origin.0[3] = local as u32;
+                state.origin.0[4] = destination.place().ty().index();
                 if local == output {
                     return Err(Error::Source("output reassignment"));
                 }
@@ -195,7 +220,10 @@ fn check_body(
                         witness = Some(*index_witness);
                         raw = Some(*raw_index);
                         check_span(kir, span, &[Some(Value::Index)], &mut consumed)?;
-                        Local::Index
+                        (
+                            Local::Index,
+                            state.recipe.push(state.origin, Expr::ThreadIndex)?,
+                        )
                     }
                     (
                         1,
@@ -210,11 +238,15 @@ fn check_body(
                         let [index] = call.arguments() else {
                             return Err(Error::Source("get arity"));
                         };
-                        if !matches!(state.operand(index)?, Local::SharedIndex { .. }) {
+                        let (tag, input) = state.operand(index)?;
+                        if !matches!(tag, Local::SharedIndex { .. }) {
                             return Err(Error::Source("get receiver"));
                         }
                         check_span(kir, span, &[], &mut consumed)?;
-                        Local::Raw
+                        (
+                            Local::Raw,
+                            state.recipe.push(state.origin, Expr::IndexGet(input))?,
+                        )
                     }
                     (
                         2,
@@ -238,11 +270,14 @@ fn check_body(
                         let [output, index, value] = call.arguments() else {
                             return Err(Error::Source("write arity"));
                         };
+                        let (output_tag, output_expression) = state.operand(output)?;
+                        let (index_tag, index_expression) = state.consume_index(index)?;
+                        let (value_tag, value_expression) = state.operand(value)?;
                         if value.ty() != *element
-                            || state.operand(output)? != Local::MutableOutput
+                            || output_tag != Local::MutableOutput
                             || index.ty() != *write_witness
-                            || state.consume_index(index)? != Local::Index
-                            || state.operand(value)? != Local::Low
+                            || index_tag != Local::Index
+                            || value_tag != Local::Low
                         {
                             return Err(Error::Source("write operands"));
                         }
@@ -260,7 +295,18 @@ fn check_body(
                             ],
                             &mut consumed,
                         )?;
-                        Local::WriteResult
+                        state.recipe.set_effect(
+                            state.origin,
+                            Effect::MirWrite {
+                                output: output_expression,
+                                index: index_expression,
+                                value: value_expression,
+                            },
+                        )?;
+                        (
+                            Local::WriteResult,
+                            state.recipe.push(state.origin, Expr::WriteAccepted)?,
+                        )
                     }
                     _ => return Err(Error::Source("call sequence")),
                 };
@@ -278,7 +324,7 @@ fn check_body(
     {
         return Err(Error::Source("complete coverage"));
     }
-    Ok(())
+    Ok(state.recipe)
 }
 
 fn check_span(
@@ -311,10 +357,13 @@ struct SourceState<'a> {
     output: usize,
     locals: BTreeMap<usize, Local>,
     generations: BTreeMap<usize, u64>,
+    expressions: BTreeMap<usize, Id>,
+    recipe: Recipe,
+    origin: Origin,
 }
 
 impl SourceState<'_> {
-    fn consume_index(&mut self, operand: &SemanticOperandV1) -> Result<Local, Error> {
+    fn consume_index(&mut self, operand: &SemanticOperandV1) -> Result<(Local, Id), Error> {
         let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
             return Err(Error::Source("write witness"));
         };
@@ -324,8 +373,9 @@ impl SourceState<'_> {
         }
         // Post-borrow-check MIR may mark this terminal non-Copy witness use as Copy.
         // The recognized consumer still spends the witness and invalidates its borrows.
+        let expression = self.expression(local)?;
         self.invalidate(local)?;
-        Ok(Local::Index)
+        Ok((Local::Index, expression))
     }
     fn invalidate(&mut self, local: usize) -> Result<(), Error> {
         let generation = self.generations.entry(local).or_default();
@@ -333,12 +383,20 @@ impl SourceState<'_> {
             .checked_add(1)
             .ok_or(Error::Source("local generation"))?;
         self.locals.remove(&local);
+        self.expressions.remove(&local);
         Ok(())
     }
-    fn assign(&mut self, local: usize, tag: Local) -> Result<(), Error> {
+    fn assign(&mut self, local: usize, (tag, expression): (Local, Id)) -> Result<(), Error> {
         self.invalidate(local)?;
         self.locals.insert(local, tag);
+        self.expressions.insert(local, expression);
         Ok(())
+    }
+    fn expression(&self, local: usize) -> Result<Id, Error> {
+        self.expressions
+            .get(&local)
+            .copied()
+            .ok_or(Error::Source("recipe local"))
     }
     fn plain(&self, place: &SemanticPlaceV1) -> Result<usize, Error> {
         let index = place.local().index() as usize;
@@ -353,7 +411,7 @@ impl SourceState<'_> {
         }
         Ok(index)
     }
-    fn operand(&mut self, operand: &SemanticOperandV1) -> Result<Local, Error> {
+    fn operand(&mut self, operand: &SemanticOperandV1) -> Result<(Local, Id), Error> {
         match operand {
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
                 let local = self.plain(place)?;
@@ -361,6 +419,7 @@ impl SourceState<'_> {
                     .locals
                     .get(&local)
                     .ok_or(Error::Source("uninitialized local"))?;
+                let expression = self.expression(local)?;
                 if let Local::SharedIndex {
                     referent,
                     generation,
@@ -378,13 +437,13 @@ impl SourceState<'_> {
                 } else if matches!(tag, Local::Output | Local::Index) {
                     return Err(Error::Source("owner copy"));
                 }
-                Ok(tag)
+                Ok((tag, expression))
             }
             SemanticOperandV1::Constant(constant)
                 if matches!(constant.value(), SemanticConstantValueV1::ZeroSized)
                     && unit(self.source, constant.ty()) =>
             {
-                Ok(Local::Unit)
+                Ok((Local::Unit, self.recipe.push(self.origin, Expr::Unit)?))
             }
             _ => Err(Error::Source("operand")),
         }
@@ -406,6 +465,8 @@ impl SourceState<'_> {
             }
             SemanticStatementKindV1::Assign(assignment) => {
                 let destination = self.plain(assignment.destination())?;
+                self.origin.0[3] = destination as u32;
+                self.origin.0[4] = assignment.destination().ty().index();
                 if destination == self.output
                     || assignment.destination().ty() != assignment.value().result_type()
                 {
@@ -415,7 +476,8 @@ impl SourceState<'_> {
                     SemanticRvalueKindV1::Use(operand)
                         if operand.ty() == assignment.destination().ty() =>
                     {
-                        self.operand(operand)?
+                        let (tag, input) = self.operand(operand)?;
+                        (tag, self.recipe.push(self.origin, Expr::Use(input))?)
                     }
                     SemanticRvalueKindV1::Cast {
                         kind: SemanticCastKindV1::Integer,
@@ -423,11 +485,16 @@ impl SourceState<'_> {
                     } if unsigned(self.source, operand.ty(), 64)
                         && unsigned(self.source, assignment.destination().ty(), 32) =>
                     {
-                        if self.operand(operand)? != Local::Raw {
+                        let (tag, input) = self.operand(operand)?;
+                        if tag != Local::Raw {
                             return Err(Error::Source("cast input"));
                         }
                         expected = &[Some(Value::IndexU64), Some(Value::TruncatedIndex)];
-                        Local::Low
+                        (
+                            Local::Low,
+                            self.recipe
+                                .push(self.origin, Expr::IntegerTruncate(input))?,
+                        )
                     }
                     SemanticRvalueKindV1::Borrow { kind, place } => {
                         let source = self.plain(place)?;
@@ -448,15 +515,24 @@ impl SourceState<'_> {
                             (SemanticBorrowKindV1::Shared, Some(Local::Index))
                                 if pointer.mutability() == SemanticMutabilityV1::Immutable =>
                             {
-                                Local::SharedIndex {
+                                let tag = Local::SharedIndex {
                                     referent: source,
                                     generation: self.generations.get(&source).copied().unwrap_or(0),
-                                }
+                                };
+                                let input = self.expression(source)?;
+                                (
+                                    tag,
+                                    self.recipe.push(self.origin, Expr::SharedBorrow(input))?,
+                                )
                             }
                             (SemanticBorrowKindV1::Mutable, Some(Local::Output))
                                 if pointer.mutability() == SemanticMutabilityV1::Mutable =>
                             {
-                                Local::MutableOutput
+                                let input = self.expression(source)?;
+                                (
+                                    Local::MutableOutput,
+                                    self.recipe.push(self.origin, Expr::MutableBorrow(input))?,
+                                )
                             }
                             _ => return Err(Error::Source("borrow origin")),
                         }

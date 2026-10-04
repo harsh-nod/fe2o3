@@ -37,6 +37,7 @@ use sha2::{Digest, Sha256};
 
 use crate::functional_refinement_runtime_v1::{
     FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementVerusRuntimeLeaseV1,
+    GeneratedVerusExecutionProfileV1,
 };
 use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1};
 
@@ -64,20 +65,89 @@ const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXE
 pub fn functional_refinement_verus_toolchain_identity_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
 ) -> Result<VerusToolchainIdentityV2, FunctionalRefinementVerusExecutionErrorV2> {
+    toolchain_identity(runtime, GeneratedVerusExecutionProfileV1::Ranked)
+}
+
+fn execution_profile(boundary: FunctionalRefinementBoundaryV2) -> GeneratedVerusExecutionProfileV1 {
+    use FunctionalRefinementBoundaryV2 as B;
+    match boundary {
+        B::SemanticMirToGfx942FillDispatchConditional => {
+            GeneratedVerusExecutionProfileV1::ClosedFill
+        }
+        B::SafeReferenceMirToKernelMir
+        | B::SafeReferenceSourceToKernelMir
+        | B::SafeReferenceMirToLivePliron
+        | B::SafeReferenceMirToLivePlironConditionalCoverage => {
+            GeneratedVerusExecutionProfileV1::Ranked
+        }
+    }
+}
+
+#[test]
+fn conditional_fill_profile_preserves_existing_configuration_and_separates_new_identity() {
+    use FunctionalRefinementBoundaryV2 as B;
+    use GeneratedVerusExecutionProfileV1 as P;
+    for boundary in [
+        B::SafeReferenceMirToKernelMir,
+        B::SafeReferenceSourceToKernelMir,
+        B::SafeReferenceMirToLivePliron,
+        B::SafeReferenceMirToLivePlironConditionalCoverage,
+    ] {
+        assert_eq!(execution_profile(boundary), P::Ranked);
+    }
+    assert_eq!(
+        execution_profile(B::SemanticMirToGfx942FillDispatchConditional),
+        P::ClosedFill
+    );
+    assert_eq!(
+        P::Ranked.verifier_configuration(),
+        b"sealed-generated-source-fd;fixed-env"
+    );
+    assert_eq!(
+        P::Ranked.solver_configuration(),
+        b"rust_verify-managed-z3;fixed-env"
+    );
+    assert_eq!(
+        (
+            P::Ranked.solver_processes(),
+            P::ClosedFill.solver_processes()
+        ),
+        (1, 12)
+    );
+    assert_ne!(
+        domain_digest(
+            VERUS_CONFIGURATION_DOMAIN,
+            P::Ranked.verifier_configuration()
+        ),
+        domain_digest(
+            VERUS_CONFIGURATION_DOMAIN,
+            P::ClosedFill.verifier_configuration()
+        )
+    );
+    assert_ne!(
+        domain_digest(
+            SOLVER_CONFIGURATION_DOMAIN,
+            P::Ranked.solver_configuration()
+        ),
+        domain_digest(
+            SOLVER_CONFIGURATION_DOMAIN,
+            P::ClosedFill.solver_configuration()
+        )
+    );
+}
+
+fn toolchain_identity(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    profile: GeneratedVerusExecutionProfileV1,
+) -> Result<VerusToolchainIdentityV2, FunctionalRefinementVerusExecutionErrorV2> {
     runtime
         .revalidate()
         .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
     VerusToolchainIdentityV2::new(
         DigestV1::from_untrusted_bytes(VERUS_EXECUTABLE_SHA256),
-        domain_digest(
-            VERUS_CONFIGURATION_DOMAIN,
-            b"sealed-generated-source-fd;fixed-env",
-        ),
+        domain_digest(VERUS_CONFIGURATION_DOMAIN, profile.verifier_configuration()),
         DigestV1::from_untrusted_bytes(SOLVER_EXECUTABLE_SHA256),
-        domain_digest(
-            SOLVER_CONFIGURATION_DOMAIN,
-            b"rust_verify-managed-z3;fixed-env",
-        ),
+        domain_digest(SOLVER_CONFIGURATION_DOMAIN, profile.solver_configuration()),
         DigestV1::from_untrusted_bytes(runtime.identity().as_bytes()),
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)
@@ -85,8 +155,8 @@ pub fn functional_refinement_verus_toolchain_identity_v2(
 
 /// Executes the exact generated proof source before creating a signable `Proved` statement.
 ///
-/// The signer identity comes from compiler configuration. Kernel source cannot select it. This
-/// producer deliberately supports only the reference-MIR to kernel-MIR boundary; a source hash is
+/// The signer identity comes from compiler configuration. Kernel source cannot select it.
+/// The private caller selects the generated relation's boundary. A source hash is
 /// not evidence of source-to-MIR refinement.
 fn execute_functional_refinement_verus_and_prepare_receipt_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
@@ -102,7 +172,8 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
             FunctionalRefinementVerusExecutionErrorKindV2::InvalidTimeout,
         ));
     }
-    let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
+    let profile = execution_profile(boundary);
+    let toolchain = toolchain_identity(runtime, profile)?;
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(u64::from(timeout_seconds)))
         .ok_or_else(|| {
@@ -115,6 +186,7 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
             &source,
             deadline,
             MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2,
+            profile,
         )
         .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
     validate_proved_output(&observed)?;
@@ -306,6 +378,27 @@ pub(crate) fn execute_and_import_generated_conditional_composition_locally_v1(
     )
 }
 
+pub(crate) fn execute_and_import_generated_conditional_fill_composition_locally_v1(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    source: CanonicalGeneratedVerusProofInputV3,
+    binding: FunctionalRefinementBindingV2,
+    timeout_seconds: u32,
+) -> Result<
+    (
+        RetainedImportedFunctionalRefinementReceiptV2,
+        ProductionRefinementStagingPolicyV2,
+    ),
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
+    execute_and_import_generated_composition_locally_v1(
+        runtime,
+        source,
+        binding,
+        timeout_seconds,
+        FunctionalRefinementBoundaryV2::SemanticMirToGfx942FillDispatchConditional,
+    )
+}
+
 fn execute_and_import_generated_composition_locally_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     source: CanonicalGeneratedVerusProofInputV3,
@@ -321,7 +414,7 @@ fn execute_and_import_generated_composition_locally_v1(
 > {
     let signing = SigningKey::generate(&mut OsRng);
     let verifying_key = signing.verifying_key().to_bytes();
-    let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
+    let toolchain = toolchain_identity(runtime, execution_profile(boundary))?;
     let policy = FunctionalRefinementImportPolicyV2::new(verifying_key, toolchain, boundary)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =

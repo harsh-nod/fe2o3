@@ -261,6 +261,34 @@ fn whole_program_accepts_sparse_ids_and_unconditional_empty_plumbing() {
 }
 
 #[test]
+fn recipe_retains_actual_sparse_ssa_dependencies_not_value_tags() {
+    let mut module = module();
+    let original = check_module(&module).unwrap().recipe;
+    let ops = operations(&mut module);
+    ops.insert(
+        1,
+        Operation::new(
+            vec![ValueDef::new(ValueId(777), Type::INDEX)],
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+    );
+    if let OperationKind::Cast { value, .. } = &mut ops[2].kind {
+        *value = ValueId(777);
+    }
+    let changed = check_module(&module).unwrap().recipe;
+    assert_ne!(original.canonical_bytes(), changed.canonical_bytes());
+    let cast = changed
+        .nodes
+        .iter()
+        .find(|node| node.origin.0[3] == 41)
+        .unwrap();
+    let Expr::Bitcast(operand) = cast.expression else {
+        panic!("expected cast")
+    };
+    assert_eq!(changed.nodes[operand.index() as usize].origin.0[3], 777);
+}
+
+#[test]
 fn safety_only_predicates_and_changed_address_or_value_reject() {
     for case in 0..12 {
         let mut module = module();

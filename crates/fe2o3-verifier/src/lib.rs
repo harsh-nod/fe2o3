@@ -24,6 +24,7 @@ mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
 mod compiler_target_lineage_v1;
 mod conditional_fill_program_v1;
+mod conditional_fill_refinement_v1;
 mod conditional_output_evidence_v1;
 mod conditional_output_verus_v1;
 mod control_flow_binding;
@@ -104,6 +105,10 @@ pub use compiler_target_lineage_v1::{
 pub use conditional_fill_program_v1::{
     CheckedConditionalFillProgramV1, ConditionalFillProgramErrorV1,
     check_conditional_fill_program_v1,
+};
+pub use conditional_fill_refinement_v1::{
+    ConditionalFillRefinementErrorV1, ProductionConditionalFillRefinementExecutionV1,
+    execute_conditional_fill_refinement_v1,
 };
 pub use conditional_output_evidence_v1::{
     CanonicalConditionalOutputEvidenceV1, ConditionalOutputEvidenceErrorV1,

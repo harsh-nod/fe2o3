@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use crate::functional_refinement_runtime_v1::GeneratedVerusExecutionProfileV1;
 use rustix::fs::OFlags;
 
 use super::{
@@ -36,7 +37,7 @@ const RLIMIT_CORE: i32 = 4;
 const RLIMIT_AS: i32 = 9;
 const CPU_LIMIT_MAX_SECONDS: u64 = 601;
 // RLIMIT_NPROC is charged to the real UID across the host, including unrelated
-// threads. Ptrace below supplies the strict per-proof one-descendant bound.
+// threads. Ptrace below supplies the strict per-proof descendant bound.
 const PROCESS_LIMIT: u64 = 4096;
 const DESCRIPTOR_LIMIT: u64 = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
@@ -141,6 +142,9 @@ const FILTER_LEN: usize = DENIED_FILTER_START + DENIED_SYSCALLS.len() * 2 + 1;
 
 #[cfg(test)]
 static LAST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(test)]
+static TEST_DESCENDANTS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
 static FIRST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
 #[repr(C)]
@@ -358,6 +362,7 @@ pub(super) fn execute(
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
+    profile: GeneratedVerusExecutionProfileV1,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
@@ -467,6 +472,12 @@ pub(super) fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // The pinned bit-vector simplifier creates a 1 GiB interpreter stack. The
+    // closed proof uses explicit bit-vector expressions and needs no simplifier.
+    if profile == GeneratedVerusExecutionProfileV1::ClosedFill {
+        command.args(["-V", "no-bv-simplify"]);
+    }
+
     let child_bindings = bindings.clone();
     // SAFETY: the callback performs only raw async-signal-safe syscalls over captured scalars.
     unsafe {
@@ -488,6 +499,7 @@ pub(super) fn execute(
         &allowed_mappings,
         true,
         true,
+        profile.solver_processes(),
         deadline,
         output_limit,
     );
@@ -639,6 +651,7 @@ fn supervise(
     allowed_mappings: &[AllowedRuntimeExecutableV1],
     validate_mappings: bool,
     require_auxiliary_verifier: bool,
+    expected_solver_processes: usize,
     deadline: Instant,
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
@@ -702,11 +715,12 @@ fn supervise(
 
         let mut verifier_terminal = None;
         let mut auxiliary_terminal = None;
-        let mut solver_terminal = None;
+        let mut solver_terminals = 0usize;
         let mut process_descendants_created = 0_usize;
         let mut auxiliary_started = false;
-        let mut solver_started = false;
-        let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
+        let mut solvers_started = 0usize;
+        let expected_process_descendants =
+            expected_solver_processes + usize::from(require_auxiliary_verifier);
         let mut idle_delay = Duration::ZERO;
         while !tracees.is_empty() {
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
@@ -774,6 +788,7 @@ fn supervise(
                                         Ordering::SeqCst,
                                     );
                                     LAST_TEST_DESCENDANT.store(child_process, Ordering::SeqCst);
+                                    TEST_DESCENDANTS.lock().unwrap().push(child_process);
                                 }
                                 process_descendants_created =
                                     process_descendants_created.checked_add(1).ok_or_else(
@@ -794,6 +809,26 @@ fn supervise(
                             child.role = role;
                             child.thread_group = child_thread_group;
                             child.leader = leader;
+                            let live_solver_leaders = tracees
+                                .values()
+                                .filter(|tracee| {
+                                    tracee.leader
+                                        && matches!(
+                                            tracee.role,
+                                            TraceeRole::Solver | TraceeRole::PendingExecutable
+                                        )
+                                })
+                                .count();
+                            let live_limit = if require_auxiliary_verifier && !auxiliary_started {
+                                1
+                            } else {
+                                expected_solver_processes.min(2)
+                            };
+                            if live_solver_leaders > live_limit {
+                                return Err(process_failure(
+                                    "proof exceeded its live solver/pending executable bound",
+                                ));
+                            }
                             if exceeded_tracee_bound {
                                 return Err(process_failure(
                                     "proof process tree exceeded its exact tracee bound",
@@ -822,11 +857,11 @@ fn supervise(
                                     "auxiliary rust_verify",
                                 )?;
                                 TraceeRole::AuxiliaryVerifier
-                            } else if !solver_started
+                            } else if solvers_started < expected_solver_processes
                                 && (!require_auxiliary_verifier || auxiliary_started)
                                 && observed == solver_identity
                             {
-                                solver_started = true;
+                                solvers_started += 1;
                                 validate_exact_descriptor_closure(process, bindings, "Z3")?;
                                 TraceeRole::Solver
                             } else {
@@ -892,7 +927,14 @@ fn supervise(
                         (TraceeRole::AuxiliaryVerifier, true) => {
                             auxiliary_terminal = Some(terminal)
                         }
-                        (TraceeRole::Solver, true) => solver_terminal = Some(terminal),
+                        (TraceeRole::Solver, true) => {
+                            if terminal != (Some(0), None) {
+                                return Err(process_failure(
+                                    "Z3 descendant did not exit successfully",
+                                ));
+                            }
+                            solver_terminals += 1;
+                        }
                         (TraceeRole::PendingExecutable, _) => {
                             return Err(process_failure("unexecuted proof descendant terminated"));
                         }
@@ -907,20 +949,19 @@ fn supervise(
         }
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
-        let solver_terminal = solver_terminal.ok_or_else(|| {
-            process_failure(format!(
-                "Z3 descendant was not observed; verifier={verifier_terminal:?} auxiliary={auxiliary_terminal:?} stdout={:?} stderr={:?}",
+        if solvers_started != expected_solver_processes
+            || solver_terminals != expected_solver_processes
+        {
+            return Err(process_failure(format!(
+                "exact Z3 descendants were not observed: expected={expected_solver_processes} started={solvers_started} completed={solver_terminals}; verifier={verifier_terminal:?} auxiliary={auxiliary_terminal:?} stdout={:?} stderr={:?}",
                 String::from_utf8_lossy(&stdout_capture.bytes),
                 String::from_utf8_lossy(&stderr_capture.bytes),
-            ))
-        })?;
+            )));
+        }
         if require_auxiliary_verifier && auxiliary_terminal != Some((Some(0), None)) {
             return Err(process_failure(
                 "auxiliary rust_verify did not exit successfully",
             ));
-        }
-        if solver_terminal != (Some(0), None) {
-            return Err(process_failure("Z3 descendant did not exit successfully"));
         }
         Ok(verifier_terminal)
     })();
@@ -1844,6 +1885,7 @@ mod tests {
         >,
         first_descendant: i32,
         last_descendant: i32,
+        descendants: Vec<i32>,
     }
 
     fn identity(path: &str) -> ObjectIdentityV2 {
@@ -1910,9 +1952,19 @@ mod tests {
         deadline_after: Duration,
         leaked: Option<&File>,
     ) -> HostileRun {
-        run_hostile_with_runtime(script, expected_solver, deadline_after, leaked, &[], false)
+        run_hostile_with_runtime(
+            script,
+            expected_solver,
+            deadline_after,
+            leaked,
+            &[],
+            false,
+            false,
+            1,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_hostile_with_runtime(
         script: &str,
         expected_solver: &str,
@@ -1920,12 +1972,15 @@ mod tests {
         leaked: Option<&File>,
         allowed_mappings: &[AllowedRuntimeExecutableV1],
         validate_mappings: bool,
+        require_auxiliary_verifier: bool,
+        expected_solver_processes: usize,
     ) -> HostileRun {
         let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         LAST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
+        TEST_DESCENDANTS.lock().unwrap().clear();
         let mut duplicates = Vec::new();
         let mut child_bindings = Vec::new();
         if let Some(leaked) = leaked {
@@ -1961,7 +2016,8 @@ mod tests {
             identity(expected_solver),
             allowed_mappings,
             validate_mappings,
-            false,
+            require_auxiliary_verifier,
+            expected_solver_processes,
             deadline,
             4096,
         );
@@ -1970,6 +2026,7 @@ mod tests {
             result,
             first_descendant: FIRST_TEST_DESCENDANT.load(Ordering::SeqCst),
             last_descendant: LAST_TEST_DESCENDANT.load(Ordering::SeqCst),
+            descendants: TEST_DESCENDANTS.lock().unwrap().clone(),
         }
     }
 
@@ -2110,6 +2167,7 @@ mod tests {
             &source,
             Instant::now() + Duration::from_secs(120),
             4096,
+            GeneratedVerusExecutionProfileV1::Ranked,
         )
         .unwrap();
         assert_eq!((output.exit_code, output.signal), (Some(0), None));
@@ -2142,6 +2200,7 @@ mod tests {
             &source,
             Instant::now() + Duration::from_secs(120),
             4096,
+            GeneratedVerusExecutionProfileV1::Ranked,
         )
         .unwrap();
         assert_eq!((output.exit_code, output.signal), (Some(0), None));
@@ -2179,6 +2238,8 @@ mod tests {
             None,
             &allowed,
             true,
+            false,
+            1,
         );
         match run.result {
             Ok(output) => assert_eq!((output.exit_code, output.signal), (Some(0), None)),
@@ -2226,6 +2287,8 @@ mod tests {
             None,
             &allowed,
             true,
+            false,
+            1,
         );
         let error = expect_error(run.result);
         assert_eq!(
@@ -2252,6 +2315,139 @@ mod tests {
             error.to_string().contains("executable identity differs"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn closed_fill_solver_roster_requires_exact_successful_bounded_descendants() {
+        let positive = run_hostile_with_runtime(
+            &"/bin/true; ".repeat(12),
+            "/bin/true",
+            Duration::from_secs(5),
+            None,
+            &[],
+            false,
+            false,
+            12,
+        );
+        match positive.result {
+            Ok(output) => assert_eq!((output.exit_code, output.signal), (Some(0), None)),
+            Err(error) => panic!("exact closed-fill solver roster rejected: {error}"),
+        }
+        let paired = run_hostile_with_runtime(
+            &"/bin/sleep 0.03 & /bin/sleep 0.03 & wait; ".repeat(6),
+            "/bin/sleep",
+            Duration::from_secs(5),
+            None,
+            &[],
+            false,
+            false,
+            12,
+        );
+        match paired.result {
+            Ok(output) => assert_eq!((output.exit_code, output.signal), (Some(0), None)),
+            Err(error) => panic!("two live solver processes rejected: {error}"),
+        }
+        for (script, solver, expected) in [
+            (
+                "/bin/true; ".repeat(11),
+                "/bin/true",
+                "exact Z3 descendants were not observed",
+            ),
+            (
+                "/bin/true; ".repeat(13),
+                "/bin/true",
+                "additional or nested descendant",
+            ),
+            (
+                format!("{} /bin/false; :", "/bin/true; ".repeat(5)),
+                "/bin/true",
+                "executable identity differs",
+            ),
+            (
+                "/bin/false; :".to_owned(),
+                "/bin/false",
+                "did not exit successfully",
+            ),
+            (
+                "/bin/sleep 1 & /bin/sleep 1 & /bin/sleep 1 & wait; :".to_owned(),
+                "/bin/sleep",
+                "live solver/pending executable bound",
+            ),
+            (
+                "/bin/sleep 1 & /bin/sleep invalid; wait; :".to_owned(),
+                "/bin/sleep",
+                "did not exit successfully",
+            ),
+        ] {
+            let run = run_hostile_with_runtime(
+                &script,
+                solver,
+                Duration::from_secs(5),
+                None,
+                &[],
+                false,
+                false,
+                12,
+            );
+            let error = expect_error(run.result);
+            assert_eq!(
+                error.kind(),
+                RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+            );
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!run.descendants.is_empty());
+            for descendant in run.descendants {
+                assert_process_disappears(descendant);
+            }
+        }
+    }
+
+    #[test]
+    fn closed_fill_roster_preserves_auxiliary_order_identity_and_success() {
+        let solvers = "/bin/true; ".repeat(12);
+        let positive = run_hostile_with_runtime(
+            &format!("/bin/sh -c ':'; {solvers}"),
+            "/bin/true",
+            Duration::from_secs(5),
+            None,
+            &[],
+            false,
+            true,
+            12,
+        );
+        match positive.result {
+            Ok(output) => assert_eq!((output.exit_code, output.signal), (Some(0), None)),
+            Err(error) => panic!("auxiliary and exact solver roster rejected: {error}"),
+        }
+        for (script, expected) in [
+            (
+                solvers.clone(),
+                "executable identity differs or appears out of order",
+            ),
+            (
+                format!("/bin/sh -c 'exit 1'; {solvers}"),
+                "auxiliary rust_verify did not exit successfully",
+            ),
+            (
+                format!("/bin/sh -c ':'; /bin/sh -c ':'; {solvers}"),
+                "executable identity differs or appears out of order",
+            ),
+        ] {
+            let run = run_hostile_with_runtime(
+                &script,
+                "/bin/true",
+                Duration::from_secs(5),
+                None,
+                &[],
+                false,
+                true,
+                12,
+            );
+            let error = expect_error(run.result);
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_process_disappears(run.first_descendant);
+            assert_process_disappears(run.last_descendant);
+        }
     }
 
     #[test]

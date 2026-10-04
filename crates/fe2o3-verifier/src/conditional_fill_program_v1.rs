@@ -15,7 +15,9 @@ use fe2o3_kernel_ir::{
 
 use crate::{ValidatedCompilerTargetLineageV1, ValidatedConditionalCompilerProofInputsV1};
 
+pub(crate) mod recipe;
 mod source;
+use recipe::{Effect, Expr, Id, Origin, Recipe};
 
 /// Retains the exact compiler owners for one complete guarded index-fill program.
 ///
@@ -34,6 +36,7 @@ pub struct CheckedConditionalFillProgramV1<'a> {
     lineage: &'a ValidatedCompilerTargetLineageV1,
     neutral_store: (u32, u32),
     target_store: (u32, u32),
+    pub(crate) recipes: [Recipe; 3],
 }
 
 impl CheckedConditionalFillProgramV1<'_> {
@@ -91,7 +94,8 @@ pub fn check_conditional_fill_program_v1<'a>(
     }
     let neutral = decode_module_v9(inputs.kernel_ir().canonical_bytes()).map_err(|_| E::Profile)?;
     let neutral_shape = check_module(&neutral)?;
-    source::check_source(inputs, &neutral_shape, neutral.kernels[0].entry.as_str())?;
+    let semantic_recipe =
+        source::check_source(inputs, &neutral_shape, neutral.kernels[0].entry.as_str())?;
     let target = replay.target_bound_module();
     let target_shape = check_module(target)?;
     if neutral.kernels[0].entry != target.kernels[0].entry
@@ -104,6 +108,7 @@ pub fn check_conditional_fill_program_v1<'a>(
         lineage,
         neutral_store: neutral_shape.store,
         target_store: target_shape.store,
+        recipes: [semantic_recipe, neutral_shape.recipe, target_shape.recipe],
     })
 }
 
@@ -150,6 +155,7 @@ struct ProgramShape {
     store: (u32, u32),
     values: BTreeMap<ValueId, Value>,
     operations: BTreeMap<(u32, u32), Option<Value>>,
+    recipe: Recipe,
 }
 
 fn check_module(module: &Module) -> Result<ProgramShape, ConditionalFillProgramErrorV1> {
@@ -188,6 +194,9 @@ fn check_module(module: &Module) -> Result<ProgramShape, ConditionalFillProgramE
         }
     }
     let mut values = BTreeMap::from([(*output, Value::Output)]);
+    let mut recipe = Recipe::default();
+    let parameter = recipe.push(Origin([0, u32::MAX, 0, output.0, u32::MAX]), Expr::Output)?;
+    let mut expressions = BTreeMap::from([(*output, parameter)]);
     let mut operations = BTreeMap::new();
     let mut visited = BTreeSet::new();
     let mut next = body.blocks[0].id;
@@ -206,11 +215,24 @@ fn check_module(module: &Module) -> Result<ProgramShape, ConditionalFillProgramE
                 block: site.0,
                 operation: site.1,
             })?;
+            let origin = Origin([
+                0,
+                site.0,
+                site.1,
+                operation
+                    .results
+                    .first()
+                    .map_or(u32::MAX, |value| value.id.0),
+                u32::MAX,
+            ]);
+            let expression =
+                retain_kernel_expression(operation, &expressions, &mut recipe, origin)?;
             match (value, operation.results.as_slice()) {
                 (Some(value), [result]) if result.ty == value.ty() => {
                     if values.insert(result.id, value).is_some() {
                         return Err(E::ValueDefinition);
                     }
+                    expressions.insert(result.id, expression.ok_or(E::ValueDefinition)?);
                 }
                 (None, []) if store.replace(site).is_none() => {}
                 _ => {
@@ -238,7 +260,63 @@ fn check_module(module: &Module) -> Result<ProgramShape, ConditionalFillProgramE
         store: store.ok_or(E::MissingStore)?,
         values,
         operations,
+        recipe,
     })
+}
+
+fn retain_kernel_expression(
+    operation: &Operation,
+    expressions: &BTreeMap<ValueId, Id>,
+    recipe: &mut Recipe,
+    origin: Origin,
+) -> Result<Option<Id>, ConditionalFillProgramErrorV1> {
+    let get = |id: &ValueId| {
+        expressions
+            .get(id)
+            .copied()
+            .ok_or(ConditionalFillProgramErrorV1::ValueDefinition)
+    };
+    let expression = match &operation.kind {
+        OperationKind::Intrinsic(_) => Expr::GlobalX,
+        OperationKind::Cast {
+            kind: CastKind::Bitcast,
+            value,
+            ..
+        } => Expr::Bitcast(get(value)?),
+        OperationKind::Cast {
+            kind: CastKind::Truncate,
+            value,
+            ..
+        } => Expr::Truncate(get(value)?),
+        OperationKind::SliceLength { slice } => Expr::Length(get(slice)?),
+        OperationKind::Compare { lhs, rhs, .. } => Expr::Less(get(lhs)?, get(rhs)?),
+        OperationKind::Constant(Constant::Index(0)) => Expr::Zero,
+        OperationKind::Select {
+            condition,
+            true_value,
+            false_value,
+        } => Expr::Select(get(condition)?, get(true_value)?, get(false_value)?),
+        OperationKind::SliceData { slice } => Expr::Base(get(slice)?),
+        OperationKind::GetElementPointer { base, offset } => Expr::Offset(get(base)?, get(offset)?),
+        OperationKind::GuardedStore {
+            pointer,
+            predicate,
+            value,
+            ..
+        } => {
+            recipe.set_effect(
+                origin,
+                Effect::KirStore {
+                    pointer: get(pointer)?,
+                    predicate: get(predicate)?,
+                    value: get(value)?,
+                },
+            )?;
+            return Ok(None);
+        }
+        _ => return Err(ConditionalFillProgramErrorV1::Profile),
+    };
+    recipe.push(origin, expression).map(Some)
 }
 
 // Each accepted value has one exact denotation in terms of the selected output and global X.

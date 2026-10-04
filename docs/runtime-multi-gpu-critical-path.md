@@ -15,12 +15,16 @@ opcode coverage before clearing application admission.
    lineage and authenticated analyzer/model association in the host verification
    request. The native current-publication audit passes, including substitution
    and publication-replacement controls; this is not launch authority.
-2. Implement a distinct pending conditional artifact and protected closed-fill
-   verifier/refinement path. Preserve unconditional admission; never expose the
+2. Completed: generate the conditional semantic MIR, neutral KIR and target KIR
+   relation from their actual operand graphs, execute the shared machine bodies
+   under the protected Verus runtime, and retain a distinct signed refinement
+   receipt. This proves the conditional projection, not native launch premises.
+3. Implement a distinct owned pending conditional artifact and protected compiler
+   service/current-record association. Preserve unconditional admission; never expose the
    pending state through existing unconditional executable/load APIs.
-3. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
+4. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
    and publication currentness before creating private invocation authority.
-4. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
+5. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
    -> PUBLIC XGMI -> full guarded readback in both directions, including N=65
    with G=128. A second write-only fill does not prove consumption of peer input.
 
@@ -151,13 +155,26 @@ now joins those owners to the exact current-publication request, canonical compi
 descriptor, semantic kernel identity and finalized payload. The actual native
 Worker-to-host audit passes; synthetic carriage is not compiler-origin authority.
 It also fixes V5 correspondence wrapper erasure in both compiler import paths and
-checks the retained function roster against the bound KIR. Implement the protected
-conditional provider and consuming invocation transition next. The proof producer
-must generate its semantic relation from retained source/KIR expressions and keep
-the actual protected proof execution; a fixed machine theorem with attached hashes
-does not establish that relation. Only then
+checks the retained function roster against the bound KIR. The
+[conditional refinement checkpoint](evidence/dev-fill-refinement-2026-10-03/README.md)
+now generates independent semantic/neutral/target expressions from actual operand
+edges and proves their relation to the shared wave execution and byte projection.
+Its distinct boundary retains actual protected execution and strict signed import.
+The protected qualification includes six logical operand mutations and an
+equivalent alias rewrite, not merely fixed machine theorems with attached hashes.
+Implement owned pending custody, protected compiler-service association and the
+consuming invocation transition next. Only then
 qualify admitted fill, tracked upload, native XGMI and readback on two GPUs in
 both directions.
+
+The pending owner must consume and retain the original compiler inputs, target
+lineage and authenticated analysis, not reconstruct authority from signed bytes or
+hold self-referential borrowed views. Actual DATA pointers are patched in the KFD
+queue-dispatch preparation layer, after host preparation. Discharge alignment,
+bounds, non-overflow and DATA/kernarg disjointness there before issue; a hash of the
+unpatched template is insufficient. Current-record audit evidence is also not
+protected compiler-key custody: retain the concrete service/coordinator continuity
+owners when building the pending artifact.
 
 The current Worker artifact verifier accepts only unconditional compiler proof
 inputs and runs before invocation arguments exist. Do not retag the conditional

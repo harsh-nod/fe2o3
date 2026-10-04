@@ -12,6 +12,7 @@ use std::time::Instant;
 use sha2::{Digest, Sha256};
 
 use crate::CanonicalGeneratedVerusProofInputV3;
+use crate::functional_refinement_runtime_v1::GeneratedVerusExecutionProfileV1;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "retained_functional_refinement_runtime_v1_linux.rs"]
@@ -178,6 +179,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
+        profile: GeneratedVerusExecutionProfileV1,
     ) -> Result<
         RetainedFunctionalRefinementRuntimeOutputV1,
         RetainedFunctionalRefinementRuntimeErrorV1,
@@ -189,6 +191,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
             source,
             deadline,
             output_limit,
+            profile,
         );
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(

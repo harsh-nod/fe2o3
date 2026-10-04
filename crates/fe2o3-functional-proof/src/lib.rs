@@ -90,6 +90,8 @@ pub enum FunctionalRefinementBoundaryV2 {
     SafeReferenceMirToLivePliron = 3,
     /// Guarded coverage remains conditional on the actual launch extent.
     SafeReferenceMirToLivePlironConditionalCoverage = 4,
+    /// Closed semantic MIR/KIR to projected gfx942 fill dispatch, with explicit native premises.
+    SemanticMirToGfx942FillDispatchConditional = 5,
 }
 
 impl FunctionalRefinementBoundaryV2 {
@@ -100,6 +102,7 @@ impl FunctionalRefinementBoundaryV2 {
             2 => Ok(Self::SafeReferenceSourceToKernelMir),
             3 => Ok(Self::SafeReferenceMirToLivePliron),
             4 => Ok(Self::SafeReferenceMirToLivePlironConditionalCoverage),
+            5 => Ok(Self::SemanticMirToGfx942FillDispatchConditional),
             value => Err(FunctionalRefinementImportErrorV2::UnknownBoundary(value)),
         }
     }
