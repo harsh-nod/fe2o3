@@ -886,14 +886,13 @@ mod tests {
             header.msg_iov = &mut vector;
             header.msg_iovlen = 1;
             header.msg_control = control.as_mut_ptr().cast();
-            header.msg_controllen =
-                unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+            header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as _;
             // SAFETY: aligned control storage has capacity for one SCM_RIGHTS descriptor.
             unsafe {
                 let message = libc::CMSG_FIRSTHDR(&header);
                 (*message).cmsg_level = libc::SOL_SOCKET;
                 (*message).cmsg_type = libc::SCM_RIGHTS;
-                (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize;
+                (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as _;
                 ptr::write_unaligned(
                     libc::CMSG_DATA(message).cast::<RawFd>(),
                     descriptor.as_raw_fd(),

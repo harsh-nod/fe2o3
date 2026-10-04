@@ -17,6 +17,8 @@ const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
 const SIGSTOP: c_int = 19;
 const SYS_CLONE3: c_long = 435;
+const SYS_CLOSE_RANGE: c_long = 436;
+const SYS_EXECVEAT: c_long = 322;
 const SYS_RT_SIGACTION: c_long = 13;
 const SYS_RT_SIGPROCMASK: c_long = 14;
 const SIG_SETMASK: c_int = 2;
@@ -45,15 +47,7 @@ const REAP_SLOT_DEFERRED: u8 = 2;
 
 unsafe extern "C" {
     fn close(descriptor: c_int) -> c_int;
-    fn close_range(first: c_uint, last: c_uint, flags: c_uint) -> c_int;
     fn dup3(old_descriptor: c_int, new_descriptor: c_int, flags: c_int) -> c_int;
-    fn execveat(
-        descriptor: c_int,
-        path: *const c_char,
-        arguments: *const *const c_char,
-        environment: *const *const c_char,
-        flags: c_int,
-    ) -> c_int;
     fn prctl(option: c_int, ...) -> c_int;
     fn syscall(number: c_long, ...) -> c_long;
     fn write(descriptor: c_int, bytes: *const c_void, length: usize) -> isize;
@@ -716,7 +710,7 @@ unsafe fn child_exec(
             child_fail(status_write, 1);
         }
         close(status_read);
-        if close_range(3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
+        if syscall(SYS_CLOSE_RANGE, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
             child_fail(status_write, 2);
         }
         for target in 0..=2 {
@@ -734,7 +728,8 @@ unsafe fn child_exec(
         }
         let empty_path = c"";
         let environment = [std::ptr::null::<c_char>()];
-        execveat(
+        syscall(
+            SYS_EXECVEAT,
             tool,
             empty_path.as_ptr(),
             vector.pointers(),

@@ -4,6 +4,9 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-protected-static-executable requires Linux x86-64");
 
+mod installed;
+pub use installed::RootInstalledFileV1;
+
 use std::error::Error;
 use std::fmt;
 use std::fs::{File, Metadata};

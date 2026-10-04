@@ -205,11 +205,12 @@ pub use linux::observer_channel::{
     CompilerExecutionObserverErrorV1, ObservedApplicationRegistrationV1,
     ObservedCustodianApplicationRegistrationV1, PendingApplicationObservationGateV1,
     PreparedRootCompilerExecutionObserverV1, PreparedRootCompilerObserverRegistryV1,
-    ProtectedCompilerExecutionObserverV1, PublishedApplicationCustodianHandoffV1,
+    ProofManagerCommandV1, ProofManagerDeploymentV1, ProtectedCompilerExecutionObserverV1,
+    PublishedApplicationCustodianHandoffV1, ReceivedPublishedApplicationV1,
     RegisteredApplicationObserverV1, RegisteredCompilerObserverV1,
     RegisteredCustodianApplicationObserverV1, RootCompilerExecutionObserverProgressV1,
-    RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1,
-    SupervisorCompilerObserverRegistryV1,
+    RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1, RootProofManagerClientV1,
+    RootProofManagerServerV1, SupervisorCompilerObserverRegistryV1,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{

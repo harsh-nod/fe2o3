@@ -6,37 +6,48 @@ existing MI300X evidence independently. Primary owns edits, integration and test
 
 ## Immediate Priority
 
+The [independent proof manager](runtime-proof-manager-v1.md) now implements the
+authenticated registered-owner/controller join and cooperative coordinator
+bootstrap. Its fixed manager owns controller launch, ReadyOffered custody and
+post-coordinator-loss retention. The public launcher no longer accepts arbitrary
+raw registration tuples. Ordinary host/supervisor route selection, the remote
+conditional native-invocation owner and two-GPU application qualification remain
+the next gates; do not equate manager activation with proof or GPU execution.
+The standard compiler-only deployment bundle still excludes the manager/controller
+closure and its approval records. Package and activate those resources before
+switching the ordinary host/supervisor route; the isolated manager fixture does
+not establish production deployment readiness.
+
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
 have scoped hardware qualification. Do not add more routing wrappers or expand
 opcode coverage before clearing application admission.
 
-The immediate implementation work is the deployed custodian/application handoff,
-then the conditional invocation join to existing per-device native preparation.
+The immediate implementation work is the consuming application proof client and
+conditional invocation join to existing per-device native preparation.
 The [fixed-controller execution campaign](evidence/dev-proof-controller-execution-2026-10-04/README.md)
 now passes real post-exec analysis/proof, retained-owner probing, three mismatch
 controls and live-Verus cancellation. Do not substitute another isolated identity
-or routing checkpoint for those two production joins.
+or routing checkpoint for the remaining application/native join.
 
 The independently installed root launcher is now implemented in
 `fe2o3-proof-custodian`: it opens the fixed controller, analyzer and Verus runtime,
 retains original process custody and contains each proof tree in a fresh cgroup.
 Its [pollable lifecycle](runtime-proof-custodian-polling-v1.md) supports cooperative
-startup, proof execution and cancellation on the originating root thread. This is
-the manager's lifecycle prerequisite, not the deployed manager or application
-handoff. Next implement one staged application session in the independent manager,
-then the remote conditional owner and existing per-device native invocation join.
+startup, proof execution and cancellation on the originating root thread. The
+independent manager now consumes the broker's authenticated registered owner and
+uses that lifecycle for a staged application session. Next implement the consuming
+host client, remote conditional owner and per-device native invocation join.
 Keep general performance work and additional GPU counts out of this critical path.
 
 The [staged application controller](runtime-application-proof-controller-v1.md)
 now implements resource Ready, exact root activation, two-FD application requests,
-retained proof probing and quarantine. This is the controller component, not yet
-the independently deployed manager or authenticated registration handoff. Its root
-staging primitive must be joined to the broker's typed original occurrence owner;
-the staged capsule alone cannot authenticate that observation. The generated-only
+retained proof probing and quarantine. Its root staging primitive now requires the
+manager's authenticated received registration; the staged capsule alone cannot
+authenticate that observation. The generated-only
 multi-device native-peer constructor is also implemented without granting generic
-compute authority. Next priorities are, in order: manager/registered-owner handoff,
-remote conditional native-invocation join and two-GPU application qualification.
+compute authority. Next priorities are the consuming host proof client, remote
+conditional native-invocation join and two-GPU application qualification.
 The [application-controller campaign](evidence/dev-application-proof-controller-2026-10-04/README.md)
 now passes genuine proof/probe/EOF-quarantine and three application rejection cases,
 plus all 18 existing launcher regressions. Its registration records are component
@@ -45,11 +56,11 @@ fixtures, not completion of the authenticated ordinary-application gate.
 The [published custodian handoff](runtime-application-custodian-handoff-v1.md)
 now adds a distinct authenticated broker route and moves the original published
 application owner out of issuer/registry cleanup. Identity and capacity reservations
-survive extraction; the legacy route remains unchanged. This is the sender-side
-pending owner, not the independently deployed manager or a completed Ready/Activate
-transition. Next join it to the approved manager transport and staged controller,
-then the remote conditional native invocation. Do not add more standalone identity
-or route wrappers in place of those joins.
+survive extraction; the legacy route remains unchanged. The sender-side pending
+owner now joins the approved manager transport and staged controller through
+Ready/Activate. Ordinary host/supervisor selection must switch together with the
+consuming proof client; the legacy application route is not a fallback for remote
+proof. Do not add more standalone identity or route wrappers in place of that join.
 
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
@@ -158,7 +169,8 @@ resource opener/launcher; an identity-only deployment manifest is insufficient.
 Only root sends Ready. After successful Ready delivery, activate the custodian
 and retire root's peer alias; proof packets then require that custodian's exact
 per-message credentials and fresh nonce. The staged controller protocol is now
-implemented; the authenticated coordinator/manager/client handoff is still pending.
+implemented, as is the authenticated coordinator/manager handoff. The ordinary
+application's consuming proof client and production route selection remain open.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
@@ -363,7 +375,8 @@ priority; deployed compiler acquisition remains a separate required qualificatio
    One stalled app must not block the registry, and ACK EOF must remain observable.
    The positive production-context component startup now passes under Cargo's actual
    pre-exec filter, including delayed registration and immediate post-Ready exit.
-   Next deploy fixed keyless proof custody and implement the consuming native join.
+   Fixed keyless manager/controller custody is now joined. Next connect the
+   consuming application proof client and conditional native preparation.
 
 The bootstrap uses no sandbox-forbidden waitid, pidfd reopening or socket shutdown.
 Its root/UID1000 campaign includes live separate-root success, queued Challenge

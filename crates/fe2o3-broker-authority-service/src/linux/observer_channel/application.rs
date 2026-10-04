@@ -35,6 +35,7 @@ enum State {
     },
     ReadyPending(Message),
     CustodianHandoffReady(Transcript),
+    CustodianReadyOffered,
     Registered,
     Retired,
 }
@@ -148,7 +149,7 @@ impl ApplicationSession {
     }
 
     pub(super) fn retired(&self) -> bool {
-        matches!(self.state, State::Retired)
+        matches!(self.state, State::Retired | State::CustodianReadyOffered)
     }
 
     fn advance(
@@ -419,6 +420,50 @@ pub struct PublishedApplicationCustodianHandoffV1 {
 }
 
 impl PublishedApplicationCustodianHandoffV1 {
+    pub(super) fn process_rights(&self) -> [BorrowedFd<'_>; 2] {
+        [
+            self.session.application.pidfd.as_fd(),
+            self.session.parent.pidfd.as_fd(),
+        ]
+    }
+
+    pub(super) fn proof_peer(&self) -> BorrowedFd<'_> {
+        self.session.endpoint.peer.as_fd()
+    }
+
+    // Only the authenticated manager client may publish this one-way transition.
+    pub(super) fn publish_ready(
+        &mut self,
+        session: &fe2o3_runtime_protocol::WorkerV3ApplicationProofSessionV1,
+        controller: &LiveClientPidfdIdentityV1,
+    ) -> Result<bool> {
+        self.revalidate()?;
+        controller.validate_liveness()?;
+        let identity = controller.expected_client;
+        if session.transcript() != self.transcript()
+            || session.controller() != (identity.pid, identity.uid, identity.gid)
+        {
+            return Err(invalid(
+                "custodian Ready does not match original registration",
+            ));
+        }
+        let transcript = self.transcript();
+        let message = Message::custodian_ready(session.clone());
+        require_deadline(self.session.deadline)?;
+        // Any error is conservatively possibly delivered. Drop must plain-close, not
+        // shutdown the shared peer or kill the application after this point.
+        self.session.state = State::CustodianReadyOffered;
+        if !self
+            .session
+            .endpoint
+            .send_bytes(message.canonical_bytes(), &[controller.pidfd.as_fd()])?
+        {
+            self.session.state = State::CustodianHandoffReady(transcript);
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(super) fn process_identity(&self) -> (u32, u64) {
         self.session.process_identity()
     }

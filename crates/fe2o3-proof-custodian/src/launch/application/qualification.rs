@@ -353,7 +353,7 @@ fn root_application_controller() {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut pending = ProductionApplicationProofCustodianDeploymentV1::open()
             .unwrap()
-            .begin_application(binding, transcript, app_pidfd, cargo_pidfd, peer)
+            .begin_unregistered_qualification(binding, transcript, app_pidfd, cargo_pidfd, peer)
             .unwrap();
         while !pending.poll().unwrap() {
             std::thread::sleep(Duration::from_millis(2));

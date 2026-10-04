@@ -10,8 +10,8 @@ use fe2o3_runtime_protocol::{
 #[allow(unsafe_code)]
 mod qualification;
 
-/// Pending fixed application-controller resource admission, not authenticated registration.
-/// Callers must supply the exact peer and original pidfds from registered root custody.
+/// Pending fixed application-controller resource admission from authenticated registration.
+/// Original process pidfds and the exact peer arrive only through the approved manager.
 ///
 /// ```compile_fail
 /// use fe2o3_proof_custodian::PendingRootApplicationProofControllerV1;
@@ -21,6 +21,8 @@ mod qualification;
 pub struct PendingRootApplicationProofControllerV1 {
     pending: PendingRootProofControllerLaunchV1,
     session: Session,
+    startup_deadline: Instant,
+    execution_deadline: Instant,
 }
 impl ProductionApplicationProofCustodianDeploymentV1 {
     /// Consumes the manager's staging aliases; only the fixed child inherits duplicates.
@@ -28,14 +30,44 @@ impl ProductionApplicationProofCustodianDeploymentV1 {
     /// drop that alias without shutdown before calling the staged owner's activation.
     pub fn begin_application(
         self,
+        registration: fe2o3_broker_authority_service::ReceivedPublishedApplicationV1,
+    ) -> io::Result<PendingRootApplicationProofControllerV1> {
+        registration.stage(|binding, transcript, deadline, [app, cargo, peer]| {
+            self.begin_application_parts(binding, transcript, app, cargo, peer, deadline)
+        })
+    }
+
+    #[cfg(test)]
+    fn begin_unregistered_qualification(
+        self,
         binding: Binding,
         transcript: Transcript,
         application_pidfd: OwnedFd,
         cargo_pidfd: OwnedFd,
         proof_peer: OwnedFd,
     ) -> io::Result<PendingRootApplicationProofControllerV1> {
+        self.begin_application_parts(
+            binding,
+            transcript,
+            application_pidfd,
+            cargo_pidfd,
+            proof_peer,
+            Instant::now() + Duration::from_secs(120),
+        )
+    }
+
+    fn begin_application_parts(
+        self,
+        binding: Binding,
+        transcript: Transcript,
+        application_pidfd: OwnedFd,
+        cargo_pidfd: OwnedFd,
+        proof_peer: OwnedFd,
+        startup_deadline: Instant,
+    ) -> io::Result<PendingRootApplicationProofControllerV1> {
+        check_deadline(startup_deadline)?;
         self.revalidate()?;
-        let deadline = Instant::now() + EXECUTION_TIMEOUT;
+        let execution_deadline = Instant::now() + EXECUTION_TIMEOUT;
         let peer = wire::ControlEndpoint::admit(proof_peer)?;
         let capsule =
             Capsule::capture(binding, transcript, &application_pidfd, &cargo_pidfd, &peer)?;
@@ -46,7 +78,7 @@ impl ProductionApplicationProofCustodianDeploymentV1 {
             capsule.nonce,
             request.as_fd(),
             &[application_pidfd.as_fd(), cargo_pidfd.as_fd(), peer.as_fd()],
-            deadline,
+            startup_deadline.min(execution_deadline),
         )?;
         let pid = pending.controller.as_ref().unwrap().child_pid();
         let session = Session::new(
@@ -58,35 +90,46 @@ impl ProductionApplicationProofCustodianDeploymentV1 {
         .map_err(other)?;
         pending.expected_ready = ExpectedReady::new(session.canonical_bytes());
         // All parent-side staging aliases are dropped before this pending owner is returned.
-        Ok(PendingRootApplicationProofControllerV1 { pending, session })
+        Ok(PendingRootApplicationProofControllerV1 {
+            pending,
+            session,
+            startup_deadline,
+            execution_deadline,
+        })
     }
 }
 impl PendingRootApplicationProofControllerV1 {
     pub fn poll(&mut self) -> io::Result<bool> {
-        self.pending.poll()
+        check_deadline(self.startup_deadline)?;
+        let progressed = self.pending.poll()?;
+        check_deadline(self.startup_deadline)?;
+        Ok(progressed)
     }
     pub fn poll_cancel(&mut self) -> io::Result<bool> {
         self.pending.poll_cancel()
     }
     pub fn take_ready(&mut self) -> io::Result<Option<RootStagedApplicationProofControllerV1>> {
-        Ok(self
-            .pending
-            .take_ready()?
-            .map(|controller| RootStagedApplicationProofControllerV1 {
+        check_deadline(self.startup_deadline)?;
+        Ok(self.pending.take_ready()?.map(|mut controller| {
+            controller.deadline = self.execution_deadline;
+            RootStagedApplicationProofControllerV1 {
                 controller,
                 session: self.session.clone(),
+                startup_deadline: self.startup_deadline,
+                ready_offered: false,
                 activation_sent: false,
                 activated: false,
                 proof_observed: false,
                 probe_deadline: None,
                 probe_sent: false,
-            }))
+            }
+        }))
     }
 }
 
 /// Root lifecycle custody for one staged/activated application controller.
 ///
-/// After any possibly delivered Activate, this owner cannot cancel, release or be
+/// After offering Ready or any possibly delivered Activate, this owner cannot cancel, release or be
 /// silently dropped. Drop fail-stops its manager; deployment must kill the entire
 /// manager cgroup on death. Keep active custody until a future native-settlement
 /// owner consumes it. App EOF and pidfd death never establish GPU settlement.
@@ -105,6 +148,8 @@ impl PendingRootApplicationProofControllerV1 {
 pub struct RootStagedApplicationProofControllerV1 {
     controller: RootManagedProofControllerV1,
     session: Session,
+    startup_deadline: Instant,
+    ready_offered: bool,
     activation_sent: bool,
     activated: bool,
     proof_observed: bool,
@@ -121,6 +166,15 @@ impl RootStagedApplicationProofControllerV1 {
     }
     pub fn revalidate(&self) -> io::Result<()> {
         self.controller.revalidate()
+    }
+    /// Irreversible before the manager can offer Ready: coordinator loss may mean
+    /// the application has already received it, even without a later Activate.
+    pub fn offer_ready(&mut self) -> io::Result<OwnedFd> {
+        check_deadline(self.startup_deadline)?;
+        self.controller.revalidate()?;
+        let pidfd = self.controller.try_clone_pidfd()?;
+        self.ready_offered = true;
+        Ok(pidfd)
     }
     /// The registering root must have sent Ready and dropped every receive alias.
     /// This is a root ownership invariant, not something a socket syscall can prove.
@@ -163,7 +217,7 @@ impl RootStagedApplicationProofControllerV1 {
     /// Available only before Activate could have been delivered.
     pub fn poll_cancel(&mut self) -> io::Result<bool> {
         require(
-            !self.activation_sent,
+            !self.ready_offered && !self.activation_sent,
             "activated application proof custody cannot be cancelled as settlement",
         )?;
         self.controller.poll_cancel()
@@ -219,13 +273,14 @@ impl RootStagedApplicationProofControllerV1 {
     #[cfg(test)]
     pub(super) fn contain_qualification(&mut self) -> io::Result<()> {
         self.controller.cancel()?;
+        self.ready_offered = false;
         self.activation_sent = false;
         Ok(())
     }
 }
 impl Drop for RootStagedApplicationProofControllerV1 {
     fn drop(&mut self) {
-        if self.activation_sent {
+        if self.ready_offered || self.activation_sent {
             std::process::abort();
         }
     }

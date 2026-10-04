@@ -1437,13 +1437,13 @@ mod tests {
         header.msg_iov = &mut io_vector;
         header.msg_iovlen = 1;
         header.msg_control = control.as_mut_ptr().cast();
-        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as _;
         // SAFETY: control has enough aligned storage for one SCM_RIGHTS descriptor.
         unsafe {
             let message = libc::CMSG_FIRSTHDR(&header);
             (*message).cmsg_level = libc::SOL_SOCKET;
             (*message).cmsg_type = libc::SCM_RIGHTS;
-            (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize;
+            (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as _;
             ptr::write_unaligned(libc::CMSG_DATA(message).cast::<RawFd>(), descriptor);
         }
         let sent = unsafe { libc::sendmsg(socket, &header, libc::MSG_NOSIGNAL) };
@@ -1468,7 +1468,7 @@ mod tests {
         header.msg_iov = &mut io_vector;
         header.msg_iovlen = 1;
         header.msg_control = control.as_mut_ptr().cast();
-        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as _;
         let received = unsafe { libc::recvmsg(socket, &mut header, libc::MSG_CMSG_CLOEXEC) };
         if received < 0 {
             return Err(io::Error::last_os_error());
@@ -1485,7 +1485,8 @@ mod tests {
             if message.is_null()
                 || (*message).cmsg_level != libc::SOL_SOCKET
                 || (*message).cmsg_type != libc::SCM_RIGHTS
-                || (*message).cmsg_len != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
+                || (*message).cmsg_len as usize
+                    != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
                 || !libc::CMSG_NXTHDR(&header, message).is_null()
             {
                 return Err(io::Error::from_raw_os_error(libc::EBADMSG));

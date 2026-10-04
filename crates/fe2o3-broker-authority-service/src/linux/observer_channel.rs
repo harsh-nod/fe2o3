@@ -27,6 +27,7 @@ use crate::{ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecuti
 
 mod application;
 mod issuer;
+mod proof_manager;
 pub(crate) mod registry;
 mod root;
 pub use application::{
@@ -36,6 +37,10 @@ pub use issuer::ProtectedCompilerExecutionObserverV1;
 pub(crate) use issuer::RemoteCompilerExecutionOccurrenceGuardV1;
 #[cfg(test)]
 pub(crate) use issuer::tests;
+pub use proof_manager::{
+    ProofManagerCommandV1, ProofManagerDeploymentV1, ReceivedPublishedApplicationV1,
+    RootProofManagerClientV1, RootProofManagerServerV1,
+};
 pub use registry::{
     ObservedApplicationRegistrationV1, ObservedCustodianApplicationRegistrationV1,
     PreparedRootCompilerObserverRegistryV1, RegisteredApplicationObserverV1,
@@ -254,10 +259,15 @@ struct Endpoint {
     identity: ObjectIdentityV1,
     creator: PeerCredentialsV1,
     addresses: (rustix::net::SocketAddrUnix, rustix::net::SocketAddrUnix),
+    manager_path: bool,
 }
 
 impl Endpoint {
     fn admit(peer: OwnedFd) -> Result<Self> {
+        Self::admit_with_profile(peer, false)
+    }
+
+    fn admit_with_profile(peer: OwnedFd, manager_path: bool) -> Result<Self> {
         let endpoint = Self {
             identity: ObjectIdentityV1::inspect(
                 &peer,
@@ -265,7 +275,12 @@ impl Endpoint {
                 "observer peer",
             )?,
             creator: PeerCredentialsV1::inspect(&peer)?,
-            addresses: observer_addresses(&peer)?,
+            addresses: if manager_path {
+                proof_manager::addresses(&peer)?
+            } else {
+                observer_addresses(&peer)?
+            },
+            manager_path,
             peer,
         };
         endpoint.revalidate()?;
@@ -278,7 +293,11 @@ impl Endpoint {
             AdmissionErrorKindV1::InspectPeer,
             "observer peer",
         )? != self.identity
-            || observer_addresses(&self.peer)? != self.addresses
+            || (if self.manager_path {
+                proof_manager::addresses(&self.peer)?
+            } else {
+                observer_addresses(&self.peer)?
+            }) != self.addresses
             || PeerCredentialsV1::inspect(&self.peer)? != self.creator
             || rustix::io::fcntl_getfd(&self.peer)? != rustix::io::FdFlags::CLOEXEC
             || !rustix::net::sockopt::socket_passcred(&self.peer)?
@@ -315,6 +334,19 @@ impl Endpoint {
     ) -> Result<Option<(Vec<u8>, Vec<OwnedFd>)>> {
         self.revalidate()?;
         sender.validate_liveness()?;
+        let received = self.receive_from_credentials(sender.expected_client)?;
+        sender.validate_liveness()?;
+        self.revalidate()?;
+        Ok(received)
+    }
+
+    // Bootstrap only: the caller must admit the self-pidfd carried by this same packet
+    // before trusting any body or replying. All established traffic uses receive_bytes.
+    fn receive_from_credentials(
+        &self,
+        expected: ExpectedClientProcessIdentityV1,
+    ) -> Result<Option<(Vec<u8>, Vec<OwnedFd>)>> {
+        self.revalidate()?;
         let mut bytes = [0; MAX_TRANSPORT_PACKET];
         let mut space =
             [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(2))];
@@ -356,7 +388,6 @@ impl Endpoint {
         {
             return Err(CompilerExecutionObserverErrorV1::Closed);
         }
-        let expected = sender.expected_client;
         if malformed
             || received
                 .flags
@@ -372,7 +403,6 @@ impl Endpoint {
         if rights.len() > 2 || rights_messages != usize::from(!rights.is_empty()) {
             return Err(invalid("unexpected packet descriptors"));
         }
-        sender.validate_liveness()?;
         self.revalidate()?;
         Ok(Some((bytes[..received.bytes].to_vec(), rights)))
     }

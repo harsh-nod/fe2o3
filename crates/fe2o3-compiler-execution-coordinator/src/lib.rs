@@ -680,6 +680,16 @@ impl fmt::Debug for RootManagedCompilerExecutionServiceV1 {
 }
 
 impl RootManagedCompilerExecutionServiceV1 {
+    /// Moves one fully published custodian registration out of compiler cleanup.
+    /// Capacity and duplicate-occurrence reservations remain in the root registry.
+    pub fn take_published_application_custodian(
+        &mut self,
+    ) -> Option<fe2o3_broker_authority_service::PublishedApplicationCustodianHandoffV1> {
+        self.registry
+            .as_mut()?
+            .take_published_application_custodian()
+    }
+
     /// Services registered compiler observers without waiting for a complete request exchange.
     /// Individual issuer failures are contained and reported without stopping other sessions.
     pub fn step_observers(

@@ -188,6 +188,177 @@ fn install(
     )
 }
 
+#[test]
+#[ignore = "requires isolated fixed manager/controller installation, cgroup and real-root capabilities"]
+fn root_fixed_manager_handoff_campaign() {
+    use crate::{ProofManagerDeploymentV1, RootProofManagerClientV1};
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::env::var("FE2O3_CUSTODIAN_PRIVATE_INSTALL").unwrap(),
+        "1"
+    );
+    assert_eq!(rustix::process::geteuid().as_raw(), 0);
+    let namespace = std::fs::read_link("/proc/self/ns/pid").unwrap();
+    assert_ne!(
+        namespace.as_os_str(),
+        std::env::var_os("FE2O3_CUSTODIAN_HOST_PID_NAMESPACE").unwrap()
+    );
+    let measure = |path| {
+        let bytes = std::fs::read(path).unwrap();
+        (<[u8; 32]>::from(Sha256::digest(&bytes)), bytes.len() as u64)
+    };
+    let manager_path = "/usr/libexec/fe2o3/fe2o3-proof-manager";
+    let coordinator_path = "/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator";
+    let application =
+        std::fs::read("/etc/fe2o3/proof-custodian/application-deployment-v1").unwrap();
+    assert_eq!(application.len(), 280);
+    let approval = ProofManagerDeploymentV1::new(
+        measure(manager_path),
+        measure(coordinator_path),
+        application[248..].try_into().unwrap(),
+    )
+    .unwrap();
+    let path = "/etc/fe2o3/proof-custodian/manager-deployment-v1";
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, approval.canonical_bytes()).unwrap();
+    file.set_permissions(std::fs::Permissions::from_mode(0o444))
+        .unwrap();
+    drop(file);
+    let start_manager = || {
+        let mut command = std::process::Command::new(manager_path);
+        command.env_clear();
+        super::super::tests::ChildOwner(crate::test_process_execution::spawn(&mut command).unwrap())
+    };
+    let delayed_listener = std::env::var("FE2O3_MANAGER_CASE").as_deref() == Ok("delayed-listener");
+    let mut manager = (!delayed_listener).then(start_manager);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while manager.is_some()
+        && !std::path::Path::new("/run/fe2o3-proof-custodian/control.sock").exists()
+    {
+        require_deadline(deadline).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if std::env::var("FE2O3_MANAGER_CASE").as_deref() == Ok("coordinator-copy") {
+        let error = RootProofManagerClientV1::begin_connect()
+            .err()
+            .expect("copied inode must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("not the independently installed image object"),
+            "{error}"
+        );
+        println!("PASS: byte-identical coordinator at another inode rejects before Hello");
+        return;
+    }
+    if std::env::var("FE2O3_MANAGER_CASE").as_deref() == Ok("post-connect-removal") {
+        super::super::proof_manager::reject_post_connect_removal_for_qualification();
+        println!("PASS: path removal immediately after connect is terminal, never a retry");
+        return;
+    }
+    let build = tempfile::tempdir().unwrap();
+    let helper = build_helper(build.path());
+    let mut fixture = Fixture::spawn(&helper, true);
+    let peer = fixture.take_proof_peer();
+    let (mut session, gate, publication) =
+        install_with_peer(&fixture, peer, ApplicationRoute::ProofCustodian);
+    fixture.send_session(hello(&fixture.registration()).canonical_bytes(), false);
+    assert!(step(&mut session).unwrap());
+    assert!(step(&mut session).unwrap());
+    let (challenge, rights) = fixture.receive_session();
+    assert_eq!(rights, 1);
+    let transcript = Message::decode(&challenge).unwrap().transcript().unwrap();
+    fixture.send_session(Message::accept(transcript).canonical_bytes(), false);
+    assert!(step(&mut session).unwrap());
+    session.issuer_bound();
+    assert!(step(&mut session).unwrap());
+    gate.await_observation(deadline).unwrap();
+    publication.publish(deadline).unwrap();
+    assert!(step(&mut session).unwrap());
+    assert!(step(&mut session).unwrap());
+    let original_deadline = session.deadline;
+    let handoff = PublishedApplicationCustodianHandoffV1::take_next(&mut vec![session]).unwrap();
+    assert_eq!(handoff.startup_deadline(), original_deadline);
+    let signal_manager = |manager: &super::super::tests::ChildOwner, signal| {
+        let pid = rustix::process::Pid::from_raw(manager.0.id() as i32).unwrap();
+        rustix::process::kill_process(pid, signal).unwrap();
+    };
+    if let Some(manager) = &manager {
+        signal_manager(manager, rustix::process::Signal::STOP);
+    }
+    let mut client = RootProofManagerClientV1::begin_connect().unwrap();
+    client.stage(handoff).unwrap();
+    let polling = Instant::now();
+    for _ in 0..5 {
+        client.step().unwrap();
+    }
+    assert!(
+        polling.elapsed() < Duration::from_secs(2),
+        "manager bootstrap blocked observer reactor"
+    );
+    if let Some(manager) = &manager {
+        signal_manager(manager, rustix::process::Signal::CONT);
+        println!("PASS: stopped manager leaves coordinator bootstrap cooperatively pollable");
+    } else {
+        manager = Some(start_manager());
+        println!(
+            "PASS: absent manager listener leaves coordinator bootstrap cooperatively pollable"
+        );
+    }
+    let manager = manager.unwrap();
+    let before_activate = std::env::var("FE2O3_MANAGER_CASE").as_deref() == Ok("before-activate");
+    while if before_activate {
+        !client.ready_published_for_qualification()
+    } else {
+        client.activated_count() != 1
+    } {
+        require_deadline(original_deadline).unwrap();
+        client.step().unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (ready, rights) = fixture.receive_session();
+    let ready = Message::decode(&ready).unwrap();
+    assert_eq!(ready.kind(), Kind::CustodianReady);
+    assert_eq!(rights, 1);
+    let proof = ready.proof_session().unwrap();
+    assert_eq!(proof.transcript(), transcript);
+    if !before_activate {
+        let (active, rights) = fixture.receive_session();
+        let active =
+            fe2o3_runtime_protocol::WorkerV3ApplicationProofMessageV1::decode(&active).unwrap();
+        assert_eq!(
+            active.kind(),
+            fe2o3_runtime_protocol::WorkerV3ApplicationProofKindV1::Active
+        );
+        assert_eq!(active.session(), proof.identity());
+        assert_eq!(rights, 0);
+    }
+    fixture.acknowledge_registered();
+    println!(
+        "PASS: genuine observed publication -> measured manager -> fixed resource-ready controller -> CustodianReady; activated={}",
+        !before_activate
+    );
+    drop(client);
+    std::thread::sleep(Duration::from_millis(30));
+    fixture.application_identity().validate_liveness().unwrap();
+    fixture.parent_identity().validate_liveness().unwrap();
+    super::super::tests::child_identity(&manager.0)
+        .validate_liveness()
+        .unwrap();
+    assert!(std::path::Path::new(&format!("/proc/{}", proof.controller().0)).exists());
+    println!(
+        "PASS: coordinator control EOF leaves original application, Cargo, manager and offered controller alive"
+    );
+    fixture.exit();
+    // Qualification ends by external cgroup containment, never by a settlement API.
+    drop(manager);
+}
+
 fn install_with_peer(
     fixture: &Fixture,
     peer: OwnedFd,
