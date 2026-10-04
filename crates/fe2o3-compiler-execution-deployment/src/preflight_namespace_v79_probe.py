@@ -137,14 +137,14 @@ def reap_adopted():
         time.sleep(0.01)
 
 
-def invoke(tool, root, work, name, parent_death=False):
+def invoke(tool, root, work, name, parent_death=False, stage='systemd-version'):
     output, error = work / f'{name}.stdout', work / f'{name}.stderr'
     with contextlib.ExitStack() as files:
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         files.callback(os.close, root_fd)
         stdout = files.enter_context(output.open('xb'))
         stderr = files.enter_context(error.open('xb'))
-        child = subprocess.Popen([str(tool), '__systemd-preflight-tool-v1', 'systemd-version'],
+        child = subprocess.Popen([str(tool), '__systemd-preflight-tool-v1', stage],
                                  stdin=root_fd, stdout=stdout, stderr=stderr,
                                  env={PARENT_ENV: str(os.getpid())})
         descriptors = []
@@ -256,7 +256,10 @@ def death_before_binding(tool, root, work):
             terminal(descriptors[1])
             observed, status = os.waitpid(pid1[0], os.WNOHANG)
             assert observed == pid1[0] and os.waitstatus_to_exitcode(status) == 1
-        assert (work / 'early.stdout').read_bytes() == b''
+        early_output = (work / 'early.stdout').read_bytes()
+        assert early_output.startswith(b'FE2O3_PREFLIGHT_PID1_ERROR stage="systemd-version" cause="')
+        assert len(early_output) < 1024 and early_output.count(b'\n') == 1
+        assert b'pid1=1' not in early_output
         assert list((root / 'proc').iterdir()) == []
     finally:
         for descriptor in descriptors:
@@ -312,6 +315,10 @@ def main():
                 assert list((root / 'proc').iterdir()) == [], 'proc leaked into caller namespace'
                 outcomes.append({'case': name, 'status': status, 'private_pid1_checks': True})
         with fixture(work, busybox, 'bad-handles', b'exit 99\n') as root:
+            status, stdout, stderr = invoke(tool, root, work, 'invalid-stage', stage='invalid-stage-v80')
+            assert status == 1 and stdout == ''
+            assert 'systemd preflight helper stage is not canonical' in stderr
+            outcomes.append({'case': 'outer-helper-diagnostic', 'refused': True})
             for kind in ['regular', 'sibling', 'dead', 'closed']:
                 result = subprocess.run([sys.executable, '-I', '-B', __file__, '--bad-handle',
                                          str(tool), str(root), kind], timeout=15, check=True,
@@ -325,7 +332,11 @@ def main():
             name = f'proc-{mutation}'
             with fixture(work, busybox, name, b'exit 99\n', mutation) as root:
                 status, stdout, stderr = invoke(tool, root, work, name)
-                assert status == 1 and stdout == '', (name, status, stdout, stderr)
+                assert status == 1, (name, status, stdout, stderr)
+                assert stdout.startswith('FE2O3_PREFLIGHT_PID1_ERROR stage="systemd-version" cause="')
+                assert len(stdout.encode()) < 1024 and stdout.count('\n') == 1
+                assert 'pid1=1' not in stdout and not stdout.startswith('systemd 255 ')
+                assert 'isolated preflight tool failed with exit_code=Some(1)' in stderr
                 outcomes.append({'case': name, 'refused': True})
     finally:
         reap_adopted()

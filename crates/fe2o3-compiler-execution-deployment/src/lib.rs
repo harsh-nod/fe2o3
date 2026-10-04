@@ -75,6 +75,7 @@ pub use mount::{
     enter_private_qualification_mount_namespace_v1,
 };
 pub use preflight::{
+    compiler_execution_systemd_preflight_pid1_error_v80,
     execute_compiler_execution_systemd_preflight_pid1_tool_v79,
     execute_compiler_execution_systemd_preflight_tool_v1,
 };

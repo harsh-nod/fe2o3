@@ -20,6 +20,7 @@ use fe2o3_compiler_execution_deployment::{
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
+    compiler_execution_systemd_preflight_pid1_error_v80,
     create_compiler_execution_qualification_cgroup_v1,
     execute_compiler_execution_provisioning_tool_v1,
     execute_compiler_execution_systemd_machine_tool_v1,
@@ -598,7 +599,13 @@ fn run_systemd_preflight_pid1_tool(arguments: &[std::ffi::OsString]) {
     };
     match execute_compiler_execution_systemd_preflight_pid1_tool_v79(stage, parent) {
         Ok(never) => match never {},
-        Err(_) => std::process::exit(1),
+        Err(error) => {
+            // Stderr remains the authenticated parent pidfd at this boundary. A failure-only
+            // stdout record is collected only with the nonzero status, never as a tool result.
+            let diagnostic = compiler_execution_systemd_preflight_pid1_error_v80(stage, &error);
+            let _ = std::io::stdout().lock().write_all(diagnostic.as_bytes());
+            std::process::exit(1);
+        }
     }
 }
 

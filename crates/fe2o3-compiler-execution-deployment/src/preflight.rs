@@ -22,6 +22,7 @@ const OVERLAYFS_MAGIC_V1: i64 = 0x794c_7630;
 const SYSTEMD_VERSION_V1: &str = "255.4-1ubuntu8.17";
 const SYSTEMD_VERSION_LINE_V1: &str = "systemd 255 (255.4-1ubuntu8.17)";
 const SYSTEMD_TOOL_OUTPUT_MAX_BYTES_V1: u64 = 64 * 1024;
+const SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80: usize = 1024;
 const COMPILER_UID_V1: u32 = 999;
 const ANCHOR_UID_V1: u32 = 998;
 const QUALIFICATION_CLIENT_UID_V1: u32 = 997;
@@ -150,6 +151,10 @@ impl SystemdPreflightCommandRunnerV1 for ProductionSystemdPreflightCommandRunner
             .map_err(|source| io_error("create systemd preflight output", source))?;
         let child_output = rustix::io::dup(&output)
             .map_err(|source| io_error("duplicate systemd preflight output", source))?;
+        let error_output = memfd_create("fe2o3-systemd-preflight-errors-v80", MemfdFlags::CLOEXEC)
+            .map_err(|source| io_error("create systemd preflight error output", source))?;
+        let child_error_output = rustix::io::dup(&error_output)
+            .map_err(|source| io_error("duplicate systemd preflight error output", source))?;
         let status = Command::new("/proc/self/exe")
             .arg(COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1)
             .arg(command.stage.canonical_name())
@@ -160,22 +165,159 @@ impl SystemdPreflightCommandRunnerV1 for ProductionSystemdPreflightCommandRunner
             )
             .stdin(Stdio::from(inherited_root))
             .stdout(Stdio::from(child_output))
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(child_error_output))
             .status()
             .map_err(|source| std_io_error("execute systemd preflight command", source))?;
-        if !status.success() {
-            return Err(super::invalid(
-                DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
-                format!(
-                    "{} failed with exit_code={:?} signal={:?}",
-                    command.stage.canonical_name(),
-                    status.code(),
-                    status.signal()
-                ),
-            ));
-        }
-        read_bounded_tool_output(File::from(output))
+        finish_preflight_capture_v80(
+            command.stage,
+            status,
+            File::from(output),
+            File::from(error_output),
+        )
     }
+}
+
+fn finish_preflight_capture_v80(
+    stage: SystemdPreflightStageV1,
+    status: std::process::ExitStatus,
+    output: File,
+    error_output: File,
+) -> Result<Vec<u8>, DeploymentVerificationErrorV1> {
+    let (output_len, error_len) = bounded_capture_lengths_v80(&output, &error_output)?;
+    if !status.success() {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+            format!(
+                "{} failed with exit_code={:?} signal={:?}; stdout=\"{}\"; stderr=\"{}\"",
+                stage.canonical_name(),
+                status.code(),
+                status.signal(),
+                read_error_prefix_v80(&output, output_len)?,
+                read_error_prefix_v80(&error_output, error_len)?,
+            ),
+        ));
+    }
+    read_bounded_tool_output(output)
+}
+
+fn bounded_capture_lengths_v80(
+    output: &File,
+    error_output: &File,
+) -> Result<(u64, u64), DeploymentVerificationErrorV1> {
+    let length = |file: &File| {
+        file.metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|source| std_io_error("inspect systemd preflight captured output", source))
+    };
+    let output_len = length(output)?;
+    let error_len = length(error_output)?;
+    // The inherited per-file limit bounds each memfd to 64 KiB; admit at most 64 KiB
+    // combined before allocating or reading either stream. Failure reads use 1 KiB buffers.
+    if output_len
+        .checked_add(error_len)
+        .is_none_or(|total| total > SYSTEMD_TOOL_OUTPUT_MAX_BYTES_V1)
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+            "combined systemd preflight output exceeds the fixed bound",
+        ));
+    }
+    Ok((output_len, error_len))
+}
+
+fn read_error_prefix_v80(
+    file: &File,
+    expected_len: u64,
+) -> Result<String, DeploymentVerificationErrorV1> {
+    let mut bytes = [0_u8; SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80];
+    let length = usize::try_from(expected_len.min(bytes.len() as u64)).expect("bounded prefix");
+    file.read_exact_at(&mut bytes[..length], 0)
+        .map_err(|source| std_io_error("read bounded systemd preflight error prefix", source))?;
+    if file
+        .metadata()
+        .map_err(|source| std_io_error("reinspect systemd preflight error prefix", source))?
+        .len()
+        != expected_len
+    {
+        return Err(changed(
+            "systemd preflight error output changed while reading",
+        ));
+    }
+    let mut escaped = BoundedEscapedV80::new(SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80);
+    let _ = escaped.append(&bytes[..length]);
+    escaped.truncated |= expected_len > length as u64;
+    Ok(escaped.finish())
+}
+
+struct BoundedEscapedV80 {
+    output: String,
+    limit: usize,
+    truncated: bool,
+}
+
+impl BoundedEscapedV80 {
+    const TRUNCATED: &str = "[truncated]";
+
+    fn new(limit: usize) -> Self {
+        assert!(limit >= Self::TRUNCATED.len());
+        Self {
+            output: String::with_capacity(limit),
+            limit,
+            truncated: false,
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) -> std::fmt::Result {
+        if self.truncated {
+            return Err(std::fmt::Error);
+        }
+        for &byte in bytes {
+            let mut escaped = [0_u8; 4];
+            let mut length = 0;
+            for value in std::ascii::escape_default(byte) {
+                escaped[length] = value;
+                length += 1;
+            }
+            if self.output.len() + length > self.limit - Self::TRUNCATED.len() {
+                self.truncated = true;
+                return Err(std::fmt::Error);
+            }
+            for value in &escaped[..length] {
+                self.output.push(char::from(*value));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> String {
+        if self.truncated {
+            self.output.push_str(Self::TRUNCATED);
+        }
+        self.output
+    }
+}
+
+impl std::fmt::Write for BoundedEscapedV80 {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        self.append(value.as_bytes())
+    }
+}
+
+/// Formats a failure-only PID1 diagnostic, not a tool result or admission receipt.
+/// The bounded writer stops formatting at its fixed limit; it never builds the full error first.
+pub fn compiler_execution_systemd_preflight_pid1_error_v80(
+    stage: &str,
+    error: &DeploymentVerificationErrorV1,
+) -> String {
+    let mut stage_prefix = BoundedEscapedV80::new(64);
+    let _ = stage_prefix.append(stage.as_bytes());
+    let mut error_prefix = BoundedEscapedV80::new(768);
+    let _ = std::fmt::write(&mut error_prefix, format_args!("{error}"));
+    format!(
+        "FE2O3_PREFLIGHT_PID1_ERROR stage=\"{}\" cause=\"{}\"\n",
+        stage_prefix.finish(),
+        error_prefix.finish(),
+    )
 }
 
 fn read_bounded_tool_output(file: File) -> Result<Vec<u8>, DeploymentVerificationErrorV1> {
@@ -841,6 +983,128 @@ mod tests {
             read_bounded_tool_output(file).unwrap_err().kind(),
             DeploymentVerificationErrorKindV1::InvalidQualificationPreflight
         );
+    }
+
+    fn captured(bytes: &[u8]) -> File {
+        let file = File::from(memfd_create("preflight-capture-test", MemfdFlags::CLOEXEC).unwrap());
+        file.write_all_at(bytes, 0).unwrap();
+        file
+    }
+
+    #[test]
+    fn preflight_capture_checks_combined_exact_and_one_over_before_reading() {
+        let output = captured(b"");
+        let error = captured(b"");
+        for (stdout_len, stderr_len, accepted) in [
+            (0, 0, true),
+            (65536, 0, true),
+            (0, 65536, true),
+            (32768, 32768, true),
+            (32768, 32769, false),
+            (65536, 1, false),
+            (0, 65537, false),
+        ] {
+            output.set_len(stdout_len).unwrap();
+            error.set_len(stderr_len).unwrap();
+            let result = bounded_capture_lengths_v80(&output, &error);
+            if accepted {
+                assert_eq!(result.unwrap(), (stdout_len, stderr_len));
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_error_prefix_escapes_hostile_bytes_and_marks_truncation() {
+        let bytes = b"cause\n\r\t\0\x1b\xff\xc3\xa9\"\\";
+        assert_eq!(
+            read_error_prefix_v80(&captured(bytes), bytes.len() as u64).unwrap(),
+            "cause\\n\\r\\t\\x00\\x1b\\xff\\xc3\\xa9\\\"\\\\",
+        );
+        for byte in [b'a', b'\\', 0xff] {
+            let input = vec![byte; 65536];
+            let prefix = read_error_prefix_v80(&captured(&input), input.len() as u64).unwrap();
+            assert!(prefix.len() <= SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80);
+            assert!(prefix.ends_with("[truncated]"));
+            assert!(prefix.bytes().all(|value| (0x20..=0x7e).contains(&value)));
+            assert!(!prefix.strip_suffix("[truncated]").unwrap().ends_with("\\x"));
+        }
+        assert_eq!(read_error_prefix_v80(&captured(b""), 0).unwrap(), "");
+        assert_eq!(
+            read_error_prefix_v80(&captured(b"changed"), 1)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InputChanged,
+        );
+    }
+
+    #[test]
+    fn preflight_diagnostic_writer_stops_display_at_the_fixed_bound() {
+        struct LongDisplay;
+        impl std::fmt::Display for LongDisplay {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                for _ in 0..2048 {
+                    formatter.write_str("x")?;
+                }
+                panic!("bounded formatter scanned the complete hostile display");
+            }
+        }
+        let mut prefix = BoundedEscapedV80::new(64);
+        assert!(std::fmt::write(&mut prefix, format_args!("{LongDisplay}")).is_err());
+        assert_eq!(prefix.finish().len(), 64);
+    }
+
+    #[test]
+    fn preflight_pid1_error_records_are_bounded_and_never_version_results() {
+        for stage in ["systemd-version".to_owned(), "\n\x1b".repeat(65536)] {
+            let error = super::super::invalid(
+                DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+                format!("{SYSTEMD_VERSION_LINE_V1}\n{}", "\n\x1b".repeat(65536)),
+            );
+            let record = compiler_execution_systemd_preflight_pid1_error_v80(&stage, &error);
+            assert!(record.len() < SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80);
+            assert!(record.starts_with("FE2O3_PREFLIGHT_PID1_ERROR stage=\""));
+            assert_eq!(record.matches('\n').count(), 1);
+            assert!(record.ends_with("\n"));
+            assert!(record.contains("[truncated]"));
+            assert_eq!(
+                admit_systemd_version(record.as_bytes()).unwrap_err().kind(),
+                DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_capture_preserves_success_bytes_and_never_promotes_failure_output() {
+        let valid = format!("{SYSTEMD_VERSION_LINE_V1}\n");
+        let success = finish_preflight_capture_v80(
+            SystemdPreflightStageV1::Version,
+            std::process::ExitStatus::from_raw(0),
+            captured(valid.as_bytes()),
+            captured(b"ignored successful stderr\n"),
+        )
+        .unwrap();
+        assert_eq!(success, valid.as_bytes());
+        assert_eq!(admit_systemd_version(&success).unwrap(), SYSTEMD_VERSION_V1);
+        let error = finish_preflight_capture_v80(
+            SystemdPreflightStageV1::Version,
+            std::process::ExitStatus::from_raw(1 << 8),
+            captured(valid.as_bytes()),
+            captured(b"actual cause\n\xff"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationPreflight
+        );
+        let message = error.to_string();
+        assert!(message.contains("systemd-version failed with exit_code=Some(1)"));
+        assert!(message.contains("stderr=\"actual cause\\n\\xff\""));
+        assert!(!message.contains('\n'));
     }
 
     #[derive(Default)]
