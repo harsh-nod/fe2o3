@@ -46,6 +46,8 @@ pub use nominal::{
 
 #[path = "mixed_worker_v53_admission.rs"]
 mod mixed_v53;
+#[cfg(target_os = "linux")]
+pub(crate) use mixed_v53::execution as mixed_execution_v53;
 pub use mixed_v53::{
     MixedWorkerV53PreparationError, MixedWorkerV53VerificationRequest,
     PreparedMixedWorkerV53Invocation, RecoveredMixedWorkerV53PinnedRoster,

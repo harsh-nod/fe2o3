@@ -222,6 +222,22 @@ impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
 }
 
 impl PreparedGfx942RuntimeDispatchV1 {
+    /// Borrows concrete immutable invocation inputs for an independent verifier.
+    /// Like the prepared owner, this inspection is not execution authority.
+    pub fn inspection_v1(&self) -> fe2o3_kfd::Gfx942KfdDispatchInspectionV1<'_> {
+        self.request.inspection_v1()
+    }
+
+    /// Exact completion access and extent associated with each inspected buffer.
+    /// The iterator allocates nothing and grants no memory or execution rights.
+    pub fn buffer_policies_v1(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (Gfx942RuntimeBufferAccessV1, u64)> + '_ {
+        self.buffer_policies
+            .iter()
+            .map(|policy| (policy.access, policy.byte_length))
+    }
+
     /// Derived from the exact attached request, not a detached family/hash cache.
     pub fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1 {
         conditional_transport_v1::request_binding(&self.request)

@@ -81,6 +81,20 @@ fn actual_mixed_preparation_preserves_payload_readwrite_completion_and_family_id
     assert_eq!(input.invocation_binding(), binding);
     let prepared = prepare_gfx942_runtime_dispatch_v1(&hsaco, "vecadd", input).unwrap();
     assert_eq!(prepared.invocation_binding(), binding);
+    let view = prepared.inspection_v1();
+    assert!(view.conditional_premises.is_none());
+    assert_eq!(
+        view.mixed_conditional_premises.unwrap().identity(),
+        &identity
+    );
+    assert!(std::ptr::eq(
+        view.mixed_conditional_premises.unwrap(),
+        prepared.inspection_v1().mixed_conditional_premises.unwrap(),
+    ));
+    assert_eq!(
+        prepared.buffer_policies_v1().collect::<Vec<_>>(),
+        vec![(Gfx942RuntimeBufferAccessV1::ReadWrite, 8)]
+    );
     let (request, policies) = prepared.into_authorized_execution_parts();
     assert_eq!(policies.len(), 1);
     assert_eq!(policies[0].access, Gfx942RuntimeBufferAccessV1::ReadWrite);

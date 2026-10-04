@@ -30,6 +30,8 @@ const LINEAGE_DOMAIN: &[u8] = b"fe2o3.host.worker-v3-mixed-descriptor-lineage.v5
 
 #[path = "mixed_worker_v53_preparation.rs"]
 mod preparation;
+#[cfg(target_os = "linux")]
+pub(crate) use preparation::execution;
 pub use preparation::{MixedWorkerV53PreparationError, PreparedMixedWorkerV53Invocation};
 
 #[path = "mixed_worker_v53_target_readmission.rs"]
@@ -513,6 +515,19 @@ fn validate_lineage_on_budget(
     profile: ProductionAmdTargetProfileV1,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
+    with_validated_lineage_on_budget(outer, table, profile, budget, |_, _| Ok(()))
+}
+
+fn with_validated_lineage_on_budget<T>(
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    table: &MixedDescriptorTableV53<'_>,
+    profile: ProductionAmdTargetProfileV1,
+    budget: &mut Budget<'_>,
+    receive: impl FnOnce(
+        &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+        &mut Budget<'_>,
+    ) -> Result<T>,
+) -> Result<T> {
     let receipts = outer.capsule().receipts();
     let middle = read_mixed_middle_end_v50(
         receipts.middle_end().canonical_preimage(),
@@ -600,7 +615,8 @@ fn validate_lineage_on_budget(
                 outer,
                 budget,
             )
-            .map_err(codec_error)
+            .map_err(codec_error)?;
+            receive(owner, budget)
         },
     )
 }

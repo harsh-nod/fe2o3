@@ -16,7 +16,7 @@ const LAYOUT_LIMITS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     object_bytes: (1u64 << 61) - 1,
 };
 
-pub(super) fn readmit_target_selection_v53(
+pub(super) fn readmit_target_selection_v53<T>(
     forwarded: &[u8],
     semantic: &InertCanonicalSemanticMirReceiptV3,
     invocation: TargetLineageIdentityV3,
@@ -24,8 +24,8 @@ pub(super) fn readmit_target_selection_v53(
     profile: ProductionAmdTargetProfileV1,
     received: &[u8],
     budget: &mut Budget<'_>,
-    check_native: impl FnOnce(&Owner, &mut Budget<'_>) -> Result<()>,
-) -> Result<()> {
+    check_native: impl FnOnce(&Owner, &mut Budget<'_>) -> Result<T>,
+) -> Result<T> {
     budget.check_prior_denials_v1()?;
     let scratch = [
         forwarded.len(),

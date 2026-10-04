@@ -514,6 +514,79 @@ fn mixed_v53_composed_lineage_accepts_exact_inert_content_on_both_profiles_and_r
 }
 
 #[test]
+fn mixed_v53_native_continuation_receives_same_checked_graph_and_cleans_result_error_unwind() {
+    use std::cell::Cell;
+    let fixture = Fixture::new(Profile::Gfx942, 2);
+    let outer = fixture.outer(Mutation::None);
+    let table = decode_mixed_descriptor_v53(&fixture.descriptor, &mut |_| Ok::<_, ()>(())).unwrap();
+    let floor = FLOOR
+        + fixture.retained
+        + fixture.descriptor.capacity()
+        + fixture.lowering.capacity()
+        + outer.canonical_bytes().len()
+        + outer.capsule().canonical_bytes().len()
+        + outer.module_handoff().canonical_bytes().len()
+        + MIXED_DESCRIPTOR_READER_STORAGE_V53;
+    for phase in 0..4 {
+        let mut meter = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = Budget::new(&mut meter, LIMIT);
+        budget.reserve_storage(floor).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let entered = Cell::new(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            codec_on_budget(
+                &mut budget,
+                MIXED_MIDDLE_END_WORKING_STORAGE_V50,
+                |budget| {
+                    with_validated_lineage_on_budget(
+                        &outer,
+                        &table,
+                        if phase == 3 {
+                            Profile::Gfx950
+                        } else {
+                            Profile::Gfx942
+                        },
+                        budget,
+                        |owner, budget| {
+                            entered.set(entered.get() + 1);
+                            assert_eq!(owner.canonical_bytes(), fixture.owner.canonical_bytes());
+                            assert_eq!(budget.work_ledger_identity_v1(), ledger);
+                            assert!(budget.storage() > floor);
+                            if phase == 1 {
+                                return Err(binding("fixture continuation refusal"));
+                            }
+                            if phase == 2 {
+                                panic!("fixture continuation unwind");
+                            }
+                            Ok(*owner.identity().digest())
+                        },
+                    )
+                },
+            )
+        }));
+        match phase {
+            0 => assert_eq!(
+                outcome.unwrap().unwrap(),
+                *fixture.owner.identity().digest()
+            ),
+            1 => assert!(matches!(
+                outcome.unwrap(),
+                Err(AdmissionError::MixedV53("fixture continuation refusal"))
+            )),
+            2 => assert!(outcome.is_err()),
+            3 => assert!(outcome.unwrap().is_err()),
+            _ => unreachable!(),
+        }
+        assert_eq!(entered.get(), usize::from(phase != 3));
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.work_ledger_identity_v1(), ledger);
+        assert!(budget.work() > 0);
+        assert!(!outer.authenticates_producer());
+        assert!(!outer.grants_load_authority() && !outer.grants_launch_authority());
+    }
+}
+
+#[test]
 fn mixed_v53_composed_lineage_rejects_rebound_native_and_layout_content() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         let fixture = Fixture::new(profile, 2);

@@ -12,6 +12,10 @@ use fe2o3_runtime::{
     PreparedGfx942RuntimeDispatchV1, prepare_gfx942_runtime_dispatch_v1,
 };
 
+#[cfg(target_os = "linux")]
+#[path = "mixed_worker_v53_execution.rs"]
+pub(crate) mod execution;
+
 #[derive(Debug)]
 pub enum MixedWorkerV53PreparationError {
     Admission(AdmissionError),
@@ -56,6 +60,17 @@ impl From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>
 /// generated Rust output borrows move together. No raw prepared request escapes.
 /// A receiving protected compiler/native proof join remains mandatory before
 /// this can gain a dispatch method. No unsafe backend placeholder is installed.
+/// The crate-private consuming adapter requires a separate reviewed protected
+/// provider; this ordinary public owner continues to grant no authority.
+///
+/// ```compile_fail
+/// use fe2o3_host::PreparedMixedWorkerV53Invocation;
+/// fn clone<R, K>(v: PreparedMixedWorkerV53Invocation<'_, R, K>) { let _ = v.clone(); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_host::PreparedMixedWorkerV53Invocation;
+/// fn execute<R, K>(v: PreparedMixedWorkerV53Invocation<'_, R, K>) { v.execute(); }
+/// ```
 #[must_use]
 pub struct PreparedMixedWorkerV53Invocation<'allocation, R, K> {
     owner: RecoveredMixedWorkerV53PinnedRoster<R>,

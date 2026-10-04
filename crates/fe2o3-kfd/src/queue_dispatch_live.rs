@@ -190,6 +190,24 @@ pub struct Gfx942KfdDispatchRequestV1 {
     mixed_conditional_premises: Option<MixedConditionalDispatchPremisesV26>,
 }
 
+/// Immutable inspection of the actual address-free request. This borrowed view
+/// carries no executable, proof, or dispatch authority and cannot mutate custody.
+#[derive(Clone, Copy)]
+pub struct Gfx942KfdDispatchInspectionV1<'a> {
+    pub executable_image: &'a [u8],
+    pub descriptor_offset: u64,
+    pub kernarg_template: &'a [u8],
+    pub kernarg_alignment: u64,
+    pub buffers: &'a [Gfx942KfdDispatchBufferV1],
+    pub pointer_fixups: &'a [Gfx942KfdDispatchPointerFixupV1],
+    pub geometry: AqlDispatchGeometryV1,
+    pub private_segment_size: u32,
+    pub group_segment_size: u32,
+    pub timeout_milliseconds: u32,
+    pub conditional_premises: Option<&'a ConditionalDispatchPremisesV1>,
+    pub mixed_conditional_premises: Option<&'a MixedConditionalDispatchPremisesV26>,
+}
+
 impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -214,6 +232,23 @@ impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
 }
 
 impl Gfx942KfdDispatchRequestV1 {
+    pub fn inspection_v1(&self) -> Gfx942KfdDispatchInspectionV1<'_> {
+        Gfx942KfdDispatchInspectionV1 {
+            executable_image: &self.executable_image,
+            descriptor_offset: self.descriptor_offset,
+            kernarg_template: &self.kernarg_template,
+            kernarg_alignment: self.kernarg_alignment,
+            buffers: &self.buffers,
+            pointer_fixups: &self.pointer_fixups,
+            geometry: self.geometry,
+            private_segment_size: self.private_segment_size,
+            group_segment_size: self.group_segment_size,
+            timeout_milliseconds: self.timeout_milliseconds,
+            conditional_premises: self.conditional_premises.as_ref(),
+            mixed_conditional_premises: self.mixed_conditional_premises.as_ref(),
+        }
+    }
+
     /// Immutable inspection of the actual attached payload. It cannot be removed
     /// or replaced and never authenticates the executable or descriptor.
     pub fn conditional_premises_v1(&self) -> Option<&ConditionalDispatchPremisesV1> {
