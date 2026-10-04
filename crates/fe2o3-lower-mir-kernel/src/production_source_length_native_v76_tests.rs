@@ -1,4 +1,8 @@
-fn source_length_owner_v76(write_only: bool, count: usize) -> ProductionSemanticSsaOwnerV1 {
+fn source_length_owner_v76(
+    write_only: bool,
+    count: usize,
+    used: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     assert!((1..=3).contains(&count));
     let base = source_allocation_receiver_v29_tests::owner();
     let source = base.source_semantic();
@@ -6,13 +10,25 @@ fn source_length_owner_v76(write_only: bool, count: usize) -> ProductionSemantic
     let SemanticTerminatorKindV1::Call(call) = original.blocks()[0].terminator().kind() else {
         panic!("fixture retains an authentic len callable");
     };
+    let mut locals = original.locals().to_vec();
+    let mut destinations = vec![call.destination().unwrap().place().clone()];
+    for index in 1..count {
+        let local = SemanticLocalIdV1::from_index(u32::try_from(locals.len()).unwrap());
+        locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([80 + index as u8; 32]),
+            destinations[0].ty(),
+            SemanticLocalRoleV1::Temporary,
+            original.source(),
+        ));
+        destinations.push(SemanticPlaceV1::new(local, vec![], destinations[0].ty()).unwrap());
+    }
     let mut blocks = Vec::new();
     for index in 0..count {
         let call = SemanticDirectCallV1::new_callable(
             call.callee(),
             call.arguments().to_vec(),
             Some(SemanticCallDestinationV1::new(
-                call.destination().unwrap().place().clone(),
+                destinations[index].clone(),
                 SemanticControlFlowEdgeV1::new(
                     SemanticEdgeRoleV1::CallReturn,
                     SemanticBlockIdV1::from_index(index as u32 + 1),
@@ -31,15 +47,73 @@ fn source_length_owner_v76(write_only: bool, count: usize) -> ProductionSemantic
             .unwrap(),
         );
     }
+    let mut continuation = original.blocks()[1].statements().to_vec();
+    let terminator = if used {
+        // Every result controls an observable abort, without descriptor access.
+        for destination in &destinations[1..] {
+            continuation.push(SemanticStatementV1::new(
+                original.source(),
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    destinations[0].clone(),
+                    SemanticRvalueV1::new(
+                        destinations[0].ty(),
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: SemanticOperandV1::Copy(destinations[0].clone()),
+                            right: SemanticOperandV1::Copy(destination.clone()),
+                        },
+                    ),
+                )),
+            ));
+        }
+        SemanticTerminatorV1::new(
+            original.source(),
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: SemanticOperandV1::Copy(destinations[0].clone()),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::SwitchValue,
+                            SemanticBlockIdV1::from_index(count as u32 + 1),
+                        ),
+                    )],
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(count as u32 + 2),
+                    ),
+                )
+                .unwrap(),
+            },
+        )
+    } else {
+        original.blocks()[1].terminator().clone()
+    };
     blocks.push(
         SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([70; 32]),
             original.source(),
-            original.blocks()[1].statements().to_vec(),
-            original.blocks()[1].terminator().clone(),
+            continuation,
+            terminator,
         )
         .unwrap(),
     );
+    if used {
+        for (identity, terminator) in [
+            (71, SemanticTerminatorKindV1::Abort),
+            (72, SemanticTerminatorKindV1::Return),
+        ] {
+            blocks.push(
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256([identity; 32]),
+                    original.source(),
+                    vec![],
+                    SemanticTerminatorV1::new(original.source(), terminator),
+                )
+                .unwrap(),
+            );
+        }
+    }
     let function = SemanticFunctionDeclV1::new(
         original.identity(),
         original.role(),
@@ -49,7 +123,7 @@ fn source_length_owner_v76(write_only: bool, count: usize) -> ProductionSemantic
         original.const_generic_arguments_identity(),
         original.source(),
         original.abi().clone(),
-        original.locals().to_vec(),
+        locals,
         original.entry(),
         blocks,
     )
@@ -134,10 +208,11 @@ fn source_length_abi_v76(
 fn source_length_native_run_v76(
     write_only: bool,
     count: usize,
+    used: bool,
     work: usize,
     storage: usize,
 ) -> (SourceOwnedResultV18<()>, usize, usize, bool) {
-    let owner = source_length_owner_v76(write_only, count);
+    let owner = source_length_owner_v76(write_only, count, used);
     let abi = source_length_abi_v76(&owner, write_only);
     let reached = std::cell::Cell::new(false);
     let (result, work, peak) = run_descriptor_role_owner_with_abi_v18(
@@ -161,13 +236,26 @@ fn source_length_native_run_v76(
                     }
                 );
             }
+            assert_eq!(
+                original
+                    .inventory
+                    .operations()
+                    .iter()
+                    .filter(|row| matches!(row.operation.kind, OperationKind::SliceLength { .. }))
+                    .count(),
+                count
+            );
             let output = optimized.output_inventory(budget)?;
             let lengths = output
                 .operations()
                 .iter()
                 .filter(|row| matches!(row.operation.kind, OperationKind::SliceLength { .. }))
                 .count();
-            assert!(lengths > 0 && lengths <= count);
+            assert_eq!(
+                lengths,
+                usize::from(used),
+                "used={used}, original calls={count}, WriteOnly={write_only}"
+            );
             let launches = mixed_native_launches_v26(original, budget)?;
             let result = with_mixed_source_completion_v26(
                 original,
@@ -176,7 +264,9 @@ fn source_length_native_run_v76(
                 fe2o3_kernel_ir::FormalIndexWidth::Bits64,
                 budget,
                 &mut |native, budget| {
-                    assert_eq!(native.source_census(budget)?[3], lengths);
+                    let census = native.source_census(budget)?;
+                    assert_eq!(census[3], lengths);
+                    assert_eq!(census[5], usize::from(used));
                     assert!(native.runtime_occurrences(budget)?.is_empty());
                     let premises = native.runtime_premises(budget)?;
                     assert_eq!(premises.len(), 1);
@@ -216,32 +306,40 @@ fn source_length_native_run_v76(
 fn source_length_calls_complete_unused_and_duplicate_nominal_metadata_without_access_authority() {
     for write_only in [false, true] {
         for count in [1, 2, 3] {
-            let (result, _, _, reached) = source_length_native_run_v76(
-                write_only,
-                count,
-                OPTIMIZED_SOURCE_WORK_LIMIT_V18,
-                MODULE_LIMIT,
-            );
-            result.unwrap();
-            assert!(reached);
+            for used in [false, true] {
+                let (result, _, _, reached) = source_length_native_run_v76(
+                    write_only,
+                    count,
+                    used,
+                    OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+                    MODULE_LIMIT,
+                );
+                result.unwrap();
+                assert!(reached);
+            }
         }
     }
 }
 
 #[test]
 fn source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries() {
-    let (result, work, storage, reached) =
-        source_length_native_run_v76(false, 2, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+    let (result, work, storage, reached) = source_length_native_run_v76(
+        false,
+        2,
+        true,
+        OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+        MODULE_LIMIT,
+    );
     result.unwrap();
     assert!(reached);
-    let exact = source_length_native_run_v76(false, 2, work, storage);
+    let exact = source_length_native_run_v76(false, 2, true, work, storage);
     exact.0.unwrap();
     assert_eq!((exact.1, exact.2, exact.3), (work, storage, true));
     for (work_limit, storage_limit, is_work) in
         [(work - 1, storage, true), (work, storage - 1, false)]
     {
         let (result, actual_work, actual_storage, _) =
-            source_length_native_run_v76(false, 2, work_limit, storage_limit);
+            source_length_native_run_v76(false, 2, true, work_limit, storage_limit);
         match (
             is_work,
             source_slot_tests::original_repeated_source_resource_v29(result.unwrap_err()),
@@ -263,7 +361,7 @@ fn source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries() 
 #[test]
 fn source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial() {
     for fault in 0..10 {
-        let owner = source_length_owner_v76(false, 1);
+        let owner = source_length_owner_v76(false, 1, false);
         let abi = source_length_abi_v76(&owner, false);
         let reached = std::cell::Cell::new(false);
         let (result, _, _) = run_descriptor_role_owner_with_abi_v18(
@@ -329,7 +427,14 @@ fn source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial
 
 #[test]
 fn source_length_query_refuses_foreign_budget_without_debit_or_refund() {
-    let owner = source_length_owner_v76(false, 1);
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DESCRIPTOR_ROLE_RETAINED_FLOOR_V18.set(self.0);
+        }
+    }
+    let _restore = Restore(DESCRIPTOR_ROLE_RETAINED_FLOOR_V18.replace(None));
+    let owner = source_length_owner_v76(false, 1, false);
     let abi = source_length_abi_v76(&owner, false);
     let reached = std::cell::Cell::new(false);
     let (result, _, _) = run_descriptor_role_owner_with_abi_v18(
@@ -347,10 +452,12 @@ fn source_length_query_refuses_foreign_budget_without_debit_or_refund() {
                 budget.work(),
                 budget.storage(),
             );
-            assert!(
-                scoped_raw_admission_v29::checked_source_lengths_v76(original, 0, &mut foreign)
-                    .is_err()
-            );
+            assert!(matches!(
+                scoped_raw_admission_v29::checked_source_lengths_v76(original, 0, &mut foreign),
+                Err(ProductionSourceOwnedViewErrorV18::Resource(
+                    ArgumentResourceV1::Accounting
+                ))
+            ));
             assert_eq!(
                 (
                     foreign.work(),
@@ -360,10 +467,15 @@ fn source_length_query_refuses_foreign_budget_without_debit_or_refund() {
                 ),
                 before
             );
-            assert!(
-                scoped_raw_admission_v29::checked_source_lengths_v76(original, 0, budget).is_err()
-            );
+            assert!(matches!(
+                scoped_raw_admission_v29::checked_source_lengths_v76(original, 0, budget),
+                Err(ProductionSourceOwnedViewErrorV18::Resource(
+                    ArgumentResourceV1::Accounting
+                ))
+            ));
             assert_eq!((budget.work(), budget.storage()), (before.2, before.3));
+            assert!(original.source.cleanup.is_denied());
+            DESCRIPTOR_ROLE_RETAINED_FLOOR_V18.set(Some(budget.storage()));
             reached.set(true);
             Ok(())
         },
@@ -375,6 +487,7 @@ fn source_length_query_refuses_foreign_budget_without_debit_or_refund() {
         ))
     ));
     assert!(reached.get());
+    assert!(DESCRIPTOR_ROLE_RETAINED_FLOOR_V18.get().unwrap() > MODULE_FLOOR);
 }
 
 #[test]
