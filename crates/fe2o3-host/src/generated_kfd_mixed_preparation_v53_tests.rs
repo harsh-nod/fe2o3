@@ -69,6 +69,20 @@ fn run<const WRONG_LAYOUT: bool>(
     usize,
     usize,
 ) {
+    run_with_length::<WRONG_LAYOUT>(work_limit, storage_limit, wrong_descriptor, 3)
+}
+
+fn run_with_length<const WRONG_LAYOUT: bool>(
+    work_limit: usize,
+    storage_limit: usize,
+    wrong_descriptor: bool,
+    length: usize,
+) -> (
+    std::result::Result<(), MixedWorkerV53PreparationError>,
+    usize,
+    usize,
+    usize,
+) {
     let descriptor = descriptor();
     let table = decode_device_descriptor_table_v3(&descriptor, &mut free).unwrap();
     let bytes = contract(&table, false, |subjects, _, _| {
@@ -85,8 +99,8 @@ fn run<const WRONG_LAYOUT: bool>(
         &table,
         &contract,
         Arguments::<WRONG_LAYOUT> {
-            input: &input,
-            output: &mut output,
+            input: &input[..length],
+            output: &mut output[..length],
             count: 9,
         },
         geometry(),
@@ -98,7 +112,7 @@ fn run<const WRONG_LAYOUT: bool>(
         assert!(matches!(runtime.invocation_binding(),
             fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { contract_identity, .. }
                 if contract_identity == *contract.identity()));
-        assert_eq!(completion.buffers.len(), 2);
+        assert_eq!(completion.buffers.len(), if length == 0 { 0 } else { 2 });
         assert!(budget.storage() > 0, "complete mixed premises remain retained");
         drop((runtime, completion));
     });
@@ -113,6 +127,13 @@ fn run<const WRONG_LAYOUT: bool>(
 #[test]
 fn mixed_v53_generated_preparation_reaches_real_packer_and_preserves_v26_family() {
     run::<false>(usize::MAX, usize::MAX, false).0.unwrap();
+}
+
+#[test]
+fn mixed_v53_generated_preparation_preserves_aligned_empty_slices_without_buffers() {
+    run_with_length::<false>(usize::MAX, usize::MAX, false, 0)
+        .0
+        .unwrap();
 }
 
 #[test]

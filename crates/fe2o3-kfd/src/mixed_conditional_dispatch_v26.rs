@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::Gfx942KfdDispatchPointerFixupV1;
 use crate::conditional_dispatch_v1::{
     ConditionalDispatchErrorV1 as Error, ConditionalDispatchSliceV1 as Slice, bounded_copy,
-    check_logical_extent, live_span, overlaps, put_usize, read_word,
+    check_logical_extent, live_span, overlaps, put_usize, read_word, template_pointer,
 };
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
 
@@ -145,7 +145,7 @@ impl MixedConditionalDispatchPremisesV26 {
             }
             if !slice.pointer_offset.is_multiple_of(8)
                 || slice.pointer_offset.checked_add(8) != Some(slice.length_offset)
-                || read_word(explicit_kernarg, slice.pointer_offset)? != 0
+                || read_word(explicit_kernarg, slice.pointer_offset)? != template_pointer(slice)
                 || read_word(explicit_kernarg, slice.length_offset)? != slice.length
                 || (slice.buffer_index.is_none()
                     && (slice.length != 0 || slice.buffer_byte_offset != 0))

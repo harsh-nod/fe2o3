@@ -38,6 +38,8 @@ fn accesses() -> [MixedConditionalAccessV26; 4] {
 fn bytes(slices: &[Slice]) -> Vec<u8> {
     let mut bytes = vec![0; slices.len() * 16];
     for slice in slices {
+        bytes[slice.pointer_offset..slice.pointer_offset + 8]
+            .copy_from_slice(&template_pointer(slice).to_le_bytes());
         bytes[slice.length_offset..slice.length_offset + 8]
             .copy_from_slice(&slice.length.to_le_bytes());
     }
@@ -328,6 +330,115 @@ fn mixed_width_empty_extent_and_offset_overflow_boundaries_are_exact() {
         ),
         Err(Error::Arithmetic)
     );
+}
+
+#[test]
+fn mixed_empty_slices_require_exact_aligned_dangling_pointers() {
+    for alignment in [1, 2, 4, 8, 16] {
+        let slice = Slice {
+            buffer_index: None,
+            length: 0,
+            element_bytes: u64::from(alignment),
+            alignment,
+            ..slices()[0]
+        };
+        let row = MixedConditionalAccessV26 {
+            address_domain: Domain::LogicalExtent { slice: 0 },
+            ..access(0, false, 1)
+        };
+        let construct = |bytes: &[u8]| {
+            MixedConditionalDispatchPremisesV26::new(
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                bytes,
+                geometry(),
+                3,
+                [64, 1, 1],
+                64,
+                &[slice],
+                &[row],
+            )
+        };
+        let good = bytes(&[slice]);
+        assert_eq!(read_word(&good, 0).unwrap(), u64::from(alignment));
+        let premises = construct(&good).unwrap();
+        assert_eq!(
+            premises.check_request(&good, &[], [].into_iter(), geometry()),
+            Ok(())
+        );
+        assert_eq!(premises.check_live(&[]), Ok(()));
+        for pointer in [0, u64::from(alignment) + 1, u64::from(alignment) * 2] {
+            let mut hostile = good.clone();
+            hostile[..8].copy_from_slice(&pointer.to_le_bytes());
+            assert!(matches!(construct(&hostile), Err(Error::Binding)));
+            assert_eq!(
+                premises.check_request(&hostile, &[], [].into_iter(), geometry()),
+                Err(Error::Binding)
+            );
+        }
+        let substituted = [Gfx942KfdDispatchPointerFixupV1::new(
+            0,
+            0,
+            0,
+            u64::from(alignment),
+        )];
+        assert_eq!(
+            premises.check_request(&good, &substituted, std::iter::once(0), geometry()),
+            Err(Error::Binding)
+        );
+    }
+}
+
+#[test]
+fn mixed_nonempty_slices_keep_zero_templates_and_exact_allocation_bindings() {
+    let slice = slices()[0];
+    let row = access(0, false, 1);
+    let good = bytes(&[slice]);
+    assert_eq!(read_word(&good, 0).unwrap(), 0);
+    let premises = payload(&[slice], &[row]).unwrap();
+    let exact = [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)];
+    assert_eq!(
+        premises.check_request(&good, &exact, std::iter::once(12), geometry()),
+        Ok(())
+    );
+    assert_eq!(premises.check_live(&[facts(0x1000, 12, 1)]), Ok(()));
+    assert_eq!(
+        premises.check_request(&good, &exact, std::iter::once(11), geometry()),
+        Err(Error::LogicalSpan)
+    );
+    for (index, offset, alignment) in [(1, 0, 4), (0, 4, 4), (0, 0, 8)] {
+        let wrong = [Gfx942KfdDispatchPointerFixupV1::new(
+            0, index, offset, alignment,
+        )];
+        assert_eq!(
+            premises.check_request(&good, &wrong, std::iter::once(12), geometry()),
+            Err(Error::Binding)
+        );
+    }
+    for pointer in [4_u64, 0x1000] {
+        let mut hostile = good.clone();
+        hostile[..8].copy_from_slice(&pointer.to_le_bytes());
+        assert!(matches!(
+            MixedConditionalDispatchPremisesV26::new(
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                &hostile,
+                geometry(),
+                3,
+                [64, 1, 1],
+                64,
+                &[slice],
+                &[row],
+            ),
+            Err(Error::Binding)
+        ));
+        assert_eq!(
+            premises.check_request(&hostile, &exact, std::iter::once(12), geometry()),
+            Err(Error::Binding)
+        );
+    }
 }
 
 fn with_unused(

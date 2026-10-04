@@ -369,7 +369,7 @@ pub(super) fn check_logical_extent(
     }
     Ok(bytes)
 }
-fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
+pub(super) fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
     if s.buffer_index.is_some() {
         0
     } else {
