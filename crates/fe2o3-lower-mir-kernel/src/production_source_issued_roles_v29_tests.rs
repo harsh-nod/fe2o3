@@ -99,6 +99,39 @@ pub(in super::super) fn run_issued_role_owner_access_v86(
         &mut ArgumentBudgetV1<'work>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize) {
+    run_issued_role_source_v87(
+        owner,
+        descriptor_access,
+        work_limit,
+        storage_limit,
+        retained_floor,
+        |source, budget| {
+            source.with_analysis_v18(budget, |scope| {
+                scope.with_inventory_v1(|inventory, budget| {
+                    source.with_ranked_correspondence_v18(inventory, budget, |original, budget| {
+                        with_checked_source_memory_v29(original, 0, None, budget, |_, budget| {
+                            consume(original, budget)
+                        })
+                    })
+                })
+            })
+        },
+    )
+}
+
+pub(in super::super) fn run_issued_role_source_v87<
+    E: From<ProductionSourceOwnedViewErrorV18> + std::fmt::Debug,
+>(
+    owner: ProductionSemanticSsaOwnerV1,
+    descriptor_access: fe2o3_kernel_descriptor::AccessMode,
+    work_limit: usize,
+    storage_limit: usize,
+    retained_floor: &std::cell::Cell<Option<usize>>,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceOwnedViewV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), E>,
+) -> (Result<(), E>, usize, usize) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
@@ -186,7 +219,7 @@ pub(in super::super) fn run_issued_role_owner_access_v86(
     budget
         .reserve_storage(ISSUED_ROLE_FLOOR + occurrence_storage)
         .unwrap();
-    let result = (|| -> SourceOwnedResultV18<()> {
+    let result = (|| -> Result<(), E> {
         let prepared =
             ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
                 owner,
@@ -196,19 +229,7 @@ pub(in super::super) fn run_issued_role_owner_access_v86(
                 ProductionSemanticKirLimitsV1::default(),
                 &mut budget,
             )?;
-        prepared.with_source_consumer_v18(&mut budget, |source, budget| {
-            source.with_analysis_v18(budget, |scope| {
-                scope.with_inventory_v1(|inventory, budget| {
-                    source.with_ranked_correspondence_v18(inventory, budget, |original, budget| {
-                        // Same source-owned candidate reaches the complete physical
-                        // consumer before any copied-component hostile control.
-                        with_checked_source_memory_v29(original, 0, None, budget, |_, budget| {
-                            consume(original, budget)
-                        })
-                    })
-                })
-            })
-        })
+        prepared.with_source_consumer_v18(&mut budget, consume)
     })();
     assert_eq!(
         budget.storage(),
