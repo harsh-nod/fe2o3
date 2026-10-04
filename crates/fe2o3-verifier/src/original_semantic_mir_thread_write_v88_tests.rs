@@ -20,8 +20,10 @@ fn write_fixture(
         types[boolean.index() as usize].shape(),
         Shape::Enum { .. }
     ));
+    // Keep the inert slot's identity ordered before the optional owned witness.
+    let boolean_identity = types[boolean.index() as usize].identity();
     types[boolean.index() as usize] = Type::new(
-        SemanticTypeIdentityV1::from_sha256([219; 32]),
+        boolean_identity,
         SemanticLayoutIdentityV1::from_sha256([219; 32]),
         SemanticTypeLayoutV1::new_with_backend_repr(
             Some(1),
@@ -34,6 +36,11 @@ fn write_fixture(
         )
         .unwrap(),
         Shape::Scalar(SemanticScalarTypeV1::Bool),
+    );
+    assert!(
+        types
+            .windows(2)
+            .all(|pair| pair[0].identity() < pair[1].identity())
     );
     let mut writes = 0;
     for callable in callables.iter_mut() {
