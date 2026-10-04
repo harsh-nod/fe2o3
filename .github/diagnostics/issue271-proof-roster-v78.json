@@ -1,6 +1,6 @@
 {
-  "head": "b9bde0c8a5235167ea2328e3414936473138adf1",
-  "tree": "33a1cac55d72c7440b6921bee30a8a284ad1b4aa",
+  "head": "9df833dc95046e11b8d6ffab53f18701964832f7",
+  "tree": "033f4e20aca1204490d55db0db5ef1d8c54da61a",
   "package": "fe2o3-verifier",
   "filters": [
     "aggregate_and_descriptor_operand_effects_require_exact_evaluated_state_and_value",
@@ -732,28 +732,28 @@
   },
   "source_pins": [
     {
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26.rs",
-      "sha256": "bef44ec42277d4faa48aa993cb0defb47bd54bd6cfa53773a51e40f30e8c0ff1"
-    },
-    {
       "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs",
       "sha256": "47432fd63824c095f0b14d4428637073b690a649b00bdd7c82f694ad913e4396"
     },
     {
-      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26.rs",
-      "sha256": "72745f4ab92bb91e87c818ccf8ca5d2e33391881ec8068f39000061eb45d60a6"
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26.rs",
+      "sha256": "bef44ec42277d4faa48aa993cb0defb47bd54bd6cfa53773a51e40f30e8c0ff1"
     },
     {
       "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26_tests.rs",
       "sha256": "28927a6a6c1ce46b6341affa725f068ec1d24fe4a6f060e2cee695ca210db6fa"
     },
     {
-      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26.rs",
-      "sha256": "d1818daedcf85f2f5ab5b3a461a429ffc867dbc4086a8c9738d2cdf9befab78a"
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26.rs",
+      "sha256": "72745f4ab92bb91e87c818ccf8ca5d2e33391881ec8068f39000061eb45d60a6"
     },
     {
       "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26_tests.rs",
       "sha256": "51530a83bdb9f6250307167991bb873da6740566c17e0f2dfb696bf2e7a6a09c"
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26.rs",
+      "sha256": "d1818daedcf85f2f5ab5b3a461a429ffc867dbc4086a8c9738d2cdf9befab78a"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
@@ -776,12 +776,12 @@
       "sha256": "784098f15f341ba903102d9d4d3e68bf6de26d1a795b5ae2479f699a77a48809"
     },
     {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29.rs",
-      "sha256": "68839ac37d7302ac98b7ea409f56dab505c022142574539b100b18b4bdd6dea3"
-    },
-    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
       "sha256": "301a74d8824558684927fe232d244336291f06f4d13a78cfd6104ca48f0079ca"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29.rs",
+      "sha256": "68839ac37d7302ac98b7ea409f56dab505c022142574539b100b18b4bdd6dea3"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_calls_v76.rs",
@@ -852,20 +852,24 @@
       "sha256": "23f4a5807f450a0b8903ec1b3e53d3ce020c8c5509a1ad01da583427a8d40238"
     },
     {
-      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36.rs",
-      "sha256": "83054e1a135b2475ef24c96634b902f4a1995682fbac08ed7bb23ccb896be1aa"
-    },
-    {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs",
       "sha256": "74578a5000bb6fb6a74ecdfe05f3985e744a3b932bbdbf8a6f502eca032ea2c1"
     },
     {
-      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36.rs",
-      "sha256": "c430c7317bb68794f24a1bf0ed93493b8f036fb85708c041a0b538a595543425"
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36.rs",
+      "sha256": "83054e1a135b2475ef24c96634b902f4a1995682fbac08ed7bb23ccb896be1aa"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_slots_v36.rs",
+      "sha256": "dabf015005f68630daac68ee9f7a94473df0a3e5811b1aab2a969051f29f0a40"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36_tests.rs",
       "sha256": "b614fc94dbbec6bd059b47a7b4c76fe22f8fbad910b00c65fa05991393e27118"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36.rs",
+      "sha256": "c430c7317bb68794f24a1bf0ed93493b8f036fb85708c041a0b538a595543425"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_enter_v36.rs",
@@ -877,15 +881,15 @@
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs",
-      "sha256": "942e42a19c8ea4113062c5e8839410cfac63294d414f76476bce98655b82075a"
-    },
-    {
-      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36.rs",
-      "sha256": "812579ae25951358f06861abcb0886ece7da1a64c48ed3f593cb9fb4ef95d1b2"
+      "sha256": "4e686ee57193c8b73f076656fd6a05a385ce1180d123e1ddd2b5a2452a3d1272"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36_tests.rs",
       "sha256": "5f717b101157ef00ce81812ae3b51441d8a6f6ab445961105b9d5bca037afbf5"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_pointers_v36.rs",
+      "sha256": "812579ae25951358f06861abcb0886ece7da1a64c48ed3f593cb9fb4ef95d1b2"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
@@ -912,12 +916,12 @@
       "sha256": "c6c76a31f65112411170229f6ebedf9a87d5ccc22fdfa0c4e5749a48767549f8"
     },
     {
-      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81.rs",
-      "sha256": "01e06948d7b9ef9225a2c6a1334bd999229507039a9852e608569c77fb7b5baa"
-    },
-    {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81_tests.rs",
       "sha256": "b814c2596eee318a03ef1573708085b8b8941016ccdf9cc9707cdd00b8547a2e"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_v81.rs",
+      "sha256": "01e06948d7b9ef9225a2c6a1334bd999229507039a9852e608569c77fb7b5baa"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_constructor_laws_v81.vrs",
