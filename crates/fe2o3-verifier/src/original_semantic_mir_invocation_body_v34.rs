@@ -2,6 +2,7 @@
 //! Logical local ranges are not an allocation namespace. This source model
 //! does not discharge actual call splicing or any memory interpretation.
 use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::EmittedByteFunctionsV55;
 use crate::mixed_optimizer_refinement_v26::semantics::target_view_contracts_v38::TargetByteViewContractsV38 as TargetContracts;
 
 use super::{
@@ -165,6 +166,24 @@ fn generate_refinement_inner_v49(
             out,
         )?);
     }
+    out.budget.charge_work(2)?;
+    let original_index_floor = out.budget.storage();
+    let mut emitted_original = if tail.is_some() {
+        Some(EmittedByteFunctionsV55::new(
+            inventory,
+            &physical,
+            &slots,
+            ByteContext::classified(width, &contracts, TARGET_TAG_NAMESPACE_V40),
+            out,
+        )?)
+    } else {
+        None
+    };
+    let original_index_storage = out
+        .budget
+        .storage()
+        .checked_sub(original_index_floor)
+        .ok_or(Resource::Accounting)?;
     let census = paired.census();
     write!(
         out,
@@ -206,11 +225,15 @@ fn generate_refinement_inner_v49(
     };
     write!(out, "open spec fn invocation_runtime_index_bytes_v36() -> int {{ {index_bytes} }}\nopen spec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}\n", matches!(endianness, fe2o3_kernel_ir::EndiannessV2::Little)).map_err(|_| out.error())?;
     for (root, (function, launch)) in byte_actual.iter().zip(launches).enumerate() {
-        out.budget.charge_work(5)?;
+        out.budget.charge_work(6)?;
         let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
             return Err(mismatch());
         };
-        function.emit(root, out).map_err(|error| {
+        let emitted = match emitted_original.as_mut() {
+            Some(index) => index.emit(function, root, out),
+            None => function.emit(root, out),
+        };
+        emitted.map_err(|error| {
             out.source_section_error(error, "original canonical byte functions")
         })?;
         write!(out, "open spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{}, {}, {}]) }}\n", extents[0], extents[1], extents[2]).map_err(|_| out.error())?;
@@ -222,10 +245,22 @@ fn generate_refinement_inner_v49(
     })?;
     if let Some(tail) = tail {
         byte_bindings.emit_carrier_extensionality_v48(out)?;
-        tail.emit(relation, &slots, &physical, &contracts, width, out)
-            .map_err(|error| out.source_section_error(error, "typed optimizer tail"))?;
+        tail.emit(
+            relation,
+            &slots,
+            &physical,
+            &contracts,
+            emitted_original.as_ref().ok_or_else(mismatch)?,
+            width,
+            out,
+        )
+        .map_err(|error| out.source_section_error(error, "typed optimizer tail"))?;
     }
     write!(out, "}}\n").map_err(|_| out.error())?;
+    drop(emitted_original);
+    // The typed tail releases only its nested delta; refund this older reservation
+    // separately, never any source model or intervening proof-emission credit.
+    out.budget.release_storage(original_index_storage)?;
     drop(byte_actual);
     drop(physical);
     out.budget
@@ -284,6 +319,8 @@ fn generation_headers_v36() -> usize {
         + h::<&slots::SourceTagPairsV40<'_, '_, '_, '_, '_>>()
         + h::<source_function::SourceByteProgram<'_, '_, '_>>()
         + h::<byte_bindings::SourceByteBindings<'_, '_, '_>>()
+        + h::<Option<EmittedByteFunctionsV55<'_, '_, slots::SourceSlots<'_, '_>>>>()
+        + h::<&EmittedByteFunctionsV55<'_, '_, slots::SourceSlots<'_, '_>>>()
         + h::<
             Vec<
                 super::super::byte_function_v30::ByteFunctionV30<
@@ -314,7 +351,7 @@ fn generation_headers_v36() -> usize {
         + h::<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>()
         + h::<[u32; 3]>()
         + 7 * size_of::<&()>()
-        + 8 * size_of::<usize>()
+        + 10 * size_of::<usize>()
 }
 
 impl<'a, 'plan, 'view, 'source> InvocationBodies<'a, 'plan, 'view, 'source> {

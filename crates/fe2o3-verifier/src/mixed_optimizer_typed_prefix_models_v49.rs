@@ -455,6 +455,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             None,
             None,
             None,
+            None,
             width,
             registry_namespace,
             out,
@@ -479,6 +480,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             input_contracts,
             middle_contracts,
             Some((output_physical, output_contracts)),
+            None,
             None,
             None,
             width,
@@ -513,6 +515,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             Some((output_physical, output_contracts)),
             Some(relation),
             None,
+            None,
             width,
             registry_namespace,
             out,
@@ -528,6 +531,11 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         original_contracts: &super::super::super::target_view_contracts_v38::TargetByteViewContractsV38<'_, 'owner>,
         prefix_contracts: &super::super::super::target_view_contracts_v38::TargetByteViewContractsV38<'_, 'owner>,
         relocated_contracts: &super::super::super::target_view_contracts_v38::TargetByteViewContractsV38<'_, 'owner>,
+        emitted_original: &super::super::super::byte_function_v30::EmittedByteFunctionsV55<
+            '_,
+            'owner,
+            R,
+        >,
         forwarded: &Inventory<'owner>,
         forwarding: &fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV18<'owner>,
         forwarded_physical: &Physical<'_, 'owner>,
@@ -558,6 +566,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                 forwarded_physical,
                 forwarded_contracts,
             )),
+            Some(emitted_original),
             width,
             registry_namespace,
             out,
@@ -581,6 +590,9 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             &Physical<'_, 'owner>,
             &super::super::super::target_view_contracts_v38::TargetByteViewContractsV38<'_, 'owner>,
         )>,
+        emitted_original: Option<
+            &super::super::super::byte_function_v30::EmittedByteFunctionsV55<'_, 'owner, R>,
+        >,
         width: FormalIndexWidth,
         registry_namespace: usize,
         out: &mut Writer<'_, '_>,
@@ -603,7 +615,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         let result = (|| {
             out.budget.reserve_storage(size_of::<(
                 [usize; 8],
-                [&(); 12],
+                [&(); 13],
                 [Range<usize>; 2],
                 [Result<()>; 2],
                 Writer<'_, '_>,
@@ -629,7 +641,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             emit!(out, "mod typed_prefix_v49 {{\n use super::*;\n");
             self.emit_transport([0, 1, 2], out)?;
             for (function, association) in self.prefix.rows().functions.iter().enumerate() {
-                self.charge(4, out)?;
+                self.charge(5, out)?;
                 let original_function = association.input.0 as usize;
                 let original = input
                     .functions()
@@ -656,7 +668,11 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(width, output_contracts, registry_namespace),
                     &prefix_allocations, out,
                 )?;
-                before.emit(original_function, out).map_err(|error| {
+                let original_emission = match emitted_original {
+                    Some(index) => index.emit_parent_aliases(&before, original_function, out),
+                    None => before.emit(original_function, out),
+                };
+                original_emission.map_err(|error| {
                     out.source_section_error(error, "typed prefix original byte functions")
                 })?;
                 after

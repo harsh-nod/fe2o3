@@ -69,6 +69,7 @@ impl<'a, 'owner, 'rows> Tail<'a, 'owner, 'rows> {
         slots: &slots::SourceSlots<'_, '_>,
         original_physical: &Physical<'_, '_>,
         original_contracts: &TargetContracts<'_, '_>,
+        emitted_original: &EmittedByteFunctionsV55<'_, '_, slots::SourceSlots<'_, '_>>,
         width: fe2o3_kernel_ir::FormalIndexWidth,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
@@ -116,6 +117,7 @@ impl<'a, 'owner, 'rows> Tail<'a, 'owner, 'rows> {
                     original_contracts,
                     &prefix_contracts,
                     &output_contracts,
+                    emitted_original,
                     final_inventory,
                     forwarding,
                     &final_physical,
