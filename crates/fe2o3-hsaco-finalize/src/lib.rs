@@ -38,7 +38,9 @@ pub use typed_worker_lineage_v50::{
     PreparedFinalizedTypedContentV50, TypedWorkerLineageErrorV50,
     finalize_protected_worker_typed_content_v50,
 };
+mod mixed_descriptor_finalization_family;
 mod mixed_descriptor_finalization_v53;
+mod mixed_descriptor_finalization_v89;
 mod native_worker_compact_replay;
 mod native_worker_engine;
 mod native_worker_finalization;
@@ -54,6 +56,12 @@ pub use mixed_descriptor_finalization_v53::{
     NominalDescriptorInspectionV53, NominalFinalizationErrorV53,
     derive_unfinalized_nominal_hsaco_v53, finalize_unfinalized_nominal_hsaco_v53,
     inspect_finalized_nominal_hsaco_v53, inspect_unfinalized_nominal_hsaco_v53,
+};
+pub use mixed_descriptor_finalization_v89::{
+    FinalizedNominalHsacoV89, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89,
+    NominalDescriptorInspectionV89, NominalFinalizationErrorV89,
+    derive_unfinalized_nominal_hsaco_v89, finalize_unfinalized_nominal_hsaco_v89,
+    inspect_finalized_nominal_hsaco_v89, inspect_unfinalized_nominal_hsaco_v89,
 };
 mod mixed_worker_finalization_v53;
 mod mixed_worker_resources_v53;
