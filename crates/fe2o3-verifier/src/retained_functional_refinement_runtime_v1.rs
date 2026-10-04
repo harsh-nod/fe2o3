@@ -13,6 +13,15 @@ use sha2::{Digest, Sha256};
 
 use crate::CanonicalGeneratedVerusProofInputV3;
 
+#[path = "functional_refinement_process_policy_v2.rs"]
+mod process_policy;
+pub(crate) use process_policy::GeneratedProofProcessPolicyV2;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    linux::finished_solver_contexts_for_test()
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "retained_functional_refinement_runtime_v1_resources.rs"]
 mod resources;
@@ -120,6 +129,7 @@ impl fmt::Display for RetainedFunctionalRefinementRuntimeErrorV1 {
 impl std::error::Error for RetainedFunctionalRefinementRuntimeErrorV1 {}
 /// Bounded output from one directly executed retained `rust_verify` process.
 pub(crate) struct RetainedFunctionalRefinementRuntimeOutputV1 {
+    pub(crate) policy: GeneratedProofProcessPolicyV2,
     pub(crate) exit_code: Option<i32>,
     pub(crate) signal: Option<i32>,
     pub(crate) stdout: Vec<u8>,
@@ -133,6 +143,7 @@ pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     root: PathBuf,
     identity: [u8; 32],
     owner_process: u32,
+    policy: GeneratedProofProcessPolicyV2,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     accounting: Option<resources::RuntimeAccountV1>,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -168,6 +179,14 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
     open_with_manifest(root, &manifest)
 }
 
+pub(crate) fn open_retained_generated_verus_context_runtime_v2(
+    root: &Path,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut owner = open_retained_generated_verus_runtime_v1(root)?;
+    owner.policy = GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2;
+    Ok(owner)
+}
+
 fn runtime_manifest(root: &Path) -> Result<ManifestV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_absolute_path(root)?;
     validate_runtime_root_path(root)?;
@@ -187,6 +206,7 @@ fn open_with_manifest(
             root: root.to_path_buf(),
             identity,
             owner_process,
+            policy: GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
             accounting: None,
             retained: std::sync::Arc::new(retained),
         })
@@ -226,6 +246,10 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
 
     pub(crate) const fn identity(&self) -> [u8; 32] {
         self.identity
+    }
+
+    pub(crate) const fn process_policy(&self) -> GeneratedProofProcessPolicyV2 {
+        self.policy
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -281,6 +305,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
                 source,
                 deadline,
                 output_limit,
+                self.policy,
             );
             #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
             let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
@@ -792,6 +817,27 @@ impl ByteLines for [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn context_policy_runtime_header_is_part_of_existing_retained_storage_charge() {
+        #[allow(dead_code)]
+        struct IndependentRuntimeHeader {
+            root: PathBuf,
+            identity: [u8; 32],
+            owner_process: u32,
+            policy: GeneratedProofProcessPolicyV2,
+            accounting: Option<resources::RuntimeAccountV1>,
+            retained: std::sync::Arc<linux::RetainedRuntimeClosureV2>,
+        }
+        assert_eq!(
+            std::mem::size_of::<IndependentRuntimeHeader>(),
+            std::mem::size_of::<RetainedGeneratedVerusRuntimeBackendV1>()
+        );
+        assert!(
+            linux::RETAINED_METADATA_STORAGE >= 4 * std::mem::size_of::<IndependentRuntimeHeader>()
+        );
+    }
 
     #[test]
     fn bounded_legacy_access_refuses_before_operation() {

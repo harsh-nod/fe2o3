@@ -42,6 +42,7 @@ fn source() -> Source {
 
 fn output(code: i32) -> RetainedFunctionalRefinementRuntimeOutputV1 {
     RetainedFunctionalRefinementRuntimeOutputV1 {
+        policy: super::super::GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
         exit_code: Some(code),
         signal: None,
         stdout: b"output\n".to_vec(),
@@ -55,6 +56,27 @@ fn assert_expired(error: ChannelErrorV1) {
         ChannelErrorV1::Io(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
         error => panic!("expected deadline expiry, got {error:?}"),
     }
+}
+
+#[test]
+fn legacy_executor_channel_refuses_context_policy_owner_and_output_substitution() {
+    assert!(require_legacy_policy(GeneratedProofProcessPolicyV2::LegacySingleSolverV1).is_ok());
+    assert!(matches!(
+        require_legacy_policy(GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2),
+        Err(ChannelErrorV1::Association)
+    ));
+    let (mut server, _) = pair();
+    server.begin().unwrap();
+    let header = request_header(&server);
+    let mut substituted = output(0);
+    substituted.policy = GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2;
+    assert!(matches!(
+        server.send_output(header, substituted),
+        Err(ChannelErrorV1::Association)
+    ));
+    assert_eq!(server.output_bytes, 0);
+    assert!(server.terminal);
+    assert!(matches!(server.begin(), Err(ChannelErrorV1::Terminal)));
 }
 
 fn request_header(channel: &ExecutorChannelV1) -> [u8; HEADER_BYTES] {

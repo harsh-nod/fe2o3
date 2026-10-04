@@ -138,7 +138,7 @@ fn protected_finite_map_domains_and_private_parent_import_preserve_exact_equatio
         .unwrap();
     let source = CanonicalGeneratedVerusProofInputV3::new(source.into_bytes())
         .expect("canonical complete finite-domain equation program");
-    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
+    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v2(
         "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5",
     )
     .expect("requires the actual public pinned-runtime lease");

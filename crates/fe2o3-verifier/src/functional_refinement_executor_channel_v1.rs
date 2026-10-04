@@ -7,8 +7,8 @@
 //! namespace; this transport does not establish namespace or process origin.
 
 use super::{
-    RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
-    RetainedGeneratedVerusRuntimeBackendV1,
+    GeneratedProofProcessPolicyV2, RetainedFunctionalRefinementRuntimeErrorV1,
+    RetainedFunctionalRefinementRuntimeOutputV1, RetainedGeneratedVerusRuntimeBackendV1,
 };
 use crate::{
     CanonicalGeneratedVerusProofInputV3 as Source, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
@@ -63,6 +63,14 @@ pub(super) enum ChannelErrorV1 {
     Runtime(RetainedFunctionalRefinementRuntimeErrorV1),
 }
 type Result<T> = std::result::Result<T, ChannelErrorV1>;
+
+fn require_legacy_policy(policy: GeneratedProofProcessPolicyV2) -> Result<()> {
+    if policy.is_legacy() {
+        Ok(())
+    } else {
+        Err(ChannelErrorV1::Association)
+    }
+}
 
 /// Bounds describe transport, not original-account credit or endpoint provenance.
 pub(super) struct ExecutorChannelV1 {
@@ -159,6 +167,7 @@ impl ExecutorChannelV1 {
     /// Runs only the existing direct retained backend, with its process affinity
     /// and pre/post execution validation intact. No signing occurs in the helper.
     pub(super) fn serve(mut self, runtime: &RetainedGeneratedVerusRuntimeBackendV1) -> Result<()> {
+        require_legacy_policy(runtime.process_policy())?;
         if runtime.identity() != self.binding.runtime {
             return Err(ChannelErrorV1::Association);
         }
@@ -312,6 +321,7 @@ impl ExecutorChannelV1 {
         mut header: [u8; HEADER_BYTES],
         output: RetainedFunctionalRefinementRuntimeOutputV1,
     ) -> Result<()> {
+        require_legacy_policy(output.policy)?;
         let limit = field32(&header, 140) as usize;
         if output.stdout.len() > limit || output.stderr.len() > limit {
             return Err(ChannelErrorV1::Limit);

@@ -289,6 +289,7 @@ fn register_child(
     event: u32,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
 ) -> Result<i32> {
     let pid = event_child(parent)?;
     let parent_task = tree[&parent];
@@ -350,7 +351,9 @@ fn register_child(
         *created = created
             .checked_add(1)
             .ok_or_else(|| process_failure("proof descendant counter overflow"))?;
-        if parent_task.role != TraceeRole::Verifier || *created > expected {
+        if let Some(contexts) = contexts {
+            contexts.birth(parent_task.role, group)?;
+        } else if parent_task.role != TraceeRole::Verifier || *created > expected {
             return Err(process_failure(
                 "rust_verify created an additional or nested descendant, including sequential creation",
             ));
@@ -372,6 +375,7 @@ pub(super) fn complete_request(
     validate_maps: bool,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -420,6 +424,12 @@ pub(super) fn complete_request(
         );
     }
     let birth = birth_request(pid, &registers)?;
+    if birth.is_some_and(|kind| kind != Birth::Thread)
+        && let Some(contexts) = contexts
+    {
+        contexts.retire_queued(tree)?;
+        contexts.before_birth(tree[&pid].role)?;
+    }
     if birth.is_some() {
         if tree[&pid].role == TraceeRole::PendingExecutable {
             return Err(process_failure(
@@ -461,8 +471,15 @@ pub(super) fn complete_request(
                         "one creation syscall reported multiple children",
                     ));
                 }
-                let new =
-                    register_child(tree, pid, kind, (status as u32) >> 16, created, expected)?;
+                let new = register_child(
+                    tree,
+                    pid,
+                    kind,
+                    (status as u32) >> 16,
+                    created,
+                    expected,
+                    contexts,
+                )?;
                 child = Some(new);
                 let first = wait_stopped(tree, new, deadline, progress)?;
                 if (first as u32) >> 16 != PTRACE_EVENT_STOP || stop_signal(first) != SIGTRAP {
@@ -480,6 +497,7 @@ pub(super) fn complete_request(
                         validate_maps,
                         created,
                         expected,
+                        contexts,
                         deadline,
                         progress,
                     )?;
@@ -535,6 +553,7 @@ fn run_vfork_to_exec(
     validate_maps: bool,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -554,6 +573,7 @@ fn run_vfork_to_exec(
                     validate_maps,
                     created,
                     expected,
+                    contexts,
                     deadline,
                     progress,
                 )?;

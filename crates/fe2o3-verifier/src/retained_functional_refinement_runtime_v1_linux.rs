@@ -31,6 +31,10 @@ use super::{
 #[path = "functional_refinement_process_tree_v1_linux.rs"]
 mod functional_refinement_process_tree_v1;
 pub(crate) use functional_refinement_process_tree_v1::AttemptV1;
+#[cfg(test)]
+pub(super) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    functional_refinement_process_tree_v1::finished_solver_contexts_for_test()
+}
 pub(super) const MAX_DIRECTORY_ENTRIES: usize = 256;
 pub(super) const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -547,9 +551,17 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
+    policy: super::GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
-    functional_refinement_process_tree_v1::execute(attempt, runtime, source, deadline, output_limit)
+    functional_refinement_process_tree_v1::execute_with_policy(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        policy,
+    )
 }
 
 struct SealedGeneratedProofSourceV3 {

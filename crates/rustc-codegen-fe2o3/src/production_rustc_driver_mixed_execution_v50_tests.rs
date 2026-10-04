@@ -139,7 +139,8 @@ fn mixed_execution_child() {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let runtime = Runtime::open(RUNTIME_ROOT).expect("admitted pinned runtime required");
+    let runtime =
+        Runtime::open_pinned_contexts_v2(RUNTIME_ROOT).expect("admitted pinned runtime required");
     let mut callbacks = ExecutionCallbacks {
         runtime,
         result: None,
@@ -162,7 +163,8 @@ fn mixed_execution_child() {
 #[test]
 #[ignore = "requires admitted pinned Verus runtime, nightly rust-src/rustc-dev and authentic AMD dependencies"]
 fn actual_original_mixed_composition_executes_without_protected_custody() {
-    let runtime = Runtime::open(RUNTIME_ROOT).expect("admitted pinned runtime required");
+    let runtime =
+        Runtime::open_pinned_contexts_v2(RUNTIME_ROOT).expect("admitted pinned runtime required");
     let expected_runtime = runtime.identity().as_bytes();
     runtime.revalidate().expect("runtime preflight");
     drop(runtime);

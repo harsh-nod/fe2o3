@@ -29,7 +29,7 @@ fn ordinary_publication_requires_the_fixed_typed_source_route_and_real_execution
     let publish = method.find("publish_compiler_module_handoff_v3(").unwrap();
     let acquire = method.find("compiler_execution.acquire(").unwrap();
     assert!(execute < capsule && capsule < publish && publish < acquire);
-    assert!(method.contains("FunctionalRefinementVerusRuntimeLeaseV1::open("));
+    assert!(method.contains("FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v2("));
     assert!(method.contains("ProductionPipelineError::MixedRuntime"));
     assert!(method.contains("check_strict_handoff_v53(handoff, budget)"));
     assert!(!method.contains("unwrap_or") && !method.contains("lower_production_target("));

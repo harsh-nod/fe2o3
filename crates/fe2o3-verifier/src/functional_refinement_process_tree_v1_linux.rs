@@ -162,6 +162,21 @@ const FILTER_LEN: usize = DENIED_FILTER_START + DENIED_SYSCALLS.len() * 2 + 1;
 static LAST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
 #[cfg(test)]
 static FIRST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
+#[cfg(test)]
+std::thread_local! {
+    static PEAK_TEST_EXECUTED_SOLVER_GROUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FINISHED_TEST_SOLVER_CONTEXTS: std::cell::Cell<Option<(usize, usize, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    FINISHED_TEST_SOLVER_CONTEXTS.get()
+}
+
+#[cfg(test)]
+fn reset_solver_context_observation() {
+    PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
+    FINISHED_TEST_SOLVER_CONTEXTS.set(None);
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SockFilter {
@@ -328,8 +343,13 @@ impl Tracee {
 
 #[path = "functional_refinement_process_tree_v1_custody.rs"]
 mod custody;
+use super::super::GeneratedProofProcessPolicyV2;
 pub(crate) use custody::AttemptV1;
 use custody::{Run, Tracees};
+
+#[path = "functional_refinement_solver_contexts_v2.rs"]
+mod solver_contexts;
+use solver_contexts::SolverContextsV2;
 
 #[path = "functional_refinement_process_tree_v1_spawn.rs"]
 mod seized_spawn;
@@ -485,6 +505,27 @@ pub(super) fn execute(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    execute_with_policy(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+pub(super) fn execute_with_policy(
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
         |error| {
             controller_error(
@@ -599,7 +640,7 @@ pub(super) fn execute(
         run.descriptors = duplicates;
     }
     seized_spawn::spawn_in(attempt, command, bindings.clone(), cpu_seconds, deadline)?;
-    let result = supervise(
+    let result = supervise_with_policy(
         attempt,
         &bindings,
         bindings[0].identity,
@@ -609,6 +650,7 @@ pub(super) fn execute(
         true,
         deadline,
         output_limit,
+        policy,
     );
     attempt
         .run()?
@@ -756,6 +798,36 @@ fn supervise(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    supervise_with_policy(
+        attempt,
+        bindings,
+        verifier_identity,
+        solver_identity,
+        allowed_mappings,
+        validate_mappings,
+        require_auxiliary_verifier,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_with_policy(
+    attempt: &mut AttemptV1,
+    bindings: &[DescriptorBinding],
+    verifier_identity: ObjectIdentityV2,
+    solver_identity: ObjectIdentityV2,
+    allowed_mappings: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    require_auxiliary_verifier: bool,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     let run = attempt.run()?;
     run.check_thread()?;
     let result = supervise_run(
@@ -768,6 +840,7 @@ fn supervise(
         require_auxiliary_verifier,
         deadline,
         output_limit,
+        policy,
     );
     run.release_spawn_after_terminal();
     result
@@ -784,6 +857,7 @@ fn supervise_run(
     require_auxiliary_verifier: bool,
     deadline: Instant,
     output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     let Run {
@@ -829,6 +903,8 @@ fn supervise_run(
         let mut process_descendants_created = 0_usize;
         let mut auxiliary_started = false;
         let mut solver_started = false;
+        let mut contexts =
+            (!policy.is_legacy()).then(|| SolverContextsV2::new(require_auxiliary_verifier));
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
@@ -843,6 +919,11 @@ fn supervise_run(
             let mut progressed = false;
             let processes = tracees.pids();
             for process in processes {
+                // A stable birth checkpoint may already have authenticated and
+                // retired a queued terminal from this outer census snapshot.
+                if contexts.is_some() && !tracees.contains_key(&process) {
+                    continue;
+                }
                 let Some(status) = stable::next_status(tracees, process)? else {
                     continue;
                 };
@@ -873,7 +954,27 @@ fn supervise_run(
                                 ));
                             }
                             let observed = executable_identity(process)?;
-                            let role = if require_auxiliary_verifier
+                            let role = if let Some(contexts) = &mut contexts {
+                                let role = contexts.expected_exec(process)?;
+                                let (identity, name) = match role {
+                                    TraceeRole::AuxiliaryVerifier => {
+                                        (verifier_identity, "auxiliary rust_verify")
+                                    }
+                                    TraceeRole::Solver => (solver_identity, "Z3"),
+                                    _ => {
+                                        return Err(process_failure(
+                                            "unexpected admitted context role",
+                                        ));
+                                    }
+                                };
+                                if observed != identity {
+                                    return Err(process_failure(
+                                        "traced context executable differs from its admitted role",
+                                    ));
+                                }
+                                validate_exact_descriptor_closure(process, bindings, name)?;
+                                role
+                            } else if require_auxiliary_verifier
                                 && !auxiliary_started
                                 && observed == verifier_identity
                             {
@@ -902,6 +1003,9 @@ fn supervise_run(
                                 .role = role;
                             if validate_mappings {
                                 validate_executable_mappings(process, allowed_mappings)?;
+                            }
+                            if let Some(contexts) = &mut contexts {
+                                contexts.executed(process, role)?;
                             }
                             stable::check_before_release(
                                 inspection_deadline.expect("exec inspection deadline"),
@@ -934,6 +1038,7 @@ fn supervise_run(
                                 validate_mappings,
                                 &mut process_descendants_created,
                                 expected_process_descendants,
+                                &mut contexts,
                                 deadline,
                                 &mut progress,
                             )?;
@@ -965,6 +1070,17 @@ fn supervise_run(
                         stable::release_interrupts(tracees, inspection_deadline)?;
                     }
                 } else {
+                    if let Some(contexts) = &mut contexts
+                        && matches!(
+                            tracees[&process].role,
+                            TraceeRole::Solver
+                                | TraceeRole::AuxiliaryVerifier
+                                | TraceeRole::PendingExecutable
+                        )
+                    {
+                        contexts.retire_terminal(tracees, process, status)?;
+                        continue;
+                    }
                     let tracee = tracees.remove_terminal(&process)?;
                     if !tracee
                         .exit_boundary
@@ -997,6 +1113,10 @@ fn supervise_run(
         }
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
+        if let Some(contexts) = &mut contexts {
+            contexts.finish()?;
+            return Ok(verifier_terminal);
+        }
         let solver_terminal = solver_terminal.ok_or_else(|| {
             process_failure(format!(
                 "Z3 descendant was not observed; verifier={verifier_terminal:?} auxiliary={auxiliary_terminal:?} stdout={:?} stderr={:?}",
@@ -1027,6 +1147,7 @@ fn supervise_run(
         deadline,
     )?;
     Ok(RetainedFunctionalRefinementRuntimeOutputV1 {
+        policy,
         exit_code: terminal.0,
         signal: terminal.1,
         stdout: std::mem::take(&mut stdout_capture.bytes),
@@ -2087,6 +2208,7 @@ mod quarantine_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("functional_refinement_solver_process_v2_tests.rs");
 
     #[test]
     fn tree_poll_interval_backs_off_caps_and_resets_after_progress() {
@@ -2109,6 +2231,7 @@ mod tests {
         >,
         first_descendant: i32,
         last_descendant: i32,
+        peak_executed_solver_groups: usize,
     }
 
     pub(super) fn identity(path: &str) -> ObjectIdentityV2 {
@@ -2186,11 +2309,45 @@ mod tests {
         allowed_mappings: &[AllowedRuntimeExecutableV1],
         validate_mappings: bool,
     ) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            deadline_after,
+            leaked,
+            allowed_mappings,
+            validate_mappings,
+            GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        )
+    }
+
+    fn run_contexts(script: &str, expected_solver: &str, leaked: Option<&File>) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            Duration::from_secs(3),
+            leaked,
+            &[],
+            false,
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_hostile_with_policy(
+        script: &str,
+        expected_solver: &str,
+        deadline_after: Duration,
+        leaked: Option<&File>,
+        allowed_mappings: &[AllowedRuntimeExecutableV1],
+        validate_mappings: bool,
+        policy: GeneratedProofProcessPolicyV2,
+    ) -> HostileRun {
         let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         LAST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
+        PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
         let mut duplicates = Vec::new();
         let mut child_bindings = Vec::new();
         if let Some(leaked) = leaked {
@@ -2214,7 +2371,7 @@ mod tests {
             .stderr(Stdio::piped());
         let deadline = Instant::now() + deadline_after;
         let mut child = seized_spawn::spawn(command, child_bindings, 2, deadline).unwrap();
-        let result = supervise(
+        let result = supervise_with_policy(
             &mut child,
             &[],
             identity("/bin/sh"),
@@ -2224,12 +2381,14 @@ mod tests {
             false,
             deadline,
             4096,
+            policy,
         );
         drop(duplicates);
         HostileRun {
             result,
             first_descendant: FIRST_TEST_DESCENDANT.load(Ordering::SeqCst),
             last_descendant: LAST_TEST_DESCENDANT.load(Ordering::SeqCst),
+            peak_executed_solver_groups: PEAK_TEST_EXECUTED_SOLVER_GROUPS.get(),
         }
     }
 

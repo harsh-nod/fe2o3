@@ -685,10 +685,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         compiler_execution: crate::protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
-        let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
-            "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5",
-        )
-        .map_err(ProductionPipelineError::MixedRuntime)?;
+        let runtime =
+            fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v2(
+                "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5",
+            )
+            .map_err(ProductionPipelineError::MixedRuntime)?;
         self.with_original_source_mixed_publication_on_account_v28(budget, |prepared, budget| {
             let protected = prepared.into_protected(budget)?;
             protected.with_executed_composition_v29(&runtime, 120, budget, |executed, budget| {
