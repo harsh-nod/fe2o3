@@ -1,5 +1,9 @@
 use super::*;
 
+mod checked_write_v85 {
+    include!("production_checked_write_tail_v85_tests.rs");
+}
+
 // These are independent graph/equation controls, not original-source admission.
 // The unchanged actual rustc source and native-policy matrices exercise that
 // distinct boundary through the production source-access census.

@@ -20848,16 +20848,22 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         precondition: Option<ValueId>,
         value_argument: usize,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        self.with_scoped_payload_header_v29(scoped_checked_write_payload_header_v84()?, |this| {
-            this.lower_checked_slice_write_inner_v84(
-                block,
-                call,
-                operations,
-                index,
-                precondition,
-                value_argument,
-            )
-        })
+        self.with_scoped_payload_header_v29(
+            argument_sum_v1(&[
+                scoped_checked_write_payload_header_v84()?,
+                checked_write_tail_headers_v85()?,
+            ])?,
+            |this| {
+                this.lower_checked_slice_write_inner_v84(
+                    block,
+                    call,
+                    operations,
+                    index,
+                    precondition,
+                    value_argument,
+                )
+            },
+        )
     }
 
     fn lower_checked_slice_write_inner_v84(
@@ -20916,6 +20922,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "write-only disjoint value type changed",
             ));
         }
+        let tail_start = operations.len();
         let length = self.emit_id(
             operations,
             Type::INDEX,
@@ -20992,6 +20999,25 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 },
             )
         })?;
+        let Type::Scalar(element) = value_ty else {
+            return Err(source_issued_error_v29());
+        };
+        let checked = self.with_emission_budget_v1(|_, budget| {
+            check_checked_write_tail_v85(
+                CheckedWriteInputsV85 {
+                    slice,
+                    index,
+                    precondition,
+                    value,
+                    element,
+                },
+                &operations[tail_start..],
+                budget,
+            )
+        })?;
+        if checked.predicate != present || checked.pointer != pointer {
+            return Err(source_issued_error_v29());
+        }
         Ok(SemanticValueBindingV1::Value {
             id: present,
             ty: Type::BOOL,
