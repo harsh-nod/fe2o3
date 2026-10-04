@@ -1,6 +1,6 @@
 {
-  "head": "ea41af2d6a6b01603f4b957d3de90ede7f4e639a",
-  "tree": "29938e26c15fe429f6c25adda3156ab288824ee1",
+  "head": "32e34f37e4f669c6cabc1f0fee87588331d07c5d",
+  "tree": "f3b374bd2d2a5ad7c9036902a35b48d74521dea3",
   "package": "fe2o3-verifier",
   "filters": [
     "aggregate_and_descriptor_operand_effects_require_exact_evaluated_state_and_value",
@@ -780,7 +780,7 @@
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
-      "sha256": "e593ead0257239b8fa34f68a6689aa92cc10af5a37733085eaee8e3612c05296"
+      "sha256": "c76669f9bc9da158407661b94f6c1b3a9060da3ce23b0171815686aeb07e7041"
     },
     {
       "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.vrs",

@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   verifier-ordinary:
-    name: Exact ea41 combined133 ordinary tests (diagnostic only)
+    name: Exact 32e34 combined133 ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ea41af2d6a6b01603f4b957d3de90ede7f4e639a
+          ref: 32e34f37e4f669c6cabc1f0fee87588331d07c5d
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-proof-ea41-ordinary-${{ github.run_attempt }}
+          name: issue271-proof-32e34-ordinary-r2-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-proof-v78-logs/
           if-no-files-found: warn
           retention-days: 7
