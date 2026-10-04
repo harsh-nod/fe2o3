@@ -170,7 +170,7 @@ fn process_identity(pidfd: &OwnedFd, pid: u32, id: u32) -> LiveClientPidfdIdenti
     .unwrap()
 }
 
-struct Fixture {
+pub(crate) struct Fixture {
     parent: GroupChild,
     application_pidfd: OwnedFd,
     application_pid: u32,
@@ -201,7 +201,7 @@ impl Drop for GroupChild {
 }
 
 impl Fixture {
-    fn spawn(helper: &Path, sealed: bool) -> Self {
+    pub(crate) fn spawn(helper: &Path, sealed: bool) -> Self {
         let files = tempfile::tempdir().unwrap();
         std::fs::set_permissions(files.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let directory = private_directory(&files.path().join("original"));
@@ -394,7 +394,7 @@ impl Fixture {
         )
     }
 
-    fn registration(&self) -> WorkerV3ApplicationRegistrationBindingV1 {
+    pub(crate) fn registration(&self) -> WorkerV3ApplicationRegistrationBindingV1 {
         use fe2o3_compiler_execution_protocol::{
             CompilerExecutionClientProcessIdentityV1,
             CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
@@ -481,12 +481,12 @@ impl Fixture {
         )
     }
 
-    fn command(&mut self, byte: u8) {
+    pub(crate) fn command(&mut self, byte: u8) {
         self.control.write_all(&[byte]).unwrap();
         read_ready(&mut self.control);
     }
 
-    fn acknowledge(&mut self) {
+    pub(crate) fn acknowledge(&mut self) {
         use fe2o3_runtime_protocol::WorkerV3ApplicationHandoffChallengeV1;
         let expected = WorkerV3ApplicationHandoffExpectationV1::new(
             WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(ENVELOPE_BYTES).unwrap(),
@@ -516,7 +516,7 @@ impl Fixture {
         assert_eq!(actual, ack);
     }
 
-    fn exit(&mut self) {
+    pub(crate) fn exit(&mut self) {
         self.control.write_all(b"x").unwrap();
         self.reap();
     }
@@ -535,15 +535,79 @@ impl Fixture {
             "fixture supervisor did not reap a successful original child"
         );
     }
+
+    pub(crate) fn application_identity(&self) -> LiveClientPidfdIdentityV1 {
+        process_identity(&self.application_pidfd, self.application_pid, CLIENT_ID)
+    }
+
+    pub(crate) fn parent_identity(&self) -> LiveClientPidfdIdentityV1 {
+        process_identity(&self.parent_pidfd, self.parent.0.id(), CLIENT_ID)
+    }
+
+    pub(crate) fn proof_peer(&self) -> OwnedFd {
+        rustix::io::fcntl_dupfd_cloexec(&self.proof_peer, 0).unwrap()
+    }
+
+    pub(crate) fn send_session(&mut self, bytes: &[u8], extra_right: bool) {
+        self.control
+            .write_all(if extra_right { b"I" } else { b"H" })
+            .unwrap();
+        self.control
+            .write_all(&(bytes.len() as u32).to_ne_bytes())
+            .unwrap();
+        self.control.write_all(bytes).unwrap();
+        read_ready(&mut self.control);
+    }
+
+    pub(crate) fn receive_session(&mut self) -> (Vec<u8>, u32) {
+        self.control.write_all(b"R").unwrap();
+        poll_readable(&self.control);
+        let mut fields = [0; 8];
+        self.control.read_exact(&mut fields).unwrap();
+        let length = u32::from_ne_bytes(fields[..4].try_into().unwrap()) as usize;
+        let rights = u32::from_ne_bytes(fields[4..].try_into().unwrap());
+        assert!(length <= 952);
+        let mut bytes = vec![0; length];
+        self.control.read_exact(&mut bytes).unwrap();
+        read_ready(&mut self.control);
+        (bytes, rights)
+    }
+
+    pub(crate) fn compiler_peer(&mut self) -> OwnedFd {
+        self.control.write_all(b"C").unwrap();
+        poll_readable(&self.control);
+        let mut bytes = [0];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        let received = rustix::net::recvmsg(
+            &self.control,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC,
+        )
+        .unwrap();
+        assert_eq!(received.bytes, 1);
+        assert!(
+            !received
+                .flags
+                .intersects(rustix::net::ReturnFlags::TRUNC | rustix::net::ReturnFlags::CTRUNC)
+        );
+        let mut rights = Vec::new();
+        for message in ancillary.drain() {
+            match message {
+                RecvAncillaryMessage::ScmRights(fds) => rights.extend(fds),
+                _ => panic!("unexpected compiler fixture ancillary"),
+            }
+        }
+        read_ready(&mut self.control);
+        let [peer]: [OwnedFd; 1] = rights.try_into().unwrap();
+        peer
+    }
 }
 
-#[test]
-#[ignore = "requires root, SYS_PTRACE, credential capabilities, and a static C toolchain in a private namespace"]
-fn root_application_observation_campaign() {
-    assert_eq!(rustix::process::geteuid().as_raw(), 0);
-    let build = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(build.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let helper = build.path().join("application-observation-fixture");
+pub(crate) fn build_helper(directory: &Path) -> std::path::PathBuf {
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let helper = directory.join("application-observation-fixture");
     let source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/linux/application_observation/fixture.c");
     let mut command = Command::new("cc");
@@ -571,6 +635,15 @@ fn root_application_observation_campaign() {
             .success()
     );
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    helper
+}
+
+#[test]
+#[ignore = "requires root, SYS_PTRACE, credential capabilities, and a static C toolchain in a private namespace"]
+fn root_application_observation_campaign() {
+    assert_eq!(rustix::process::geteuid().as_raw(), 0);
+    let build = tempfile::tempdir().unwrap();
+    let helper = build_helper(build.path());
 
     let mut fixture = Fixture::spawn(&helper, true);
     let observed = fixture.observe_registered().unwrap();

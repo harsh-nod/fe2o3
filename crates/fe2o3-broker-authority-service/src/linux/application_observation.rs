@@ -861,4 +861,4 @@ fn read_exact(retained: &RetainedFile, maximum: u64) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

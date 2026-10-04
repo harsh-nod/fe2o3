@@ -78,6 +78,16 @@ impl RetainedCompilerClientSessionV1 {
     }
 
     #[cfg(target_arch = "x86_64")]
+    pub(crate) fn retain_process_identity(
+        &self,
+    ) -> Result<LiveClientPidfdIdentityV1, ProtectedServiceAdmissionErrorV1> {
+        self.revalidate()?;
+        let retained = self.live_client.try_clone()?;
+        self.revalidate()?;
+        Ok(retained)
+    }
+
+    #[cfg(target_arch = "x86_64")]
     pub(crate) fn retain_session(&self) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         self.revalidate()?;
         let peer = rustix::io::fcntl_dupfd_cloexec(&self.peer, 0).map_err(|error| {

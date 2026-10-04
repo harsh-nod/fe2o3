@@ -25,9 +25,11 @@ use rustix::net::{
 
 use crate::{ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1};
 
+mod application;
 mod issuer;
 pub(crate) mod registry;
 mod root;
+pub use application::PendingApplicationObservationGateV1;
 pub use issuer::ProtectedCompilerExecutionObserverV1;
 pub(crate) use issuer::RemoteCompilerExecutionOccurrenceGuardV1;
 #[cfg(test)]
@@ -54,6 +56,9 @@ const MAX_PACKET: usize = HEADER
         OCCURRENCE_BODY
     };
 const MAGIC: &[u8; 8] = b"F2O3OBS1";
+// Registry and application messages share bounded transport, not the compiler packet codec.
+const MAX_TRANSPORT_PACKET: usize =
+    fe2o3_runtime_protocol::WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1;
 
 /// Fail-closed private observer admission or protocol failure.
 #[derive(Debug)]
@@ -62,6 +67,8 @@ pub enum CompilerExecutionObserverErrorV1 {
     Admission(ProtectedServiceAdmissionErrorV1),
     /// Live compiler/publication observation failed.
     Occurrence(Box<ProtectedCompilerExecutionOccurrenceErrorV1>),
+    /// Independent pre-ACK application observation failed.
+    ApplicationObservation(Box<crate::WorkerV3ApplicationObservationErrorV1>),
     /// The peer, message, or operation is outside the exact private protocol.
     Protocol(&'static str),
     /// The admitted process profile changed or was not established.
@@ -81,6 +88,7 @@ impl fmt::Display for CompilerExecutionObserverErrorV1 {
         match self {
             Self::Admission(e) => write!(f, "observer admission: {e}"),
             Self::Occurrence(e) => write!(f, "observer occurrence: {e}"),
+            Self::ApplicationObservation(e) => write!(f, "observer application: {e}"),
             Self::Protocol(e) => write!(f, "observer protocol: {e}"),
             Self::Profile(e) => write!(f, "observer process profile: {e}"),
             Self::Io(e) => write!(f, "observer transport: {e}"),
@@ -96,6 +104,7 @@ impl Error for CompilerExecutionObserverErrorV1 {
         match self {
             Self::Admission(e) => Some(e),
             Self::Occurrence(e) => Some(e),
+            Self::ApplicationObservation(e) => Some(e),
             Self::Io(e) => Some(e),
             _ => None,
         }
@@ -302,7 +311,7 @@ impl Endpoint {
     ) -> Result<Option<(Vec<u8>, Vec<OwnedFd>)>> {
         self.revalidate()?;
         sender.validate_liveness()?;
-        let mut bytes = [0; MAX_PACKET];
+        let mut bytes = [0; MAX_TRANSPORT_PACKET];
         let mut space =
             [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(2))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
@@ -375,7 +384,7 @@ impl Endpoint {
 
     fn send_bytes(&self, bytes: &[u8], rights: &[BorrowedFd<'_>]) -> Result<bool> {
         self.revalidate()?;
-        if bytes.is_empty() || bytes.len() > MAX_PACKET || rights.len() > 2 {
+        if bytes.is_empty() || bytes.len() > MAX_TRANSPORT_PACKET || rights.len() > 2 {
             return Err(invalid(
                 "outgoing datagram exceeds private transport bounds",
             ));

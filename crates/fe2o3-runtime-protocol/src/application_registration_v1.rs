@@ -28,6 +28,13 @@ const IDENTITY_OFFSET: usize = CHALLENGE_OFFSET + WORKER_V3_APPLICATION_HANDOFF_
 const OCCURRENCE_BUDGET: WorkerV3ApplicationHandoffCodecBudgetV1 =
     WorkerV3ApplicationHandoffCodecBudgetV1::new(FOUR_INPUT_OCCURRENCE_BYTES, 1024, 4);
 
+mod session;
+pub use session::{
+    WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1, WorkerV3ApplicationRegistrationInputsV1,
+    WorkerV3ApplicationSessionKindV1, WorkerV3ApplicationSessionMessageV1,
+    WorkerV3ApplicationSessionTranscriptV1,
+};
+
 /// Exact byte length of the dedicated application binding, distinct from compiler-only handoff.
 pub const WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1: usize = IDENTITY_OFFSET + 32;
 
@@ -90,46 +97,25 @@ impl WorkerV3ApplicationRegistrationBindingV1 {
         expectation: WorkerV3ApplicationHandoffExpectationV1,
         challenge: WorkerV3ApplicationHandoffChallengeV1,
     ) -> Result<Self> {
-        if occurrence.inputs().len() != 4
-            || occurrence
-                .inputs()
-                .iter()
-                .zip(1..=4)
-                .any(|(input, slot)| input.slot() != slot)
-        {
-            return Err(WorkerV3ApplicationRegistrationErrorV1::InputProfile);
-        }
-        if WorkerV3ApplicationHandoffExpectationV1::new(expectation.envelope(), &occurrence)
-            != expectation
-        {
-            return Err(WorkerV3ApplicationRegistrationErrorV1::ExpectationMismatch);
-        }
-        let occurrence_bytes = occurrence.encode_canonical_with_budget(OCCURRENCE_BUDGET)?;
-        if occurrence_bytes.len() != FOUR_INPUT_OCCURRENCE_BYTES {
-            return Err(WorkerV3ApplicationRegistrationErrorV1::InputProfile);
-        }
+        let inputs = WorkerV3ApplicationRegistrationInputsV1::new(
+            occurrence,
+            descriptors,
+            expectation,
+            challenge,
+        )?;
         let mut bytes = [0; WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1];
         bytes[..8].copy_from_slice(MAGIC);
         bytes[8..10].copy_from_slice(&1u16.to_le_bytes());
         bytes[12..16]
             .copy_from_slice(&(WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1 as u32).to_le_bytes());
         bytes[HEADER_BYTES..OCCURRENCE_OFFSET].copy_from_slice(handoff.canonical_bytes());
-        bytes[OCCURRENCE_OFFSET..DESCRIPTORS_OFFSET].copy_from_slice(&occurrence_bytes);
-        for (slot, value) in bytes[DESCRIPTORS_OFFSET..EXPECTATION_OFFSET]
-            .chunks_exact_mut(4)
-            .zip(descriptors.0)
-        {
-            slot.copy_from_slice(&value.to_le_bytes());
-        }
-        bytes[EXPECTATION_OFFSET..CHALLENGE_OFFSET]
-            .copy_from_slice(&expectation.encode_canonical()?);
-        bytes[CHALLENGE_OFFSET..IDENTITY_OFFSET].copy_from_slice(&challenge.encode_canonical()?);
+        bytes[OCCURRENCE_OFFSET..IDENTITY_OFFSET].copy_from_slice(inputs.canonical_bytes());
         let identity =
             WorkerV3ApplicationRegistrationIdentityV1(derive_identity(&bytes[..IDENTITY_OFFSET]));
         bytes[IDENTITY_OFFSET..].copy_from_slice(identity.as_bytes());
         Ok(Self {
             handoff,
-            occurrence,
+            occurrence: inputs.occurrence,
             descriptors,
             expectation,
             challenge,
@@ -158,27 +144,16 @@ impl WorkerV3ApplicationRegistrationBindingV1 {
         let handoff =
             CompilerExecutionSupervisorHandoffV1::decode(&bytes[HEADER_BYTES..OCCURRENCE_OFFSET])
                 .map_err(WorkerV3ApplicationRegistrationErrorV1::CompilerHandoff)?;
-        let occurrence = WorkerV3ApplicationOccurrenceV1::decode_canonical_with_budget(
-            &bytes[OCCURRENCE_OFFSET..DESCRIPTORS_OFFSET],
-            OCCURRENCE_BUDGET,
+        let inputs = WorkerV3ApplicationRegistrationInputsV1::decode(
+            &bytes[OCCURRENCE_OFFSET..IDENTITY_OFFSET],
         )?;
-        let mut values = [0; 4];
-        for (value, slot) in values
-            .iter_mut()
-            .zip(bytes[DESCRIPTORS_OFFSET..EXPECTATION_OFFSET].chunks_exact(4))
-        {
-            *value = i32::from_le_bytes(slot.try_into().expect("fixed descriptor width"));
-        }
-        let descriptors = WorkerV3ApplicationRegistrationDescriptorsV1::new(
-            values[0], values[1], values[2], values[3],
+        let value = Self::new(
+            handoff,
+            inputs.occurrence,
+            inputs.descriptors,
+            inputs.expectation,
+            inputs.challenge,
         )?;
-        let expectation = WorkerV3ApplicationHandoffExpectationV1::decode_canonical(
-            &bytes[EXPECTATION_OFFSET..CHALLENGE_OFFSET],
-        )?;
-        let challenge = WorkerV3ApplicationHandoffChallengeV1::decode_canonical(
-            &bytes[CHALLENGE_OFFSET..IDENTITY_OFFSET],
-        )?;
-        let value = Self::new(handoff, occurrence, descriptors, expectation, challenge)?;
         if value.bytes != bytes {
             return Err(WorkerV3ApplicationRegistrationErrorV1::Canonical);
         }
@@ -229,6 +204,7 @@ pub enum WorkerV3ApplicationRegistrationErrorV1 {
     InputProfile,
     ExpectationMismatch,
     Canonical,
+    SessionTranscript,
     CompilerHandoff(CompilerExecutionSupervisorHandoffErrorV1),
     ApplicationHandoff(WorkerV3ApplicationHandoffProtocolErrorV1),
 }

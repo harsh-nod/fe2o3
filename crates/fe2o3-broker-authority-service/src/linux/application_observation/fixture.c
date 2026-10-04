@@ -33,6 +33,7 @@ static long kernel_call(long number, long a, long b, long c, long d, long e, lon
 #define getppid() call3(SYS_getppid, 0, 0, 0)
 #define prctl(option, value) call3(SYS_prctl, option, value, 0)
 #define sendmsg(fd, message, flags) call3(SYS_sendmsg, fd, message, flags)
+#define recvmsg(fd, message, flags) call3(SYS_recvmsg, fd, message, flags)
 #define waitpid(pid, status, options) call3(SYS_wait4, pid, status, options)
 #define fexecve(fd, argv, env) kernel_call(SYS_execveat, fd, (long)"", (long)argv, (long)env, AT_EMPTY_PATH, 0)
 
@@ -134,6 +135,71 @@ int fixture_main(int argc, char **argv) {
         char command;
         transfer(183, &command, 1, 0);
         switch (command) {
+        case 'H':
+        case 'I': {
+            uint32_t length;
+            unsigned char bytes[952];
+            transfer(183, &length, sizeof(length), 0);
+            check(length <= sizeof(bytes));
+            transfer(183, bytes, length, 0);
+            struct iovec iov = {bytes, length};
+            union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
+            struct msghdr message = {0};
+            message.msg_iov = &iov; message.msg_iovlen = 1;
+            if (command == 'I') {
+                message.msg_control = control.bytes; message.msg_controllen = sizeof(control.bytes);
+                struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+                header->cmsg_level = SOL_SOCKET; header->cmsg_type = SCM_RIGHTS;
+                header->cmsg_len = CMSG_LEN(sizeof(int));
+                *(int *)CMSG_DATA(header) = 180;
+            }
+            check(sendmsg(190, &message, MSG_NOSIGNAL) == length);
+            break;
+        }
+        case 'R': {
+            unsigned char bytes[952];
+            struct iovec iov = {bytes, sizeof(bytes)};
+            union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int))]; } control = {0};
+            struct msghdr message = {0};
+            message.msg_iov = &iov; message.msg_iovlen = 1;
+            message.msg_control = control.bytes; message.msg_controllen = sizeof(control.bytes);
+            long length = recvmsg(190, &message, MSG_CMSG_CLOEXEC);
+            check(length > 0 && !(message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)));
+            uint32_t rights = 0;
+            for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header)) {
+                check(header->cmsg_level == SOL_SOCKET);
+                if (header->cmsg_type == SCM_RIGHTS) {
+                    check(header->cmsg_len == CMSG_LEN(sizeof(int)));
+                    int fd = *(int *)CMSG_DATA(header);
+                    check(fcntl(fd, F_GETFD, 0) == FD_CLOEXEC);
+                    close(fd); rights++;
+                } else check(header->cmsg_type == SCM_CREDENTIALS);
+            }
+            uint32_t fields[] = {(uint32_t)length, rights};
+            transfer(183, fields, sizeof(fields), 1);
+            transfer(183, bytes, (size_t)length, 1);
+            break;
+        }
+        case 'C': {
+            int compiler[2];
+            check(kernel_call(SYS_socketpair, AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC,
+                              0, (long)compiler, 0, 0) == 0);
+            check(dup3(compiler[0], 191, O_CLOEXEC) == 191);
+            close(compiler[0]);
+            char byte = 'c';
+            struct iovec iov = {&byte, 1};
+            union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
+            struct msghdr message = {0};
+            message.msg_iov = &iov; message.msg_iovlen = 1;
+            message.msg_control = control.bytes; message.msg_controllen = sizeof(control.bytes);
+            struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+            header->cmsg_level = SOL_SOCKET; header->cmsg_type = SCM_RIGHTS;
+            header->cmsg_len = CMSG_LEN(sizeof(int));
+            *(int *)CMSG_DATA(header) = compiler[1];
+            check(sendmsg(183, &message, MSG_NOSIGNAL) == 1);
+            close(compiler[1]);
+            break;
+        }
         case 'a': {
             uint32_t length;
             unsigned char ack[512];

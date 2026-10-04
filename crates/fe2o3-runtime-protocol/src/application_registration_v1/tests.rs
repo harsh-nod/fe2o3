@@ -107,6 +107,180 @@ fn fixed_layout_round_trip_retains_full_original_binding() {
 }
 
 #[test]
+fn session_round_trip_has_exact_phase_lengths_rights_and_transcript() {
+    let binding = fixture();
+    let inputs =
+        WorkerV3ApplicationRegistrationInputsV1::decode(&binding.canonical_bytes()[208..808])
+            .unwrap();
+    assert_eq!(inputs.canonical_bytes().len(), 600);
+    assert!(inputs.matches_binding(&binding));
+    let hello = WorkerV3ApplicationSessionMessageV1::hello(inputs.clone(), [31; 32]).unwrap();
+    let challenge =
+        WorkerV3ApplicationSessionMessageV1::challenge(binding.clone(), [31; 32], [32; 32])
+            .unwrap();
+    let transcript = challenge.transcript().unwrap();
+    assert_eq!(transcript.app_nonce(), [31; 32]);
+    assert_eq!(transcript.root_nonce(), [32; 32]);
+    assert_eq!(transcript.binding(), *binding.identity().as_bytes());
+    assert_eq!(hello.inputs(), Some(&inputs));
+    assert_eq!(hello.transcript(), None);
+    assert_eq!(challenge.registration(), Some(&binding));
+    for (message, kind, length, rights) in [
+        (hello, WorkerV3ApplicationSessionKindV1::Hello, 712, 0),
+        (
+            challenge,
+            WorkerV3ApplicationSessionKindV1::Challenge,
+            952,
+            1,
+        ),
+        (
+            WorkerV3ApplicationSessionMessageV1::accept(transcript),
+            WorkerV3ApplicationSessionKindV1::Accept,
+            112,
+            0,
+        ),
+        (
+            WorkerV3ApplicationSessionMessageV1::ready(transcript),
+            WorkerV3ApplicationSessionKindV1::Ready,
+            112,
+            0,
+        ),
+    ] {
+        assert_eq!(message.kind(), kind);
+        assert_eq!(message.canonical_bytes().len(), length);
+        assert_eq!(message.rights(), rights);
+        assert_eq!(
+            WorkerV3ApplicationSessionMessageV1::decode(message.canonical_bytes()).unwrap(),
+            message
+        );
+        for length in 0..message.canonical_bytes().len() {
+            assert!(
+                WorkerV3ApplicationSessionMessageV1::decode(&message.canonical_bytes()[..length])
+                    .is_err()
+            );
+        }
+        for offset in [0, 7, 8, 9, 10, 11, 12, 15] {
+            let mut changed = message.canonical_bytes().to_vec();
+            changed[offset] = 255;
+            assert!(WorkerV3ApplicationSessionMessageV1::decode(&changed).is_err());
+        }
+        let mut trailing = message.canonical_bytes().to_vec();
+        trailing.push(0);
+        assert!(WorkerV3ApplicationSessionMessageV1::decode(&trailing).is_err());
+    }
+}
+
+#[test]
+fn session_rejects_invalid_transcripts_and_challenge_body_substitution() {
+    let binding = fixture();
+    let inputs =
+        WorkerV3ApplicationRegistrationInputsV1::decode(&binding.canonical_bytes()[208..808])
+            .unwrap();
+    let hello = WorkerV3ApplicationSessionMessageV1::hello(inputs.clone(), [31; 32]).unwrap();
+    assert!(WorkerV3ApplicationSessionMessageV1::hello(inputs, [0; 32]).is_err());
+    for offset in [48, 80] {
+        let mut bytes = hello.canonical_bytes().to_vec();
+        bytes[offset] = 1;
+        assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+    }
+    let challenge =
+        WorkerV3ApplicationSessionMessageV1::challenge(binding.clone(), [31; 32], [32; 32])
+            .unwrap();
+    for message in [
+        hello,
+        challenge.clone(),
+        WorkerV3ApplicationSessionMessageV1::accept(challenge.transcript().unwrap()),
+        WorkerV3ApplicationSessionMessageV1::ready(challenge.transcript().unwrap()),
+    ] {
+        for offset in if message.kind() == WorkerV3ApplicationSessionKindV1::Hello {
+            &[16][..]
+        } else {
+            &[16, 48, 80][..]
+        } {
+            let mut bytes = message.canonical_bytes().to_vec();
+            bytes[*offset..*offset + 32].fill(0);
+            assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+        }
+        let mut bytes = message.canonical_bytes().to_vec();
+        bytes[48..80].fill(31);
+        assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+    }
+    let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+        binding.handoff.clone(),
+        binding.occurrence.clone(),
+        binding.descriptors,
+        binding.expectation,
+        WorkerV3ApplicationHandoffChallengeV1::from_bytes([19; 32]).unwrap(),
+    )
+    .unwrap();
+    let mut bytes = challenge.canonical_bytes().to_vec();
+    bytes[112..].copy_from_slice(changed.canonical_bytes());
+    assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+    bytes[80..112].copy_from_slice(changed.identity().as_bytes());
+    assert_ne!(
+        WorkerV3ApplicationSessionMessageV1::decode(&bytes)
+            .unwrap()
+            .transcript(),
+        challenge.transcript()
+    );
+}
+
+#[test]
+fn local_inputs_match_every_application_dimension_but_not_compiler_handoff() {
+    let original = fixture();
+    let inputs =
+        WorkerV3ApplicationRegistrationInputsV1::decode(&original.canonical_bytes()[208..808])
+            .unwrap();
+    for mutation in 0..5 {
+        let mut value = original.clone();
+        match mutation {
+            0 => {
+                value.handoff = CompilerExecutionSupervisorHandoffV1::new(
+                    CompilerExecutionClientProcessIdentityV1::new(101, 1000, 1001).unwrap(),
+                    value.handoff.launch_manifest().clone(),
+                )
+                .unwrap()
+            }
+            1 => {
+                value.occurrence = occurrence(&[1, 2, 3, 4], 12);
+                value.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+                    value.expectation.envelope(),
+                    &value.occurrence,
+                );
+            }
+            2 => {
+                value.descriptors =
+                    WorkerV3ApplicationRegistrationDescriptorsV1::new(10, 11, 12, 14).unwrap()
+            }
+            3 => {
+                value.expectation = WorkerV3ApplicationHandoffExpectationV1::new(
+                    WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(b"different").unwrap(),
+                    &value.occurrence,
+                )
+            }
+            4 => {
+                value.challenge =
+                    WorkerV3ApplicationHandoffChallengeV1::from_bytes([99; 32]).unwrap()
+            }
+            _ => unreachable!(),
+        }
+        let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+            value.handoff,
+            value.occurrence,
+            value.descriptors,
+            value.expectation,
+            value.challenge,
+        )
+        .unwrap();
+        assert_ne!(changed.identity(), original.identity());
+        assert_eq!(inputs.matches_binding(&changed), mutation == 0);
+    }
+    for size in [0, 599, 601, 840, 4096] {
+        assert!(WorkerV3ApplicationRegistrationInputsV1::decode(&vec![0; size]).is_err());
+    }
+}
+
+#[test]
 fn every_byte_mutation_and_nonexact_length_rejects() {
     let value = fixture();
     for index in 0..840 {

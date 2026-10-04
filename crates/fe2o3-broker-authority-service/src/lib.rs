@@ -207,6 +207,7 @@ pub use linux::observer_channel::{
     RegisteredCompilerObserverV1, RootCompilerExecutionObserverProgressV1,
     RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1,
     SupervisorCompilerObserverRegistryV1,
+    PendingApplicationObservationGateV1,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{

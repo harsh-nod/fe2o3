@@ -11,7 +11,10 @@ fn packet(kind: RegistryKind) -> RegistryPacket {
         kind,
         sequence: 1,
         nonce: [1; 32],
-        registration: if kind == RegistryKind::Register {
+        registration: if matches!(
+            kind,
+            RegistryKind::Register | RegistryKind::RegisterApplication
+        ) {
             [0; 32]
         } else {
             [2; 32]
@@ -20,7 +23,11 @@ fn packet(kind: RegistryKind) -> RegistryPacket {
             3;
             match kind {
                 RegistryKind::Register => COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1,
-                RegistryKind::Registered => 32,
+                RegistryKind::RegisterApplication => WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
+                RegistryKind::Registered
+                | RegistryKind::RegisteredApplication
+                | RegistryKind::AttachApplication => 32,
+                RegistryKind::ApplicationInstalled => 64,
                 RegistryKind::Bind | RegistryKind::Bound => 52,
             }
         ],
@@ -34,11 +41,18 @@ fn registration_codec_is_canonical_and_distinct_from_occurrence_protocol() {
         RegistryKind::Registered,
         RegistryKind::Bind,
         RegistryKind::Bound,
+        RegistryKind::RegisterApplication,
+        RegistryKind::RegisteredApplication,
+        RegistryKind::AttachApplication,
+        RegistryKind::ApplicationInstalled,
     ] {
         let expected = packet(kind);
         let bytes = expected.encode().unwrap();
         assert_eq!(RegistryPacket::decode(&bytes).unwrap(), expected);
         assert!(Packet::decode(&bytes).is_err());
+        assert!(
+            fe2o3_runtime_protocol::WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err()
+        );
         for length in 0..bytes.len() {
             assert!(RegistryPacket::decode(&bytes[..length]).is_err());
         }
@@ -53,7 +67,16 @@ fn registration_codec_is_canonical_and_distinct_from_occurrence_protocol() {
             assert!(RegistryPacket::decode(&changed).is_err());
         }
         let mut changed = bytes.clone();
-        changed[56..88].fill(if kind == RegistryKind::Register { 1 } else { 0 });
+        changed[56..88].fill(
+            if matches!(
+                kind,
+                RegistryKind::Register | RegistryKind::RegisterApplication
+            ) {
+                1
+            } else {
+                0
+            },
+        );
         assert!(RegistryPacket::decode(&changed).is_err());
         let mut extra = bytes;
         extra.push(0);
@@ -76,6 +99,10 @@ fn registration_enforces_exact_rights_and_sender_not_socket_creator() {
         RegistryKind::Registered,
         RegistryKind::Bind,
         RegistryKind::Bound,
+        RegistryKind::RegisterApplication,
+        RegistryKind::RegisteredApplication,
+        RegistryKind::AttachApplication,
+        RegistryKind::ApplicationInstalled,
     ] {
         let packet = packet(kind);
         for count in 0..=2 {
@@ -149,6 +176,275 @@ fn production_launch_requires_distinct_roles_and_exact_policy_anchor() {
     }
 }
 
+#[test]
+#[ignore = "requires root and credential capabilities for real Cargo/application process fixtures"]
+fn root_application_registry_transitions() {
+    use crate::linux::application_observation::tests::{Fixture, build_helper};
+    use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV1;
+    assert_eq!(rustix::process::geteuid().as_raw(), 0);
+    let build = tempfile::tempdir().unwrap();
+    let helper = build_helper(build.path());
+    for scenario in [
+        "attached",
+        "independent",
+        "pending_marker",
+        "pending_retired",
+        "prepared_expiry",
+    ] {
+        let mut fixture = Fixture::spawn(&helper, true);
+        let original = fixture.registration();
+        let policy = policy();
+        let anchor = CompilerExecutionExternalAnchorServiceIdentityV1::new(61001, 61001).unwrap();
+        let launch = CompilerExecutionServiceLaunchManifestV1::new(
+            original.compiler_handoff().launch_manifest().client(),
+            anchor,
+            &policy,
+        );
+        let binding = WorkerV3ApplicationRegistrationBindingV1::new(
+            CompilerExecutionSupervisorHandoffV1::new(
+                original.compiler_handoff().submitter(),
+                launch.clone(),
+            )
+            .unwrap(),
+            original.occurrence().clone(),
+            original.descriptors(),
+            original.expectation(),
+            original.challenge(),
+        )
+        .unwrap();
+        let credentials = ProtectedServiceCredentialProfileV1::new(1000, 1000).unwrap();
+        let (prepared, _transfers) = PreparedRootCompilerObserverRegistryV1::prepare_inner(
+            policy,
+            credentials,
+            anchor,
+            false,
+        )
+        .unwrap();
+        let (parent_control, child_control) = observer_pair().unwrap();
+        let supervisor = spawn_helper(
+            "linux::observer_channel::registry::tests::application_registry_parent_helper",
+            &[child_control],
+            "application_parent",
+            false,
+        );
+        let supervisor_identity = LiveClientPidfdIdentityV1::admit(
+            rustix::process::pidfd_open(
+                rustix::process::Pid::from_raw(supervisor.0.id() as i32).unwrap(),
+                rustix::process::PidfdFlags::empty(),
+            )
+            .unwrap(),
+            ExpectedClientProcessIdentityV1::new(supervisor.0.id(), 1000, 1000).unwrap(),
+        )
+        .unwrap();
+        let parent_control = Endpoint::admit(parent_control).unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        let (issuer_bytes, mut issuer_rights) = loop {
+            if let Some(message) = parent_control.receive_bytes(&supervisor_identity).unwrap() {
+                break message;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(issuer_rights.len(), 1);
+        let identity = LiveClientPidfdIdentityV1::admit(
+            issuer_rights.remove(0),
+            ExpectedClientProcessIdentityV1::new(
+                u32::from_le_bytes(issuer_bytes.try_into().unwrap()),
+                1000,
+                1000,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut registry = RootCompilerObserverRegistryV1 {
+            prepared,
+            supervisor: supervisor_identity,
+            sessions: Vec::new(),
+            applications: Vec::new(),
+            pending: None,
+            next_sequence: 1,
+            closing: false,
+        };
+        let compiler_peer = fixture.compiler_peer();
+        let application = fixture.application_identity();
+        let parent = fixture.parent_identity();
+        let register = |kind, body| RegistryPacket {
+            kind,
+            body,
+            ..packet(kind)
+        };
+        registry
+            .register(
+                register(
+                    RegistryKind::RegisterApplication,
+                    binding.canonical_bytes().to_vec(),
+                ),
+                vec![
+                    rustix::io::fcntl_dupfd_cloexec(&compiler_peer, 0).unwrap(),
+                    rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
+                ],
+            )
+            .unwrap();
+        assert!(registry.applications.is_empty());
+        let registered = registry.pending.take().unwrap();
+        assert_eq!(registered.packet.kind, RegistryKind::RegisteredApplication);
+        assert_eq!(registered.packet.body, binding.identity().as_bytes());
+        registry.validate_pending(&registered).unwrap();
+        let id = registered.packet.registration;
+        let mut bind_body = Vec::new();
+        encode_identity(&identity, &mut bind_body);
+        bind_body.extend_from_slice(launch.identity().as_bytes());
+        let bind = RegistryPacket {
+            registration: id,
+            body: bind_body,
+            ..packet(RegistryKind::Bind)
+        };
+        assert!(
+            registry
+                .bind_issuer(
+                    bind.clone(),
+                    vec![rustix::io::fcntl_dupfd_cloexec(&identity.pidfd, 0).unwrap()]
+                )
+                .is_err()
+        );
+        assert_eq!(registry.sessions.len(), 1);
+        let attach = RegistryPacket {
+            registration: id,
+            body: binding.identity().as_bytes().to_vec(),
+            ..packet(RegistryKind::AttachApplication)
+        };
+        for mutation in 0..4 {
+            let mut changed = attach.clone();
+            let rights = match mutation {
+                0 => {
+                    changed.registration = [99; 32];
+                    vec![
+                        fixture.proof_peer(),
+                        rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                    ]
+                }
+                1 => {
+                    changed.body[0] ^= 1;
+                    vec![
+                        fixture.proof_peer(),
+                        rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                    ]
+                }
+                2 => vec![
+                    rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                    fixture.proof_peer(),
+                ],
+                _ => vec![
+                    fixture.proof_peer(),
+                    rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
+                ],
+            };
+            assert!(registry.attach_application(changed, rights).is_err());
+            assert!(registry.applications.is_empty());
+            assert!(registry.pending.is_none());
+        }
+        registry
+            .attach_application(
+                attach.clone(),
+                vec![
+                    fixture.proof_peer(),
+                    rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(registry.applications.len(), 1);
+        let installed = registry.pending.take().unwrap();
+        registry.validate_pending(&installed).unwrap();
+        assert_eq!(installed.packet.kind, RegistryKind::ApplicationInstalled);
+        assert_eq!(installed.rights.len(), 1);
+        let mut bytes = [0; 72];
+        assert_eq!(
+            rustix::io::read(&installed.rights[0], &mut bytes),
+            Err(rustix::io::Errno::AGAIN)
+        );
+        assert!(
+            registry
+                .attach_application(
+                    attach,
+                    vec![
+                        fixture.proof_peer(),
+                        rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap()
+                    ]
+                )
+                .is_err()
+        );
+        assert_eq!(registry.applications.len(), 1);
+        match scenario {
+            "independent" => {
+                registry
+                    .bind_issuer(
+                        bind,
+                        vec![rustix::io::fcntl_dupfd_cloexec(&identity.pidfd, 0).unwrap()],
+                    )
+                    .unwrap();
+                assert!(matches!(registry.sessions[0], Session::Bound(_)));
+                registry.sessions.clear();
+                assert_eq!(registry.applications.len(), 1);
+                registry.applications[0].revalidate_installation().unwrap();
+                assert_eq!(
+                    rustix::io::read(&installed.rights[0], &mut bytes),
+                    Err(rustix::io::Errno::AGAIN),
+                    "compiler binding cannot publish observation readiness"
+                );
+            }
+            "pending_marker" => {
+                if let Session::Prepared { application, .. } = &mut registry.sessions[0] {
+                    *application = ApplicationAttachment::CompilerOnly;
+                }
+                assert!(registry.validate_pending(&installed).is_err());
+            }
+            "pending_retired" => {
+                registry.applications[0].cancel();
+                assert!(registry.validate_pending(&installed).is_err());
+                assert!(
+                    registry
+                        .bind_issuer(
+                            bind,
+                            vec![rustix::io::fcntl_dupfd_cloexec(&identity.pidfd, 0).unwrap()]
+                        )
+                        .is_err()
+                );
+            }
+            "prepared_expiry" => {
+                if let Session::Prepared { deadline, .. } = &mut registry.sessions[0] {
+                    *deadline = Instant::now();
+                }
+                assert!(
+                    registry
+                        .bind_issuer(
+                            bind,
+                            vec![rustix::io::fcntl_dupfd_cloexec(&identity.pidfd, 0).unwrap()]
+                        )
+                        .is_err()
+                );
+            }
+            _ => {}
+        }
+        registry.cancel_all();
+        assert!(!registry.is_drained());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !registry.is_drained() {
+            assert!(Instant::now() < deadline);
+            registry
+                .step(|error| panic!("unexpected containment failure: {error}"))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            rustix::io::read(&installed.rights[0], &mut bytes).unwrap(),
+            0
+        );
+        println!(
+            "PASS: application registry {scenario}; cancellation drains original process custody"
+        );
+    }
+}
+
 fn spawn_helper(
     name: &str,
     descriptors: &[OwnedFd],
@@ -160,6 +456,7 @@ fn spawn_helper(
         .map(|fd| rustix::io::fcntl_dupfd_cloexec(fd, 240).unwrap())
         .collect();
     let raw: Vec<_> = sources.iter().map(AsRawFd::as_raw_fd).collect();
+    let application_parent = scenario == "application_parent";
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
@@ -177,6 +474,13 @@ fn spawn_helper(
     // SAFETY: only async-signal-safe credential and descriptor syscalls run in the owned child.
     unsafe {
         command.pre_exec(move || {
+            if application_parent
+                && (libc::setgroups(0, std::ptr::null()) != 0
+                    || libc::setresgid(1000, 1000, 1000) != 0
+                    || libc::setresuid(1000, 1000, 1000) != 0)
+            {
+                return Err(io::Error::last_os_error());
+            }
             if production && libc::geteuid() == 0 {
                 for capability in 0..=63 {
                     if libc::prctl(libc::PR_CAPBSET_DROP, capability, 0, 0, 0) != 0
@@ -226,6 +530,162 @@ fn spawn_helper(
         });
     }
     ChildOwner(crate::test_process_execution::spawn(&mut command).unwrap())
+}
+
+#[test]
+#[ignore = "private application-registry supervisor with original issuer pidfd"]
+fn application_registry_parent_helper() {
+    let endpoint = Endpoint::admit(inherited(200)).unwrap();
+    let mut command = Command::new("/bin/sleep");
+    command.arg("30");
+    let child = ChildOwner(crate::test_process_execution::spawn(&mut command).unwrap());
+    let identity = child_identity(&child.0);
+    assert!(
+        endpoint
+            .send_bytes(&child.0.id().to_le_bytes(), &[identity.pidfd.as_fd()])
+            .unwrap()
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    while !endpoint.closed().unwrap() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+#[ignore = "requires root and credential capabilities for authenticated registry transport"]
+fn root_application_registry_transport() {
+    use crate::linux::application_observation::tests::{Fixture, build_helper};
+    use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV1;
+    assert_eq!(rustix::process::geteuid().as_raw(), 0);
+    let build = tempfile::tempdir().unwrap();
+    let helper = build_helper(build.path());
+    let mut fixture = Fixture::spawn(&helper, true);
+    let original = fixture.registration();
+    let policy = policy();
+    let anchor = CompilerExecutionExternalAnchorServiceIdentityV1::new(61001, 61001).unwrap();
+    let launch = CompilerExecutionServiceLaunchManifestV1::new(
+        original.compiler_handoff().launch_manifest().client(),
+        anchor,
+        &policy,
+    );
+    let binding = WorkerV3ApplicationRegistrationBindingV1::new(
+        CompilerExecutionSupervisorHandoffV1::new(original.compiler_handoff().submitter(), launch)
+            .unwrap(),
+        original.occurrence().clone(),
+        original.descriptors(),
+        original.expectation(),
+        original.challenge(),
+    )
+    .unwrap();
+    let credentials = ProtectedServiceCredentialProfileV1::new(1000, 1000).unwrap();
+    let (prepared, [peer, root_pidfd]) = PreparedRootCompilerObserverRegistryV1::prepare_inner(
+        policy.clone(),
+        credentials,
+        anchor,
+        false,
+    )
+    .unwrap();
+    let application = fixture.application_identity();
+    let parent = fixture.parent_identity();
+    let descriptors = [
+        peer,
+        root_pidfd,
+        bytes_file(policy.canonical_bytes()),
+        bytes_file(binding.canonical_bytes()),
+        fixture.compiler_peer(),
+        rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
+        fixture.proof_peer(),
+        rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+    ];
+    let mut supervisor = spawn_helper(
+        "linux::observer_channel::registry::tests::application_registry_wire_helper",
+        &descriptors,
+        "application_parent",
+        false,
+    );
+    drop(descriptors);
+    let supervisor_identity = LiveClientPidfdIdentityV1::admit(
+        rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(supervisor.0.id() as i32).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap(),
+        ExpectedClientProcessIdentityV1::new(supervisor.0.id(), 1000, 1000).unwrap(),
+    )
+    .unwrap();
+    let mut registry = prepared.bind(supervisor_identity).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut installed = false;
+    loop {
+        let result = registry.step(|error| panic!("unexpected application failure: {error}"));
+        installed |= registry.applications.len() == 1;
+        if let Err(error) = result {
+            assert!(
+                matches!(
+                    error,
+                    CompilerExecutionObserverErrorV1::Closed
+                        | CompilerExecutionObserverErrorV1::Admission(_)
+                        | CompilerExecutionObserverErrorV1::Profile(_)
+                ),
+                "unexpected registry error: {error}"
+            );
+        }
+        if let Some(status) = supervisor.0.try_wait().unwrap() {
+            assert!(status.success());
+            registry.cancel_all();
+            if registry.is_drained() {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(installed);
+    println!(
+        "PASS: root/supervisor two-exchange application API; installation alone cannot complete readiness"
+    );
+}
+
+#[test]
+#[ignore = "private application registry wire supervisor with original application descriptors"]
+fn application_registry_wire_helper() {
+    let peer = inherited(200);
+    let root = inherited(201);
+    let policy = CompilerExecutionIssuerPolicyV1::decode(&read_inherited(202)).unwrap();
+    let binding = WorkerV3ApplicationRegistrationBindingV1::decode(&read_inherited(203)).unwrap();
+    let compiler = inherited(204);
+    let application = inherited(205);
+    let proof = inherited(206);
+    let parent = inherited(207);
+    let mut registry = SupervisorCompilerObserverRegistryV1::admit_inner(
+        peer,
+        root,
+        &policy,
+        ProtectedServiceCredentialProfileV1::new(1000, 1000).unwrap(),
+        binding
+            .compiler_handoff()
+            .launch_manifest()
+            .external_anchor_service(),
+        false,
+    )
+    .unwrap();
+    let (registered, gate) = registry
+        .register_application(
+            &binding,
+            compiler.as_fd(),
+            application.as_fd(),
+            proof.as_fd(),
+            parent.as_fd(),
+            Instant::now() + TIMEOUT,
+        )
+        .unwrap();
+    assert!(registered.matches_launch(binding.compiler_handoff().launch_manifest()));
+    assert!(matches!(
+        gate.await_observation(Instant::now() + Duration::from_millis(20)),
+        Err(CompilerExecutionObserverErrorV1::Timeout)
+    ));
+    drop(registered);
 }
 
 /// Actual root/supervisor/issuer process hierarchy and observed compiler publication, with

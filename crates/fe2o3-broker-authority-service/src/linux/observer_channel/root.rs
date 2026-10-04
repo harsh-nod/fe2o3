@@ -21,6 +21,19 @@ pub struct PreparedRootCompilerExecutionObserverV1 {
 }
 
 impl PreparedRootCompilerExecutionObserverV1 {
+    pub(super) fn retain_application_process(
+        &self,
+        launch: &CompilerExecutionServiceLaunchManifestV1,
+    ) -> Result<LiveClientPidfdIdentityV1> {
+        self.validate_root()?;
+        if &self.launch != launch {
+            return Err(invalid("application/compiler launch mismatch"));
+        }
+        let retained = self.client.retain_process_identity()?;
+        self.validate_root()?;
+        Ok(retained)
+    }
+
     pub(super) fn peer_closed(&self) -> Result<bool> {
         self.endpoint.closed()
     }
