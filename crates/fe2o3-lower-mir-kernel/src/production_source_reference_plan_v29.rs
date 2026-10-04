@@ -176,6 +176,7 @@ struct SourceReferencePlanV29<'a, 'source> {
     blocks: Vec<SourceReferenceBlockV29>,
     entries: Vec<Option<usize>>,
     accesses: Vec<SourceReferenceAccessRecordV29>,
+    checked_enum_reads: source_enum_checked_read_v58::Claims,
     access_sites: BTreeMap<Box<SourceReferenceAccessIndexKeyV29>, usize>,
     access_loans: Vec<usize>,
     selectors: Vec<SourceReferenceSelectorV29>,
@@ -289,6 +290,7 @@ fn source_reference_headers_v29<R>() -> Result<usize, ArgumentResourceV1> {
         // Only one owned payload iterator/type walk is live: Loan/EnumView
         // completes it before any recursive rebuild or consumer invocation.
         source_reference_owned_type_headers_v29()?,
+        source_enum_checked_read_v58::headers(),
     ])
 }
 
@@ -709,6 +711,7 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
                 blocks: Vec::new(),
                 entries,
                 accesses: Vec::new(),
+                checked_enum_reads: source_enum_checked_read_v58::Claims::default(),
                 access_sites: BTreeMap::new(),
                 access_loans: Vec::new(),
                 selectors: Vec::new(),

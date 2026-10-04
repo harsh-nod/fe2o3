@@ -22324,6 +22324,15 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                                 .is_some_and(|availability| {
                                     self.enum_payload_dominance.allows(availability, block)
                                 }))
+                        && !(projection_index == 0
+                            && access == SourceReferenceAccessV29::Read
+                            && self.source_enum_checked_variant_v58(
+                                block,
+                                statement,
+                                place,
+                                semantic_type,
+                                expected,
+                            )?)
                     {
                         return Err(unsupported(
                             self.semantic_function.index(),
