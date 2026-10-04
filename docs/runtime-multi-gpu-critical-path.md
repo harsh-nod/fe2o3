@@ -196,11 +196,21 @@ these are not yet implemented registration/deployment or remote proof ownership.
    and includes slot 4 before encoding the occurrence. Host claim/cleanup and root
    observation now validate the same four-input profile. FD195 is unchanged.
    Endpoint possession and local observation are not authenticated registration.
-2. Add a distinct Cargo-to-supervisor application kind with exactly four rights:
+2. Implemented [transport/admission prerequisite](evidence/dev-application-supervisor-handoff-2026-10-04/README.md):
+   a distinct application kind with exactly four rights:
    compiler peer, duplicate of captured original app pidfd, proof peer, and original
    Cargo pidfd. Ordinary compiler handoff still requires exactly two. Authenticate
    Cargo's control credentials and the complete binding; do not numerically reopen
    the app PID or downgrade an application to the ordinary profile.
+   The new client launch/pending and supervisor accepted types are move-only and
+   have no conversion to the compiler-only types. Client transfer independently
+   reconstructs the embedded compiler handoff and checks slot 4 against the original
+   prepared pair. Supervisor admission validates both process tokens and direct
+   parentage, retaining a candidate Cargo-created proof peer. It cannot independently
+   establish the remote slot-4 counterpart: that still requires root observation.
+   Cargo and production session dispatch deliberately remain unchanged until the
+   registration/readiness gate below is integrated. This prerequisite is not
+   authenticated root registration, application readiness, or GPU launch authority.
 3. Root `RegisterApplication` uses the existing two-right compiler registration
    transport and marks its preparation AppExpected. `AttachApplication` references
    that exact unexpired preparation and transfers only proof peer and Cargo pidfd.
@@ -227,6 +237,11 @@ App-side root bootstrap must not reuse helpers requiring sandbox-forbidden waiti
 or socket shutdown. No new publication recovery or lock acquisition belongs in
 registration. Root process identity alone does not measure the fixed custodian.
 Application exit, EOF and containment remain distinct from GPU settlement.
+The application must send the first authenticated Hello after claiming slot 4:
+otherwise root inspection can race its required CLOEXEC transition. Root checks
+that message against the original app token before observing inputs. The later
+challenge/accept/ready transcript must bind both fresh session nonces and the exact
+registration; app-side root pidfd inspection must use the permitted poll-only path.
 
 The [reviewed-macro checkpoint](evidence/dev-macro-admission-2026-10-04/README.md)
 closes the inherited workspace-local macro source-pin drift after independent delta
