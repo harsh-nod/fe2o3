@@ -343,12 +343,11 @@ fn observe(
     assert_eq!(budget.storage(), floor);
     assert!(!candidate.grants_publication_or_artifact_authority());
     assert_eq!(candidate.open_gates().len(), 7);
-    assert!(matches!(
-        candidate.into_protected(budget),
-        Err(Error::MixedPublication(
-            MixedPublicationErrorV28::ExtractionOnly
-        ))
-    ));
+    match candidate.into_protected(budget) {
+        Err(Error::MixedPublication(MixedPublicationErrorV28::ExtractionOnly)) => (),
+        Err(error) => return Err(error),
+        Ok(_) => panic!("extraction-only candidate gained protected publication authority"),
+    }
     report.extraction_refused = true;
     Ok(report)
 }
