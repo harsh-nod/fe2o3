@@ -5,12 +5,13 @@ fn native_proc_target_has_exact_profile_and_retained_identity() {
     let before = snapshot(&fstat(&upper).unwrap());
     let owner = (before.uid, before.gid);
     prepare_overlay_upper(&upper, owner).unwrap();
-    let retained = prepare_overlay_proc_target(&upper, owner).unwrap();
+    let retained = prepare_overlay_proc_directory(&upper, owner).unwrap();
     assert_eq!(retained.1.mode & 0o7777, 0o755);
     assert_eq!((retained.1.uid, retained.1.gid), owner);
     assert_eq!(retained.1.device, before.device);
     validate_overlay_upper(&upper, owner, MountedRootStateV1::Pristine).unwrap();
-    revalidate_overlay_proc_target(&upper, &retained, owner).unwrap();
+    revalidate_overlay_proc_target(&upper, &retained, owner, OverlayProcProfileV82::Unmarked)
+        .unwrap();
     assert!(prepare_overlay_proc_target(&upper, owner).is_err());
     assert_eq!(snapshot(&fstat(&retained.0).unwrap()), retained.1);
 }
@@ -48,7 +49,7 @@ fn native_proc_target_refuses_metadata_attributes_contents_and_replacement() {
         let observed = snapshot(&fstat(&upper).unwrap());
         let owner = (observed.uid, observed.gid);
         prepare_overlay_upper(&upper, owner).unwrap();
-        let retained = prepare_overlay_proc_target(&upper, owner).unwrap();
+        let retained = prepare_overlay_proc_directory(&upper, owner).unwrap();
         match mutant {
             0 => fchmod(&retained.0, Mode::from_raw_mode(0o700)).unwrap(),
             1 => rustix::fs::fsetxattr(
@@ -89,9 +90,60 @@ fn native_proc_target_refuses_metadata_attributes_contents_and_replacement() {
             owner
         };
         assert!(
-            revalidate_overlay_proc_target(&upper, &retained, check_owner).is_err(),
+            revalidate_overlay_proc_target(
+                &upper,
+                &retained,
+                check_owner,
+                OverlayProcProfileV82::Unmarked,
+            )
+            .is_err(),
             "{mutant}"
         );
+    }
+}
+
+#[test]
+fn native_proc_opaque_profile_refuses_missing_alternate_multiple_and_oversize_markers() {
+    assert!(proc_opaque_marker_is_exact(PROC_OPAQUE_NAME_V82, b"y"));
+    for names in [
+        b"".as_slice(),
+        b"trusted.overlay.origin\0",
+        b"user.overlay.opaque\0",
+        b"trusted.overlay.opaque",
+        b"trusted.overlay.opaque\0user.extra\0",
+        b"trusted.overlay.opaque\0trusted.overlay.opaque\0",
+        &[b'x'; 256],
+    ] {
+        assert!(!proc_opaque_marker_is_exact(names, b"y"));
+    }
+    for value in [b"".as_slice(), b"n", b"x", b"y\0", b"yy", &[b'y'; 256]] {
+        assert!(!proc_opaque_marker_is_exact(PROC_OPAQUE_NAME_V82, value));
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let target = File::open(scratch.path()).unwrap();
+    assert_eq!(
+        require_proc_opaque_marker(&target).unwrap_err().kind(),
+        DeploymentVerificationErrorKindV1::ForbiddenAttributes
+    );
+    rustix::fs::fsetxattr(
+        &target,
+        "user.unexpected",
+        b"y",
+        rustix::fs::XattrFlags::CREATE,
+    )
+    .unwrap();
+    assert_eq!(
+        require_proc_opaque_marker(&target).unwrap_err().kind(),
+        DeploymentVerificationErrorKindV1::ForbiddenAttributes
+    );
+    for length in [32, 255] {
+        let name = format!("user.{}", "x".repeat(length - 5));
+        rustix::fs::fsetxattr(&target, &name, b"", rustix::fs::XattrFlags::CREATE).unwrap();
+        assert_eq!(
+            require_proc_opaque_marker(&target).unwrap_err().kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+        rustix::fs::fremovexattr(&target, &name).unwrap();
     }
 }
 

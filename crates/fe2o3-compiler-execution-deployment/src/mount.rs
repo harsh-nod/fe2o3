@@ -852,6 +852,38 @@ fn prepare_overlay_proc_target(
     upper: &File,
     owner: (u32, u32),
 ) -> Result<(File, ObjectSnapshotV1), DeploymentVerificationErrorV1> {
+    let (target, before) = prepare_overlay_proc_directory(upper, owner)?;
+    // The sealed lower proc is empty. Do not merge it or admit variable origin handles.
+    rustix::fs::fsetxattr(
+        &target,
+        "trusted.overlay.opaque",
+        b"y",
+        rustix::fs::XattrFlags::CREATE,
+    )
+    .map_err(|source| io_error("mark native preflight proc target opaque", source))?;
+    let after = super::validate_directory_metadata(
+        &target,
+        Some(owner),
+        COMPOSED_ROOT_MODE_V1,
+        "opaque preflight proc target",
+    )?;
+    let mut expected = before;
+    expected.changed_seconds = after.changed_seconds;
+    expected.changed_nanoseconds = after.changed_nanoseconds;
+    if expected != after {
+        return Err(changed(
+            "native proc identity changed during opaque marking",
+        ));
+    }
+    let retained = (target, after);
+    revalidate_overlay_proc_target(upper, &retained, owner, OverlayProcProfileV82::Opaque)?;
+    Ok(retained)
+}
+
+fn prepare_overlay_proc_directory(
+    upper: &File,
+    owner: (u32, u32),
+) -> Result<(File, ObjectSnapshotV1), DeploymentVerificationErrorV1> {
     validate_directory_mode(upper, Some(owner), COMPOSED_ROOT_MODE_V1, "prepared upper")?;
     verify_directory_children(upper, &[], "prepared upper")?;
     // Create before OverlayFS attachment; never alter backing directories of a live overlay.
@@ -868,24 +900,71 @@ fn prepare_overlay_proc_target(
     )?;
     verify_directory_children(&target, &[], "native preflight proc target")?;
     let retained = (target, expected);
-    revalidate_overlay_proc_target(upper, &retained, owner)?;
+    revalidate_overlay_proc_target(upper, &retained, owner, OverlayProcProfileV82::Unmarked)?;
     Ok(retained)
+}
+
+#[derive(Clone, Copy)]
+enum OverlayProcProfileV82 {
+    Unmarked,
+    Opaque,
+}
+
+const PROC_OPAQUE_NAME_V82: &[u8] = b"trusted.overlay.opaque\0";
+
+fn proc_opaque_marker_is_exact(names: &[u8], value: &[u8]) -> bool {
+    names == PROC_OPAQUE_NAME_V82 && value == b"y"
+}
+
+fn require_proc_opaque_marker(target: &File) -> Result<(), DeploymentVerificationErrorV1> {
+    let refused = || {
+        super::invalid(
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes,
+            "native preflight proc target must carry only its exact opaque marker",
+        )
+    };
+    let mut names = [0u8; PROC_OPAQUE_NAME_V82.len()];
+    let length = match flistxattr(target, &mut names) {
+        Ok(length) if length == names.len() => length,
+        Ok(_) | Err(rustix::io::Errno::RANGE) => return Err(refused()),
+        Err(source) => return Err(io_error("inspect native proc xattr names", source)),
+    };
+    if names.as_slice() != PROC_OPAQUE_NAME_V82 {
+        return Err(refused());
+    }
+    let mut value = [0u8; 2];
+    let value_length = match fgetxattr(target, "trusted.overlay.opaque", &mut value) {
+        Ok(length) if length <= value.len() => length,
+        Ok(_) | Err(rustix::io::Errno::RANGE) => return Err(refused()),
+        Err(source) => return Err(io_error("inspect native proc opaque marker", source)),
+    };
+    if !proc_opaque_marker_is_exact(&names[..length], &value[..value_length]) {
+        return Err(refused());
+    }
+    Ok(())
 }
 
 fn revalidate_overlay_proc_target(
     upper: &File,
     retained: &(File, ObjectSnapshotV1),
     owner: (u32, u32),
+    profile: OverlayProcProfileV82,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let reopened = super::open_beneath(upper, "proc", true)?;
     for target in [&retained.0, &reopened, &retained.0] {
-        if validate_directory_mode(
+        let observed = super::validate_directory_metadata(
             target,
             Some(owner),
             COMPOSED_ROOT_MODE_V1,
             "retained native preflight proc target",
-        )? != retained.1
-        {
+        )?;
+        match profile {
+            OverlayProcProfileV82::Unmarked => {
+                super::require_no_xattrs(target, "unmarked native proc target")?;
+            }
+            OverlayProcProfileV82::Opaque => require_proc_opaque_marker(target)?,
+        }
+        if observed != retained.1 {
             return Err(changed(
                 "native preflight proc target lost retained identity",
             ));
@@ -998,6 +1077,7 @@ fn revalidate_mounted_qualification(
             .as_ref()
             .ok_or_else(|| changed("native preflight proc target custody was released"))?,
         owner,
+        OverlayProcProfileV82::Opaque,
     )?;
     revalidate_overlay_work(
         staged.directory_descriptor("work"),

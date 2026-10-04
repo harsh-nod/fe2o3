@@ -10,7 +10,7 @@ fn overlay_upper_mode_transition_is_exact_and_phase_specific() {
     let after = snapshot(&fstat(&upper).unwrap());
     assert_eq!((after.device, after.inode), (before.device, before.inode));
     assert_eq!(after.mode & 0o7777, 0o755);
-    let _proc_target = prepare_overlay_proc_target(&upper, owner).unwrap();
+    let _proc_target = prepare_overlay_proc_directory(&upper, owner).unwrap();
     validate_overlay_upper(&upper, owner, MountedRootStateV1::Pristine).unwrap();
     validate_overlay_upper(&upper, owner, MountedRootStateV1::SystemdPreflight).unwrap();
     assert!(prepare_overlay_upper(&upper, owner).is_err());
@@ -224,7 +224,8 @@ fn qualification_overlay_state_preserves_exact_modes_work_custody_and_copyup_mar
     validate_directory_mode(&root, Some((0, 0)), 0o755, "actual composed root").unwrap();
     validate_overlay_upper(&upper, (0, 0), MountedRootStateV1::Pristine).unwrap();
     revalidate_overlay_work(&work, &kernel_work, (0, 0)).unwrap();
-    revalidate_overlay_proc_target(&upper, &proc_target, (0, 0)).unwrap();
+    revalidate_overlay_proc_target(&upper, &proc_target, (0, 0), OverlayProcProfileV82::Opaque)
+        .unwrap();
     let composed_proc = super::super::open_beneath(&root, "proc", true).unwrap();
     validate_directory_mode(&composed_proc, Some((0, 0)), 0o755, "actual proc target").unwrap();
     verify_directory_children(&composed_proc, &[], "actual proc target").unwrap();
@@ -238,7 +239,8 @@ fn qualification_overlay_state_preserves_exact_modes_work_custody_and_copyup_mar
     .unwrap();
     assert!(validate_overlay_upper(&upper, (0, 0), MountedRootStateV1::Pristine).is_err());
     validate_overlay_upper(&upper, (0, 0), MountedRootStateV1::SystemdPreflight).unwrap();
-    revalidate_overlay_proc_target(&upper, &proc_target, (0, 0)).unwrap();
+    revalidate_overlay_proc_target(&upper, &proc_target, (0, 0), OverlayProcProfileV82::Opaque)
+        .unwrap();
     let mut marker = [0u8; 2];
     assert_eq!(
         fgetxattr(&upper, "trusted.overlay.impure", &mut marker).unwrap(),
@@ -385,6 +387,54 @@ fn qualification_overlay_state_preserves_exact_modes_work_custody_and_copyup_mar
     )
     .unwrap();
     revalidate_overlay_work(&work, &kernel_work, (0, 0)).unwrap();
+    for value in [b"".as_slice(), b"n", b"x", b"yy", &[b'y'; 256]] {
+        rustix::fs::fsetxattr(
+            &proc_target.0,
+            "trusted.overlay.opaque",
+            value,
+            rustix::fs::XattrFlags::REPLACE,
+        )
+        .unwrap();
+        assert_eq!(
+            revalidate_overlay_proc_target(
+                &upper,
+                &proc_target,
+                (0, 0),
+                OverlayProcProfileV82::Opaque,
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+    }
+    rustix::fs::fsetxattr(
+        &proc_target.0,
+        "trusted.overlay.opaque",
+        b"y",
+        rustix::fs::XattrFlags::REPLACE,
+    )
+    .unwrap();
+    for name in [
+        "trusted.overlay.origin",
+        "trusted.unexpected",
+        "user.unexpected",
+    ] {
+        rustix::fs::fsetxattr(&proc_target.0, name, b"", rustix::fs::XattrFlags::CREATE).unwrap();
+        assert_eq!(
+            require_proc_opaque_marker(&proc_target.0)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+        rustix::fs::fremovexattr(&proc_target.0, name).unwrap();
+    }
+    rustix::fs::fremovexattr(&proc_target.0, "trusted.overlay.opaque").unwrap();
+    assert_eq!(
+        require_proc_opaque_marker(&proc_target.0)
+            .unwrap_err()
+            .kind(),
+        DeploymentVerificationErrorKindV1::ForbiddenAttributes
+    );
     drop((root, kernel_work, proc_target, other, lower, upper, work));
     unmount(&root_path, UnmountFlags::empty()).unwrap();
     cleanup.0.pop();
