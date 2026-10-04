@@ -1,6 +1,6 @@
 {
-  "head": "5631b1d4f8b7314a53067483bf4b136a15e4e266",
-  "tree": "a5ce7267dada95cb16a4b391299a0d109f4c6a6b",
+  "head": "d271daab608323e1fda599b7693f1a4ad403149c",
+  "tree": "5b53822f19d52d8ab8291eca03b284ad960f4ad6",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
@@ -136,6 +136,10 @@
     "mixed_source_contract_v26_projects_actual_shared_and_rmw_policy9_handoffs",
     "mixed_source_contract_v26_refuses_same_count_kernel_type_launch_and_output_substitution",
     "moving_through_alias_does_not_invalidate_the_alias_or_pointee_slot",
+    "optimized_thread_write_rejects_wrong_producer_index_and_root_descendants",
+    "optimized_thread_write_transaction_has_exact_resource_boundaries",
+    "optimized_thread_write_transports_actual_suffix_and_commoned_producers",
+    "optimized_write_headers_precede_scratch_and_restore_the_parent_floor",
     "original_global_expression_namespace_keeps_private_reads_and_legacy_values_separate",
     "original_global_store_arithmetic_completes_exact_native_value_join",
     "original_global_store_completion_rejects_substituted_instance_value_root_and_guard",
@@ -783,6 +787,22 @@
       "name": "moving_through_alias_does_not_invalidate_the_alias_or_pointee_slot"
     },
     {
+      "name": "optimized_thread_write_rejects_wrong_producer_index_and_root_descendants",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "optimized_thread_write_transaction_has_exact_resource_boundaries",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "optimized_thread_write_transports_actual_suffix_and_commoned_producers",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
+    },
+    {
+      "name": "optimized_write_headers_precede_scratch_and_restore_the_parent_floor",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_writes_v87_tests.rs"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
       "name": "original_global_expression_namespace_keeps_private_reads_and_legacy_values_separate"
     },
@@ -1315,7 +1335,15 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_roles_v18.rs",
-      "sha256": "db22bb88aeb006aab23aa3bb17ebe18454ffa217e4041c79df19d7e32cc63239"
+      "sha256": "227aa4661b26e1d8483c94d6dadde1e88eede876752fe5495c34fd5b0c57fc71"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_writes_v87_tests.rs",
+      "sha256": "1de781b54d098fdf0163129bac865175b4cc74b052ba1ba8dcac1cf10d2fb6d9"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_writes_v87.rs",
+      "sha256": "9ba8efba0e5d3d1f89d9e0a66a5f00853025c0a02f87ddca1daa763b9feb7147"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29.rs",
@@ -1391,7 +1419,7 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "sha256": "41222acd7ab4bac746bc684a90f88b067ef4c2951a43c0a184daad5da52fdf85"
+      "sha256": "6a1c63be321e572b385faa085836e3a5a4a436d02338fe87c3aea88d2bfe6839"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29.rs",
@@ -1407,7 +1435,7 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs",
-      "sha256": "726a3fb6704ef74925cd33844ad97c1b3e0d9587860fa8dbba745902d48b1a03"
+      "sha256": "c225fbdcb98eb770e606d85a94fc8ba38d33450a3f7ff00400ae02feca576f6d"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86.rs",
@@ -1415,14 +1443,14 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_replay_v86.rs",
-      "sha256": "3a666a929495a75b58bb3f0ef38997eb5d2ec4007e1b602680a8a005f78c28bd"
+      "sha256": "6e5cd457d01d6aef579e072421eb2cabbb354ba8eeb1501e4aba395a4f62b3da"
     }
   ],
   "union": {
-    "prior_joint": 241,
-    "original_thread_write": 4,
+    "prior_joint": 245,
+    "optimized_thread_write": 4,
     "duplicate_rows_removed": 0,
-    "distinct": 245
+    "distinct": 249
   },
   "scope": "Joint lowerer regression only. Typed explicit-predicate endpoints still refuse V26 completion; checked-write suffix validates emitted physical equations, not original source authority. No proof or activation credit."
 }

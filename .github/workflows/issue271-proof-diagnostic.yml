@@ -2,14 +2,14 @@ name: Issue 271 Typed Global Guard and Write Suffix Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-original-write-diagnostic-v86-20261004]
+    branches: [wip/issue271-optimized-write-diagnostic-v87-20261004]
 
 permissions:
   contents: read
 
 jobs:
   verifier-ordinary:
-    name: Exact 5631b1 original-write245 ordinary tests (diagnostic only)
+    name: Exact d271da optimized-write249 ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 5631b1d4f8b7314a53067483bf4b136a15e4e266
+          ref: d271daab608323e1fda599b7693f1a4ad403149c
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-original-write-5631b1-ordinary-v86-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue271-original-write-v86-logs/
+          name: issue271-optimized-write-d271da-ordinary-v87-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-optimized-write-v87-logs/
           if-no-files-found: warn
           retention-days: 7
