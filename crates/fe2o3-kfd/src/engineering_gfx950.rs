@@ -65,13 +65,13 @@ pub use peer::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
     Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringPeerKernelV1,
-    Gfx950EngineeringPeerPointerV1, Gfx950EngineeringPeerWaveMlpStateV1,
+    Gfx950EngineeringPeerPointerV1, Gfx950EngineeringPeerStateBankEntryV1,
+    Gfx950EngineeringPeerStateBankSnapshotV1, Gfx950EngineeringPeerWaveMlpStateV1,
     Gfx950EngineeringPeerWaveMlpTilesDispatchV2, Gfx950EngineeringPeerWaveMlpTilesRoundV2,
     Gfx950EngineeringPeerWaveMlpTilesStateV2, Gfx950EngineeringPeerWaveOutputStateV5,
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6,
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
-    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
-    Gfx950EngineeringSharedHostCountersV1,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6, Gfx950EngineeringSharedHostCountersV1,
 };
 pub use resident_layer_tp2_v1::{
     Gfx950EngineeringResidentLayerMlpWorkerResultV1, Gfx950EngineeringResidentLayerObservationV1,

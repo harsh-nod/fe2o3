@@ -46,6 +46,12 @@ pub use wave_qkv_attention_output_tiles_v6::{
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
 };
 
+#[path = "engineering_gfx950_peer_state_bank_v1.rs"]
+mod state_bank_v1;
+pub use state_bank_v1::{
+    Gfx950EngineeringPeerStateBankEntryV1, Gfx950EngineeringPeerStateBankSnapshotV1,
+};
+
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);

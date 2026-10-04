@@ -294,6 +294,46 @@ impl StateBackend for NativeState<'_> {
     }
 }
 
+pub(super) fn validate_idle_bank_state(
+    group: &Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveMlpTilesStateV2,
+) -> Result<()> {
+    group.require_active()?;
+    if !matches!(
+        state.activation,
+        Activation::Ready | Activation::Submitted | Activation::Completed
+    ) {
+        return Err("MLP tiles V2 idle bank observation activation".into());
+    }
+    validate_state_record(state, group.validate_token(state.buffer)?)?;
+    state.local_id(group)?;
+    Ok(())
+}
+
+/// Observe constructed idle atomics within the separate bounded-bank fence pair.
+/// Unlike the resident accessor, this permits a completed activation.
+///
+/// # Safety
+/// The bank coordinator must hold the exclusive group borrow and all mappings
+/// across fresh all-participant idle/currentness checks before and after every
+/// read. No dispatch, map, release, or rearm may interleave. No snapshot escapes
+/// before the trailing check succeeds; any failure must quarantine the group.
+pub(super) unsafe fn observe_within_idle_bank_fence(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveMlpTilesStateV2,
+) -> Result<[u32; STATE_WORDS]> {
+    group.require_active()?;
+    let result = (|| {
+        validate_idle_bank_state(group, state)?;
+        NativeState {
+            group: &mut *group,
+            owner: state.owner_rank(),
+        }
+        .observe(state)
+    })();
+    group.finish(result)
+}
+
 /// Read one private resident state inside its coordinator's full-fence pair.
 /// The public observer keeps its own fences; only the paired resident path
 /// may use this accessor. No topology snapshot or reuse capability escapes.
