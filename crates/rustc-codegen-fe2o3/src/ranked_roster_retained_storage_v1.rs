@@ -40,7 +40,9 @@ impl AuthenticatedRankedVerificationRosterV1 {
     /// include it in its enclosing owner). The roots Box charges all inline
     /// root/verification/Option/functional headers once. Each actual root costs
     /// an additional zero-byte item BEFORE inspecting its nested payloads.
-    /// Canonical ordering is a separate Box at actual length.
+    /// Canonical ordering is a separate Box at actual length. The retained
+    /// original projection account contributes one actual Box<OwnedBudget>;
+    /// its numeric reservation counter is not counted as duplicate owned memory.
     ///
     /// Each original root contributes String capacity, export Box bytes,
     /// middle-end canonical bytes, induction certificates and optional reachable
@@ -68,6 +70,7 @@ impl AuthenticatedRankedVerificationRosterV1 {
             roots,
             canonical_roster_identity,
             canonical_kernel_order,
+            phase,
         } = self;
         fixed(canonical_roster_identity);
         owned_shape::<Box<[AuthenticatedRankedVerificationRootV1]>>(roots);
@@ -78,7 +81,8 @@ impl AuthenticatedRankedVerificationRosterV1 {
             counter.charge(0, 1)?;
             root.charge_retained_heap_storage_v1(counter)?;
         }
-        counter.array::<usize>(canonical_kernel_order.len())
+        counter.array::<usize>(canonical_kernel_order.len())?;
+        phase.charge_retained_heap_storage_v1(counter)
     }
 }
 

@@ -64,8 +64,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     }
 
     /// Explicit private owning-entry test. Completes materialization postflight,
-    /// then moves the same owner into the real boxed projection phase. This is
-    /// neither the ordinary dispatcher nor the lowerer/LLVM/target continuation.
+    /// then moves the same owner into the real boxed projection phase. This
+    /// includes private source/ranked translation validation, but neither ordinary
+    /// admission nor lowerer attachment, LLVM or target continuation.
     pub(crate) fn observe_bf16_owned_root_for_test_v1(
         self,
         inspect: impl for<'a, 'b, 'work> FnOnce(

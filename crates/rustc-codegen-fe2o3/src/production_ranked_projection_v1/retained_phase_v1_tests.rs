@@ -272,3 +272,188 @@ fn conditional_original_phase_observer_restores_after_unwind() {
     assert_eq!(answer, 7);
     assert!(observation.events.is_empty());
 }
+
+#[test]
+fn retained_roster_phase_box_storage_is_exact_and_does_not_count_reserved_credits() {
+    use fe2o3_kernel_ir::{
+        LogicalStorageCounterV1 as Counter, LogicalStorageErrorV1 as E,
+        LogicalStorageLimitsV1 as Limits,
+    };
+    let phase = phase(100, 100);
+    let bytes = std::mem::size_of::<OwnedBudget>();
+    let mut exact = Counter::new(Limits {
+        max_bytes: Some(bytes),
+        max_items: 1,
+    });
+    phase.charge_retained_heap_storage_v1(&mut exact).unwrap();
+    assert_eq!((exact.bytes(), exact.items()), (bytes, 1));
+    assert_eq!((phase.ledger.work(), phase.ledger.storage()), (3, 7));
+    let mut short = Counter::new(Limits {
+        max_bytes: Some(bytes - 1),
+        max_items: 1,
+    });
+    assert_eq!(
+        phase.charge_retained_heap_storage_v1(&mut short),
+        Err(E::ByteLimit)
+    );
+    assert_eq!((short.bytes(), short.items()), (0, 0));
+    let mut short_items = Counter::new(Limits {
+        max_bytes: Some(bytes),
+        max_items: 0,
+    });
+    assert_eq!(
+        phase.charge_retained_heap_storage_v1(&mut short_items),
+        Err(E::ItemLimit)
+    );
+    assert_eq!((short_items.bytes(), short_items.items()), (0, 0));
+}
+
+#[test]
+fn retained_roster_clean_gate_rejects_swallowed_original_storage_denial() {
+    let mut phase = phase(100, 8);
+    phase
+        .with_budget(|budget| {
+            assert!(budget.reserve_storage(2).is_err());
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(
+        phase.require_clean_v1(),
+        Err(Error::ConditionalResource(Resource::Storage(_)))
+    ));
+    assert_eq!(
+        (phase.ledger.storage(), phase.ledger.failed_storage()),
+        (7, Some(9))
+    );
+}
+
+fn roster_phase_state(
+    phase: &RetainedProjectionPhaseV1,
+) -> (
+    usize,
+    usize,
+    usize,
+    Option<usize>,
+    Option<usize>,
+    usize,
+    bool,
+) {
+    (
+        phase.ledger.work(),
+        phase.ledger.storage(),
+        phase.ledger.peak_storage(),
+        phase.ledger.failed_work(),
+        phase.ledger.failed_storage(),
+        phase.floor,
+        phase.poisoned,
+    )
+}
+
+#[test]
+fn retained_roster_clean_gate_preserves_original_work_denial_before_new_debit() {
+    let mut phase = phase(5, 8);
+    let original = phase.ledger.with_budget(|budget| {
+        budget.charge_work(2).unwrap();
+        budget.charge_work(4).unwrap_err() // accepted 5, original attempted 9
+    });
+    assert!(matches!(original, Resource::Work(_)));
+    assert_eq!(
+        (phase.ledger.work(), phase.ledger.failed_work()),
+        (5, Some(9))
+    );
+    let state = roster_phase_state(&phase);
+    let account = phase.ledger.as_ref() as *const OwnedBudget;
+    for _ in 0..3 {
+        let Err(Error::ConditionalResource(actual)) = phase.require_clean_v1() else {
+            panic!("expected original typed Work refusal");
+        };
+        // The old gate returned attempted 6 here before inspecting original 9.
+        assert_eq!(actual, original);
+        assert_eq!(roster_phase_state(&phase), state);
+        assert_eq!(phase.ledger.as_ref() as *const OwnedBudget, account);
+    }
+}
+
+#[test]
+fn retained_roster_clean_gate_preserves_original_storage_at_exhausted_work() {
+    let mut phase = phase(5, 8);
+    let original = phase.ledger.with_budget(|budget| {
+        budget.charge_work(2).unwrap();
+        budget.reserve_storage(2).unwrap_err() // accepted storage 7, attempted 9
+    });
+    assert!(matches!(original, Resource::Storage(_)));
+    assert_eq!((phase.ledger.work(), phase.ledger.failed_work()), (5, None));
+    let state = roster_phase_state(&phase);
+    let account = phase.ledger.as_ref() as *const OwnedBudget;
+    for _ in 0..3 {
+        let Err(Error::ConditionalResource(actual)) = phase.require_clean_v1() else {
+            panic!("expected original typed Storage refusal");
+        };
+        // No new Work denial is introduced to mask the existing Storage error.
+        assert_eq!(actual, original);
+        assert_eq!(phase.ledger.failed_work(), None);
+        assert_eq!(roster_phase_state(&phase), state);
+        assert_eq!(phase.ledger.as_ref() as *const OwnedBudget, account);
+    }
+}
+
+#[test]
+fn retained_roster_clean_gate_keeps_existing_work_first_history_policy() {
+    let mut phase = phase(5, 8);
+    let original_work = phase.ledger.with_budget(|budget| {
+        budget.charge_work(2).unwrap();
+        // Storage happened first chronologically. Existing policy is still
+        // Work-first when BOTH per-resource original histories are present.
+        assert!(budget.reserve_storage(2).is_err());
+        budget.charge_work(4).unwrap_err()
+    });
+    assert_eq!(
+        (phase.ledger.failed_work(), phase.ledger.failed_storage()),
+        (Some(9), Some(9))
+    );
+    let state = roster_phase_state(&phase);
+    for _ in 0..3 {
+        let Err(Error::ConditionalResource(actual)) = phase.require_clean_v1() else {
+            panic!("expected original Work-first refusal");
+        };
+        assert_eq!(actual, original_work);
+        assert_eq!(roster_phase_state(&phase), state);
+    }
+}
+
+#[test]
+fn retained_roster_clean_gate_keeps_clean_charge_and_accounting_priority() {
+    let mut clean = phase(4, 8);
+    clean.require_clean_v1().unwrap();
+    assert_eq!((clean.ledger.work(), clean.ledger.failed_work()), (4, None));
+    let Err(Error::ConditionalResource(first)) = clean.require_clean_v1() else {
+        panic!("expected new first Work refusal at the unchanged cap");
+    };
+    assert_eq!(
+        (clean.ledger.work(), clean.ledger.failed_work()),
+        (4, Some(5))
+    );
+    let state = roster_phase_state(&clean);
+    let Err(Error::ConditionalResource(repeated)) = clean.require_clean_v1() else {
+        panic!("expected retained Work refusal");
+    };
+    assert_eq!(first, repeated);
+    assert_eq!(roster_phase_state(&clean), state);
+    for poison in [false, true] {
+        let mut damaged = phase(5, 8);
+        damaged.ledger.with_budget(|budget| {
+            budget.charge_work(2).unwrap();
+            assert!(budget.reserve_storage(2).is_err());
+            if !poison {
+                budget.release_storage(1).unwrap();
+            }
+        });
+        damaged.poisoned = poison;
+        let state = roster_phase_state(&damaged);
+        assert!(matches!(
+            damaged.require_clean_v1(),
+            Err(Error::ConditionalResource(Resource::Accounting))
+        ));
+        assert_eq!(roster_phase_state(&damaged), state);
+    }
+}

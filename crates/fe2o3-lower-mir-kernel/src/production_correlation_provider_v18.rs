@@ -1840,8 +1840,9 @@ enum TranslationEffectDispositionV18 {
 trait TranslationSourceRelationV18 {
     fn check_contract_multisets(
         &mut self,
-        body: &FunctionBody,
+        function: &Function,
         recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+        helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
     ) -> Result<(usize, usize), ProductionMirPlironTranslationErrorV1>;
     fn check_effect_control_flow(
         &mut self,
@@ -1894,20 +1895,30 @@ struct LegacyTranslationSourceV18<'a> {
 impl TranslationSourceRelationV18 for LegacyTranslationSourceV18<'_> {
     fn check_contract_multisets(
         &mut self,
-        body: &FunctionBody,
+        function: &Function,
         recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+        helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
     ) -> Result<(usize, usize), ProductionMirPlironTranslationErrorV1> {
+        let body = function
+            .body
+            .as_ref()
+            .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
         let kir_synchronization = kir_synchronization_contracts_v1(body)?;
         let ranked_synchronization = ranked_synchronization_contracts_v1(recipe)?;
         if kir_synchronization != ranked_synchronization {
             return Err(ProductionMirPlironTranslationErrorV1::SynchronizationMismatch);
         }
-        let kir_tensors = kir_tensor_contracts_v1(body)?;
-        let ranked_tensors = ranked_tensor_contracts_v1(recipe)?;
-        if kir_tensors != ranked_tensors {
-            return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
-        }
-        Ok((kir_synchronization.len(), kir_tensors.len()))
+        let tensor_operations = if let Some(count) = helpers.nominal_tensors(function, recipe)? {
+            count
+        } else {
+            let kir_tensors = kir_tensor_contracts_v1(body)?;
+            let ranked_tensors = ranked_tensor_contracts_v1(recipe)?;
+            if kir_tensors != ranked_tensors {
+                return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
+            }
+            kir_tensors.len()
+        };
+        Ok((kir_synchronization.len(), tensor_operations))
     }
     fn check_effect_control_flow(
         &mut self,

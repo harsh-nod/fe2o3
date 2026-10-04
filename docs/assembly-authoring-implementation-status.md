@@ -11,6 +11,36 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Full private BF16 validation and observed debugger startup — 2026-10-04
+
+The private owning BF16 path now runs the full MIR-to-PLIRON translation
+validator against the actual retained source and emitted graph, on the original
+account. Its closed roster preserves two executable bodies and admits only the
+exact optional Trap declaration, joined to actual root Trap calls. Extra bodies,
+imports, detached owners, malformed calls and prior resource denials still
+refuse. This corrects a genuine owning-frontend failure; the original failed
+attempt and temporary diagnostic observations remain separate retained evidence.
+
+Fresh qualification passed 2,059 lowerer tests, then 3,897 compiler library tests
+(224 ignored), 73 extractor tests and two API tests in both debug and release.
+The fresh thirteen-child candidate campaign passed 36 positive and 32 negative
+CPU requests and both mandatory candidate checks. Two additional fresh release
+frontend sessions, Identity and swapped-input, each completed the actual full
+lowerer validation and private owning entry on the same account. They produced
+no sidecar, ordinary admission, lowerer attachment or launch authority. The
+earlier debug-only Identity diagnostic is not substituted for these release runs.
+
+The private debugger also passed its actual no-inferior startup: the exact
+private queue-health provider was mapped, the MI2 exchange completed, and the
+owned service family joined cleanup. Five benign cleanup cases, 77 profile and
+controller source controls, and the rebuilt controller's 64 protocol and
+97 native-controller CPU tests passed. Retrospective checks observed the six
+named service cgroups absent; they do not prove global or continuous exclusion.
+
+Same-stop physical capture, the remaining consuming BF16 continuation, ordinary
+ranked admission, LLVM/GPU qualification and the remaining curriculum work are
+still open. Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private owning handoff and debugger source packages — 2026-10-04
 
 The private BF16 owning constructor now retains the real materialized source,
@@ -1923,3 +1953,39 @@ Actual source/SSA construction, canonical/backend integration and genuine
 Shared-first whole-root preparation remain open. Ordinary compilation, native
 debugging and GPU dispatch are not activated. Broad accepted exits remain
 M1/V1/V2/U1/U2/U3 (6/18).
+
+## Retained-account handoff checkpoint (2026-10-04, R63)
+
+The same move-only projection phase now survives Program-to-projection-roster
+and authenticated-roster handoffs. The phase remains the last owner field so
+source/evidence ownership ends before its accounting state is released.
+The retained heap census includes the actual boxed account payload once;
+a numeric storage balance is not treated as another heap allocation.
+
+The clean-account check preserves an existing typed resource refusal before
+attempting its own one-unit work debit. This preserves the established
+work-before-storage refusal priority, not a new chronological ordering between
+failure kinds. Nine added controls cover custody, retained heap accounting and
+prior-denial behavior. One existing genuine metadata-refusal test now requires
+the new exact accepted check event, with all original refusal reasons and
+single-drop cleanup assertions retained.
+
+Validation: complete backend debug and release each passed 3,906 library
+tests (224 intentionally ignored), 73 extractor tests and both API tests.
+The first runs' stale test-expectation failures remain retained separately.
+These tests do not yet establish that genuine BF16 source crosses the next
+authenticated-roster boundary; that isolated frontend continuation is being
+prepared separately. Module attachment, ordinary admission, emission and GPU
+qualification are not implied.
+
+The debugger's read-only continuation also passed 32 census controls and
+28 current-consumer controls, followed by an actual bounded snapshot of 373
+named runtime inputs and 81 required absences. The snapshot paid the complete
+440,384,584-byte input schedule and 3,781,936-byte historical-record schedule.
+A root pretty-print output-limit refusal was preserved; compact serialization
+passed the unchanged 512 KiB output limit. This remains preparation, not a
+live stop or physical capture. Native-scope CPU/resource checks are separate
+from authorization to launch.
+
+Milestone acceptance remains 7/18: M1, M2, V1, V2, U1, U2 and U3. No additional
+milestone or tutorial is declared complete by this checkpoint.

@@ -10,6 +10,60 @@ const WORK: usize = 100_000_000;
 const STORAGE: usize = 64 << 20;
 const FLOOR: usize = 29;
 
+#[test]
+fn merged_value_source_keeps_generic_results_cleanup_and_exact_resource_boundaries() {
+    for (work_limit, storage_limit, reject) in [
+        (3, FLOOR + 8, false),
+        (3, FLOOR + 8, true),
+        (2, FLOOR + 8, false),
+        (3, FLOOR + 7, false),
+    ] {
+        let mut work = Work::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(FLOOR).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut meter = NativeValueMeter {
+            budget: &mut budget,
+            allowance: None,
+            failed: false,
+            resource_error: None,
+        };
+        let result: Result<[u8; 3], ProductionMirPlironTranslationErrorV1> =
+            run(ValueSource::None, &mut meter, |expansion| {
+                assert!(matches!(expansion.source, ValueSource::None));
+                expansion
+                    .meter
+                    .work(3)
+                    .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+                expansion
+                    .meter
+                    .reserve(8)
+                    .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+                expansion.reserved = 8;
+                if reject {
+                    Err(ProductionMirPlironTranslationErrorV1::KernelShape)
+                } else {
+                    Ok([5, 3, 18])
+                }
+            });
+        let expected = if work_limit < 3 || storage_limit < FLOOR + 8 {
+            Err(ProductionMirPlironTranslationErrorV1::ResourceLimit)
+        } else if reject {
+            Err(ProductionMirPlironTranslationErrorV1::KernelShape)
+        } else {
+            Ok([5, 3, 18])
+        };
+        assert_eq!(result, expected);
+        assert_eq!(meter.budget.storage(), FLOOR);
+        assert!(meter.budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(meter.budget.failed_work(), (work_limit < 3).then_some(3));
+        assert_eq!(
+            meter.budget.failed_storage(),
+            (storage_limit < FLOOR + 8).then_some(FLOOR + 8)
+        );
+    }
+}
+
 fn doubling(levels: u32, trailing_not: u32) -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let mut block = BasicBlock::new(BlockId(0));
@@ -91,7 +145,7 @@ fn actual_normalizer_caps_shallow_dag_expansion_before_tree_allocation() {
         meter.reserve(bytes).unwrap();
         {
             let mut expansion = NativeValueExpansion {
-                helpers: None,
+                source: ValueSource::None,
                 meter: &mut meter,
                 reserved: 0,
                 temporary_nodes_remaining: active.then_some(NODES),
@@ -153,7 +207,7 @@ fn per_argument_failure_restores_enclosing_allowance_and_keeps_correlation_limit
     meter.reserve(bytes).unwrap();
     {
         let mut expansion = NativeValueExpansion {
-            helpers: None,
+            source: ValueSource::None,
             meter: &mut meter,
             reserved: 0,
             temporary_nodes_remaining: Some(17),
@@ -207,7 +261,7 @@ fn argument_allowance_restores_original_state_and_panic_payload() {
     };
     for original in [None, Some(0), Some(17)] {
         let mut expansion = NativeValueExpansion {
-            helpers: None,
+            source: ValueSource::None,
             meter: &mut meter,
             reserved: 0,
             temporary_nodes_remaining: original,

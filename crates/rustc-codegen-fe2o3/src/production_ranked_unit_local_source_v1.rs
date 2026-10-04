@@ -140,7 +140,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     /// Caller reserves original N/source before entry and returned storage before
     /// allocating B. New scratch restores its incoming floor on every exit.
     pub(crate) fn into_silent_unit_erased_source_v1(
-        self,
+        mut self,
         budget: &mut Budget<'_>,
     ) -> Result<
         (
@@ -154,6 +154,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         let ledger = budget.work_ledger_identity_v1();
         let slot = budget as *const Budget<'_> as usize;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.phase.require_clean_v1()?;
             budget.charge_work(8).map_err(resource)?;
             let original_storage = self
                 .materialized
@@ -163,11 +164,14 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 return Err(resource(Resource::Accounting));
             }
             self.verify_equivalence()?;
+            // Keep the original projection account after all local failure drops.
+            let phase = self.phase;
             let Self {
                 materialized,
                 source_order_roots,
                 canonical_kernel_order,
                 canonical_roster_identity,
+                ..
             } = self;
             let count = source_order_roots.len();
             let (mut lowering, lowering_container) = rows::<LoweringRoot>(count, budget)?;
@@ -236,6 +240,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                     roots,
                     canonical_roster_identity,
                     canonical_kernel_order,
+                    phase,
                 },
                 ErasedSourceStageStorageV1(retained),
             ))

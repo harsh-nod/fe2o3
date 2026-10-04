@@ -678,13 +678,15 @@ fn actual_generated_owning_source() {
         && body.failure.is_none()
         && body.phase.as_ref().is_some_and(completed_owning_phase);
     let mut frame = json!({
-        "schema":"fe2o3-bf16-private-owning-source-observation-v1",
+        "schema":"fe2o3-bf16-private-owning-source-observation-v2",
         "session":config.session, "requested_order":if config.session == 1 {"identity"}else{"swap01"},
         "record_sha256":config.record_sha256, "source_pin":record.spec.source,
         "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
         "inputs_unchanged":unchanged, "deadline_met":deadline,
         "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
-        "owning_entry_completed":body.completed, "phase":body.phase,
+        // The one owning path returns only after the exact full lowerer check.
+        "owning_entry_completed":body.completed, "lowerer_validation_completed":body.completed,
+        "phase":body.phase,
         "failure":body.failure, "accepted":success, "parent_acceptance_required":true,
         "normal_qualified":false, "lowerer_attached":false, "hardware_observed":false,
         "numerical_cpu_qualified":false, "source_authority_in_report":false,
@@ -701,7 +703,7 @@ fn actual_generated_owning_source() {
     )
     .unwrap();
     println!(
-        "\nFE2O3_BF16_PRIVATE_OWNING_SOURCE_V1 {}",
+        "\nFE2O3_BF16_PRIVATE_OWNING_SOURCE_V2 {}",
         std::str::from_utf8(&encoded).unwrap()
     );
     let final_deadline = timely(started).is_ok();

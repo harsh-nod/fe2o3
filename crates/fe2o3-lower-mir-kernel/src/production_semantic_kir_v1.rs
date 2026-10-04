@@ -4386,6 +4386,7 @@ enum NormalizedScalarExpressionV1 {
 include!("production_checked_arithmetic_expression_v41.rs");
 
 include!("production_semantic_kir_v1/scalar_value_correspondence_v1.rs");
+mod bf16_nominal_translation_context_v1;
 mod native_helper_value_context_v1;
 mod native_helper_value_expansion_v1;
 mod native_helper_value_template_v1;
@@ -7445,7 +7446,7 @@ fn validate_translation_core_v18(
     source_relation.check_effect_control_flow(body, recipe, scratch.effects(), budget)?;
 
     let (synchronization_effects, tensor_operations) =
-        source_relation.check_contract_multisets(body, recipe)?;
+        source_relation.check_contract_multisets(function, recipe, helpers)?;
     let conservative_ranked_effects = scratch
         .conservative_effects(recipe, budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;

@@ -40,6 +40,56 @@ pub(crate) fn project_private_nominal_materialized_v1(
             budget
                 .check_prior_denials_v1()
                 .map_err(ranked_projection_source_v1::resource)?;
+            // The exact moved lowering and source maps remain borrowed from
+            // this root; no second projection/frontend or reconstructed receipt.
+            let slot = budget as *const _ as usize;
+            let identity = budget.work_ledger_identity_v1();
+            let storage = budget.storage();
+            let work = budget.work();
+            let credits = owned;
+            let lowering = root.verification.ordinary().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "private nominal root has no ordinary ranked lowering",
+                ),
+            )?;
+            let validation = materialized
+                .verify_private_bf16_nominal_candidate_translation_with_budget_v1(
+                    root.semantic_root,
+                    lowering,
+                    &root.access_sources,
+                    &root.executable_effect_sources,
+                    budget,
+                )
+                .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
+            if budget as *const _ as usize != slot
+                || budget.work_ledger_identity_v1() != identity
+                || budget.storage() != storage
+                || budget.work() <= work
+                || owned != credits
+            {
+                drop(validation);
+                return Err(ranked_projection_source_v1::resource(Resource::Accounting));
+            }
+            source.require_floor(budget)?;
+            budget.check_prior_denials_v1().map_err(ranked_projection_source_v1::resource)?;
+            // One fixed SHA-256 comparison; no source-sized rehash or allocation.
+            budget.charge_work(32).map_err(ranked_projection_source_v1::resource)?;
+            if validation.semantic_sha256()
+                != materialized.semantic_ssa().source_semantic().semantic_sha256().as_bytes()
+                || validation.tensor_operations() != 1
+                || validation.claims_indexed_address_equivalence()
+                || validation.claims_complete_operational_equivalence()
+                || validation.reconciled_projection_remains_trusted()
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "private nominal translation report/source differs",
+                ));
+            }
+            #[cfg(test)]
+            eprintln!("fe2o3-bf16-private-lowerer-validation-v1 completed=true tensors=1 memory={} values={} storage={} work={} same_account=true source_join=true normal_admission=false attached=false",
+                validation.memory_effects(), validation.value_expressions(),
+                budget.storage(), budget.work());
+            drop(validation);
             // Prepay the actual one-root roster before allocating its payload.
             let mut roots = Vec::new();
             {
