@@ -2,14 +2,14 @@ name: Issue 271 Native Checked Store Ordinary Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-native-guarded-diagnostic-v87-r2-20261004]
+    branches: [wip/issue271-native-guarded-diagnostic-v87-r3-20261004]
 
 permissions:
   contents: read
 
 jobs:
   verifier-ordinary:
-    name: Exact 33aedf full Pliron ordinary tests (diagnostic only)
+    name: Exact a382fa full Pliron ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 33aedfb0471cead4f033ece7639af63736c97c45
+          ref: a382faa7cb32a16a2713473348e67243ef34a549
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-native-guarded-33aedf-ordinary-v87-r2-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue271-native-guarded-v87-r2-logs/
+          name: issue271-native-guarded-a382fa-ordinary-v87-r3-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-native-guarded-v87-r3-logs/
           if-no-files-found: warn
           retention-days: 7
