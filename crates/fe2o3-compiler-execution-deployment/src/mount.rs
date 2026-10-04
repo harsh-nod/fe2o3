@@ -113,7 +113,7 @@ impl fmt::Debug for PrivateQualificationMountNamespaceV1 {
 }
 
 impl PrivateQualificationMountNamespaceV1 {
-    fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
+    pub(super) fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
         let retained = fstat(&self.namespace)
             .map_err(|source| io_error("inspect retained qualification mount namespace", source))?;
         if retained.st_dev != self.device || retained.st_ino != self.inode {

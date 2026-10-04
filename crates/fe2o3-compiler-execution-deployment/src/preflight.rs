@@ -203,15 +203,23 @@ fn read_bounded_tool_output(file: File) -> Result<Vec<u8>, DeploymentVerificatio
     Ok(bytes)
 }
 
-/// Enters the composed root inherited on stdin and replaces this helper with one pinned tool.
+/// Supervises one isolated PID1 helper that executes a pinned tool in the inherited root.
 ///
 /// This is a narrow hidden boundary for the static qualification image. The caller must first
 /// bind this process to its exact parent with parent-death `SIGKILL`. The function requires root,
 /// one task, an OverlayFS directory on stdin, and one canonical preflight stage. Success does not
-/// return because the helper is replaced by the selected binary from the admitted base.
+/// return because the dedicated helper exits only after reaping its successful child.
 pub fn execute_compiler_execution_systemd_preflight_tool_v1(
     stage: &str,
 ) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    let (_, root, null_stdin) = prepare_preflight_tool(stage)?;
+    drop(null_stdin);
+    super::preflight_namespace_v79::supervise_pid1(root, stage)
+}
+
+fn prepare_preflight_tool(
+    stage: &str,
+) -> Result<(SystemdPreflightCommandV1, File, File), DeploymentVerificationErrorV1> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InsufficientPrivilege,
@@ -259,10 +267,38 @@ pub fn execute_compiler_execution_systemd_preflight_tool_v1(
         },
     )
     .map_err(|source| io_error("bound systemd preflight output", source))?;
+    Ok((*command, root, null_stdin))
+}
+
+/// Executes one canonical tool as PID1 with an exact live-parent pidfd inherited on stderr.
+///
+/// This hidden boundary rejects ordinary processes, a different creating parent, and invalid
+/// parent descriptors. It installs only a private read-only proc filesystem in the already
+/// private mount namespace, then replaces itself with the admitted tool. It grants no authority.
+pub fn execute_compiler_execution_systemd_preflight_pid1_tool_v79(
+    stage: &str,
+    expected_parent: u32,
+) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    let parent =
+        super::preflight_namespace_v79::PreflightParentBindingV79::bind_stderr(expected_parent)?;
+    let (command, root, null_stdin) = prepare_preflight_tool(stage)?;
+    let null_stderr = File::options()
+        .write(true)
+        .open("/dev/null")
+        .map_err(|source| {
+            std_io_error(
+                "open writable null output before entering composed root",
+                source,
+            )
+        })?;
     rustix::process::chroot(COMPOSED_ROOT_STDIN_PATH_V1)
         .map_err(|source| io_error("enter composed root for systemd preflight", source))?;
     std::env::set_current_dir("/")
         .map_err(|source| std_io_error("enter composed-root working directory", source))?;
+    super::preflight_namespace_v79::mount_private_proc_v79()?;
+    parent.require_live()?;
+    drop(parent);
+    drop(root);
     let error = Command::new(command.arguments[0])
         .args(&command.arguments[1..])
         .env_clear()
@@ -273,6 +309,7 @@ pub fn execute_compiler_execution_systemd_preflight_tool_v1(
         .env("SYSTEMD_LOG_LEVEL", "warning")
         .env("SYSTEMD_PAGER", "cat")
         .stdin(Stdio::from(null_stdin))
+        .stderr(Stdio::from(null_stderr))
         .exec();
     Err(std_io_error(
         "replace systemd preflight helper with pinned tool",

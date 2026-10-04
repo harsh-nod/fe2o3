@@ -15,6 +15,7 @@ use fe2o3_compiler_execution_deployment::{
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, CompilerExecutionInstallRecoveryV1,
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
@@ -22,6 +23,7 @@ use fe2o3_compiler_execution_deployment::{
     create_compiler_execution_qualification_cgroup_v1,
     execute_compiler_execution_provisioning_tool_v1,
     execute_compiler_execution_systemd_machine_tool_v1,
+    execute_compiler_execution_systemd_preflight_pid1_tool_v79,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
     recover_compiler_execution_qualification_parent_v1,
@@ -82,6 +84,9 @@ fn main() {
         }
         COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_preflight_tool(&arguments)
+        }
+        COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79 if arguments.len() == 4 => {
+            run_systemd_preflight_pid1_tool(&arguments)
         }
         COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1 if arguments.len() == 2 => {
             run_provisioning_tool()
@@ -574,6 +579,26 @@ fn run_systemd_preflight_tool(arguments: &[std::ffi::OsString]) {
             eprintln!("compiler-execution systemd preflight helper failed: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+fn run_systemd_preflight_pid1_tool(arguments: &[std::ffi::OsString]) {
+    let Some(stage) = arguments[2].to_str() else {
+        std::process::exit(1);
+    };
+    let Some(parent) = arguments[3].to_str().filter(|value| {
+        !value.is_empty()
+            && !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+    }) else {
+        std::process::exit(1);
+    };
+    let Ok(parent) = parent.parse::<u32>() else {
+        std::process::exit(1);
+    };
+    match execute_compiler_execution_systemd_preflight_pid1_tool_v79(stage, parent) {
+        Ok(never) => match never {},
+        Err(_) => std::process::exit(1),
     }
 }
 

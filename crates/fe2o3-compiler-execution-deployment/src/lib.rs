@@ -30,6 +30,7 @@ mod host;
 mod install;
 mod mount;
 mod preflight;
+mod preflight_namespace_v79;
 mod profile;
 mod provision;
 mod qualification;
@@ -73,7 +74,10 @@ pub use mount::{
     attach_compiler_execution_qualification_mounts_v1,
     enter_private_qualification_mount_namespace_v1,
 };
-pub use preflight::execute_compiler_execution_systemd_preflight_tool_v1;
+pub use preflight::{
+    execute_compiler_execution_systemd_preflight_pid1_tool_v79,
+    execute_compiler_execution_systemd_preflight_tool_v1,
+};
 pub use provision::execute_compiler_execution_provisioning_tool_v1;
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
@@ -101,6 +105,9 @@ pub const COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1: &str = "x86_64-unknown-linux-
 /// Hidden static-harness command that enters the inherited composed root and executes one tool.
 pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1: &str =
     "__systemd-preflight-tool-v1";
+/// Hidden PID1 entrypoint reached only through the parent-bound preflight supervisor.
+pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79: &str =
+    "__systemd-preflight-pid1-v79";
 /// Parent-PID binding passed only from the qualification worker to its systemd helper.
 pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
     "FE2O3_QUALIFICATION_SYSTEMD_PARENT_PID_V1";
