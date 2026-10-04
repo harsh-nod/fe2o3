@@ -168,7 +168,7 @@ fn observe(
                         ..
                     },
                 ..
-            } = &semantic.callables()[call.callee().0 as usize]
+            } = &semantic.callables()[call.callee().index() as usize]
             else {
                 continue;
             };
@@ -203,7 +203,8 @@ fn observe(
     );
     let original = candidate
         .original_mir_request(budget)?
-        .generated_source(budget)?;
+        .generated_source(budget)
+        .map_err(Error::OriginalMir)?;
     let original = std::str::from_utf8(original).unwrap();
     for root in 0..2 {
         assert!(original.contains(&format!("proof fn invocation_paired_step_{root}_v36(")));
