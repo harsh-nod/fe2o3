@@ -19,9 +19,12 @@ enum Phase {
     Verified,
 }
 
-/// No detached lowering/session or paid reservation is returned from this slot.
+/// Owns the actual session until either outer-owner drop or the private move.
+/// Accepted credits remain on the same account across that move.
 pub(super) struct Pending {
     phase: Phase,
+    // Lexical original account only; never source or admission authority.
+    ledger: Option<Ledger>,
     ordinals: Vec<(ProjectedSemanticAccessSiteV1, u32)>,
     accesses: Vec<ProductionRankedAccessSourceV1>,
     unmapped_private_reads: usize,
@@ -35,6 +38,7 @@ impl Pending {
     pub(super) const fn new() -> Self {
         Self {
             phase: Phase::Fresh,
+            ledger: None,
             ordinals: Vec::new(),
             accesses: Vec::new(),
             unmapped_private_reads: 0,
@@ -42,6 +46,64 @@ impl Pending {
             tensors: Vec::new(),
             lowering: Vec::new(),
         }
+    }
+}
+
+// Plain moved implementation data, not a source/postflight/launch receipt.
+// The private outer owner must complete every enclosing source and account
+// postflight before invoking this move, using its own original emitted object.
+pub(super) type VerifiedParts = (
+    ProductionRankedKernelLoweringInputV1,
+    Vec<ProductionRankedAccessSourceV1>,
+);
+
+fn transfer_frame() -> Result<usize> {
+    // Additive selected storage for input/callee and result/return frames.
+    // No heap/session reconstruction, new allocator allowance, or refund.
+    add(
+        mul(size_of::<Pending>(), 2)?,
+        mul(size_of::<Result<VerifiedParts>>(), 2)?,
+    )
+}
+
+impl Pending {
+    pub(super) fn into_verified_parts(
+        mut self,
+        emitted: &emission::Emitted,
+        resources: &mut PreparationResourcesV1<'_, '_>,
+    ) -> Result<VerifiedParts> {
+        let ledger = self.ledger.ok_or_else(|| resource(Resource::Accounting))?;
+        check(resources, ledger)?;
+        resources.work(64)?;
+        if self.phase != Phase::Verified
+            || self.lowering.len() != 1
+            || self.lowering.capacity() != 1
+            || !emitted.complete
+            || !emitted.blocks.is_empty()
+            || add(self.accesses.len(), self.unmapped_private_reads)? != emitted.sources.len()
+        {
+            return Err(Error::Incomplete(
+                "nominal consuming handoff lacks its single verified original payload",
+            ));
+        }
+        let frame = transfer_frame()?;
+        resources.work(frame)?;
+        resources.reserve_storage(frame)?;
+        check_transformed(
+            self.lowering
+                .first()
+                .expect("checked actual lowering")
+                .kernel(),
+            emitted,
+            &self,
+            resources,
+        )?;
+        check(resources, ledger)?;
+        // No public admission is enabled here. Ownership moves exactly once;
+        // dropping residual Pending data does not refund any live payload credit.
+        let lowering = self.lowering.pop().expect("checked actual lowering");
+        let accesses = std::mem::take(&mut self.accesses);
+        Ok((lowering, accesses))
     }
 }
 
@@ -97,9 +159,14 @@ fn pay(
     snapshot: Snapshot,
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<()> {
-    if !resources.is_metered() || resources.has_denial() || pending.phase != Phase::Fresh {
+    if !resources.is_metered()
+        || resources.has_denial()
+        || pending.phase != Phase::Fresh
+        || pending.ledger.is_some()
+    {
         return Err(resource(Resource::Accounting));
     }
+    pending.ledger = resources.original_ledger_v1();
     pending.phase = Phase::Entered; // All refusals are terminal; never retry.
     // These are selected prepayments, not measurements or complete heap costs.
     resources.work(add(analysis.max_work(), snapshot.max_work())?)?;
