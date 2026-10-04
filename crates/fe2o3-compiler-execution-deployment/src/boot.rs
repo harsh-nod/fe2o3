@@ -43,6 +43,10 @@ const READINESS_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(10);
 
+#[path = "boot_diagnostics_v85.rs"]
+mod diagnostics_v85;
+use diagnostics_v85::MachineStderrV85;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct QualificationMachineIdentityV1 {
     machine_name: String,
@@ -206,7 +210,7 @@ pub fn execute_compiler_execution_systemd_machine_tool_v1(
         .envs(plan.environment().iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .exec();
     Err(std_io_error(
         "replace systemd machine helper with pinned systemd-nspawn",
@@ -324,6 +328,7 @@ pub(super) fn boot_and_stop_systemd_machine_v1(
 struct RunningSystemdMachineV1 {
     child: Option<Child>,
     pidfd: OwnedFd,
+    stderr: MachineStderrV85,
 }
 
 impl RunningSystemdMachineV1 {
@@ -336,6 +341,7 @@ impl RunningSystemdMachineV1 {
             .map_err(|source| io_error("duplicate machine base for helper", source))?;
         let child_root = rustix::io::dup(root)
             .map_err(|source| io_error("duplicate machine root for helper", source))?;
+        let (stderr, child_stderr) = MachineStderrV85::new()?;
         let mut child = Command::new("/proc/self/exe")
             .arg(COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1)
             .arg(staging_name)
@@ -346,7 +352,7 @@ impl RunningSystemdMachineV1 {
             )
             .stdin(Stdio::from(child_base))
             .stdout(Stdio::from(child_root))
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(child_stderr))
             .spawn()
             .map_err(|source| std_io_error("spawn pinned systemd machine helper", source))?;
         let pid = Pid::from_child(&child);
@@ -373,15 +379,22 @@ impl RunningSystemdMachineV1 {
         Ok(Self {
             child: Some(child),
             pidfd,
+            stderr,
         })
     }
 
     fn try_wait(&mut self) -> Result<Option<ExitStatus>, DeploymentVerificationErrorV1> {
-        self.child
+        self.stderr.drain()?;
+        let status = self
+            .child
             .as_mut()
             .expect("running systemd machine retains one child")
             .try_wait()
-            .map_err(|source| std_io_error("poll systemd machine helper", source))
+            .map_err(|source| std_io_error("poll systemd machine helper", source))?;
+        if status.is_some() {
+            self.stderr.drain()?;
+        }
+        Ok(status)
     }
 
     fn stop(&mut self, timeout: Duration) -> Result<(), DeploymentVerificationErrorV1> {
@@ -394,14 +407,13 @@ impl RunningSystemdMachineV1 {
                 if status.success() {
                     return Ok(());
                 }
-                return Err(machine_exit_error("during shutdown", status));
+                return Err(machine_exit_error("during shutdown", status, &self.stderr));
             }
             if Instant::now() >= deadline {
                 self.force_stop_and_reap();
-                return Err(invalid(
-                    DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-                    "systemd machine did not stop within the fixed timeout",
-                ));
+                return Err(self
+                    .stderr
+                    .failure("systemd machine did not stop within the fixed timeout"));
             }
             std::thread::sleep(POLL_INTERVAL_V1);
         }
@@ -440,18 +452,20 @@ fn await_machine_socket(
     let deadline = Instant::now() + timeout;
     let policy = MachineSocketPolicyV1::production();
     loop {
+        machine.stderr.drain()?;
         if let Some(readiness) = try_admit_machine_socket(root, policy)? {
             return Ok(readiness);
         }
         if let Some(status) = machine.try_wait()? {
             machine.child.take();
-            return Err(machine_exit_error("before readiness", status));
+            return Err(machine_exit_error(
+                "before readiness",
+                status,
+                &machine.stderr,
+            ));
         }
         if Instant::now() >= deadline {
-            return Err(invalid(
-                DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-                "systemd machine did not publish the exact supervisor socket within the fixed timeout",
-            ));
+            return Err(machine.stderr.failure("systemd machine did not publish the exact supervisor socket within the fixed timeout"));
         }
         std::thread::sleep(POLL_INTERVAL_V1);
     }
@@ -513,6 +527,7 @@ fn await_client_transaction(
 ) -> Result<CompilerExecutionClientTransactionEvidenceV1, DeploymentVerificationErrorV1> {
     let deadline = Instant::now() + timeout;
     loop {
+        machine.stderr.drain()?;
         if let Some(transaction) = try_admit_client_transaction_report_v1(
             root,
             provisioned.client_profile(),
@@ -528,13 +543,11 @@ fn await_client_transaction(
             return Err(machine_exit_error(
                 "before client transaction completion",
                 status,
+                &machine.stderr,
             ));
         }
         if Instant::now() >= deadline {
-            return Err(invalid(
-                DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-                "systemd machine did not complete the canonical non-root client transaction within the fixed timeout",
-            ));
+            return Err(machine.stderr.failure("systemd machine did not complete the canonical non-root client transaction within the fixed timeout"));
         }
         std::thread::sleep(POLL_INTERVAL_V1);
     }
@@ -641,15 +654,28 @@ fn require_machine_socket_absent(root: &OwnedFd) -> Result<(), DeploymentVerific
     }
 }
 
-fn machine_exit_error(stage: &'static str, status: ExitStatus) -> DeploymentVerificationErrorV1 {
+fn machine_exit_error(
+    stage: &'static str,
+    status: ExitStatus,
+    stderr: &MachineStderrV85,
+) -> DeploymentVerificationErrorV1 {
     invalid(
         DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
         format!(
-            "systemd machine exited {stage}: exit_code={:?} signal={:?}",
+            "systemd machine exited {stage}: exit_code={:?} signal={:?} stderr_prefix={}",
             status.code(),
-            status.signal()
+            status.signal(),
+            stderr.prefix(),
         ),
     )
+}
+
+/// A bounded failure-only diagnostic; never a machine readiness record.
+pub fn compiler_execution_systemd_machine_error_v85(
+    stage: &str,
+    error: &impl std::fmt::Display,
+) -> String {
+    super::preflight::bounded_pid1_error_v84("FE2O3_MACHINE_ERROR", stage, error)
 }
 
 #[cfg(test)]

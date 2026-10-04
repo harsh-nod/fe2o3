@@ -21,7 +21,7 @@ use fe2o3_compiler_execution_deployment::{
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
-    compiler_execution_provisioning_pid1_error_v84,
+    compiler_execution_provisioning_pid1_error_v84, compiler_execution_systemd_machine_error_v85,
     compiler_execution_systemd_preflight_pid1_error_v80,
     create_compiler_execution_qualification_cgroup_v1,
     execute_compiler_execution_provisioning_pid1_tool_v84,
@@ -619,17 +619,23 @@ fn run_systemd_machine_tool(arguments: &[std::ffi::OsString]) {
     if let Err(error) =
         establish_exact_parent_boundary(COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1)
     {
-        eprintln!("compiler-execution systemd machine boundary failed: {error}");
+        let diagnostic = compiler_execution_systemd_machine_error_v85("parent-boundary", &error);
+        let _ = std::io::stderr().lock().write_all(diagnostic.as_bytes());
         std::process::exit(1);
     }
     let Some(staging_name) = arguments[2].to_str() else {
-        eprintln!("compiler-execution systemd machine identity must be UTF-8");
+        let diagnostic = compiler_execution_systemd_machine_error_v85(
+            "staging-identity",
+            &"identity must be UTF-8",
+        );
+        let _ = std::io::stderr().lock().write_all(diagnostic.as_bytes());
         std::process::exit(1);
     };
     match execute_compiler_execution_systemd_machine_tool_v1(staging_name) {
         Ok(never) => match never {},
         Err(error) => {
-            eprintln!("compiler-execution systemd machine helper failed: {error}");
+            let diagnostic = compiler_execution_systemd_machine_error_v85("machine-exec", &error);
+            let _ = std::io::stderr().lock().write_all(diagnostic.as_bytes());
             std::process::exit(1);
         }
     }

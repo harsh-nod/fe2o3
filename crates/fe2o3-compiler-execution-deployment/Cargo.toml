@@ -14,7 +14,7 @@ fe2o3-build-authority.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-loop-device.workspace = true
-rustix = { workspace = true, features = ["event", "mount", "net", "process", "rand", "thread"] }
+rustix = { workspace = true, features = ["event", "mount", "net", "pipe", "process", "rand", "thread"] }
 sha2.workspace = true
 signal-hook.workspace = true
 zeroize = "=1.9.0"

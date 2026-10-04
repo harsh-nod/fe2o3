@@ -249,6 +249,12 @@ pub(super) fn read_error_prefix_v80(
     Ok(escaped.finish())
 }
 
+pub(super) fn bounded_output_prefix_v85(bytes: &[u8]) -> String {
+    let mut escaped = BoundedEscapedV80::new(SYSTEMD_ERROR_PREFIX_MAX_BYTES_V80);
+    let _ = escaped.append(bytes);
+    escaped.finish()
+}
+
 struct BoundedEscapedV80 {
     output: String,
     limit: usize,
@@ -315,7 +321,7 @@ pub fn compiler_execution_systemd_preflight_pid1_error_v80(
 pub(super) fn bounded_pid1_error_v84(
     prefix: &'static str,
     stage: &str,
-    error: &DeploymentVerificationErrorV1,
+    error: &impl std::fmt::Display,
 ) -> String {
     let mut stage_prefix = BoundedEscapedV80::new(64);
     let _ = stage_prefix.append(stage.as_bytes());
