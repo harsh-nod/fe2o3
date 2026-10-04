@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 type Request<'h, 'n, 'p, 'v, 's> = PreparedTypedSourceTailV50<'h, 'n, 'p, 'v, 's>;
 const MAGIC: &[u8] = b"FE2O3/MIXED/TYPED-SOURCE-TAIL/V50\0";
 const EXECUTION_DOMAIN: &[u8] = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V50\0";
+const EXECUTION_DOMAIN_V66: &[u8] = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V66\0";
 const UNSIGNED: usize = MAGIC.len() + 6 + 2 * 32 + 4 * 40 + 4 * 32 + 2 * 8 + 6 * 8 + 8 * 32;
 const WIRE: usize = UNSIGNED + 64;
 
@@ -45,6 +46,30 @@ fn execution(error: crate::FunctionalRefinementVerusExecutionErrorV2) -> Error {
 }
 fn count(value: usize) -> Result<u64> {
     value.try_into().map_err(|_| Resource::Arithmetic.into())
+}
+
+fn bind_execution_policy(
+    digest: &mut Sha256,
+    policy: crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    if policy.is_legacy() {
+        digest.update(EXECUTION_DOMAIN);
+    } else {
+        budget.check_prior_denials_v1()?;
+        // Equal-length domains preserve the old precharge; these bytes are additional.
+        budget.charge_work(
+            policy
+                .canonical_bytes()
+                .len()
+                .checked_add(8)
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        digest.update(EXECUTION_DOMAIN_V66);
+        digest.update(count(policy.canonical_bytes().len())?.to_le_bytes());
+        digest.update(policy.canonical_bytes());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -455,7 +480,7 @@ impl<'r, 'h, 'n, 'p, 'v, 's> PreparedTypedSourceTailExecutionV50<'r, 'h, 'n, 'p,
                 return Err(refusal("composed execution deadline elapsed"));
             }
             let mut digest = Sha256::new();
-            digest.update(EXECUTION_DOMAIN);
+            bind_execution_policy(&mut digest, observed.policy, budget)?;
             for bytes in [
                 runtime_owner.identity().as_bytes().as_slice(),
                 prepared.binding.generated.as_slice(),

@@ -36,6 +36,124 @@ fn sign(value: &Expected, key: &SigningKey) -> [u8; WIRE] {
 }
 
 #[test]
+fn typed_source_execution_identity_preserves_legacy_transcript_and_binds_process_policy() {
+    use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2 as Policy;
+
+    let old_domain = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V50\0";
+    let new_domain = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V66\0";
+    let policy = b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V2\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal";
+    assert_eq!(
+        Policy::PinnedSingleThreadContextsV2.canonical_bytes(),
+        policy
+    );
+    let stdout = b"verification results:: 1 verified, 0 errors\n";
+    let runtime = [9; 32];
+    let generated = [7; 32];
+    let statement = [6; 32];
+    let fields: [&[u8]; 5] = [&runtime, &generated, &statement, stdout, b""];
+    let actual = |policy| -> [u8; 32] {
+        let mut digest = Sha256::new();
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, 0);
+        bind_execution_policy(&mut digest, policy, &mut budget).unwrap();
+        for bytes in fields {
+            digest.update((bytes.len() as u64).to_le_bytes());
+            digest.update(bytes);
+        }
+        digest.update(0i32.to_le_bytes());
+        digest.update(0i32.to_le_bytes());
+        digest.finalize().into()
+    };
+
+    // Reconstruct the historical byte transcript without the production policy helper.
+    let mut old = old_domain.to_vec();
+    for bytes in [&runtime, &generated, &statement] {
+        old.extend_from_slice(&32u64.to_le_bytes());
+        old.extend_from_slice(bytes);
+    }
+    old.extend_from_slice(&(stdout.len() as u64).to_le_bytes());
+    old.extend_from_slice(stdout);
+    old.extend_from_slice(&0u64.to_le_bytes());
+    old.extend_from_slice(&[0; 8]);
+    let legacy: [u8; 32] = Sha256::digest(&old).into();
+    assert_eq!(actual(Policy::LegacySingleSolverV1), legacy);
+
+    let mut contexts = new_domain.to_vec();
+    contexts.extend_from_slice(&(policy.len() as u64).to_le_bytes());
+    contexts.extend_from_slice(policy);
+    contexts.extend_from_slice(&old[old_domain.len()..]);
+    let contexts: [u8; 32] = Sha256::digest(&contexts).into();
+    assert_eq!(actual(Policy::PinnedSingleThreadContextsV2), contexts);
+    assert_ne!(legacy, contexts);
+
+    // Inert codec fixtures isolate this coordinate; they do not execute a proof.
+    let key = SigningKey::from_bytes(&[45; 32]);
+    let mut legacy_expected = expected(key.verifying_key().to_bytes());
+    legacy_expected.execution = legacy;
+    let mut contexts_expected = legacy_expected;
+    contexts_expected.execution = contexts;
+    let legacy_wire = sign(&legacy_expected, &key);
+    let contexts_wire = sign(&contexts_expected, &key);
+    import(&legacy_expected, &legacy_wire).unwrap();
+    import(&contexts_expected, &contexts_wire).unwrap();
+    assert!(import(&legacy_expected, &contexts_wire).is_err());
+    assert!(import(&contexts_expected, &legacy_wire).is_err());
+}
+
+#[test]
+fn typed_source_execution_policy_hash_has_exact_incremental_work_and_sticky_refusal() {
+    use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2 as Policy;
+
+    let policy = b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V2\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal";
+    let expected_work = 8 + policy.len();
+    assert_eq!(EXECUTION_DOMAIN.len(), EXECUTION_DOMAIN_V66.len());
+    for limit in [expected_work, expected_work - 1] {
+        let mut work = Work::new(limit);
+        let mut budget = Budget::new(&mut work, 31);
+        budget.reserve_storage(31).unwrap();
+        let mut digest = Sha256::new();
+        let before: [u8; 32] = digest.clone().finalize().into();
+        let result = bind_execution_policy(
+            &mut digest,
+            Policy::PinnedSingleThreadContextsV2,
+            &mut budget,
+        );
+        if limit == expected_work {
+            result.unwrap();
+            assert_eq!(budget.work(), expected_work);
+            assert!(budget.check_prior_denials_v1().is_ok());
+        } else {
+            assert!(matches!(result, Err(Error::Resource(Resource::Work(error)))
+                if error.limit() == limit && error.actual() == expected_work));
+            assert_eq!(budget.failed_work(), Some(expected_work));
+            assert_eq!(<[u8; 32]>::from(digest.clone().finalize()), before);
+            // A cheaper later attempt cannot erase the recorded original refusal.
+            assert!(budget.charge_work(0).is_ok());
+            let retry = bind_execution_policy(
+                &mut digest,
+                Policy::PinnedSingleThreadContextsV2,
+                &mut budget,
+            );
+            assert!(matches!(retry, Err(Error::Resource(Resource::Work(error)))
+                if error.limit() == limit && error.actual() == expected_work));
+            assert_eq!(budget.failed_work(), Some(expected_work));
+            assert_eq!(<[u8; 32]>::from(digest.finalize()), before);
+        }
+        assert_eq!(budget.storage(), 31);
+    }
+    let mut work = Work::new(0);
+    let mut budget = Budget::new(&mut work, 0);
+    bind_execution_policy(
+        &mut Sha256::new(),
+        Policy::LegacySingleSolverV1,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(budget.work(), 0);
+    assert_eq!(budget.failed_work(), None);
+}
+
+#[test]
 fn typed_source_receipt_rejects_every_modified_and_resigned_owner_statement_and_runtime_byte() {
     let key = SigningKey::from_bytes(&[41; 32]);
     let expected = expected(key.verifying_key().to_bytes());
