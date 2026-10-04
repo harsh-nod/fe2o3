@@ -53,7 +53,7 @@ pub(super) fn derive(
             None
         });
         for (block, row) in function.control.iter().enumerate() {
-            out.budget.charge_work(1)?;
+            out.budget.charge_work(2)?;
             let (operands, call) = match &row.end {
                 End::Call { child, arguments } => {
                     out.budget.charge_work(arguments.len())?;
@@ -91,6 +91,7 @@ pub(super) fn derive(
                 statements: row.statements,
                 operands,
                 call,
+                frame_preserving: !conserves_heap && cut_frames::supports(function, block, out)?,
             });
         }
     }

@@ -279,6 +279,12 @@ fn run_write_attempt(
                                             Resource::Accounting
                                         )))
                                     ));
+                                    assert!(matches!(
+                                        program.emit_cut_frame_proofs_v93(&mut writer),
+                                        Err(Error::Source(SourceError::Resource(
+                                            Resource::Accounting
+                                        )))
+                                    ));
                                     assert!(writer.text.is_empty());
                                 }
                                 assert_eq!(
@@ -292,6 +298,10 @@ fn run_write_attempt(
                             for _ in 0..2 {
                                 assert!(matches!(
                                     program.source_slots(out),
+                                    Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+                                ));
+                                assert!(matches!(
+                                    program.emit_cut_frame_proofs_v93(out),
                                     Err(Error::Source(SourceError::Resource(Resource::Accounting)))
                                 ));
                                 assert_eq!(
@@ -309,6 +319,16 @@ fn run_write_attempt(
                             let hints = program.step_hints(root, out)?.unwrap();
                             assert!(!hints.conserves_heap);
                             assert!(!hints.cuts.is_empty());
+                            let original = plan.instance(root, 0, out)?;
+                            let write_pc = original.blocks.end - 1;
+                            assert!(
+                                !hints
+                                    .cuts
+                                    .iter()
+                                    .find(|cut| cut.pc == write_pc)
+                                    .unwrap()
+                                    .frame_preserving
+                            );
                             for cut in &hints.cuts {
                                 assert!(hints.fuels[cut.instance] > cut.statements);
                             }
@@ -508,5 +528,78 @@ fn scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit() {
         "memory == source.memory",
     ] {
         assert!(!laws.contains(forbidden), "{forbidden}");
+    }
+}
+
+#[test]
+fn writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains() {
+    let frames = include_str!("original_semantic_mir_cut_frame_laws_v93.vrs");
+    assert_eq!(frames.matches("proof fn ").count(), 8);
+    for required in [
+        "source_after.valid, target_after.valid",
+        "source_after.memory == source.memory, target_after.memory == target.memory",
+        "source_after.generations == source.generations",
+        "target_after.generations == target.generations",
+        "source_after.frames == source.frames, target_after.frames == target.frames",
+        "invocation_source_frame_equal_v93(before, after) && after.machine.pc == before.machine.pc",
+    ] {
+        assert!(frames.contains(required), "{required}");
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "spinoff_prover"] {
+        assert!(!frames.contains(forbidden), "{forbidden}");
+    }
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(text.matches(frames).count(), 1);
+            assert!(!text.contains("proof fn invocation_external_store_"));
+            let mut summaries = 0;
+            for suffix in text.split("proof fn invocation_cut_source_frame_").skip(1) {
+                let (coordinates, body) = suffix.split_once("_v93(source:").unwrap();
+                let (root, pc) = coordinates.split_once('_').unwrap();
+                assert!(root.bytes().all(|byte| byte.is_ascii_digit()));
+                assert!(pc.bytes().all(|byte| byte.is_ascii_digit()));
+                let body = body.split("proof fn ").next().unwrap();
+                let premises = body
+                    .split_once(" requires ")
+                    .unwrap()
+                    .1
+                    .split_once(" ensures ")
+                    .unwrap()
+                    .0;
+                assert_eq!(premises.trim(), format!("source.machine.pc == {pc},"));
+                assert!(body.contains("invocation_cut_frame_descriptor_length_v93("));
+                assert!(body.contains(
+                    "invocation_source_frame_equal_v93(source, invocation_paired_source_step_"
+                ));
+                assert!(text.contains(&format!(
+                    " invocation_cut_source_frame_{coordinates}_v93(source);"
+                )));
+                summaries += 1;
+            }
+            assert!(summaries >= 2);
+            // These conditional support laws do not replace either root's step theorem.
+            assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
+            assert!(!text.contains("invocation_paired_source_preserved_"));
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn writing_cut_support_has_exact_full_model_work_and_storage_limits() {
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        let (result, work, floor, peak) = run_write_model(LIMIT, LIMIT, disjoint, copied, |_| {});
+        result.unwrap();
+        assert_eq!(floor, 37);
+        let (exact, used, after, used_peak) = run_write_model(work, peak, disjoint, copied, |_| {});
+        exact.unwrap();
+        assert_eq!((used, after, used_peak), (work, floor, peak));
+        for (work_limit, storage_limit) in [(work - 1, peak), (work, peak - 1)] {
+            let (short, _, after, _) =
+                run_write_model(work_limit, storage_limit, disjoint, copied, |_| {});
+            assert!(short.is_err());
+            assert_eq!(after, floor);
+        }
     }
 }

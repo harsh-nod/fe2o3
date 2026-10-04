@@ -38,6 +38,9 @@ mod conservation;
 #[path = "original_semantic_mir_source_step_hints_v85.rs"]
 mod step_hints;
 
+#[path = "original_semantic_mir_cut_frame_generate_v93.rs"]
+mod cut_frames;
+
 pub(super) struct SourceEntryHintsV85 {
     pub(super) owner: u32,
     pub(super) locals: Range<usize>,
@@ -56,6 +59,7 @@ pub(super) struct SourceCutHintsV85 {
     pub(super) statements: usize,
     pub(super) operands: usize,
     pub(super) call: Option<SourceCallHintsV85>,
+    pub(super) frame_preserving: bool,
 }
 
 pub(super) struct SourceStepHintsV85 {
@@ -113,6 +117,10 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
 }
 
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
+    pub(super) fn emit_cut_frame_proofs_v93(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        cut_frames::emit(self, out)
+    }
+
     pub(super) fn step_hints(
         &self,
         root: usize,

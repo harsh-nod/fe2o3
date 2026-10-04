@@ -1,0 +1,167 @@
+// Shared frame lemmas. Callers still prove the exact cut's effects and validity.
+
+spec fn invocation_source_frame_equal_v93(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+) -> bool {
+    after.machine.memory == before.machine.memory
+        && after.machine.generations == before.machine.generations
+        && after.machine.frames == before.machine.frames
+        && after.machine.values.len() == before.machine.values.len()
+}
+
+spec fn invocation_source_constructor_frame_equal_v93(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+) -> bool {
+    invocation_source_frame_equal_v93(before, after) && after.machine.pc == before.machine.pc
+}
+
+proof fn invocation_cut_frame_put_local_pc_v93(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
+)
+    ensures invocation_source_byte_put_local_v36(source, local, value).machine.pc
+        == source.machine.pc,
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_logical_write_v38);
+}
+
+proof fn invocation_cut_frame_carrier_pc_v93(
+    source: InvocationSourceByteStateV36, local: int, moved: bool, bits: int,
+)
+    ensures invocation_source_carrier_evaluate_v36(source, local, moved, bits).source.machine.pc
+        == source.machine.pc,
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_cut_frame_put_local_pc_v93(source, local, MemoryValueV30::Undefined);
+}
+
+proof fn invocation_cut_frame_states_related_v93(
+    source: MemoryStateV30, target: MemoryStateV30,
+    source_after: MemoryStateV30, target_after: MemoryStateV30,
+    map: InvocationByteMapV36,
+)
+    requires invocation_byte_states_related_v36(source, target, map),
+        source_after.valid, target_after.valid,
+        source_after.memory == source.memory, target_after.memory == target.memory,
+        source_after.generations == source.generations,
+        target_after.generations == target.generations,
+        source_after.frames == source.frames, target_after.frames == target.frames,
+    ensures invocation_byte_states_related_v36(source_after, target_after, map),
+{
+    hide(invocation_byte_heaps_related_v36);
+    hide(byte_frame_runtime_well_formed_v30);
+    hide(byte_private_frames_live_v30);
+    hide(private_generation_counters_valid_v30);
+}
+
+proof fn invocation_cut_frame_descriptor_install_v93(
+    source: InvocationSourceByteStateV36, destination: int, value: MemoryValueV30,
+    reference: InvocationSourceDescriptorReferenceV51,
+)
+    ensures invocation_source_constructor_frame_equal_v93(source,
+        invocation_source_descriptor_install_v51(source, destination, value, reference)),
+{
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_put_local_preserves_heap_v78(source, destination, value);
+    invocation_cut_frame_put_local_pc_v93(source, destination, value);
+}
+
+proof fn invocation_cut_frame_descriptor_step_v93(
+    source: InvocationSourceByteStateV36, event: InvocationSourceDescriptorEventV51,
+)
+    ensures invocation_source_constructor_frame_equal_v93(source,
+        invocation_source_descriptor_step_v51(source, event)),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_descriptor_carrier_v51);
+    hide(invocation_source_descriptor_reference_current_v51);
+    hide(invocation_source_descriptor_install_v51);
+    hide(invocation_source_byte_put_local_v36);
+    assert forall|s: InvocationSourceByteStateV36, destination: int, value: MemoryValueV30,
+        reference: InvocationSourceDescriptorReferenceV51|
+        #[trigger] invocation_source_descriptor_install_v51(s, destination, value, reference)
+            .machine.memory == s.machine.memory
+        && invocation_source_constructor_frame_equal_v93(s,
+            invocation_source_descriptor_install_v51(s, destination, value, reference)) by {
+        invocation_cut_frame_descriptor_install_v93(s, destination, value, reference);
+    }
+    match event {
+        InvocationSourceDescriptorEventV51::Transfer { destination, input, moved, .. } => {
+            invocation_source_put_local_preserves_heap_v78(source, input, MemoryValueV30::Undefined);
+            invocation_cut_frame_put_local_pc_v93(source, input, MemoryValueV30::Undefined);
+            let consumed = if moved {
+                invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+            } else { source };
+            invocation_cut_frame_descriptor_install_v93(consumed, destination,
+                source.machine.values[input], source.logical.descriptor_references[input]);
+        },
+        _ => {},
+    }
+}
+
+proof fn invocation_cut_frame_descriptor_length_v93(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
+)
+    ensures invocation_source_constructor_frame_equal_v93(source,
+        invocation_source_descriptor_length_v51(source, destination, input, recipe, moved)),
+{
+    hide(invocation_source_descriptor_reference_current_v51);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_put_local_preserves_heap_v78(source, input, MemoryValueV30::Undefined);
+    invocation_cut_frame_put_local_pc_v93(source, input, MemoryValueV30::Undefined);
+    let consumed = if moved {
+        invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+    } else { source };
+    match source.machine.values[input] {
+        MemoryValueV30::Slice(slice) => {
+            invocation_source_put_local_preserves_heap_v78(consumed, destination,
+                MemoryValueV30::Scalar(slice.length));
+            invocation_cut_frame_put_local_pc_v93(consumed, destination,
+                MemoryValueV30::Scalar(slice.length));
+        },
+        _ => {},
+    }
+}
+
+proof fn invocation_cut_frame_issue_witness_v93(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int, bits: int,
+)
+    ensures invocation_source_constructor_frame_equal_v93(source,
+        invocation_source_issue_witness_v38(source, destination, source_type, bits)),
+{
+    hide(byte_execution_well_formed_v37);
+    hide(byte_execution_index_v37);
+    hide(invocation_source_byte_put_local_v36);
+    match source.machine.frames.execution {
+        Some(execution) => {
+            invocation_source_put_local_preserves_heap_v78(source, destination,
+                MemoryValueV30::Scalar(byte_execution_index_v37(execution, 0, 0)));
+            invocation_cut_frame_put_local_pc_v93(source, destination,
+                MemoryValueV30::Scalar(byte_execution_index_v37(execution, 0, 0)));
+        },
+        _ => {},
+    }
+}
+
+proof fn invocation_cut_frame_slice_copy_v93(
+    source: InvocationSourceByteStateV36, destination: int, local: int, moved: bool,
+    operand_bits: int, metadata_bits: int, root: int, instance: int, little_endian: bool,
+)
+    ensures invocation_source_constructor_frame_equal_v93(source,
+        invocation_source_pointer_step_v36(source,
+            InvocationSourcePointerEventV36::Copy { destination,
+                operand: InvocationSourceOperandV36::Slice { local, moved, metadata_bits: operand_bits },
+                metadata_bits }, root, instance, little_endian)),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_pointer_carrier_v36);
+    hide(invocation_source_carrier_evaluate_v36);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_carrier_evaluate_preserves_heap_v78(source, local, moved, operand_bits);
+    invocation_cut_frame_carrier_pc_v93(source, local, moved, operand_bits);
+    let evaluated = invocation_source_carrier_evaluate_v36(source, local, moved, operand_bits);
+    invocation_source_put_local_preserves_heap_v78(evaluated.source, destination, evaluated.value);
+    invocation_cut_frame_put_local_pc_v93(evaluated.source, destination, evaluated.value);
+}

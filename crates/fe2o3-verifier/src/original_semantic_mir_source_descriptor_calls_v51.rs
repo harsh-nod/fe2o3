@@ -144,6 +144,18 @@ impl DescriptorCall {
         write!(out, ", {}), {});\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n",
             self.moved, self.continuation).map_err(|_| out.error())
     }
+
+    pub(super) fn emit_frame_proof(self, cursor: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.charge_work(1)?;
+        write!(
+            out,
+            " invocation_cut_frame_descriptor_length_v93(c{cursor}.source, {}, {}, ",
+            self.destination, self.input
+        )
+        .map_err(|_| out.error())?;
+        self.recipe.emit(out)?;
+        write!(out, ", {});\n", self.moved).map_err(|_| out.error())
+    }
 }
 
 fn headers() -> usize {
