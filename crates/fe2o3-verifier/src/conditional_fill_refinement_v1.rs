@@ -20,6 +20,10 @@ use sha2::{Digest as _, Sha256};
 use std::{error::Error, fmt};
 
 mod generate;
+mod owned;
+pub use owned::{
+    OwnedConditionalFillRefinementExecutionV1, execute_owned_conditional_fill_refinement_v1,
+};
 
 const DOMAIN: &[u8] = b"FE2O3/SEMANTIC-GFX942-FILL-CONDITIONAL-REFINEMENT/V1\0";
 const BOUNDARY: FunctionalRefinementBoundaryV2 =
@@ -192,6 +196,8 @@ fn obligation(
 
 #[derive(Debug)]
 pub enum ConditionalFillRefinementErrorV1 {
+    Program(crate::ConditionalFillProgramErrorV1),
+    Machine(fe2o3_kernel_analysis::Gfx942FillAnalysisErrorV1),
     Profile,
     Source(GeneratedVerusProofInputErrorV3),
     Execution(FunctionalRefinementVerusExecutionErrorV2),
@@ -205,6 +211,8 @@ impl fmt::Display for ConditionalFillRefinementErrorV1 {
 impl Error for ConditionalFillRefinementErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Program(error) => Some(error),
+            Self::Machine(error) => Some(error),
             Self::Source(error) => Some(error),
             Self::Execution(error) => Some(error),
             _ => None,

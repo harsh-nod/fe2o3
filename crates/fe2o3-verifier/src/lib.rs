@@ -107,8 +107,9 @@ pub use conditional_fill_program_v1::{
     check_conditional_fill_program_v1,
 };
 pub use conditional_fill_refinement_v1::{
-    ConditionalFillRefinementErrorV1, ProductionConditionalFillRefinementExecutionV1,
-    execute_conditional_fill_refinement_v1,
+    ConditionalFillRefinementErrorV1, OwnedConditionalFillRefinementExecutionV1,
+    ProductionConditionalFillRefinementExecutionV1, execute_conditional_fill_refinement_v1,
+    execute_owned_conditional_fill_refinement_v1,
 };
 pub use conditional_output_evidence_v1::{
     CanonicalConditionalOutputEvidenceV1, ConditionalOutputEvidenceErrorV1,

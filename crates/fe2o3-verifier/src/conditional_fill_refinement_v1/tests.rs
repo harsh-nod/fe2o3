@@ -70,53 +70,14 @@ fn genuine_program_generates_closed_distinct_operand_graphs() {
 #[test]
 #[ignore = "requires native LLVM analyzer and protected pinned Verus runtime; no GPU required"]
 fn protected_native_conditional_fill_refinement() {
-    use fe2o3_kernel_analysis::{
-        AuthenticatedPhysicalMachineEffectLimitsV1, AuthenticatedPhysicalMachineEffectWorkerV1,
-        PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
-        check_gfx942_fill_analysis_v1, inspect_physical_machine_effect_worker_candidate_v1,
-    };
+    use fe2o3_kernel_analysis::check_gfx942_fill_analysis_v1;
     let (handoff, inputs) = inputs();
     let lineage =
         crate::validate_conditional_compiler_target_lineage_v1(handoff.capsule(), &inputs).unwrap();
     let program = crate::check_conditional_fill_program_v1(&inputs, &lineage).unwrap();
-    let path =
-        std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER").expect("native analyzer path");
-    let payload = std::fs::read(
-        std::env::var_os("FE2O3_FILL_ANALYSIS_HSACO").expect("genuine finalized fill payload"),
-    )
-    .unwrap();
-    let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
-        std::time::Duration::from_secs(60),
-        1024 * 1024,
-        16384,
-    )
-    .unwrap();
-    let candidate = inspect_physical_machine_effect_worker_candidate_v1(&path, limits).unwrap();
-    let worker =
-        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), limits)
-            .unwrap();
-    worker
-        .verify_deployed_no_fork_profile_for_test(limits)
-        .unwrap();
-    let execution = worker
-        .analyze(
-            payload,
-            vec![
-                PhysicalMachineEffectEntryRequestV1::new(
-                    program.function_symbol(),
-                    PhysicalMachineEffectBudgetV1::new(2, 1, 1, 1, 0),
-                )
-                .unwrap(),
-            ],
-            limits,
-        )
-        .unwrap();
+    let execution = native_analysis(program.function_symbol());
     let machine = check_gfx942_fill_analysis_v1(&execution, program.function_symbol()).unwrap();
-    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
-        std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
-            .expect("protected pinned runtime root"),
-    )
-    .unwrap();
+    let runtime = runtime();
     let proof = execute_conditional_fill_refinement_v1(&runtime, &program, &machine, 180).unwrap();
     assert!(std::ptr::eq(proof.program(), &program));
     assert!(std::ptr::eq(proof.machine(), &machine));
@@ -183,6 +144,204 @@ fn protected_native_conditional_fill_refinement() {
         crate::FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
     );
     eprintln!("conditional fill public producer: wrong value returned no proof owner");
+}
+
+fn native_analysis(
+    symbol: &str,
+) -> fe2o3_kernel_analysis::AuthenticatedPhysicalMachineAnalysisExecutionV1 {
+    native_analysis_payload(symbol, native_payload())
+}
+
+fn native_payload() -> Vec<u8> {
+    std::fs::read(
+        std::env::var_os("FE2O3_FILL_ANALYSIS_HSACO").expect("genuine finalized fill payload"),
+    )
+    .unwrap()
+}
+
+fn native_analysis_payload(
+    symbol: &str,
+    payload: Vec<u8>,
+) -> fe2o3_kernel_analysis::AuthenticatedPhysicalMachineAnalysisExecutionV1 {
+    use fe2o3_kernel_analysis::{
+        AuthenticatedPhysicalMachineEffectLimitsV1, AuthenticatedPhysicalMachineEffectWorkerV1,
+        PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
+        inspect_physical_machine_effect_worker_candidate_v1,
+    };
+    let path =
+        std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER").expect("native analyzer path");
+    let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+        std::time::Duration::from_secs(60),
+        1024 * 1024,
+        16384,
+    )
+    .unwrap();
+    let candidate = inspect_physical_machine_effect_worker_candidate_v1(&path, limits).unwrap();
+    let worker =
+        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), limits)
+            .unwrap();
+    worker
+        .verify_deployed_no_fork_profile_for_test(limits)
+        .unwrap();
+    worker
+        .analyze(
+            payload,
+            vec![
+                PhysicalMachineEffectEntryRequestV1::new(
+                    symbol,
+                    PhysicalMachineEffectBudgetV1::new(2, 1, 1, 1, 0),
+                )
+                .unwrap(),
+            ],
+            limits,
+        )
+        .unwrap()
+}
+
+fn runtime() -> FunctionalRefinementVerusRuntimeLeaseV1 {
+    FunctionalRefinementVerusRuntimeLeaseV1::open(
+        std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
+            .expect("protected pinned runtime root"),
+    )
+    .unwrap()
+}
+
+#[test]
+#[ignore = "requires native LLVM analyzer and protected pinned Verus runtime; no GPU required"]
+fn protected_native_owned_conditional_fill_refinement() {
+    let (proof, original_buffers, challenge, analysis_identity, source, obligation) = {
+        let (handoff, inputs) = inputs();
+        let lineage =
+            crate::validate_conditional_compiler_target_lineage_v1(handoff.capsule(), &inputs)
+                .unwrap();
+        let program = crate::check_conditional_fill_program_v1(&inputs, &lineage).unwrap();
+        let analysis = native_analysis(program.function_symbol());
+        let machine = fe2o3_kernel_analysis::check_gfx942_fill_analysis_v1(
+            &analysis,
+            program.function_symbol(),
+        )
+        .unwrap();
+        let source =
+            generate::source(&program.recipes, machine.kernel().kernarg_storage_bytes()).unwrap();
+        let obligation = obligation(&program, &machine, &source);
+        let source = source.source().to_vec();
+        let buffers = original_owner_buffers(&inputs, &lineage, &analysis);
+        let challenge = analysis.execution_challenge();
+        let identity = analysis.identity();
+        let runtime = runtime();
+        let proof =
+            execute_owned_conditional_fill_refinement_v1(&runtime, inputs, lineage, analysis, 180)
+                .unwrap();
+        (proof, buffers, challenge, identity, source, obligation)
+    };
+    assert_eq!(
+        original_buffers,
+        original_owner_buffers(proof.inputs(), proof.lineage(), proof.analysis_execution(),)
+    );
+    assert_eq!(proof.analysis_execution().execution_challenge(), challenge);
+    assert_eq!(proof.analysis_execution().identity(), analysis_identity);
+    assert_eq!(proof.generated_source(), source);
+    assert_eq!(proof.obligation_preimage(), obligation);
+    assert_eq!(proof.boundary(), BOUNDARY);
+    assert!(proof.retains_strictly_imported_signed_receipt());
+    assert!(!proof.grants_launch_authority());
+    assert_eq!(proof.signed_receipt_wire().len(), 524);
+    let program =
+        crate::check_conditional_fill_program_v1(proof.inputs(), proof.lineage()).unwrap();
+    let machine = fe2o3_kernel_analysis::check_gfx942_fill_analysis_v1(
+        proof.analysis_execution(),
+        program.function_symbol(),
+    )
+    .unwrap();
+    assert_eq!(
+        proof.obligation_preimage(),
+        super::obligation(
+            &program,
+            &machine,
+            &generate::source(&program.recipes, machine.kernel().kernarg_storage_bytes()).unwrap(),
+        )
+    );
+    if let Some(directory) = std::env::var_os("FE2O3_FILL_REFINEMENT_EVIDENCE") {
+        let directory = std::path::Path::new(&directory);
+        for (name, bytes) in [
+            ("owned-generated.rs", proof.generated_source()),
+            ("owned-obligation.bin", proof.obligation_preimage()),
+            ("owned-refinement.receipt", proof.signed_receipt_wire()),
+            (
+                "owned-refinement.key",
+                proof.receipt_verifying_key().as_slice(),
+            ),
+            (
+                "owned-fill.request",
+                proof.analysis_execution().request().canonical_bytes(),
+            ),
+            (
+                "owned-fill.bundle",
+                proof.analysis_execution().analysis().canonical_bytes(),
+            ),
+            (
+                "owned-fill.receipt",
+                proof.analysis_execution().canonical_receipt_bytes(),
+            ),
+        ] {
+            std::fs::write(directory.join(name), bytes).unwrap();
+        }
+    }
+    eprintln!(
+        "owned conditional fill: original buffers, analyzer execution and proof retained after runtime scope"
+    );
+}
+
+#[test]
+#[ignore = "requires native LLVM analyzer and protected pinned Verus runtime; no GPU required"]
+fn protected_native_owned_conditional_fill_rejects_descriptor_before_execution() {
+    use fe2o3_kernel_analysis::{Gfx942FillAnalysisErrorV1, Gfx942FillErrorV1, Gfx942FillKernelV1};
+    let (handoff, inputs) = inputs();
+    let lineage =
+        crate::validate_conditional_compiler_target_lineage_v1(handoff.capsule(), &inputs).unwrap();
+    let program = crate::check_conditional_fill_program_v1(&inputs, &lineage).unwrap();
+    let mut payload = native_payload();
+    let offset = Gfx942FillKernelV1::inspect(&payload, 0)
+        .unwrap()
+        .binding()
+        .descriptor_file_offset() as usize;
+    payload[offset + 56..offset + 58].copy_from_slice(&0xau16.to_le_bytes());
+    payload[offset + 52..offset + 56].copy_from_slice(&0x88u32.to_le_bytes());
+    let analysis = native_analysis_payload(program.function_symbol(), payload);
+    let error =
+        execute_owned_conditional_fill_refinement_v1(&runtime(), inputs, lineage, analysis, 0)
+            .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ConditionalFillRefinementErrorV1::Machine(Gfx942FillAnalysisErrorV1::Kernel(
+                Gfx942FillErrorV1::EntryLayout
+            ))
+        ),
+        "unexpected failure: {error}"
+    );
+    eprintln!(
+        "owned conditional fill: genuine analyzed descriptor mutation rejected before proof execution"
+    );
+}
+
+fn original_owner_buffers(
+    inputs: &crate::ValidatedConditionalCompilerProofInputsV1,
+    lineage: &crate::ValidatedCompilerTargetLineageV1,
+    analysis: &fe2o3_kernel_analysis::AuthenticatedPhysicalMachineAnalysisExecutionV1,
+) -> [usize; 6] {
+    [
+        inputs.semantic_mir().canonical_encoding().as_ptr() as usize,
+        lineage
+            .replay()
+            .replay()
+            .target_bound_kernel_ir_bytes()
+            .as_ptr() as usize,
+        analysis.request().exact_payload_bytes().as_ptr() as usize,
+        analysis.request().canonical_bytes().as_ptr() as usize,
+        analysis.analysis().canonical_bytes().as_ptr() as usize,
+        analysis.canonical_receipt_bytes().as_ptr() as usize,
+    ]
 }
 
 fn operand_mutants(

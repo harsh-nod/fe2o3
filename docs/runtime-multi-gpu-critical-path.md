@@ -19,8 +19,10 @@ opcode coverage before clearing application admission.
    relation from their actual operand graphs, execute the shared machine bodies
    under the protected Verus runtime, and retain a distinct signed refinement
    receipt. This proves the conditional projection, not native launch premises.
-3. Implement a distinct owned pending conditional artifact and protected compiler
-   service/current-record association. Preserve unconditional admission; never expose the
+3. The consuming owned refinement producer now retains original compiler, target
+   and analyzer owners plus the executed proof. Implement a distinct owned pending
+   conditional artifact and protected compiler service/current-record association.
+   Preserve unconditional admission; never expose the
    pending state through existing unconditional executable/load APIs.
 4. Consume exact packed/prepared full64 coverage, storage/fixups, selected device
    and publication currentness before creating private invocation authority.
@@ -32,6 +34,12 @@ Protected compiler-origin/currentness and native entry/storage/completion
 associations remain required. Test-signed carriage and an analyzer/model match
 cannot replace them. Defer general optimizer proofs, additional opcodes, more
 GPU counts, zero-copy generated-to-peer transfer and performance campaigns.
+
+The [owned-refinement checkpoint](evidence/dev-owned-fill-refinement-2026-10-03/README.md)
+removes borrowed-proof lifetime constraints without self-reference or reimport.
+Retain one compiler-service admission for the artifact: its inherited current-record
+connection is one-use. Discharge each selected GPU's invocation separately without
+treating copied signed records as original evidence custody.
 
 ## Reuse What Works
 
