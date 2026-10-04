@@ -9,6 +9,7 @@ fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
             let program = SourceByteProgram::derive(plan, slots, out)?;
             for root in 0..program.roots.len() {
                 let hints = program.step_hints(root, out)?.unwrap();
+                assert!(hints.conserves_heap);
                 let range = &program.roots[root].0;
                 assert_eq!(hints.entries.len(), range.len());
                 for (instance, function) in program.functions[range.clone()].iter().enumerate() {

@@ -297,7 +297,11 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                 }
                 super::super::byte_bindings::SourceByteBindings::derive(slots, out)?.emit(out)?;
                 paired.emit(out)?;
-                assert!(paired.roots.iter().all(|root| root.step_hints.is_none()));
+                assert!(paired.roots.iter().all(|root| {
+                    root.step_hints
+                        .as_ref()
+                        .is_none_or(|hints| !hints.conserves_heap)
+                }));
                 assert!(
                     !out.text
                         .contains("proof fn invocation_paired_source_preserved_")
@@ -313,7 +317,17 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                         root,
                     );
                 }
-                assert!(!out.text.contains("proof fn invocation_paired_cut_"));
+                for (root, row) in paired.roots.iter().enumerate() {
+                    if row.step_hints.is_some() {
+                        for cut in row.cuts.iter().flatten() {
+                            super::step_tests::check_four(
+                                &out.text,
+                                &format!("invocation_paired_cut_{root}_pc{}_all_v85", cut.source),
+                                root,
+                            );
+                        }
+                    }
+                }
                 assert!(out.text.contains("MemoryOperationEffectV30::Allocate"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Read"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Write"));

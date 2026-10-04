@@ -45,6 +45,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     paired.emit(out)?;
                     for (root, row) in paired.roots.iter().enumerate() {
                         let hints = row.step_hints.as_ref().unwrap();
+                        assert!(hints.conserves_heap);
+                        assert!(!out.text.contains("proof fn invocation_scalar_store_"));
                         check_four(&out.text, &format!("invocation_paired_step_{root}_v36"), root);
                         check_four(&out.text, &format!("invocation_paired_cut_{root}_terminal_all_v85"), root);
                         let dispatcher = theorem(&out.text, &format!("invocation_paired_step_{root}_v36"));

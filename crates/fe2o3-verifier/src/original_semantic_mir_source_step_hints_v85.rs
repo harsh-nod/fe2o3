@@ -8,19 +8,30 @@ pub(super) fn derive(
     out: &mut Writer<'_, '_>,
 ) -> Result<Option<SourceStepHintsV85>> {
     out.budget.reserve_storage(headers())?;
-    let Some(fuels) = conservation::derive(program, root, out)? else {
-        return Ok(None);
-    };
+    let conserved_fuels = conservation::derive(program, root, out)?;
+    let conserves_heap = conserved_fuels.is_some();
     out.budget.charge_work(2)?;
     let range = &program.roots.get(root).ok_or_else(mismatch)?.0;
     let functions = program.functions.get(range.clone()).ok_or_else(mismatch)?;
     let mut count = 0usize;
     for function in functions.iter().flatten() {
         out.budget.charge_work(1)?;
+        for row in &function.control {
+            out.budget.charge_work(1)?;
+            if matches!(row.end, End::Abort) {
+                return Ok(None);
+            }
+        }
         count = count
             .checked_add(function.control.len())
             .ok_or(Resource::Arithmetic)?;
     }
+    // Fuel describes the authenticated micro-program, not its memory effects.
+    // Only the independently classified subset may use the no-write theorem.
+    let fuels = match conserved_fuels {
+        Some(fuels) => fuels,
+        None => conservation::structural_fuels(functions, out)?,
+    };
     let mut entries = vector(functions.len(), out)?;
     let mut cuts = vector(count, out)?;
     for (instance, function) in functions.iter().enumerate() {
@@ -36,23 +47,36 @@ pub(super) fn derive(
         {
             return Err(mismatch());
         }
-        entries.push(Some(function.enter.step_proof_hints(out)?));
+        entries.push(if function.enter.heap_conservation_shape(out)? {
+            Some(function.enter.step_proof_hints(out)?)
+        } else {
+            None
+        });
         for (block, row) in function.control.iter().enumerate() {
             out.budget.charge_work(1)?;
             let (operands, call) = match &row.end {
                 End::Call { child, arguments } => {
-                    let mut captured = vector(arguments.len(), out)?;
-                    for argument in arguments {
-                        out.budget.charge_work(1)?;
-                        captured.push(argument.scalar_local_coordinates().ok_or_else(mismatch)?);
+                    out.budget.charge_work(arguments.len())?;
+                    if !arguments
+                        .iter()
+                        .all(|argument| argument.scalar_local_coordinates().is_some())
+                    {
+                        (arguments.len(), None)
+                    } else {
+                        let mut captured = vector(arguments.len(), out)?;
+                        for argument in arguments {
+                            out.budget.charge_work(1)?;
+                            captured
+                                .push(argument.scalar_local_coordinates().ok_or_else(mismatch)?);
+                        }
+                        (
+                            arguments.len(),
+                            Some(SourceCallHintsV85 {
+                                child: *child,
+                                arguments: captured,
+                            }),
+                        )
                     }
-                    (
-                        arguments.len(),
-                        Some(SourceCallHintsV85 {
-                            child: *child,
-                            arguments: captured,
-                        }),
-                    )
                 }
                 End::Switch { .. } => (1, None),
                 _ => (0, None),
@@ -71,6 +95,7 @@ pub(super) fn derive(
         }
     }
     Ok(Some(SourceStepHintsV85 {
+        conserves_heap,
         fuels,
         entries,
         cuts,
@@ -84,6 +109,8 @@ fn headers() -> usize {
     h::<Option<SourceStepHintsV85>>()
         + h::<SourceStepHintsV85>()
         + h::<Vec<usize>>()
+        + h::<Option<Vec<usize>>>()
+        + h::<bool>()
         + h::<Vec<Option<SourceEntryHintsV85>>>()
         + h::<Vec<SourceCutHintsV85>>()
         + h::<Vec<(usize, bool, u32)>>()

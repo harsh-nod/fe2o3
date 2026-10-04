@@ -306,6 +306,12 @@ fn run_write_attempt(
                                 program.conservation_fuels(root, out)?.is_none(),
                                 "a real write must not use memory-neutral preservation"
                             );
+                            let hints = program.step_hints(root, out)?.unwrap();
+                            assert!(!hints.conserves_heap);
+                            assert!(!hints.cuts.is_empty());
+                            for cut in &hints.cuts {
+                                assert!(hints.fuels[cut.instance] > cut.statements);
+                            }
                         }
                         let launches = [ExplicitLaunchExtent::Exact {
                             rank: 1,
@@ -434,5 +440,73 @@ fn original_thread_write_retains_owner_floor_ledger_and_sticky_refusal() {
             result.0,
             Err(Error::Source(SourceError::Resource(Resource::Accounting)))
         ));
+    }
+}
+
+#[test]
+fn original_thread_write_partitions_every_authentic_cut_without_heap_conservation() {
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            for root in 0..2 {
+                let step_name = format!("proof fn invocation_paired_step_{root}_v36(");
+                let step = text.split_once(&step_name).unwrap().1.split("proof fn ").next().unwrap();
+                let prefix = format!("invocation_paired_cut_{root}_pc");
+                let mut count = 0;
+                for part in step.split(&prefix).skip(1) {
+                    let (pc, _) = part.split_once("_all_v85(source, target);").unwrap();
+                    assert!(pc.bytes().all(|byte| byte.is_ascii_digit()));
+                    let name = format!("proof fn {prefix}{pc}_all_v85(");
+                    let cut = text.split_once(&name).unwrap().1.split("proof fn ").next().unwrap();
+                    let (header, body) = cut.split_once("\n{\n").unwrap();
+                    let premises = header.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
+                    assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
+                    for conclusion in [
+                        format!("invocation_paired_related_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state)"),
+                        format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
+                        format!("invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted"),
+                        format!("source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))"),
+                    ] {
+                        assert!(header.contains(&conclusion), "{name}: {conclusion}");
+                    }
+                    for goal in ["relation", "observations", "halted", "control"] {
+                        assert!(body.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
+                    }
+                    for goal in ["map", "heap", "residual"] {
+                        assert!(text.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
+                    }
+                    count += 1;
+                }
+                assert!(count > 0);
+            }
+            assert!(text.contains(" invocation_scalar_store_facts_v92();"));
+            assert!(!text.contains("invocation_paired_source_preserved_"));
+        }).0.unwrap();
+    }
+}
+
+#[test]
+fn scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit() {
+    let laws = include_str!("original_semantic_mir_scalar_store_laws_v92.vrs");
+    assert_eq!(laws.matches("proof fn ").count(), 6);
+    for required in [
+        "byte_object_relocations_well_formed_v37(written)",
+        "byte_token_well_formed_v37(written.bytes[i])",
+        "0 <= written.write_epochs[i] <= written.write_clock",
+        "byte_relocation_fragment_v37(relocation, i)",
+        "invocation_source_store_enabled_v36(source, pointer, width, alignment, value)",
+        "invocation_scalar_store_well_formed_v92(source.memory, pointer, width, bits, little_endian);",
+        "invocation_scalar_store_source_well_formed_v92(source, pointer, width, alignment, value, little_endian);",
+        "before.live.dom() == after.live.dom()",
+    ] {
+        assert!(laws.contains(required), "{required}");
+    }
+    for forbidden in [
+        "assume(",
+        "admit(",
+        "external_body",
+        "Map::empty()",
+        "memory == source.memory",
+    ] {
+        assert!(!laws.contains(forbidden), "{forbidden}");
     }
 }

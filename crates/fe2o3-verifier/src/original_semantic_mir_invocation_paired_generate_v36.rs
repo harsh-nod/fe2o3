@@ -19,6 +19,14 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
     out.budget.reserve_storage(headers())?;
     emit!(out, "{PAIRED_V36}");
     emit!(out, "{}", conservation::SHARED);
+    out.budget.charge_work(model.roots.len())?;
+    if model.roots.iter().any(|row| {
+        row.step_hints
+            .as_ref()
+            .is_some_and(|hints| !hints.conserves_heap)
+    }) {
+        emit!(out, "{}", step::WRITING_SHARED);
+    }
     emit!(
         out,
         "{}",
@@ -31,7 +39,9 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
         observed(model, root, row, out)?;
         initial(model, root, row, out)?;
         if let Some(hints) = &row.step_hints {
-            conservation::emit(root, &hints.fuels, out)?;
+            if hints.conserves_heap {
+                conservation::emit(root, &hints.fuels, out)?;
+            }
             step::emit(model, root, row, hints, out)?;
         }
         proofs(root, row, out)?;
@@ -706,7 +716,8 @@ spec fn invocation_actual_boundary_join_v36(block: int, head: MemoryBlockResultV
 "#;
 
 fn headers() -> usize {
-    size_of::<bool>()
+    2 * size_of::<bool>()
+        + size_of::<std::slice::Iter<'_, Root>>()
         + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
         + 6 * size_of::<Result<()>>()
