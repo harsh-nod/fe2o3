@@ -87,7 +87,7 @@ pub(super) fn test_source_native_writes_v88(
                                             error
                                         };
                                         assert!(matches!(error, ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)));
-                                        assert!(original.source.cleanup.refund_denied());
+                                        assert!(original.source.cleanup.is_denied());
                                         denied_floor.set(Some(budget.storage()));
                                         Err(error)
                                     }
