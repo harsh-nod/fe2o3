@@ -70,12 +70,16 @@ exclusive to compiler-currentness auditing. Custody must outlive both selected
 devices' invocation settlement; receipt serialization alone is insufficient.
 The inert canonical fill subject is now implemented after exact host association
 and retained by successful pending admission. It commits original compiler/proof
-roots but is neither occurrence identity nor a remote owner. Before service use,
-independently derive the closed fill's host contract from original checked
-descriptor and semantic/KIR inputs. The current unsafe marker profile declaration
-is not sufficient for a fixed service that cannot monomorphize application markers.
-Use a genuinely generated marker as the positive fixture, not the audit-only marker.
-Keep this closed-profile restriction out of generic request preparation.
+roots but is neither occurrence identity nor a remote owner. Independent closed-fill
+host-contract derivation is now implemented from the original lineage-bound ABI
+receipt, descriptor and checked semantic/KIR inputs. Pending admission compares
+that result with the marker declaration before service use. The positive fixture
+now uses the actual macro-generated ABI/contract; a same-name/same-binding synthetic
+profile rejects without consuming the inherited endpoint. Generic request
+preparation and the existing exhaustive error enums remain unchanged.
+The fixed custodian can reuse this non-generic derivation, but must still validate
+the complete transferred compiler closure and authenticate the original application
+occurrence. Do not reacquire the application's held publication lock in that service.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
@@ -97,8 +101,13 @@ It remains distinct from production deployment approval and invocation authority
 The [inert-subject checkpoint](evidence/dev-conditional-fill-subject-2026-10-04/README.md)
 adds fixed canonical matching data without replacing any original owner or changing
 validation order. Its fresh six-case protected campaign remains test-key-backed;
-independent contract derivation and authenticated cross-process custody are still
-required before this identity can participate in service admission.
+authenticated cross-process custody is still required before this identity can
+participate in service admission.
+The [closed-contract checkpoint](evidence/dev-conditional-fill-contract-2026-10-04/README.md)
+adds independent reconstruction of the exact explicit host ABI and launch contract.
+The ABI receipt's domain-separated identity must match the original target lineage;
+a raw descriptor content hash is not that receipt identity. A copied contract digest
+is canonical equivalence data, not original ABI provenance or launch authority.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
