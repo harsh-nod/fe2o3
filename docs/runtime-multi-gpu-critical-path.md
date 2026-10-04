@@ -100,6 +100,13 @@ The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
 workers, and the threaded async engines also conflict with the current profile.
+Keep proof execution outside the 30-second registration/ACK path. The inherited
+compiler auditor's separate 30-second absolute deadline begins at admission, not
+its first request; admit it immediately before the audit, after proving. Bound
+custodian startup, analyzer execution, proof and audit together within the existing
+300-second issuer/observer sessions. A 180-second proof bound alone is insufficient.
+The current-record audit reads the protected issuer ledger and anchor; it does not
+reacquire the application's held artifact-publication lock.
 
 Protected compiler-origin/currentness and native entry/storage/completion
 associations remain required. Test-signed carriage and an analyzer/model match
@@ -127,7 +134,7 @@ is canonical equivalence data, not original ABI provenance or launch authority.
 The [compiler-closure checkpoint](evidence/dev-compiler-closure-check-2026-10-04/README.md)
 shares immutable validation with ordinary admission and independently reconstructs
 the same fill subject. It is not a custodian deployment or cross-process owner.
-The next registration path must authenticate the original application before its
+The implemented registration path authenticates the original application before its
 descriptor ACK, on a dedicated proof endpoint rather than FD195. Cargo reads that
 ACK pipe until EOF: root-side inspection must close any duplicated ACK writer
 before allowing acknowledgment, while retaining the original pidfd and other
@@ -146,9 +153,9 @@ substitution, changed flags/bytes, same-byte executable replacement and applicat
 death while its parent remains live. This is neither authenticated registration nor
 the no-fork application/proof-custodian deployment.
 The dedicated inherited proof endpoint is now bound as the fourth input on Cargo,
-host and root-observation sides. Next, authenticate messages against the original
-application pidfd and retain a fresh bounded application session independently of
-issuer lifetime. The [startup custody checkpoint](evidence/dev-application-startup-2026-10-04/README.md)
+host and root-observation sides. Registration authenticates messages against the
+original application pidfd and retains a fresh bounded application session
+independently of issuer lifetime. The [startup custody checkpoint](evidence/dev-application-startup-2026-10-04/README.md)
 adds Cargo's separate post-spawn transition before compiler readiness:
 it drops parent ACK and test-readiness writers, captures the original unreaped child's
 pidfd, completes sandbox admission once, and retains the complete occurrence,
@@ -160,22 +167,24 @@ pidfd. A private-field move-only owner also captures the original Cargo pidfd;
 it has no production raw-descriptor constructor or extraction. Live transfer
 revalidates current-parent waitability against the original pidfd, while cleanup
 may retain descriptor/history custody after exit or reaping. The ordinary compiler
-PID-based path and its two-right supervisor wire remain unchanged. The future
-four-right proof registration must use duplicates of these original handles.
+PID-based path and its two-right supervisor wire remain unchanged. The active
+four-right application registration uses duplicates of these original handles.
 The [registration-prerequisite checkpoint](evidence/dev-application-registration-binding-2026-10-04/README.md)
 qualifies this transfer and the inert four-input binding. Both original handles
 and protocol occupy the same pre-spawn allocation through cleanup, without a new
 post-spawn allocation. That checkpoint did not install the dedicated proof endpoint.
 The [proof-endpoint checkpoint](evidence/dev-application-proof-endpoint-2026-10-04/README.md)
 now creates the Cargo-owned nonblocking PASSCRED pair before spawn, closes Cargo's
-application-side alias immediately afterward, and retains the counterpart through
-failure cleanup. Host admission claims and checks the exact fourth occurrence,
+application-side alias immediately afterward, and retains the counterpart until
+single-use transfer or failure cleanup. Host admission claims and checks the exact
+fourth occurrence,
 including strict environment/profile agreement, without widening the sandbox.
 Root observation derives all coordinates and process assertions from the complete
 registration binding and checks Cargo creator credentials, reversed abstract
 addresses, distinct socket objects, original pidfds and source-slot continuity.
 It retains only application-endpoint facts, never an application-side socket alias.
-The three-input observation/host qualifier remains separate. Static single/roster
+The historical three-input observation qualifier remains separate; current
+production host consumers require all four inputs. Static single/roster
 admission and cross-UID ACK EOF/proof HUP are qualified locally; this is not installed
 authenticated application registration, proof custody, or GPU launch authority.
 The join must authenticate Cargo's
@@ -184,9 +193,10 @@ from the process snapshot alone. Then deploy the fixed keyless custodian, join i
 original proof to native invocation premises, and run the selected two-GPU pipeline.
 
 The registration design reuses the supervisor/root registry without another
-listener. The root registry and observation handshake are now implemented as
-described below. Production Cargo/supervisor/host activation and remote proof
-ownership are still required before ordinary application admission.
+listener. The root registry, observation handshake and production
+Cargo/supervisor/host activation are now implemented as described below.
+Composed production startup qualification and remote proof ownership are still
+required before ordinary application admission.
 
 1. Completed prerequisite: the inert canonical application binding is exactly 840 bytes
    containing the full compiler supervisor handoff, exact four-slot occurrence,
@@ -209,8 +219,9 @@ ownership are still required before ordinary application admission.
    prepared pair. Supervisor admission validates both process tokens and direct
    parentage, retaining a candidate Cargo-created proof peer. It cannot independently
    establish the remote slot-4 counterpart: that still requires root observation.
-   Cargo and host activation remain pending. Production supervisor session dispatch
-   now classifies the ordinary/application profiles atomically as described below.
+   Cargo and host now activate this profile; the composed production startup
+   qualification remains pending. Supervisor session dispatch classifies the
+   ordinary/application profiles atomically as described below.
    The accepted handoff alone is not
    authenticated root registration, application readiness, or GPU launch authority.
 3. Implemented [root application registry](evidence/dev-root-application-registry-2026-10-04/README.md):
@@ -223,10 +234,15 @@ ownership are still required before ordinary application admission.
    before replying Installed. Missing/duplicate attachment and attach-after-bind
    reject. Compiler eviction or issuer exit cannot retire the app entry.
 4. Implemented root gate and shared bounded handshake codec: Installed returns a
-   root-created observation-readiness reader. Root retains its writer and waits for
+   root-created observation-readiness reader and a distinct publication writer.
+   Root retains the observation writer and waits for
    authenticated app Hello, exact observation, matching Accept, and issuer binding.
-   It writes/closes the independent gate before sending Ready, so an app that ACKs
-   and unloads immediately cannot race gate publication. The separate application
+   It writes/closes the independent observation gate, then waits for the supervisor's
+   exact session-bound publication record and EOF before sending app Ready. The
+   supervisor commits this reverse gate only after sending Cargo's dedicated
+   readiness record. No fallible issuer-liveness check follows that commit: an app
+   may then ACK, complete its one-use audit, or exit immediately. The publication
+   writer never enters the fourteen-input issuer ABI. The separate application
    table retains no compiler peer and permits only one initial observation per
    registry iteration. Registered observation-only EOF retires without signaling
    a still-live app; startup failure contains the original app before release.
@@ -251,11 +267,22 @@ ownership are still required before ordinary application admission.
    one absolute deadline; failed admission closes the original endpoint. Broker
    and application now share the strict target/procfs parsers, with broker waitid
    and signal-interruption semantics preserved. No application syscall is added.
-   The host API remains inactive: Cargo must transfer the actual four-right
-   application profile and await dedicated readiness; host must register after
-   local admission and before Cargo ACK. Preserve the original startup deadline
-   through child admission, transfer, supervisor response and strict ACK/EOF.
-   Recheck publication currentness after root Ready, immediately before host ACK.
+   The [startup activation checkpoint](evidence/dev-application-startup-activation-2026-10-04/README.md)
+   qualifies the Cargo/host changes and reverse publication gate in component and
+   static-filter campaigns, not their complete production startup composition.
+   Cargo now transfers the actual four-right application profile and accepts only
+   its dedicated readiness. Its proof state distinguishes prepared, retained,
+   transferred and absent compatibility custody; transfer is single-use and leaves
+   the original child/reaper cleanup intact. One absolute startup deadline covers
+   child admission, transfer, supervisor response and strict ACK/EOF.
+   Both production host consumers now require four inputs and root registration
+   after local admission, before ACK, even with test features enabled. One original
+   publication token spans registration and the post-Ready descriptor/currentness
+   checks immediately before ACK. Cargo does not reacquire that lock until app exit.
+   The returned descriptor/roster retains the registered endpoint and original root
+   pidfd through native unload. A live root that closes just this session also
+   fails continuity. Envelope-only tests use explicit feature-gated fixture APIs,
+   never a production fallback.
    Authenticate socket creator, reverse addresses and distinct per-message sender
    credentials against original pidfds. Commit observation before either readiness
    response. The new readiness pipe is not Cargo's ACK pipe: temporary ACK writer
@@ -264,15 +291,19 @@ ownership are still required before ordinary application admission.
 5. Qualify wrong slots/addresses/credentials, reordered and stale pidfds, wrong
    registration/profile, replay, capacity, backpressure, timeout and shutdown.
    One stalled app must not block the registry, and ACK EOF must remain observable.
+   Qualify the complete positive production-context startup under Cargo's actual
+   pre-exec filter, including delayed registration and immediate post-Ready exit.
    Then deploy fixed keyless proof custody and implement the consuming native join.
 
 The bootstrap uses no sandbox-forbidden waitid, pidfd reopening or socket shutdown.
 Its root/UID1000 campaign includes live separate-root success, queued Challenge
 and Ready from an already-reaped root with a retained peer alias, foreign Ready
 senders, wrong pidfds/inputs, exact endpoint substitutions, malformed packets and
-timeout. Helpers install a focused process/socket syscall denylist after libtest
+timeout, plus retirement of a registered endpoint by a still-live root. Helpers
+install a focused process/socket syscall denylist after libtest
 startup; this is not qualification of Cargo's full inherited pre-exec allowlist.
-That static application qualification still belongs in the production startup join.
+The strict static application negative and explicit envelope-only positives do
+not replace successful qualification of the composed production startup join.
 No new publication recovery or lock acquisition belongs in
 registration. Root process identity alone does not measure the fixed custodian.
 Application exit, EOF and containment remain distinct from GPU settlement.
@@ -544,9 +575,9 @@ retains/rechecks installed-path provenance around the exchange and evidence bind
 Later invocation authorization must revalidate those original owners as well.
 The existing hardened issuer implements checks for actual compiler occurrence,
 signing-key custody, ledger currentness and a live independent anchor before signing.
-Its direct remote observation currently lacks the required cross-UID permission;
-that missing authority must be separated from signing and qualified before genuine
-acquisition can pass. Reuse the existing signing mechanism; do not trust the carriage's
+The root-side observer now supplies the separate privileged inspection while the
+issuer remains unprivileged. Genuine acquisition through that deployed composition
+still needs qualification. Reuse the existing signing mechanism; do not trust the carriage's
 self-selected policy or mistake FD195 socket
 credentials for the transferred issuer's identity. No new signing protocol is needed
 for this trusted-local-root/kernel scope.
