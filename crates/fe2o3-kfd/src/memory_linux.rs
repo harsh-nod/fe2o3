@@ -164,6 +164,17 @@ pub(super) struct LinuxCpuMapping {
     reservation_phase: Arc<AtomicU8>,
 }
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_wave_mlp_tiles_v2.rs"]
+mod wave_mlp_tiles_v2;
+#[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_wave_qkv_attention_output_tiles_v6.rs"]
+mod wave_qkv_attention_output_tiles_v6;
+
+#[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_multiwave_join_v1.rs"]
+mod multiwave_join_v1;
+
 const VA_GUARDED: u8 = 0;
 const VA_IDENTITY_MAPPED: u8 = 1;
 const VA_RELEASED: u8 = 2;
@@ -263,6 +274,270 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
         mapping: &mut LinuxCpuMapping,
     ) -> Result<(), MemorySessionError> {
         Self::initialize_engineering_signal_slots(mapping, 1)
+    }
+
+    /// The mapping is fresh and exclusively owned, before any dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_finite_join_state(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 24, 0, 24, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for (index, value) in [1, 3, 0, 0, 0, 0].into_iter().enumerate() {
+            // SAFETY: the entire aligned region was checked before any write.
+            // No GPU or other CPU may access this fresh allocation yet.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Caller retains either fresh unpublished state or confirmed queue completion.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_finite_join_state(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 6], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 24, 0, 24, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: the caller retains the initialized, aligned atomic array;
+            // no reference escapes this backend helper.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh state for Norm0 -> {Key1, Key2}, including one arrival counter per task.
+    /// This does not grant permission to publish a dispatch or reuse live state.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_task_state(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 36, 0, 36, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for (index, value) in [1, 1, 0, 0, 0, 0, 0, 0, 0].into_iter().enumerate() {
+            // SAFETY: the complete aligned region is validated before writing.
+            // The caller exclusively owns fresh, unpublished storage, with no
+            // concurrent CPU or GPU access to any of these nine atomic words.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Read only fresh initialized state or state after confirmed queue completion.
+    /// A terminal state value by itself never permits allocation reclamation.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_task_state(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 9], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 36, 0, 36, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: the caller retains the exact initialized atomic array;
+            // mapping validation precedes access and no reference escapes.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh, exclusively owned QKV V2 state, before any dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_qkv_task_state_v2(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 76, 0, 76, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for index in 0..19 {
+            let value = if index < 2 { 1 } else { 0 };
+            // SAFETY: validate the entire array before writing; the caller
+            // retains fresh storage with no concurrent CPU or GPU access.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Observe fresh QKV V2 state or state after confirmed queue completion.
+    /// Observed terminal values alone never permit allocation reclamation.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_qkv_task_state_v2(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 19], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 76, 0, 76, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: the caller retains the initialized atomic array and the
+            // unpublished/completed lifetime; no reference escapes.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh, exclusively owned Post V3 state, before dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_qkv_post_task_state_v3(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 80, 0, 80, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for index in 0..20 {
+            let value = if index < 2 { 1 } else { 0 };
+            // SAFETY: the entire aligned array was checked; the caller owns
+            // fresh unpublished storage with no concurrent CPU/GPU access.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Observe fresh Post state or state after confirmed queue completion.
+    /// A terminal-looking state is not itself permission to reclaim storage.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_qkv_post_task_state_v3(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 20], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 80, 0, 80, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: caller retains the initialized array and unpublished or
+            // completed lifetime; mapping validation precedes every access.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh, exclusively owned Attention V4 state, before dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_qkv_attention_task_state_v4(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 84, 0, 84, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for index in 0..21 {
+            let value = if index < 2 { 1 } else { 0 };
+            // SAFETY: the entire aligned array was checked; the caller owns
+            // fresh unpublished storage with no concurrent CPU/GPU access.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Observe fresh Attention state or state after confirmed queue completion.
+    /// A terminal-looking state is not itself permission to reclaim storage.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_qkv_attention_task_state_v4(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 21], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 84, 0, 84, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: caller retains the initialized array and unpublished or
+            // completed lifetime; mapping validation precedes every access.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh exclusively owned Output V5 state, before dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_qkv_attention_output_task_state_v5(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 88, 0, 88, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for index in 0..22 {
+            let value = u32::from(index < 2);
+            // SAFETY: exact aligned unpublished storage was checked above.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Observe initialized Output state only before launch or after completion.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_qkv_attention_output_task_state_v5(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 22], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 88, 0, 88, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: caller retains initialized storage outside a live dispatch.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Fresh exclusively owned MLP state, before dispatch publication.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_wave_mlp_task_state_v1(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 44, 0, 44, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        for index in 0..11 {
+            let value = u32::from(index < 2);
+            // SAFETY: exact aligned unpublished storage was checked above.
+            unsafe { pointer.add(index).write(AtomicU32::new(value)) };
+        }
+        Ok(())
+    }
+
+    /// Observe initialized MLP state only before launch or after completion.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn observe_engineering_wave_mlp_task_state_v1(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<[u32; 11], MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 44, 0, 44, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        Ok(core::array::from_fn(|index| {
+            // SAFETY: caller retains initialized storage outside a live dispatch.
+            unsafe { (*pointer.add(index)).load(Ordering::Acquire) }
+        }))
+    }
+
+    /// Already initialized, completed, exclusively owned state, outside every
+    /// dispatch. Do not reconstruct AtomicU32 objects in published storage.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn rearm_engineering_wave_output_task_state_v1(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 88, 0, 88, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        // SAFETY: the private peer-group caller validates initialized typed
+        // storage and quiescence before entering this exact-extent operation.
+        unsafe {
+            (*pointer).store(0, Ordering::Release);
+            for index in 1..22 {
+                (*pointer.add(index)).store(u32::from(index == 1), Ordering::Relaxed);
+            }
+            (*pointer).store(1, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    /// Same idle-only rearm for the eleven initialized MLP atomic words.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn rearm_engineering_wave_mlp_task_state_v1(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer =
+            checked_mapping_pointer(mapping, 44, 0, 44, core::mem::align_of::<AtomicU32>())?
+                .cast::<AtomicU32>();
+        // SAFETY: initialized exact owner-only mapping, after all queues idle.
+        unsafe {
+            (*pointer).store(0, Ordering::Release);
+            for index in 1..11 {
+                (*pointer.add(index)).store(u32::from(index == 1), Ordering::Relaxed);
+            }
+            (*pointer).store(1, Ordering::Release);
+        }
+        Ok(())
     }
 
     /// Caller retains an idle queue: no GPU use of any signal may be pending.
@@ -490,6 +765,114 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
                 result,
             }
         }
+    }
+}
+
+#[cfg(feature = "engineering-gfx950")]
+impl LinuxGfx950MemoryBackend {
+    /// # Safety
+    /// The caller owns a quiescent signal slot: either never published on this
+    /// queue, or its preceding dispatch has completed and retired. No GPU or
+    /// other CPU agent may access the plain timestamp fields during this call.
+    pub(super) unsafe fn arm_raw_completion_timestamps(
+        mapping: &mut LinuxCpuMapping,
+        requested_bytes: usize,
+        fresh: bool,
+    ) -> Result<(), MemorySessionError> {
+        if mapping.reservation_phase.load(Ordering::Acquire) != VA_IDENTITY_MAPPED {
+            return Err(malformed_aql_mapping("timestamp mapping phase"));
+        }
+        let signal = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            0,
+            AMD_SIGNAL_BYTES_V1,
+            AMD_SIGNAL_BYTES_V1,
+        )?;
+        let (kind, value) =
+            Self::observe_completion_signal_state_acquire(mapping, requested_bytes, 0)?;
+        if kind != fe2o3_aql::AMD_SIGNAL_KIND_USER_V1
+            || value
+                != if fresh {
+                    AMD_SIGNAL_VALUE_PENDING_V1
+                } else {
+                    0
+                }
+        {
+            return Err(malformed_aql_mapping(
+                "timestamp signal is not fresh or retired",
+            ));
+        }
+        // SAFETY: the exact initialized signal and quiescence are established
+        // above and by the caller. Clear both sentinels before release-arming.
+        unsafe {
+            signal
+                .add(fe2o3_aql::AMD_SIGNAL_START_TIMESTAMP_OFFSET_V1)
+                .cast::<u64>()
+                .write_volatile(0);
+            signal
+                .add(fe2o3_aql::AMD_SIGNAL_END_TIMESTAMP_OFFSET_V1)
+                .cast::<u64>()
+                .write_volatile(0);
+        }
+        Self::reset_completion_signal_release(mapping, requested_bytes, 0)
+    }
+
+    /// # Safety
+    /// The retained dispatch must be complete and retired, with no signal reuse
+    /// or concurrent writer until this call returns. An acquired zero alone is
+    /// not authority to bypass the caller's packet/frontier/exception checks.
+    pub(super) unsafe fn capture_raw_completion_timestamps(
+        mapping: &mut LinuxCpuMapping,
+        requested_bytes: usize,
+    ) -> Result<[u64; 2], MemorySessionError> {
+        if mapping.reservation_phase.load(Ordering::Acquire) != VA_IDENTITY_MAPPED {
+            return Err(malformed_aql_mapping("timestamp mapping phase"));
+        }
+        let signal = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            0,
+            AMD_SIGNAL_BYTES_V1,
+            AMD_SIGNAL_BYTES_V1,
+        )?;
+        if Self::observe_completion_signal_state_acquire(mapping, requested_bytes, 0)?
+            != (fe2o3_aql::AMD_SIGNAL_KIND_USER_V1, 0)
+        {
+            return Err(malformed_aql_mapping(
+                "timestamp signal is not acquired complete",
+            ));
+        }
+        // SAFETY: completion acquire precedes these exact full-width reads;
+        // the exclusive owner prevents reuse and retains the mapping.
+        let ticks = unsafe {
+            [
+                signal
+                    .add(fe2o3_aql::AMD_SIGNAL_START_TIMESTAMP_OFFSET_V1)
+                    .cast::<u64>()
+                    .read_volatile(),
+                signal
+                    .add(fe2o3_aql::AMD_SIGNAL_END_TIMESTAMP_OFFSET_V1)
+                    .cast::<u64>()
+                    .read_volatile(),
+            ]
+        };
+        if Self::observe_completion_signal_state_acquire(mapping, requested_bytes, 0)?
+            != (fe2o3_aql::AMD_SIGNAL_KIND_USER_V1, 0)
+        {
+            return Err(malformed_aql_mapping(
+                "timestamp signal changed during capture",
+            ));
+        }
+        Ok(ticks)
+    }
+
+    pub(super) fn validate_observed_queue_profile(&self) -> Result<(), MemorySessionError> {
+        crate::engineering_gfx950_profile::validate_profile(
+            self.device.topology_snapshot(),
+            self.device.observation().unique_id(),
+        )
+        .map_err(MemorySessionError::KernelResultMalformed)
     }
 }
 
@@ -1220,6 +1603,18 @@ impl Drop for LinuxCpuMapping {
         // Deliberately no implicit munmap or FREE retry.
     }
 }
+
+#[cfg(all(test, feature = "engineering-gfx950"))]
+#[path = "memory_linux_finite_join_tests.rs"]
+mod finite_join_tests;
+
+#[cfg(all(test, feature = "engineering-gfx950"))]
+#[path = "memory_linux_state_rearm_tests.rs"]
+mod state_rearm_tests;
+
+#[cfg(all(test, feature = "engineering-gfx950"))]
+#[path = "memory_linux_raw_timestamps_tests.rs"]
+mod raw_timestamps_tests;
 
 #[cfg(test)]
 mod tests {

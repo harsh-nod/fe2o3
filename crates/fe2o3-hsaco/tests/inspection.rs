@@ -474,6 +474,146 @@ fn rejects_invalid_target_prefix_and_target_id() {
 }
 
 #[test]
+fn inspects_exact_legacy_and_llvm23_metadata_target_spellings() {
+    for prefix in ["amdgcn-amd-amdhsa--", "amdgpu-amd-amdhsa-unknown-"] {
+        for (target, flags) in [
+            ("gfx942", 0x54c),
+            ("gfx942:xnack-", 0x64c),
+            ("gfx942:sramecc-:xnack+", 0xb4c),
+            ("gfx950", 0x54f),
+            ("gfx950:xnack-", 0x64f),
+        ] {
+            let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+            set_field(
+                &mut document,
+                "amdhsa.target",
+                Value::from(format!("{prefix}{target}")),
+            );
+            let mut bytes = hsaco(&encode(&document), 4, &[b"AMDGPU\0"]);
+            write_u32(&mut bytes, 48, flags);
+            let inspected = inspect(&bytes).unwrap();
+            assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
+            assert_eq!(inspected.target().to_string(), target, "{prefix}{target}");
+        }
+    }
+}
+
+#[test]
+fn rejects_unrecognized_metadata_target_triples() {
+    for target in [
+        "nvptx-amd-amdhsa-unknown-gfx950",
+        "amdgpu-nvidia-amdhsa-unknown-gfx950",
+        "amdgpu-amd-linux-unknown-gfx950",
+        "amdgpu-amd-amdhsa-gnu-gfx950",
+        "amdgpu-amd-amdhsa--gfx950",
+        "amdgcn-amd-amdhsa-unknown-gfx950",
+        "amdgcn-unknown-amdhsa--gfx942",
+        "amdgcn-amd-linux--gfx942",
+        "amdgcn-amd-amdhsa-gnu-gfx942",
+        "AMDGPU-amd-amdhsa-unknown-gfx950",
+        " amdgpu-amd-amdhsa-unknown-gfx950",
+        "amdgpu-amd-amdhsa-gfx950",
+    ] {
+        let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+        set_field(&mut document, "amdhsa.target", Value::from(target));
+        assert_eq!(
+            inspect(&hsaco(&encode(&document), 4, &[b"AMDGPU\0"])),
+            Err(InspectionError::InvalidTargetPrefix),
+            "{target}",
+        );
+    }
+}
+
+#[test]
+fn rejects_malformed_target_suffixes_for_both_metadata_spellings() {
+    for prefix in ["amdgcn-amd-amdhsa--", "amdgpu-amd-amdhsa-unknown-"] {
+        for suffix in [
+            "",
+            "gfx9999",
+            "GFX950",
+            "gfx950-generic",
+            " gfx950",
+            "gfx950 ",
+            "gfx950\0",
+            "gfx950:unknown+",
+            "gfx950:xnack",
+            "gfx950:xnack++",
+            "gfx950:xnack-:xnack-",
+            "gfx950:xnack-:xnack+",
+            "gfx950:sramecc+:sramecc+",
+            "gfx950:",
+            "gfx950:xnack-:",
+        ] {
+            let target = format!("{prefix}{suffix}");
+            let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+            set_field(&mut document, "amdhsa.target", Value::from(target.as_str()));
+            assert_eq!(
+                inspect(&hsaco(&encode(&document), 4, &[b"AMDGPU\0"])),
+                Err(InspectionError::InvalidTargetId),
+                "{target:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_noncanonical_feature_order_for_both_metadata_spellings() {
+    for prefix in ["amdgcn-amd-amdhsa--", "amdgpu-amd-amdhsa-unknown-"] {
+        let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+        set_field(
+            &mut document,
+            "amdhsa.target",
+            Value::from(format!("{prefix}gfx942:xnack+:sramecc-")),
+        );
+        let mut bytes = hsaco(&encode(&document), 4, &[b"AMDGPU\0"]);
+        write_u32(&mut bytes, 48, 0xb4c);
+        assert_eq!(
+            inspect(&bytes),
+            Err(InspectionError::NonCanonicalTargetId),
+            "{prefix}",
+        );
+    }
+}
+
+#[test]
+fn rejects_elf_flag_disagreement_for_both_metadata_spellings() {
+    for prefix in ["amdgcn-amd-amdhsa--", "amdgpu-amd-amdhsa-unknown-"] {
+        let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+        set_field(
+            &mut document,
+            "amdhsa.target",
+            Value::from(format!("{prefix}gfx950:xnack-")),
+        );
+        for flags in [0x64c, 0x74f, 0xa4f, 0x0100_064f] {
+            let mut bytes = hsaco(&encode(&document), 4, &[b"AMDGPU\0"]);
+            write_u32(&mut bytes, 48, flags);
+            assert_eq!(
+                inspect(&bytes),
+                Err(InspectionError::TargetFlagsMismatch),
+                "{prefix}, flags {flags:#x}",
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_duplicate_target_keys_across_metadata_spellings() {
+    let mut document = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
+    set_field(
+        &mut document,
+        "amdhsa.target",
+        Value::from("amdgcn-amd-amdhsa--gfx950:xnack-"),
+    );
+    as_map_mut(&mut document).push((
+        Value::from("amdhsa.target"),
+        Value::from("amdgpu-amd-amdhsa-unknown-gfx950:xnack-"),
+    ));
+    let mut bytes = hsaco(&encode(&document), 4, &[b"AMDGPU\0"]);
+    write_u32(&mut bytes, 48, 0x64f);
+    assert_eq!(inspect(&bytes), Err(InspectionError::DuplicateMapKey));
+}
+
+#[test]
 fn requires_canonical_target_feature_order() {
     let mut noncanonical = metadata((1, 2), vec![valid_kernel("k", "k.kd")]);
     set_field(

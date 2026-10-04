@@ -10,6 +10,7 @@ use crate::{
 };
 
 const TARGET_PREFIX: &str = "amdgcn-amd-amdhsa--";
+const LLVM23_TARGET_PREFIX: &str = "amdgpu-amd-amdhsa-unknown-";
 const MAX_ENTRY_NAME_BYTES: usize = 256;
 const MAX_SEGMENT_BYTES: u64 = 0xffff_ffff;
 
@@ -38,6 +39,7 @@ pub(crate) fn inspect_metadata(
     let target_text = expect_string(required(root, "amdhsa.target")?, "amdhsa.target")?;
     let target_id = target_text
         .strip_prefix(TARGET_PREFIX)
+        .or_else(|| target_text.strip_prefix(LLVM23_TARGET_PREFIX))
         .ok_or(InspectionError::InvalidTargetPrefix)?;
     let target = AmdTargetId::parse(target_id).map_err(|_| InspectionError::InvalidTargetId)?;
     if target.to_string() != target_id {

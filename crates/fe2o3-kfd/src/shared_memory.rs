@@ -1,5 +1,18 @@
 //! Bounded shared KFD VM authority for typed host-visible GTT allocations.
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "shared_memory_gfx950_observed.rs"]
+mod gfx950_observed;
+#[cfg(feature = "engineering-gfx950")]
+pub use gfx950_observed::{
+    Gfx950ObservedBarrierAndV1, Gfx950ObservedBarrierAndV2, Gfx950ObservedFiniteJoinOwnerV1,
+    Gfx950ObservedFiniteJoinRootV1, Gfx950ObservedFiniteJoinV1, Gfx950ObservedInitializedGttV1,
+    Gfx950ObservedMemoryPhaseV1, Gfx950ObservedMemorySessionV1, Gfx950ObservedMultiwaveJoinOwnerV1,
+    Gfx950ObservedMultiwaveJoinRootV1, Gfx950ObservedMultiwaveJoinV1, Gfx950ObservedQueueFailureV1,
+    Gfx950ObservedQueueLifecycleV1, observe_gfx950_queue_barrier_and_v1,
+    observe_gfx950_queue_barrier_and_v2, observe_gfx950_queue_lifecycle_v1,
+};
+
 use core::fmt;
 use core::marker::PhantomData;
 use std::os::fd::BorrowedFd;
@@ -4925,6 +4938,8 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "engineering-gfx950")]
+    include!("shared_memory_gfx950_observed_tests.rs");
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;

@@ -17,9 +17,11 @@ use fe2o3_aql::{
     AqlPreparedBarrierAndV1, AqlPreparedKernelDispatchBatchV2, AqlRingBatchReservationV1,
     AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1,
 };
-use fe2o3_kfd_uapi::{
-    KfdContextSaveAreaHeaderV1, KfdQueueExceptionPayloadAddressV1, KfdSignalEventIdV1,
-};
+use fe2o3_kfd_uapi::{KfdQueueExceptionPayloadAddressV1, KfdSignalEventIdV1};
+
+#[path = "queue_cwsr_geometry.rs"]
+mod cwsr_geometry;
+pub(crate) use cwsr_geometry::CwsrGeometryV1;
 
 #[cfg(test)]
 use fe2o3_aql::{AqlPreparedKernelDispatchV1, is_reviewed_aql_publication_v1};
@@ -54,7 +56,7 @@ pub(crate) enum NativeAqlSubmissionErrorV1 {
 
 /// Side-effect classification for the isolated BARRIER_AND submission.
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum NativeBarrierAndSubmissionFailureV1 {
+pub(crate) enum NativeBarrierAndSubmissionFailureV1 {
     RetryableBeforeSideEffect(NativeAqlSubmissionErrorV1),
     Terminal(NativeAqlSubmissionErrorV1),
 }
@@ -65,13 +67,13 @@ pub(super) enum NativeBarrierAndSubmissionFailureV1 {
 /// monotonic observations, currentness loss, and every possible native side
 /// effect poison it. Only an ordinary full or insufficient-space observation
 /// before the write-counter reservation is retryable.
-pub(super) struct NativeAqlSubmissionOwnerV1 {
+pub(crate) struct NativeAqlSubmissionOwnerV1 {
     ring: AqlSingleProducerRingModelV1,
     phase: SubmissionPhaseV1,
 }
 
 impl NativeAqlSubmissionOwnerV1 {
-    pub(super) fn new(ring_bytes: u32) -> Result<Self, NativeAqlSubmissionErrorV1> {
+    pub(crate) fn new(ring_bytes: u32) -> Result<Self, NativeAqlSubmissionErrorV1> {
         Self::from_counters(ring_bytes, 0, 0)
     }
 
@@ -103,7 +105,7 @@ impl NativeAqlSubmissionOwnerV1 {
         self.submit_batch(AqlPreparedKernelDispatchBatchV2::one(packet), backend)
     }
 
-    pub(super) fn submit_batch<const N: usize, B: NativeAqlSubmissionBackendV1>(
+    pub(crate) fn submit_batch<const N: usize, B: NativeAqlSubmissionBackendV1>(
         &mut self,
         batch: AqlPreparedKernelDispatchBatchV2<N>,
         backend: &mut B,
@@ -177,7 +179,7 @@ impl NativeAqlSubmissionOwnerV1 {
     }
 
     /// Publishes exactly one zero-dependency BARRIER_AND packet.
-    pub(super) fn submit_barrier_and<B: NativeAqlSubmissionBackendV1>(
+    pub(crate) fn submit_barrier_and<B: NativeAqlSubmissionBackendV1>(
         &mut self,
         packet: AqlPreparedBarrierAndV1,
         backend: &mut B,
@@ -266,7 +268,7 @@ fn retryable_occupancy(error: &AqlRingReservationError) -> bool {
     )
 }
 
-pub(super) trait NativeAqlSubmissionBackendV1 {
+pub(crate) trait NativeAqlSubmissionBackendV1 {
     fn check_currentness(&mut self) -> Result<(), NativeAqlSubmissionErrorV1>;
     fn observe_counters_acquire(&mut self) -> Result<(u64, u64), NativeAqlSubmissionErrorV1>;
     fn fetch_add_write_acq_rel(
@@ -365,6 +367,15 @@ pub(crate) fn initialize_invalid_ring(bytes: &mut [u8]) -> Result<(), NativeAqlS
 pub(crate) fn initialize_amd_aql_control(
     bytes: &mut [u8],
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
+    initialize_amd_aql_control_with_raw_timestamps(bytes, false)
+}
+
+/// Only called while the control allocation is exclusively CPU-owned, before
+/// GPU map/CREATE_QUEUE. No active-queue property setter is exposed.
+pub(crate) fn initialize_amd_aql_control_with_raw_timestamps(
+    bytes: &mut [u8],
+    enabled: bool,
+) -> Result<(), NativeAqlSubmissionErrorV1> {
     if bytes.len() != 4096 {
         return Err(NativeAqlSubmissionErrorV1::CounterObservation);
     }
@@ -384,6 +395,11 @@ pub(crate) fn initialize_amd_aql_control(
     let field_offset = crate::queue_resources::AMD_AQL_READ_BASE_OFFSET_FIELD_V1;
     bytes[field_offset..field_offset + core::mem::size_of::<u32>()]
         .copy_from_slice(&crate::queue_resources::AMD_AQL_READ_BASE_OFFSET_VALUE_V1.to_le_bytes());
+    if enabled {
+        let offset = fe2o3_aql::AMD_AQL_QUEUE_PROPERTIES_OFFSET_V1;
+        bytes[offset..offset + 4]
+            .copy_from_slice(&fe2o3_aql::AMD_AQL_QUEUE_ENABLE_PROFILING_V1.to_le_bytes());
+    }
     Ok(())
 }
 
@@ -392,33 +408,7 @@ pub(crate) fn gfx942_cwsr_header_bytes(
     payload: KfdQueueExceptionPayloadAddressV1,
     event_id: KfdSignalEventIdV1,
 ) -> Result<[u8; CWSR_HEADER_BYTES], NativeAqlSubmissionErrorV1> {
-    if xcc >= GFX942_CWSR_XCC_COUNT_V1 {
-        return Err(NativeAqlSubmissionErrorV1::InvalidCwsr("XCC index"));
-    }
-    let debug_offset = u32::try_from(
-        (GFX942_CWSR_XCC_COUNT_V1 - xcc)
-            .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset"))?,
-    )
-    .map_err(|_| NativeAqlSubmissionErrorV1::InvalidCwsr("debug offset width"))?;
-    let header = KfdContextSaveAreaHeaderV1::new_queue_exception(
-        debug_offset,
-        GFX942_CWSR_DEBUG_BYTES_TOTAL_V1,
-        payload,
-        event_id,
-    )
-    .map_err(|_| NativeAqlSubmissionErrorV1::InvalidCwsr("typed header"))?;
-    let mut bytes = [0_u8; CWSR_HEADER_BYTES];
-    for (index, word) in header.wave_state_words().iter().enumerate() {
-        let offset = index * 4;
-        bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
-    }
-    bytes[16..20].copy_from_slice(&header.debug_offset().to_le_bytes());
-    bytes[20..24].copy_from_slice(&header.debug_size().to_le_bytes());
-    bytes[24..32].copy_from_slice(&header.error_payload_address().to_le_bytes());
-    bytes[32..36].copy_from_slice(&header.error_event_id().to_le_bytes());
-    bytes[36..40].copy_from_slice(&header.reserved().to_le_bytes());
-    Ok(bytes)
+    CwsrGeometryV1::Gfx942.header(xcc, payload, event_id)
 }
 
 /// Reproduces the pinned ROCr `fill_cwsr_header` layout with one exact event.
@@ -427,22 +417,7 @@ pub(crate) fn initialize_gfx942_cwsr_headers(
     payload: KfdQueueExceptionPayloadAddressV1,
     event_id: KfdSignalEventIdV1,
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
-    if bytes.len() != GFX942_CWSR_TOTAL_BYTES_V1 {
-        return Err(NativeAqlSubmissionErrorV1::InvalidCwsr("mapping length"));
-    }
-    for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
-        let offset = xcc
-            .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("header offset"))?;
-        let end = offset
-            .checked_add(CWSR_HEADER_BYTES)
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("header end"))?;
-        let destination = bytes
-            .get_mut(offset..end)
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidCwsr("header range"))?;
-        destination.copy_from_slice(&gfx942_cwsr_header_bytes(xcc, payload, event_id)?);
-    }
-    Ok(())
+    CwsrGeometryV1::Gfx942.initialize(bytes, payload, event_id)
 }
 
 #[cfg(test)]
@@ -756,6 +731,36 @@ mod tests {
         );
         assert!(initialize_amd_aql_control(&mut [0; 4095]).is_err());
         assert!(initialize_amd_aql_control(&mut [0; 4097]).is_err());
+    }
+
+    #[test]
+    fn raw_timestamp_control_changes_only_the_profiling_bit_before_queue_creation() {
+        #[repr(align(64))]
+        struct Page([u8; 4096]);
+        let mut off = Page([0xa5; 4096]);
+        let mut on = Page([0xa5; 4096]);
+        initialize_amd_aql_control_with_raw_timestamps(&mut off.0, false).unwrap();
+        initialize_amd_aql_control_with_raw_timestamps(&mut on.0, true).unwrap();
+        let differences = off
+            .0
+            .iter()
+            .zip(on.0)
+            .enumerate()
+            .filter_map(|(i, (&a, b))| (a != b).then_some((i, a, b)))
+            .collect::<Vec<_>>();
+        assert_eq!(differences, [(0xb4, 0, 8)]);
+        let mut legacy = Page([0; 4096]);
+        initialize_amd_aql_control(&mut legacy.0).unwrap();
+        assert_eq!(legacy.0, off.0);
+    }
+
+    #[test]
+    fn raw_timestamp_control_rejects_wrong_extent_without_modifying_bytes() {
+        for size in [0, 4095, 4097] {
+            let mut bytes = vec![0xa5; size];
+            assert!(initialize_amd_aql_control_with_raw_timestamps(&mut bytes, true).is_err());
+            assert!(bytes.iter().all(|&byte| byte == 0xa5));
+        }
     }
 
     #[test]

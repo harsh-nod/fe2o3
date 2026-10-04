@@ -1098,6 +1098,13 @@ pub const fn classify_acquired_completion_value_v1(value: i64) -> AqlCompletionO
     }
 }
 
+/// Installed ROCr 7.3 queue/signal ABI constants. These inert offsets do not
+/// authorize a mapping, enable profiling, or establish hardware clock units.
+pub const AMD_AQL_QUEUE_PROPERTIES_OFFSET_V1: usize = 0xb4;
+pub const AMD_AQL_QUEUE_ENABLE_PROFILING_V1: u32 = 1 << 3;
+pub const AMD_SIGNAL_START_TIMESTAMP_OFFSET_V1: usize = 32;
+pub const AMD_SIGNAL_END_TIMESTAMP_OFFSET_V1: usize = 40;
+
 /// Exact 64-byte ROCr user-signal prefix used by AQL completion packets.
 ///
 /// Event fields stay zero, so this value only supports bounded busy polling.
@@ -1176,6 +1183,10 @@ const _: () = {
     assert!(align_of::<AmdBusyCompletionSignalV1>() == AMD_SIGNAL_ALIGNMENT_V1);
     assert!(offset_of!(AmdBusyCompletionSignalV1, kind) == 0);
     assert!(offset_of!(AmdBusyCompletionSignalV1, value) == 8);
+    assert!(
+        offset_of!(AmdBusyCompletionSignalV1, start_ts) == AMD_SIGNAL_START_TIMESTAMP_OFFSET_V1
+    );
+    assert!(offset_of!(AmdBusyCompletionSignalV1, end_ts) == AMD_SIGNAL_END_TIMESTAMP_OFFSET_V1);
 };
 
 #[cfg(test)]

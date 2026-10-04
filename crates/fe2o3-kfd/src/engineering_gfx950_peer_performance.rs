@@ -131,6 +131,14 @@ impl Gfx950EngineeringPeerGroupV1 {
         self.require_active()?;
         let result = (|| {
             for context in &self.contexts {
+                host_observation::require_observational_policy(
+                    context.host_observation.is_some(),
+                    Some(PerformanceOptions {
+                        cache_kernel_admission,
+                        operational_currentness,
+                        profile: false,
+                    }),
+                )?;
                 require_fresh_configuration(
                     context.performance.is_some(),
                     context.next_buffer,

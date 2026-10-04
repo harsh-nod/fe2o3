@@ -34,9 +34,35 @@ mod engineering_gfx950;
     target_arch = "x86_64"
 ))]
 pub use engineering_gfx950::{
-    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
-    Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
-    run_gfx950_engineering_worker_unchecked_v1,
+    Gfx950EngineeringFiniteJoinResultV1, Gfx950EngineeringPeerBufferV1,
+    Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
+    Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
+    Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringPeerKernelV1,
+    Gfx950EngineeringPeerPointerV1, Gfx950EngineeringPeerWaveMlpStateV1,
+    Gfx950EngineeringPeerWaveMlpTilesDispatchV2, Gfx950EngineeringPeerWaveMlpTilesRoundV2,
+    Gfx950EngineeringPeerWaveMlpTilesStateV2, Gfx950EngineeringPeerWaveOutputStateV5,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    Gfx950EngineeringRawTimestampObservationV1, Gfx950EngineeringResidentLayerMlpWorkerResultV1,
+    Gfx950EngineeringResidentLayerObservationV1, Gfx950EngineeringResidentLayerRankV1,
+    Gfx950EngineeringResidentLayerResultV1, Gfx950EngineeringResidentPrefixObservationV1,
+    Gfx950EngineeringResidentPrefixRankV1, Gfx950EngineeringResidentPrefixResultV1,
+    Gfx950EngineeringSharedHostCountersV1, Gfx950EngineeringWaveMlpTasksResultV1,
+    Gfx950EngineeringWaveMlpTilesResultV2, Gfx950EngineeringWaveQkvAttentionOutputTasksResultV5,
+    Gfx950EngineeringWaveQkvAttentionTasksResultV4, Gfx950EngineeringWaveQkvPostTasksResultV3,
+    Gfx950EngineeringWaveQkvTasksResultV2, Gfx950EngineeringWaveTasksResultV1,
+    execute_gfx950_engineering_finite_join_unchecked_v1,
+    execute_gfx950_engineering_resident_layer_mlp_worker_tp2_unchecked_v1,
+    execute_gfx950_engineering_resident_layer_tp2_unchecked_v1,
+    execute_gfx950_engineering_resident_prefix_tp2_unchecked_v1,
+    execute_gfx950_engineering_wave_mlp_tasks_unchecked_v1,
+    execute_gfx950_engineering_wave_mlp_tiles_unchecked_v2,
+    execute_gfx950_engineering_wave_qkv_attention_output_tasks_unchecked_v5,
+    execute_gfx950_engineering_wave_qkv_attention_tasks_unchecked_v4,
+    execute_gfx950_engineering_wave_qkv_post_tasks_unchecked_v3,
+    execute_gfx950_engineering_wave_qkv_tasks_unchecked_v2,
+    execute_gfx950_engineering_wave_tasks_unchecked_v1, run_gfx950_engineering_worker_unchecked_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

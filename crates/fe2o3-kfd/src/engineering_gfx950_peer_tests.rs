@@ -354,6 +354,7 @@ fn group_tokens_are_incarnation_bound_and_failures_poison_without_native_access(
     let record = BufferRecord {
         token,
         local_id: 1,
+        kind: BufferKind::PublicVram,
         mapping: PeerMapping {
             peers: vec![2],
             mapped: 1,

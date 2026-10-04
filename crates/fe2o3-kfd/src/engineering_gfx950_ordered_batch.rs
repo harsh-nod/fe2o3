@@ -500,6 +500,7 @@ impl Context {
         timeout_ms: u32,
     ) -> Result<ResponseV1> {
         let result = (|| {
+            raw_timestamps::require_capture_mode(self.raw_timestamps_enabled, false)?;
             let expected = CommandV1::DispatchOrderedBatch {
                 dispatches: dispatches.clone(),
                 timeout_ms,

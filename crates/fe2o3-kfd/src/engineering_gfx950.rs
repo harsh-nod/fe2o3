@@ -29,13 +29,84 @@ use crate::queue_linux::{
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
+#[path = "engineering_gfx950_finite_join.rs"]
+mod finite_join;
 #[path = "engineering_gfx950_ordered_batch.rs"]
 mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
 mod peer;
+#[path = "engineering_gfx950_raw_timestamps.rs"]
+mod raw_timestamps;
+pub use raw_timestamps::Gfx950EngineeringRawTimestampObservationV1;
+#[path = "engineering_gfx950_resident_layer_tp2_v1.rs"]
+mod resident_layer_tp2_v1;
+#[path = "engineering_gfx950_resident_prefix_tp2_v1.rs"]
+mod resident_prefix_tp2_v1;
+#[path = "engineering_gfx950_wave_mlp_tasks_v1.rs"]
+mod wave_mlp_tasks_v1;
+#[path = "engineering_gfx950_wave_mlp_tiles_v2.rs"]
+mod wave_mlp_tiles_v2;
+#[path = "engineering_gfx950_wave_qkv_attention_output_tasks_v5.rs"]
+mod wave_qkv_attention_output_tasks_v5;
+#[path = "engineering_gfx950_wave_qkv_attention_output_tiles_v6.rs"]
+mod wave_qkv_attention_output_tiles_v6;
+#[path = "engineering_gfx950_wave_qkv_attention_tasks_v4.rs"]
+mod wave_qkv_attention_tasks_v4;
+#[path = "engineering_gfx950_wave_qkv_post_tasks_v3.rs"]
+mod wave_qkv_post_tasks_v3;
+#[path = "engineering_gfx950_wave_qkv_tasks_v2.rs"]
+mod wave_qkv_tasks_v2;
+#[path = "engineering_gfx950_wave_tasks.rs"]
+mod wave_tasks;
+pub use finite_join::{
+    Gfx950EngineeringFiniteJoinResultV1, execute_gfx950_engineering_finite_join_unchecked_v1,
+};
 pub use peer::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
-    Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
+    Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
+    Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringPeerKernelV1,
+    Gfx950EngineeringPeerPointerV1, Gfx950EngineeringPeerWaveMlpStateV1,
+    Gfx950EngineeringPeerWaveMlpTilesDispatchV2, Gfx950EngineeringPeerWaveMlpTilesRoundV2,
+    Gfx950EngineeringPeerWaveMlpTilesStateV2, Gfx950EngineeringPeerWaveOutputStateV5,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    Gfx950EngineeringSharedHostCountersV1,
+};
+pub use resident_layer_tp2_v1::{
+    Gfx950EngineeringResidentLayerMlpWorkerResultV1, Gfx950EngineeringResidentLayerObservationV1,
+    Gfx950EngineeringResidentLayerRankV1, Gfx950EngineeringResidentLayerResultV1,
+    execute_gfx950_engineering_resident_layer_mlp_worker_tp2_unchecked_v1,
+    execute_gfx950_engineering_resident_layer_tp2_unchecked_v1,
+};
+pub use resident_prefix_tp2_v1::{
+    Gfx950EngineeringResidentPrefixObservationV1, Gfx950EngineeringResidentPrefixRankV1,
+    Gfx950EngineeringResidentPrefixResultV1,
+    execute_gfx950_engineering_resident_prefix_tp2_unchecked_v1,
+};
+pub use wave_mlp_tasks_v1::{
+    Gfx950EngineeringWaveMlpTasksResultV1, execute_gfx950_engineering_wave_mlp_tasks_unchecked_v1,
+};
+pub use wave_mlp_tiles_v2::{
+    Gfx950EngineeringWaveMlpTilesResultV2, execute_gfx950_engineering_wave_mlp_tiles_unchecked_v2,
+};
+pub use wave_qkv_attention_output_tasks_v5::{
+    Gfx950EngineeringWaveQkvAttentionOutputTasksResultV5,
+    execute_gfx950_engineering_wave_qkv_attention_output_tasks_unchecked_v5,
+};
+pub use wave_qkv_attention_tasks_v4::{
+    Gfx950EngineeringWaveQkvAttentionTasksResultV4,
+    execute_gfx950_engineering_wave_qkv_attention_tasks_unchecked_v4,
+};
+pub use wave_qkv_post_tasks_v3::{
+    Gfx950EngineeringWaveQkvPostTasksResultV3,
+    execute_gfx950_engineering_wave_qkv_post_tasks_unchecked_v3,
+};
+pub use wave_qkv_tasks_v2::{
+    Gfx950EngineeringWaveQkvTasksResultV2, execute_gfx950_engineering_wave_qkv_tasks_unchecked_v2,
+};
+pub use wave_tasks::{
+    Gfx950EngineeringWaveTasksResultV1, execute_gfx950_engineering_wave_tasks_unchecked_v1,
 };
 
 type Result<T> = std::result::Result<T, String>;
@@ -82,6 +153,7 @@ struct PendingDispatch {
     wait_started: Option<Instant>,
     profiled: bool,
     completed: bool,
+    raw_timestamps: Option<[u64; 2]>,
 }
 
 /// Crate-private owner used only by explicit disposable-process engineering
@@ -108,7 +180,9 @@ struct Context {
     last_observed_read: u64,
     performance: Option<PerformanceOptions>,
     counters: PerformanceCountersV1,
+    host_observation: Option<peer::host_observation::HostObservationState>,
     ordered_batch_poisoned: bool,
+    raw_timestamps_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -181,6 +255,13 @@ const CWSR: usize = 5;
 
 impl Context {
     fn open(device: CheckedGfx950XnackMinusDevice) -> Result<Self> {
+        Self::open_with_raw_timestamps(device, false)
+    }
+
+    fn open_with_raw_timestamps(
+        device: CheckedGfx950XnackMinusDevice,
+        raw_timestamps_enabled: bool,
+    ) -> Result<Self> {
         let unique_id = device.observation().unique_id();
         validate_profile(device.topology_snapshot(), unique_id).map_err(str::to_owned)?;
         if rustix::param::page_size() != PAGE_BYTES {
@@ -212,7 +293,9 @@ impl Context {
             last_observed_read: 0,
             performance: None,
             counters: PerformanceCountersV1::default(),
+            host_observation: None,
             ordered_batch_poisoned: false,
+            raw_timestamps_enabled,
         };
         if let Err(error) = context.initialize() {
             std::mem::forget(context);
@@ -251,10 +334,17 @@ impl Context {
             |bytes| crate::queue::submit::initialize_invalid_ring(bytes).map_err(explain),
         )?;
         self.internal.push(ring);
+        let raw_timestamps_enabled = self.raw_timestamps_enabled;
         let control = self.allocate_resource(
             PAGE_BYTES,
             KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL,
-            |bytes| crate::queue::submit::initialize_amd_aql_control(bytes).map_err(explain),
+            |bytes| {
+                crate::queue::submit::initialize_amd_aql_control_with_raw_timestamps(
+                    bytes,
+                    raw_timestamps_enabled,
+                )
+                .map_err(explain)
+            },
         )?;
         self.internal.push(control);
         Backend::initialize_engineering_error_payload(&mut self.internal[CONTROL].mapping)
@@ -340,12 +430,18 @@ impl Context {
     }
 
     fn profile_started(&self) -> Option<Instant> {
-        self.performance
-            .filter(|options| options.profile)
-            .map(|_| Instant::now())
+        peer::host_observation::timers_enabled(self.performance, self.host_observation.is_some())
+            .then(Instant::now)
     }
 
     fn configure_performance(&mut self, options: PerformanceOptions) -> Result<()> {
+        peer::host_observation::require_observational_policy(
+            self.host_observation.is_some(),
+            Some(options),
+        )?;
+        if self.raw_timestamps_enabled && options.operational_currentness {
+            return Err("raw timestamp queues retain full currentness checks".into());
+        }
         require_fresh_configuration(
             self.performance.is_some(),
             self.next_buffer,
@@ -801,6 +897,18 @@ impl Context {
         prepared: PreparedDispatch,
         timeout_ms: u32,
     ) -> Result<PendingDispatch> {
+        // SAFETY: unchanged dispatch contract; the closed mode check rejects
+        // this legacy route on queues opened for timestamp capture.
+        unsafe { self.publish_prepared_dispatch_with_raw_timestamps(prepared, timeout_ms, false) }
+    }
+
+    unsafe fn publish_prepared_dispatch_with_raw_timestamps(
+        &mut self,
+        prepared: PreparedDispatch,
+        timeout_ms: u32,
+        capture: bool,
+    ) -> Result<PendingDispatch> {
+        raw_timestamps::require_capture_mode(self.raw_timestamps_enabled, capture)?;
         require_completed_frontier(self.completed_write, self.ring.write())?;
         if timeout_ms == 0 || timeout_ms > 600_000 {
             return Err("dispatch timeout is outside 1..600000 ms".into());
@@ -830,8 +938,25 @@ impl Context {
                 mapped[..bytes.len()].copy_from_slice(&bytes);
             },
         );
-        Backend::reset_completion_signal_release(&mut self.internal[SIGNAL].mapping, PAGE_BYTES, 0)
+        if capture {
+            // SAFETY: no previous dispatch remains; the retained frontier is
+            // exact and no publication has occurred for this reservation.
+            unsafe {
+                Backend::arm_raw_completion_timestamps(
+                    &mut self.internal[SIGNAL].mapping,
+                    PAGE_BYTES,
+                    self.completed_write == 0,
+                )
+            }
             .map_err(explain)?;
+        } else {
+            Backend::reset_completion_signal_release(
+                &mut self.internal[SIGNAL].mapping,
+                PAGE_BYTES,
+                0,
+            )
+            .map_err(explain)?;
+        }
         let packet = AqlKernelDispatchPacketV1::new_unpublished(
             geometry,
             0,
@@ -869,6 +994,7 @@ impl Context {
             wait_started: self.profile_started(),
             profiled: publish_started.is_some(),
             completed: false,
+            raw_timestamps: None,
         })
     }
 
@@ -918,6 +1044,20 @@ impl Context {
         self.completed_write = pending.next;
         record_elapsed(&mut self.counters.dispatch_wait_ns, pending.wait_started)?;
         self.check_idle()?;
+        if self.raw_timestamps_enabled {
+            // SAFETY: genuine completion, counter/exception/frontier and idle
+            // checks succeeded. The sole queue signal cannot be reused while
+            // this pending dispatch and exclusive context borrow are retained.
+            let ticks = unsafe {
+                Backend::capture_raw_completion_timestamps(
+                    &mut self.internal[SIGNAL].mapping,
+                    PAGE_BYTES,
+                )
+            }
+            .map_err(explain)?;
+            raw_timestamps::require_ticks(ticks)?;
+            pending.raw_timestamps = Some(ticks);
+        }
         if pending.profiled {
             add_counter(&mut self.counters.dispatches, 1)?;
         }

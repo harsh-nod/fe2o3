@@ -270,4 +270,83 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn a_later_publication_fence_cannot_reuse_an_earlier_topology_observation() {
+        for count in [2, 8] {
+            let mut backend = Recording::new(count);
+            run_fence(&mut backend).unwrap();
+            backend.events.clear();
+            backend.observed = 8;
+            assert!(run_fence(&mut backend).is_err());
+            assert_eq!(
+                backend
+                    .events
+                    .iter()
+                    .filter(|event| *event == "discover")
+                    .count(),
+                1
+            );
+            assert_eq!(backend.events.last().unwrap(), "poison");
+            assert!(backend.poisoned.iter().all(|value| *value));
+            assert!(
+                !backend
+                    .events
+                    .iter()
+                    .any(|event| event.starts_with("after:"))
+            );
+        }
+    }
+
+    #[test]
+    fn each_repeated_full_fence_keeps_generation_and_all_mutable_checks() {
+        for count in [2, 8] {
+            for checkpoint in 0..2 {
+                let mut backend = Recording::new(count);
+                for _ in 0..checkpoint {
+                    run_fence(&mut backend).unwrap();
+                }
+                backend.events.clear();
+                backend.change_at = Some(format!("after:{}", count - 1));
+                assert!(run_fence(&mut backend).is_err());
+                assert_eq!(
+                    backend
+                        .events
+                        .iter()
+                        .filter(|event| event.starts_with("before:"))
+                        .count(),
+                    count
+                );
+                assert_eq!(
+                    backend
+                        .events
+                        .iter()
+                        .filter(|event| *event == "discover")
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    backend
+                        .events
+                        .iter()
+                        .filter(|event| event.starts_with("compare:"))
+                        .count(),
+                    count
+                );
+                assert_eq!(
+                    backend
+                        .events
+                        .iter()
+                        .filter(|event| event.starts_with("after:"))
+                        .count(),
+                    count
+                );
+                assert_eq!(
+                    &backend.events[backend.events.len() - 2..],
+                    ["finish", "poison"]
+                );
+                assert!(backend.poisoned.iter().all(|value| *value));
+            }
+        }
+    }
 }

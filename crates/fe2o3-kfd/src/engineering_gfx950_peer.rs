@@ -9,8 +9,42 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod performance;
 pub use performance::Gfx950EngineeringPeerDispatchV1;
 
+#[path = "engineering_gfx950_peer_host_observation_v1.rs"]
+pub(super) mod host_observation;
+pub use host_observation::{
+    Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
+    Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringSharedHostCountersV1,
+};
+
 #[path = "engineering_gfx950_peer_round.rs"]
 mod round;
+
+#[path = "engineering_gfx950_peer_capacity_v1.rs"]
+mod capacity_v1;
+
+#[path = "engineering_gfx950_peer_wave_output_state_v5.rs"]
+mod wave_output_state_v5;
+pub use wave_output_state_v5::Gfx950EngineeringPeerWaveOutputStateV5;
+#[path = "engineering_gfx950_peer_wave_mlp_state_v1.rs"]
+mod wave_mlp_state_v1;
+pub use wave_mlp_state_v1::Gfx950EngineeringPeerWaveMlpStateV1;
+#[path = "engineering_gfx950_peer_wave_mlp_tiles_state_v2.rs"]
+mod wave_mlp_tiles_state_v2;
+pub use wave_mlp_tiles_state_v2::Gfx950EngineeringPeerWaveMlpTilesStateV2;
+#[path = "engineering_gfx950_peer_wave_mlp_tiles_v2.rs"]
+mod wave_mlp_tiles_v2;
+#[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_state_v6.rs"]
+mod wave_qkv_attention_output_tiles_state_v6;
+pub use wave_qkv_attention_output_tiles_state_v6::Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6;
+#[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_v6.rs"]
+mod wave_qkv_attention_output_tiles_v6;
+pub use wave_mlp_tiles_v2::{
+    Gfx950EngineeringPeerWaveMlpTilesDispatchV2, Gfx950EngineeringPeerWaveMlpTilesRoundV2,
+};
+pub use wave_qkv_attention_output_tiles_v6::{
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6,
+    Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
+};
 
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
@@ -178,10 +212,27 @@ impl PeerMapping {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BufferKind {
+    PublicVram,
+    WaveOutputStateV5,
+    WaveMlpStateV1,
+    WaveMlpTilesStateV2,
+    WaveQkvAttentionOutputTilesStateV6,
+}
+
 struct BufferRecord {
     token: Gfx950EngineeringPeerBufferV1,
     local_id: u64,
     mapping: PeerMapping,
+    kind: BufferKind,
+}
+
+fn require_public_vram(record: &BufferRecord) -> Result<()> {
+    if record.kind != BufferKind::PublicVram {
+        return Err("coherent wave state requires its typed atomic observer".into());
+    }
+    Ok(())
 }
 
 struct NativeTransaction<'a> {
@@ -193,11 +244,7 @@ struct NativeTransaction<'a> {
 
 fn check_contexts(contexts: &mut [Context], shared_full_currentness: bool) -> Result<()> {
     if shared_full_currentness {
-        let mut devices = contexts
-            .iter_mut()
-            .map(|context| context.backend.engineering_peer_device())
-            .collect::<Vec<_>>();
-        crate::device::check_engineering_group_currentness(&mut devices).map_err(explain)?;
+        host_observation::shared_currentness(contexts, host_observation::SharedScope::GroupFence)?;
         for context in contexts {
             context.check_idle()?;
         }
@@ -378,6 +425,26 @@ impl Gfx950EngineeringPeerGroupV1 {
     /// fe2o3_kfd::Gfx950EngineeringPeerGroupV1::open_unchecked(&[1, 2]).unwrap();
     /// ```
     pub unsafe fn open_unchecked(unique_ids: &[u64]) -> Result<Self> {
+        Self::open_with_timestamp_mode(unique_ids, false)
+    }
+
+    /// Opens fresh queues with completion-signal profiling enabled before
+    /// CREATE_QUEUE. Only `dispatch_round_with_raw_timestamps_unchecked` may
+    /// publish on these queues; legacy dispatch APIs fail terminally.
+    ///
+    /// Timestamps are raw per-device clock observations, not calibrated time,
+    /// kernel-active cycles, or evidence of overlap between different GPUs.
+    /// Queue rollover preserves this mode and changes the retained queue epoch.
+    ///
+    /// # Safety
+    /// All disposable-process, exclusive ownership and terminal-failure
+    /// obligations of `open_unchecked` apply unchanged. This is experimental
+    /// engineering instrumentation, not a protected production capability.
+    pub unsafe fn open_raw_timestamps_unchecked(unique_ids: &[u64]) -> Result<Self> {
+        Self::open_with_timestamp_mode(unique_ids, true)
+    }
+
+    fn open_with_timestamp_mode(unique_ids: &[u64], capture: bool) -> Result<Self> {
         checked_roster(unique_ids)?;
         let incarnation = NEXT_GROUP
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -401,7 +468,9 @@ impl Gfx950EngineeringPeerGroupV1 {
                     .map_err(explain)?
                     .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))
                     .map_err(explain)?;
-                group.contexts.push(Context::open(device)?);
+                group
+                    .contexts
+                    .push(Context::open_with_raw_timestamps(device, capture)?);
             }
             check_contexts(&mut group.contexts, group.shared_full_currentness)?;
             let snapshot = group.contexts[0].backend.engineering_peer_topology();
@@ -513,6 +582,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                     token,
                     local_id,
                     mapping: PeerMapping::new(peer_ids)?,
+                    kind: BufferKind::PublicVram,
                 },
             );
             let record = self.buffers.get_mut(&id).ok_or("missing new peer record")?;
@@ -539,6 +609,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                 return Err("peer host write limit".into());
             }
             let record = self.validate_token(buffer)?;
+            require_public_vram(record)?;
             let local = record.local_id;
             check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             self.contexts[buffer.owner].write(local, offset, bytes)?;
@@ -558,7 +629,9 @@ impl Gfx950EngineeringPeerGroupV1 {
             if bytes > MAX_TRANSFER_BYTES_V1 {
                 return Err("peer host read limit".into());
             }
-            let local = self.validate_token(buffer)?.local_id;
+            let record = self.validate_token(buffer)?;
+            require_public_vram(record)?;
+            let local = record.local_id;
             check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let result = self.contexts[buffer.owner].read(local, offset, bytes)?;
             check_contexts(&mut self.contexts, self.shared_full_currentness)?;

@@ -323,6 +323,7 @@ pub(crate) struct CwsrShadowPlanV1 {
     base: u64,
     bytes: usize,
     page_bytes: usize,
+    geometry: crate::queue::submit::CwsrGeometryV1,
 }
 
 const CWSR_CONTROL_STACK_PAGES_PER_XCC_V1: usize =
@@ -336,11 +337,21 @@ impl CwsrShadowPlanV1 {
         bytes: usize,
         page_bytes: usize,
     ) -> Result<Self, LinuxDoorbellErrorV1> {
-        use crate::queue::submit::{
-            GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1,
-            GFX942_CWSR_XCC_COUNT_V1,
-        };
-        if bytes != GFX942_CWSR_TOTAL_BYTES_V1 || page_bytes != 4096 {
+        Self::from_owned_reservation_for_geometry(
+            base,
+            bytes,
+            page_bytes,
+            crate::queue::submit::CwsrGeometryV1::Gfx942,
+        )
+    }
+
+    pub(crate) fn from_owned_reservation_for_geometry(
+        base: u64,
+        bytes: usize,
+        page_bytes: usize,
+        geometry: crate::queue::submit::CwsrGeometryV1,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        if bytes != geometry.total_bytes() || page_bytes != 4096 {
             return Err(LinuxDoorbellErrorV1::Shadow("reservation geometry"));
         }
         if !base.is_multiple_of(page_bytes as u64) {
@@ -349,15 +360,13 @@ impl CwsrShadowPlanV1 {
         let end = base
             .checked_add(bytes as u64)
             .ok_or(LinuxDoorbellErrorV1::Shadow("reservation overflow"))?;
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+        for xcc in 0..geometry.xccs() {
             let offset = xcc
-                .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
+                .checked_mul(geometry.context_bytes())
                 .ok_or(LinuxDoorbellErrorV1::Shadow("XCC offset"))?;
             let control_stack_end = base
                 .checked_add(offset as u64)
-                .and_then(|address| {
-                    address.checked_add(u64::from(crate::GFX942_CONTROL_STACK_BYTES_PER_XCC_V1))
-                })
+                .and_then(|address| address.checked_add(geometry.control_bytes() as u64))
                 .ok_or(LinuxDoorbellErrorV1::Shadow("XCC control-stack overflow"))?;
             if control_stack_end > end {
                 return Err(LinuxDoorbellErrorV1::Shadow("XCC control-stack range"));
@@ -367,6 +376,7 @@ impl CwsrShadowPlanV1 {
             base,
             bytes,
             page_bytes,
+            geometry,
         })
     }
 }
@@ -905,6 +915,7 @@ pub(crate) struct LinuxCwsrShadowPagesV1 {
     page_bytes: usize,
     payload_page_active: bool,
     active: bool,
+    geometry: crate::queue::submit::CwsrGeometryV1,
 }
 
 pub(crate) struct LinuxUnpublishedCwsrShadowPagesV1 {
@@ -925,23 +936,22 @@ impl LinuxCwsrShadowPagesV1 {
         plan: CwsrShadowPlanV1,
         event: &LinuxQueueExceptionEventV1,
     ) -> Result<LinuxUnpublishedCwsrShadowPagesV1, LinuxDoorbellErrorV1> {
-        use crate::queue::submit::{
-            CWSR_HEADER_BYTES, GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_XCC_COUNT_V1,
-            gfx942_cwsr_header_bytes,
-        };
+        use crate::queue::submit::CWSR_HEADER_BYTES;
         if !event.active || event.poisoned || event.binding.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::Event("shadow event state"));
         }
         if plan.page_bytes != 4096
-            || crate::GFX942_CONTROL_STACK_BYTES_PER_XCC_V1 as usize
+            || plan.geometry.control_bytes()
                 != CWSR_CONTROL_STACK_PAGES_PER_XCC_V1 * plan.page_bytes
+            || plan.geometry.xccs() * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1
+                != GFX942_CWSR_SHADOW_PAGES_V1
         {
             return Err(LinuxDoorbellErrorV1::Shadow("control-stack page geometry"));
         }
         let mut pages = Vec::with_capacity(GFX942_CWSR_SHADOW_PAGES_V1);
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+        for xcc in 0..plan.geometry.xccs() {
             let xcc_offset = xcc
-                .checked_mul(GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1)
+                .checked_mul(plan.geometry.context_bytes())
                 .ok_or(LinuxDoorbellErrorV1::Shadow("XCC offset"))?;
             for control_page in 0..CWSR_CONTROL_STACK_PAGES_PER_XCC_V1 {
                 let offset = control_page
@@ -1011,11 +1021,12 @@ impl LinuxCwsrShadowPagesV1 {
             // SAFETY: the exact aligned payload word is exclusively owned and
             // was not previously initialized as a Rust object.
             unsafe { core::ptr::write_volatile(payload.as_ptr(), 0_u64) };
-            for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+            for xcc in 0..plan.geometry.xccs() {
                 let page = pages[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-                let header =
-                    gfx942_cwsr_header_bytes(xcc, payload_observation, event.binding.event_id)
-                        .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header"))?;
+                let header = plan
+                    .geometry
+                    .header(xcc, payload_observation, event.binding.event_id)
+                    .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header"))?;
                 debug_assert_eq!(header.len(), CWSR_HEADER_BYTES);
                 // SAFETY: each exact page has at least 40 writable bytes and
                 // no reference or pointer escapes this boundary.
@@ -1044,6 +1055,7 @@ impl LinuxCwsrShadowPagesV1 {
             page_bytes: plan.page_bytes,
             payload_page_active: true,
             active: true,
+            geometry: plan.geometry,
         };
         admit_installed_cwsr_shadows(owner).map(|shadows| LinuxUnpublishedCwsrShadowPagesV1 {
             shadows: Some(shadows),
@@ -1090,18 +1102,11 @@ impl LinuxCwsrShadowPagesV1 {
             .ok_or(
                 crate::queue::submit::NativeAqlSubmissionErrorV1::InvalidCwsr("payload readback"),
             )?;
-        crate::queue::submit::initialize_gfx942_cwsr_headers(
-            bytes,
-            payload,
-            self.binding.event_id,
-        )?;
-        for xcc in 0..crate::queue::submit::GFX942_CWSR_XCC_COUNT_V1 {
-            let offset = xcc * crate::queue::submit::GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1;
-            let expected = crate::queue::submit::gfx942_cwsr_header_bytes(
-                xcc,
-                payload,
-                self.binding.event_id,
-            )?;
+        self.geometry
+            .initialize(bytes, payload, self.binding.event_id)?;
+        for xcc in 0..self.geometry.xccs() {
+            let offset = xcc * self.geometry.context_bytes();
+            let expected = self.geometry.header(xcc, payload, self.binding.event_id)?;
             if bytes.get(offset..offset + expected.len()) != Some(expected.as_slice()) {
                 return Err(
                     crate::queue::submit::NativeAqlSubmissionErrorV1::InvalidCwsr(
@@ -1139,11 +1144,12 @@ impl LinuxCwsrShadowPagesV1 {
         }
         let payload = KfdQueueExceptionPayloadAddressV1::new(self.payload.as_ptr() as usize as u64)
             .ok_or(LinuxDoorbellErrorV1::Shadow("payload readback"))?;
-        for xcc in 0..crate::queue::submit::GFX942_CWSR_XCC_COUNT_V1 {
+        for xcc in 0..self.geometry.xccs() {
             let page = self.pages[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-            let expected =
-                crate::queue::submit::gfx942_cwsr_header_bytes(xcc, payload, self.binding.event_id)
-                    .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header readback"))?;
+            let expected = self
+                .geometry
+                .header(xcc, payload, self.binding.event_id)
+                .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header readback"))?;
             for (index, expected_byte) in expected.iter().enumerate() {
                 // SAFETY: exact owned live page and bounded header byte.
                 let observed =
@@ -1776,6 +1782,12 @@ mod tests {
     );
 
     fn diagnostic_shadow_fixture() -> DiagnosticShadowFixture {
+        diagnostic_shadow_fixture_for_geometry(crate::queue::submit::CwsrGeometryV1::Gfx942)
+    }
+
+    fn diagnostic_shadow_fixture_for_geometry(
+        geometry: crate::queue::submit::CwsrGeometryV1,
+    ) -> DiagnosticShadowFixture {
         let file = std::fs::File::open("/dev/null").unwrap();
         let binding = QueueExceptionBindingV1 {
             event_id: KfdSignalEventIdV1::new(7).unwrap(),
@@ -1790,14 +1802,11 @@ mod tests {
         let payload = NonNull::new(payload_storage.as_mut_ptr().cast::<u64>()).unwrap();
         let payload_address =
             KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+        for xcc in 0..geometry.xccs() {
             let page = &mut storage[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
-                xcc,
-                payload_address,
-                binding.event_id,
-            )
-            .unwrap();
+            let header = geometry
+                .header(xcc, payload_address, binding.event_id)
+                .unwrap();
             page[..header.len()].copy_from_slice(&header);
         }
         let pages: [NonNull<c_void>; GFX942_CWSR_SHADOW_PAGES_V1] = storage
@@ -1814,6 +1823,7 @@ mod tests {
             page_bytes: 4096,
             payload_page_active: true,
             active: true,
+            geometry,
         };
         let event = LinuxQueueExceptionEventV1 {
             binding,
@@ -1869,6 +1879,7 @@ mod tests {
             page_bytes: 4096,
             payload_page_active: true,
             active: true,
+            geometry: crate::queue::submit::CwsrGeometryV1::Gfx942,
         };
         let event = LinuxQueueExceptionEventV1 {
             binding,
@@ -1920,6 +1931,34 @@ mod tests {
         ] {
             assert!(result.is_err());
         }
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn observed_950_shadow_plan_and_readback_reject_cross_target_geometry() {
+        use crate::queue::submit::CwsrGeometryV1;
+        let geometry = CwsrGeometryV1::Gfx950Observed;
+        let base = 0x1_0000_0000;
+        let plan =
+            CwsrShadowPlanV1::from_owned_reservation_for_geometry(base, 0xad68000, 4096, geometry)
+                .unwrap();
+        assert_eq!(plan.geometry, geometry);
+        assert_eq!(plan.bytes, 8 * 0x15a3000 + 0x50000);
+        for (bytes, page) in [(0xb167000, 4096), (0xad67000, 4096), (0xad68000, 8192)] {
+            assert!(
+                CwsrShadowPlanV1::from_owned_reservation_for_geometry(base, bytes, page, geometry)
+                    .is_err()
+            );
+        }
+        assert!(CwsrShadowPlanV1::from_owned_reservation(base, 0xad68000, 4096).is_err());
+        let (mut shadows, mut storage, _payload, _event, _file) =
+            diagnostic_shadow_fixture_for_geometry(geometry);
+        shadows.validate_structural_readback().unwrap();
+        shadows.geometry = CwsrGeometryV1::Gfx942;
+        assert!(shadows.validate_structural_readback().is_err());
+        shadows.geometry = geometry;
+        storage[7 * 3][16] ^= 1;
+        assert!(shadows.validate_structural_readback().is_err());
     }
 
     #[test]

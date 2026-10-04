@@ -297,3 +297,281 @@ fn round_entry_rejection_quarantines_without_native_resources() {
     assert!(group.poisoned);
     assert!(group.require_active().is_err());
 }
+
+#[test]
+fn publication_sharing_never_enables_operational_mode_or_changes_profile_accounting() {
+    assert!(can_share_full_publication_observation(
+        [None; 2].into_iter()
+    ));
+    let full = PerformanceOptions {
+        cache_kernel_admission: false,
+        operational_currentness: false,
+        profile: false,
+    };
+    for count in [2, 8] {
+        for cache_kernel_admission in [false, true] {
+            let full = PerformanceOptions {
+                cache_kernel_admission,
+                ..full
+            };
+            assert!(can_share_full_publication_observation(
+                vec![Some(full); count].into_iter()
+            ));
+            for rank in 0..count {
+                for (operational_currentness, profile) in
+                    [(true, false), (false, true), (true, true)]
+                {
+                    let mut mixed = vec![Some(full); count];
+                    mixed[rank] = Some(PerformanceOptions {
+                        operational_currentness,
+                        profile,
+                        ..full
+                    });
+                    assert!(!can_share_full_publication_observation(mixed.into_iter()));
+                }
+            }
+        }
+    }
+}
+
+struct PublicationRecording {
+    round: Recording,
+    participants: usize,
+    share: bool,
+    checkpoint: usize,
+    fresh_observations: usize,
+}
+
+impl PublicationRecording {
+    fn new(participants: usize, commands: usize, share: bool) -> Self {
+        Self {
+            round: Recording::new(commands),
+            participants,
+            share,
+            checkpoint: 0,
+            fresh_observations: 0,
+        }
+    }
+}
+
+impl PublicationCurrentnessBackend for PublicationRecording {
+    fn participants(&self) -> usize {
+        self.participants
+    }
+    fn share_full_observation(&self) -> bool {
+        self.share
+    }
+    fn fresh_group_currentness(&mut self) -> Result<()> {
+        self.fresh_observations += 1;
+        self.round.event(format!("fresh:{}", self.checkpoint))
+    }
+    fn individual_currentness(&mut self, rank: usize) -> Result<()> {
+        self.round
+            .event(format!("individual:{}:{rank}", self.checkpoint))
+    }
+    fn queue_exception(&mut self, rank: usize) -> Result<()> {
+        self.round
+            .event(format!("exception:{}:{rank}", self.checkpoint))
+    }
+}
+
+impl ConcurrentRoundBackend for PublicationRecording {
+    type Prepared = usize;
+    type Pending = (usize, usize);
+    fn full_fence(&mut self) -> Result<()> {
+        self.round.full_fence()
+    }
+    fn prepare(&mut self, index: usize) -> Result<usize> {
+        self.round.prepare(index)
+    }
+    fn publication_fence(&mut self, pending: &[Self::Pending]) -> Result<()> {
+        self.checkpoint = pending.len();
+        self.round.event(format!("fence:{}", self.checkpoint))?;
+        run_publication_currentness(self)
+    }
+    fn publish(&mut self, index: usize) -> Result<Self::Pending> {
+        self.round.publish(index)
+    }
+    fn poll(&mut self, pending: &mut Self::Pending) -> Result<Option<u64>> {
+        self.round.poll(pending)
+    }
+    fn wait_checkpoint(&mut self) -> Result<()> {
+        self.round.wait_checkpoint()
+    }
+}
+
+#[test]
+fn every_publication_observes_a_fresh_full_group_before_all_queue_exceptions() {
+    for (participants, commands) in [(2, 1), (2, 2), (8, 1), (8, 8)] {
+        let mut backend = PublicationRecording::new(participants, commands, true);
+        assert_eq!(
+            run_round(&mut backend, commands).unwrap(),
+            (0..commands).map(|i| 100 + i as u64).collect::<Vec<_>>()
+        );
+        assert_eq!(backend.fresh_observations, commands);
+        for checkpoint in 0..commands {
+            let start = backend
+                .round
+                .events
+                .iter()
+                .position(|e| e == &format!("fence:{checkpoint}"))
+                .unwrap();
+            let mut expected = vec![format!("fence:{checkpoint}"), format!("fresh:{checkpoint}")];
+            expected.extend((0..participants).map(|rank| format!("exception:{checkpoint}:{rank}")));
+            expected.push(format!("publish:{checkpoint}"));
+            assert_eq!(
+                &backend.round.events[start..start + expected.len()],
+                expected.as_slice()
+            );
+        }
+        assert!(
+            !backend
+                .round
+                .events
+                .iter()
+                .any(|e| e.starts_with("individual:"))
+        );
+        assert_eq!(backend.round.fences, 2);
+    }
+}
+
+#[test]
+fn explicit_operational_or_profiled_path_keeps_individual_exception_order() {
+    for participants in [2, 8] {
+        let mut backend = PublicationRecording::new(participants, 2, false);
+        run_round(&mut backend, 2).unwrap();
+        assert_eq!(backend.fresh_observations, 0);
+        for checkpoint in 0..2 {
+            let start = backend
+                .round
+                .events
+                .iter()
+                .position(|e| e == &format!("fence:{checkpoint}"))
+                .unwrap();
+            let mut expected = vec![format!("fence:{checkpoint}")];
+            for rank in 0..participants {
+                expected.push(format!("individual:{checkpoint}:{rank}"));
+                expected.push(format!("exception:{checkpoint}:{rank}"));
+            }
+            expected.push(format!("publish:{checkpoint}"));
+            assert_eq!(
+                &backend.round.events[start..start + expected.len()],
+                expected.as_slice()
+            );
+        }
+    }
+}
+
+#[test]
+fn host_observation_timers_do_not_change_full_publication_routing_or_trace() {
+    for count in [2, 8] {
+        for cache in [false, true] {
+            let options = PerformanceOptions {
+                cache_kernel_admission: cache,
+                operational_currentness: false,
+                profile: false,
+            };
+            let mut traces = Vec::new();
+            for observation in [false, true] {
+                assert_eq!(
+                    host_observation::timers_enabled(Some(options), observation),
+                    observation
+                );
+                let share =
+                    can_share_full_publication_observation(vec![Some(options); count].into_iter());
+                assert!(share);
+                let mut backend = PublicationRecording::new(count, 2, share);
+                assert_eq!(run_round(&mut backend, 2).unwrap(), [100, 101]);
+                traces.push(backend.round.events);
+            }
+            assert_eq!(traces[0], traces[1]);
+        }
+    }
+}
+
+#[test]
+fn host_observation_keeps_publication_failure_cutoff_before_successful_result() {
+    let options = PerformanceOptions {
+        cache_kernel_admission: true,
+        operational_currentness: false,
+        profile: false,
+    };
+    for failure in ["fresh:0", "exception:0:1", "fresh:1", "exception:1:0"] {
+        let mut traces = Vec::new();
+        for observation in [false, true] {
+            assert_eq!(
+                host_observation::timers_enabled(Some(options), observation),
+                observation
+            );
+            let share = can_share_full_publication_observation([Some(options); 2].into_iter());
+            let mut backend = PublicationRecording::new(2, 2, share);
+            backend.round.fail = Some(failure.into());
+            assert!(run_round(&mut backend, 2).is_err());
+            assert_eq!(
+                backend.round.events.last().map(String::as_str),
+                Some(failure)
+            );
+            traces.push(backend.round.events);
+        }
+        assert_eq!(traces[0], traces[1]);
+    }
+}
+
+#[test]
+fn every_publication_observation_fault_stops_and_poisons_even_after_prior_publish() {
+    for participants in [2, 8] {
+        for share in [false, true] {
+            let mut good = PublicationRecording::new(participants, 2, share);
+            run_round(&mut good, 2).unwrap();
+            let failures = good
+                .round
+                .events
+                .iter()
+                .filter(|e| {
+                    e.starts_with("fresh:")
+                        || e.starts_with("individual:")
+                        || e.starts_with("exception:")
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for failure in failures {
+                let checkpoint = failure.split(':').nth(1).unwrap().parse::<usize>().unwrap();
+                let mut backend = PublicationRecording::new(participants, 2, share);
+                backend.round.fail = Some(failure.clone());
+                let result = run_round(&mut backend, 2);
+                assert!(result.is_err(), "{failure}");
+                assert_eq!(backend.round.events.last(), Some(&failure));
+                assert_eq!(backend.round.published.len(), checkpoint);
+                assert!(backend.round.completed.is_empty());
+                let mut group = empty_group();
+                assert!(group.finish(result).is_err());
+                assert!(group.poisoned);
+                assert!(group.require_active().is_err());
+                assert!(group.close().is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn publication_sharing_does_not_move_wait_or_completion_checkpoints() {
+    let mut backend = PublicationRecording::new(2, 2, true);
+    backend.round.finish_after = vec![2, 1];
+    assert_eq!(run_round(&mut backend, 2).unwrap(), [100, 101]);
+    assert_eq!(backend.fresh_observations, 2);
+    assert_eq!(backend.round.waits, 2);
+    assert_eq!(backend.round.completed, [1, 0]);
+    assert_eq!(backend.round.events.last().unwrap(), "full:1");
+}
+
+#[test]
+fn publication_currentness_refuses_invalid_rosters_before_observation() {
+    for count in [0, 1, 3, 7, 9] {
+        for share in [false, true] {
+            let mut backend = PublicationRecording::new(count, 0, share);
+            assert!(run_publication_currentness(&mut backend).is_err());
+            assert!(backend.round.events.is_empty());
+            assert_eq!(backend.fresh_observations, 0);
+        }
+    }
+}
