@@ -32,6 +32,9 @@ const LINEAGE_DOMAIN: &[u8] = b"fe2o3.host.worker-v3-mixed-descriptor-lineage.v5
 mod preparation;
 pub use preparation::{MixedWorkerV53PreparationError, PreparedMixedWorkerV53Invocation};
 
+#[path = "mixed_worker_v53_target_readmission.rs"]
+mod target_readmission;
+
 fn binding(detail: &'static str) -> AdmissionError {
     AdmissionError::MixedV53(detail)
 }
@@ -304,7 +307,12 @@ pub fn admit_recovered_mixed_worker_v53_roster<R: CompilerGeneratedKernelExpecta
     let (custody, current) = reconstruct_replay_custody(&envelope)?;
     let descriptor = validate_descriptor(&envelope, &current, &custody)?;
     let table = descriptor.table()?;
-    validate_lineage(&custody.outer_handoff, &table, budget)?;
+    // validate_descriptor already checked the complete physical target/features.
+    let profile = ProductionAmdTargetProfileV1::from_cpu(
+        descriptor.bindings.inspection().target().processor(),
+    )
+    .ok_or_else(|| binding("unsupported inspected V53 target"))?;
+    validate_lineage(&custody.outer_handoff, &table, profile, budget)?;
     let mut charge = codec_work();
     let mut identities = Vec::new();
     identities
@@ -488,19 +496,21 @@ fn normalize_descriptor(bytes: &[u8]) -> Result<Vec<u8>> {
 fn validate_lineage(
     outer: &InertSemanticCompilerModuleHandoffV3,
     table: &MixedDescriptorTableV53<'_>,
+    profile: ProductionAmdTargetProfileV1,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     codec_on_budget(
         budget,
         MIXED_MIDDLE_END_WORKING_STORAGE_V50
             + fe2o3_kernel_descriptor::mixed_conditional_v26::MIXED_CONTRACT_CODEC_STORAGE_V26,
-        |budget| validate_lineage_on_budget(outer, table, budget),
+        |budget| validate_lineage_on_budget(outer, table, profile, budget),
     )
 }
 
 fn validate_lineage_on_budget(
     outer: &InertSemanticCompilerModuleHandoffV3,
     table: &MixedDescriptorTableV53<'_>,
+    profile: ProductionAmdTargetProfileV1,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     let receipts = outer.capsule().receipts();
@@ -568,7 +578,21 @@ fn validate_lineage_on_budget(
             return Err(binding("contract differs from exact typed source/graphs"));
         }
     }
-    Ok(())
+    let capsule = outer.capsule();
+    let invocation = fe2o3_compiler_lineage::TargetLineageIdentityV3::new(
+        *capsule.invocation_digest().as_bytes(),
+        u64::try_from(capsule.invocation_canonical_length()).map_err(|_| Resource::Arithmetic)?,
+    )
+    .map_err(codec_error)?;
+    target_readmission::readmit_target_selection_v53(
+        middle.input().forwarded,
+        receipts.semantic_mir(),
+        invocation,
+        table.canonical_bytes(),
+        profile,
+        receipts.target_binding().canonical_preimage(),
+        budget,
+    )
 }
 
 #[cfg(test)]

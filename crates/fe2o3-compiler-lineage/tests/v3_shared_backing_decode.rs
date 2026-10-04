@@ -142,6 +142,12 @@ fn shared_decode_retains_exact_outer_backing_and_preserves_identity() {
 
     assert_eq!(decoded, constructed);
     assert_eq!(decoded, borrowed);
+    assert_eq!(
+        decoded.invocation_canonical_length(),
+        fe2o3_rustc_invocation::encode_descriptor_v3(constructed.invocation())
+            .unwrap()
+            .len()
+    );
     assert_eq!(decoded.identity(), constructed.identity());
     assert_eq!(decoded.canonical_bytes(), canonical);
     assert!(decoded.identity().matches_canonical_bytes(&canonical));
