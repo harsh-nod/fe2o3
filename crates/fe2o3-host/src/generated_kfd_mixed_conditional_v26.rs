@@ -8,9 +8,9 @@ use super::conditional::{
 use super::*;
 use fe2o3_artifacts::{Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability};
 use fe2o3_kernel_descriptor::mixed_conditional_v26::{
-    MIXED_CONTRACT_CODEC_STORAGE_V26, MixedContractV26, MixedIndexEnvelopeV26, MixedScalarV26,
-    mixed_descriptor_subject_v26,
+    MixedContractV26, MixedIndexEnvelopeV26, MixedScalarV26, mixed_descriptor_subject_v26,
 };
+use fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractV86;
 use fe2o3_kernel_descriptor::{
     DeviceDescriptorTableV3, KernelDescriptorRefV3, MAX_ARGUMENTS_PER_KERNEL, OwnershipSemantics,
     SourceTypeDescriptorV3,
@@ -24,6 +24,10 @@ use fe2o3_kfd::{
     MixedConditionalDispatchPremisesV26 as Premises, MixedConditionalIndexDomainV26 as Domain,
     MixedConditionalUnusedSliceV26 as Unused,
 };
+
+#[path = "generated_kfd_mixed_contract_v88.rs"]
+mod contract_v88;
+use contract_v88::MixedPackingContractV88;
 
 fn binding(reason: &'static str) -> Error {
     Error::Binding(reason)
@@ -87,6 +91,29 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
         geometry: AqlDispatchGeometryV1,
         budget: &mut Budget<'_>,
     ) -> Result<GeneratedMixedKfdArgumentsV26<'allocation>> {
+        self.bind_mixed_contract_v88(table, contract, geometry, budget)
+    }
+
+    /// V86 retains the exact explicit-predicate contract and occurrence identities.
+    /// Numeric runtime premises are shared with V26, not its CFG-only decoding or
+    /// source-proof admission. The owning worker still supplies those authorities.
+    pub(crate) fn bind_predicated_mixed_conditional_premises_v88(
+        self,
+        table: &DeviceDescriptorTableV3<'_>,
+        contract: &MixedContractV86<'_>,
+        geometry: AqlDispatchGeometryV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<GeneratedMixedKfdArgumentsV26<'allocation>> {
+        self.bind_mixed_contract_v88(table, contract, geometry, budget)
+    }
+
+    fn bind_mixed_contract_v88<C: MixedPackingContractV88>(
+        self,
+        table: &DeviceDescriptorTableV3<'_>,
+        contract: &C,
+        geometry: AqlDispatchGeometryV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<GeneratedMixedKfdArgumentsV26<'allocation>> {
         let floor = budget.storage();
         if floor < self.source_plan_storage {
             return Err(Resource::Accounting.into());
@@ -104,7 +131,8 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
         let scratch = sum(&[
             abi::ABI_SCRATCH_STORAGE,
             fe2o3_kernel_descriptor::DESCRIPTOR_QUERY_STORAGE_V3,
-            MIXED_CONTRACT_CODEC_STORAGE_V26,
+            C::CODEC_STORAGE,
+            contract_v88::PACKING_CONTRACT_STORAGE_V88,
             size_of::<KernelDescriptorRefV3<'_, '_>>(),
             size_of::<[Option<usize>; MAX_ARGUMENTS_PER_KERNEL]>() * 2,
             size_of::<Vec<Slice>>()
@@ -195,11 +223,11 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
     }
 }
 
-fn prepare_rows(
+fn prepare_rows<C: MixedPackingContractV88>(
     packed: &GeneratedKfdPackedArguments<'_>,
     table: &DeviceDescriptorTableV3<'_>,
     kernel: &KernelDescriptorRefV3<'_, '_>,
-    contract: &MixedContractV26<'_>,
+    contract: &C,
     geometry: AqlDispatchGeometryV1,
     budget: &mut Budget<'_>,
 ) -> Result<Premises> {
@@ -211,7 +239,7 @@ fn prepare_rows(
     let mut by_field = [None; MAX_ARGUMENTS_PER_KERNEL];
     let mut observations = [None; MAX_ARGUMENTS_PER_KERNEL];
     for i in 0..contract.argument_count() {
-        let a = contract.argument(i, &mut |n| budget.charge_work(n))?;
+        let a = contract.argument(i, budget)?;
         let slot = by_field
             .get_mut(usize::from(a.generated_field))
             .ok_or_else(|| binding("mixed generated field range"))?;
@@ -267,12 +295,11 @@ fn prepare_rows(
             }
             continue;
         };
-        let a = contract.argument(index, &mut |n| budget.charge_work(n))?;
+        let a = contract.argument(index, budget)?;
         if a.reads == 0 && a.writes == 0 {
             unused.push(Unused {
                 slice: u16::try_from(index).map_err(|_| Resource::Arithmetic)?,
-                source_argument_identity: contract
-                    .argument_identity(index, &mut |n| budget.charge_work(n))?,
+                source_argument_identity: contract.argument_identity(index, budget)?,
             });
         }
         let observation = packed
@@ -380,7 +407,7 @@ fn prepare_rows(
         .map_err(|_| binding("allocation"))?;
     let mut accesses = exact_row_storage(accesses, contract.occurrence_count())?;
     for i in 0..contract.occurrence_count() {
-        let row = contract.occurrence(i, &mut |n| budget.charge_work(n))?;
+        let row = contract.occurrence(i, budget)?;
         let slice = slices
             .get(usize::from(row.argument))
             .ok_or_else(|| binding("mixed occurrence argument"))?;
@@ -391,7 +418,7 @@ fn prepare_rows(
         accesses.push(AccessRow {
             slice: row.argument,
             writing: row.writing,
-            occurrence_identity: contract.occurrence_identity(i, &mut |n| budget.charge_work(n))?,
+            occurrence_identity: contract.occurrence_identity(i, budget)?,
             access_domain: domain(row.access_envelope),
             address_domain: domain(row.formation_envelope),
             invocation_axis: (row.invocation_axis != 255).then_some(row.invocation_axis),
