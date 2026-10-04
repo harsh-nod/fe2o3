@@ -18,6 +18,7 @@ const RESULTS: &str = "FE2O3_TEST_MANIFEST_FILL_RESULTS_V1";
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::manifest_fill_proof::actual_manifest_fill_signed_effect_child";
 const PREFIX: &str = "FE2O3_MANIFEST_FILL_PROOF_V1 ";
 const SOURCE: &[u8] = include_bytes!("../../../examples/fill/src/lib.rs");
+const REFERENCE_SOURCE: &[u8] = include_bytes!("../../../examples/fill/src/reference.rs");
 const MANIFEST: &[u8] = include_bytes!("../../../examples/fill/Cargo.toml");
 const CAP: usize = 16 * 1024 * 1024;
 const PROOF_FEATURE: &str = "reference-proof";
@@ -64,10 +65,19 @@ fn assert_source_current() {
         read_bounded(&package().join("src/lib.rs"), 1024 * 1024).unwrap(),
         SOURCE
     );
+    reference_source_sha256(&package().join("src/reference.rs")).unwrap();
     assert_eq!(
         read_bounded(&package().join("Cargo.toml"), 64 * 1024).unwrap(),
         MANIFEST
     );
+}
+
+fn reference_source_sha256(path: &Path) -> Result<String, &'static str> {
+    let bytes = read_bounded(path, 1024 * 1024).map_err(|_| "cannot read fill reference source")?;
+    if bytes != REFERENCE_SOURCE {
+        return Err("fill reference source differs from the independent original");
+    }
+    Ok(super::super::lower_hex_v1(&Sha256::digest(&bytes)))
 }
 
 fn digest(path: &Path, cap: usize) -> String {
@@ -81,8 +91,8 @@ fn wrong_store_source(source: &[u8]) -> Vec<u8> {
     let (before, after) = source.split_once(needle).expect("one original GPU store");
     assert!(!after.contains(needle), "ambiguous GPU-store mutation");
     assert!(
-        before.contains("*out = 42.5;"),
-        "independent reference must remain intact"
+        before.matches("include!(\"reference.rs\");").count() == 1,
+        "independent reference include must remain intact"
     );
     format!("{before}*value = 43.5;{after}").into_bytes()
 }
@@ -121,6 +131,7 @@ struct Invocation {
     source: PathBuf,
     source_sha256: String,
     original_source_sha256: String,
+    reference_source_sha256: String,
     package_manifest_sha256: String,
     tutorial_manifest_sha256: String,
     compiler_input: serde_json::Value,
@@ -185,6 +196,8 @@ fn derive_invocation(directory: &Path, case: Case) -> Invocation {
     } else {
         original.clone()
     };
+    let reference_source_sha256 =
+        reference_source_sha256(&source.parent().unwrap().join("reference.rs")).unwrap();
     let input = default_manifest_input();
     let metadata: serde_json::Value =
         serde_json::from_slice(&read_bounded(&directory.join("metadata.stdout"), CAP).unwrap())
@@ -241,6 +254,7 @@ fn derive_invocation(directory: &Path, case: Case) -> Invocation {
         source: source.clone(),
         source_sha256: digest(&source, 1024 * 1024),
         original_source_sha256: digest(&original, 1024 * 1024),
+        reference_source_sha256,
         package_manifest_sha256: digest(&package().join("Cargo.toml"), 64 * 1024),
         tutorial_manifest_sha256: digest(
             &workspace().join("config/tutorial-kernel-manifest-v1.json"),
@@ -349,6 +363,7 @@ fn prepare_actual_manifest_fill_inputs() {
         &directory.join("wrong-store.rs"),
         &wrong_store_source(SOURCE),
     );
+    create_file(&directory.join("reference.rs"), REFERENCE_SOURCE);
     create_file(
         &directory.join("preparation.json"),
         &serde_json::to_vec_pretty(&preparation_record(&directory)).unwrap(),
@@ -770,7 +785,31 @@ fn mutation_changes_only_the_original_gpu_store_not_the_cpu_reference() {
     assert!(
         std::str::from_utf8(&changed)
             .unwrap()
+            .contains("include!(\"reference.rs\");")
+    );
+    assert!(
+        std::str::from_utf8(REFERENCE_SOURCE)
+            .unwrap()
             .contains("*out = 42.5;")
+    );
+    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-fill-reference-mutation");
+    let reference = scratch.path().join("reference.rs");
+    create_file(&scratch.path().join("wrong-store.rs"), &changed);
+    create_file(&reference, REFERENCE_SOURCE);
+    assert_eq!(
+        reference_source_sha256(&reference).unwrap(),
+        reference_source_sha256(&package().join("src/reference.rs")).unwrap()
+    );
+    fs::write(
+        &reference,
+        std::str::from_utf8(REFERENCE_SOURCE)
+            .unwrap()
+            .replace("42.5", "43.5"),
+    )
+    .unwrap();
+    assert_eq!(
+        reference_source_sha256(&reference).unwrap_err(),
+        "fill reference source differs from the independent original"
     );
 }
 
