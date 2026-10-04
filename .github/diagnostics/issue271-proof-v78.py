@@ -12,18 +12,18 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "d1b364182b7232f4806ca8eef99cd8a051aac63e"
-TREE = "1d05610aac82624952cf1ad153463ce446cb4b73"
+HEAD = "beae1c6f60a36dfe843cd0346bf486f8c2e4ce11"
+TREE = "4d90f02ec6db7fb6bb9431a4a429a14cb0910774"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
 TEMP = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
-LOGS = TEMP / "issue271-lowerer-broad-v87-logs"
+LOGS = TEMP / "issue271-native-guarded-v87-logs"
 ROSTER = CONTROL / ".github/diagnostics/issue271-proof-roster-v78.json"
 os.umask(0o077)
 assert TEMP != ROOT and ROOT not in TEMP.parents
 LOGS.mkdir(mode=0o700)
-LANE = Path(tempfile.mkdtemp(prefix="issue271-lowerer-broad-v87-", dir=TEMP))
+LANE = Path(tempfile.mkdtemp(prefix="issue271-native-guarded-v87-", dir=TEMP))
 IDENTITY = (LANE.stat().st_dev, LANE.stat().st_ino, LANE.stat().st_uid)
 INTERRUPTED = []
 ACTIVE_CHILD = None
@@ -83,10 +83,10 @@ def select_artifact(log):
             and row.get("executable") is not None]
     assert len(rows) == 1
     row = rows[0]
-    assert row["target"]["name"] == "fe2o3_lower_mir_kernel"
+    assert row["target"]["name"] == "fe2o3_pliron"
     assert row["target"]["kind"] == ["lib"] and row["profile"]["test"] is True
-    assert Path(row["manifest_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-lower-mir-kernel/Cargo.toml"
-    assert Path(row["target"]["src_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-lower-mir-kernel/src/lib.rs"
+    assert Path(row["manifest_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-pliron/Cargo.toml"
+    assert Path(row["target"]["src_path"]).resolve(strict=True) == SOURCE / "crates/fe2o3-pliron/src/lib.rs"
     executable = Path(row["executable"])
     assert executable.resolve(strict=True) == executable
     assert executable.parent == LANE / "target/debug/deps"
@@ -232,11 +232,11 @@ def run(name, args, environment, seconds, limit):
 before, error, coverage, tools, tool_pins = None, None, None, [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "42829efea0eff54f91143ef27faf10d6e991320ba0bcc7521b439c84781e7012"
+    assert before["roster_sha256"] == "7c764e3e5040b8194353641bf7c887ad827fe49f5cc1dff89d5ea91bac7592ec"
     roster = json.loads(ROSTER.read_text())
-    assert roster["head"] == HEAD and roster["package"] == "fe2o3-lower-mir-kernel"
-    assert roster["expected_total"] == 4644
-    assert len(roster["required_normal_leaves"]) == len(set(roster["required_normal_leaves"])) == 246
+    assert roster["head"] == HEAD and roster["package"] == "fe2o3-pliron"
+    assert roster["expected_total"] == 2470
+    assert len(roster["required_normal_leaves"]) == len(set(roster["required_normal_leaves"])) == 33
     for row in roster["source_pins"]:
         assert digest(SOURCE / row["path"]) == row["sha256"]
     nightly = Path.home() / ".rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu"
