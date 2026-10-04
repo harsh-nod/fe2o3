@@ -43,7 +43,8 @@ impl PendingCanonicalGlobalAccessesV18<'_, '_> {
         predicate: Definition,
         bound_comparison: Definition,
         budget: &mut Budget<'_>,
-    ) -> Result<Option<[(&Operation, &ValueDef); 2]>, Failure> {
+    ) -> Result<Option<[(&::fe2o3_kernel_ir::Operation, &::fe2o3_kernel_ir::ValueDef); 2]>, Failure>
+    {
         self.check_owner(owner, budget)?;
         budget
             .reserve_storage(headers())

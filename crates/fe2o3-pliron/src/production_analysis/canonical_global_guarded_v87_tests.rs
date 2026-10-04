@@ -278,10 +278,11 @@ fn pending_guarded_v87_callback_error_and_unwind_drop_captures_before_refund() {
             self.0.set(self.0.get() + 1);
         }
     }
-    for panic in [false, true] {
+    for (panic, extra) in [(false, false), (true, false), (false, true), (true, true)] {
         let drops = Cell::new(0);
         with_checked(&guarded_fixture(1), |checked, budget| {
-            with_pending_canonical_ranked_source_roles_v18(
+            let outer_floor = budget.storage();
+            let outer = with_pending_canonical_ranked_source_roles_v18(
                 checked,
                 LAYOUTS,
                 budget,
@@ -295,7 +296,9 @@ fn pending_guarded_v87_callback_error_and_unwind_drop_captures_before_refund() {
                         move |view, budget| {
                             let _capture = capture;
                             assert!(view.operation(owner, coordinate(1, 4), budget)?.is_some());
-                            budget.reserve_storage(17)?;
+                            if extra {
+                                budget.reserve_storage(17)?;
+                            }
                             if panic {
                                 panic!("guarded callback sentinel");
                             }
@@ -304,7 +307,22 @@ fn pending_guarded_v87_callback_error_and_unwind_drop_captures_before_refund() {
                     );
                     assert_eq!(drops.get(), 1);
                     assert_eq!(budget.storage(), floor);
-                    if panic {
+                    if extra {
+                        assert!(matches!(
+                            result,
+                            Err(Failure::Resource(Resource::Accounting))
+                        ));
+                        let work = budget.work();
+                        ENTERED.set(0);
+                        for _ in 0..2 {
+                            assert!(matches!(
+                                pending.with_pending_global_accesses_v87(owner, budget, noop),
+                                Err(Failure::Resource(Resource::Accounting))
+                            ));
+                            assert_eq!(budget.work(), work);
+                        }
+                        assert_eq!(ENTERED.get(), 0);
+                    } else if panic {
                         assert!(matches!(result, Err(Failure::Panicked)));
                     } else {
                         assert!(matches!(
@@ -314,8 +332,16 @@ fn pending_guarded_v87_callback_error_and_unwind_drop_captures_before_refund() {
                     }
                     Ok(())
                 },
-            )
-            .unwrap();
+            );
+            assert_eq!(budget.storage(), outer_floor);
+            if extra {
+                assert!(matches!(
+                    outer,
+                    Err(Failure::Resource(Resource::Accounting))
+                ));
+            } else {
+                outer.unwrap();
+            }
         });
     }
 }
