@@ -344,6 +344,25 @@ struct Capture {
     eof: bool,
 }
 
+#[derive(Clone, Copy)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl OutputStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_output_tests.rs"]
+mod output_tests;
+
 #[derive(Clone, Debug)]
 pub(super) struct AllowedRuntimeExecutableV1 {
     identity: ObjectIdentityV2,
@@ -813,8 +832,8 @@ fn supervise_run(
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
-            drain(stdout, stdout_capture, output_limit)?;
-            drain(stderr, stderr_capture, output_limit)?;
+            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)?;
             if Instant::now() >= deadline {
                 return Err(controller_error(
                     RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
@@ -833,8 +852,8 @@ fn supervise_run(
                     let signal = stop_signal(status);
                     let inspection_deadline = if event == PTRACE_EVENT_EXEC {
                         Some(stable::park_for_inspection(tracees, deadline, &mut || {
-                            drain(stdout, stdout_capture, output_limit)?;
-                            drain(stderr, stderr_capture, output_limit)
+                            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                         })?)
                     } else {
                         None
@@ -887,16 +906,26 @@ fn supervise_run(
                             stable::check_before_release(
                                 inspection_deadline.expect("exec inspection deadline"),
                                 &mut || {
-                                    drain(stdout, stdout_capture, output_limit)?;
-                                    drain(stderr, stderr_capture, output_limit)
+                                    drain(
+                                        stdout,
+                                        stdout_capture,
+                                        output_limit,
+                                        OutputStream::Stdout,
+                                    )?;
+                                    drain(
+                                        stderr,
+                                        stderr_capture,
+                                        output_limit,
+                                        OutputStream::Stderr,
+                                    )
                                 },
                             )?;
                             resume_tracee(tracees, process, 0)?;
                         }
                         PTRACE_EVENT_SECCOMP => {
                             let mut progress = || {
-                                drain(stdout, stdout_capture, output_limit)?;
-                                drain(stderr, stderr_capture, output_limit)
+                                drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                                drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                             };
                             stable::complete_request(
                                 tracees,
@@ -1914,6 +1943,7 @@ fn drain(
     pipe: &mut impl Read,
     capture: &mut Capture,
     limit: usize,
+    stream: OutputStream,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut buffer = [0_u8; 4096];
     loop {
@@ -1924,9 +1954,11 @@ fn drain(
             }
             Ok(count) => {
                 if count > limit.saturating_sub(capture.bytes.len()) {
-                    return Err(controller_error(
-                        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
-                        "functional-refinement process exceeded its output bound",
+                    return Err(output_too_large(
+                        stream,
+                        &capture.bytes,
+                        &buffer[..count],
+                        limit,
                     ));
                 }
                 capture.bytes.extend_from_slice(&buffer[..count]);
@@ -1935,6 +1967,40 @@ fn drain(
             Err(_) => return Err(io_process_failure("read traced proof output")),
         }
     }
+}
+
+fn output_too_large(
+    stream: OutputStream,
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let (prefix, truncated) = bounded_output_prefix(retained, incoming);
+    let detail = format!(
+        "functional-refinement process exceeded its output bound: stream={} limit={limit} retained={} observed_at_least={} prefix=\"{prefix}\"{}",
+        stream.name(),
+        retained.len(),
+        retained.len().saturating_add(incoming.len()),
+        if truncated { " (truncated)" } else { "" },
+    );
+    controller_error(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
+        detail,
+    )
+}
+
+const MAX_ESCAPED_OUTPUT_PREFIX_BYTES: usize = 1024;
+
+fn bounded_output_prefix(retained: &[u8], incoming: &[u8]) -> (String, bool) {
+    let mut prefix = String::with_capacity(MAX_ESCAPED_OUTPUT_PREFIX_BYTES);
+    for byte in retained.iter().chain(incoming) {
+        let escaped = std::ascii::escape_default(*byte);
+        if escaped.len() > MAX_ESCAPED_OUTPUT_PREFIX_BYTES - prefix.len() {
+            return (prefix, true);
+        }
+        prefix.extend(escaped.map(char::from));
+    }
+    (prefix, false)
 }
 
 fn drain_to_eof(
@@ -1947,8 +2013,8 @@ fn drain_to_eof(
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let grace = deadline.min(Instant::now() + Duration::from_millis(200));
     while (!stdout_capture.eof || !stderr_capture.eof) && Instant::now() < grace {
-        drain(stdout, stdout_capture, limit)?;
-        drain(stderr, stderr_capture, limit)?;
+        drain(stdout, stdout_capture, limit, OutputStream::Stdout)?;
+        drain(stderr, stderr_capture, limit, OutputStream::Stderr)?;
         if !stdout_capture.eof || !stderr_capture.eof {
             thread::sleep(POLL_INTERVAL);
         }

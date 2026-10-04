@@ -917,7 +917,7 @@ fn output_capacity_rejects_an_oversized_first_read_without_appending() {
             eof: false,
         };
         let mut reader = io::Cursor::new(vec![b'x'; limit + 1]);
-        let error = drain(&mut reader, &mut capture, limit).unwrap_err();
+        let error = drain(&mut reader, &mut capture, limit, OutputStream::Stdout).unwrap_err();
         assert_eq!(
             error.kind(),
             RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge
@@ -929,10 +929,24 @@ fn output_capacity_rejects_an_oversized_first_read_without_appending() {
         bytes: Vec::new(),
         eof: false,
     };
-    drain(&mut io::Cursor::new(b"x"), &mut capture, 1).unwrap();
+    drain(
+        &mut io::Cursor::new(b"x"),
+        &mut capture,
+        1,
+        OutputStream::Stdout,
+    )
+    .unwrap();
     assert_eq!(capture.bytes, b"x");
     assert!(capture.eof);
-    assert!(drain(&mut io::Cursor::new(b"y"), &mut capture, 1).is_err());
+    assert!(
+        drain(
+            &mut io::Cursor::new(b"y"),
+            &mut capture,
+            1,
+            OutputStream::Stdout
+        )
+        .is_err()
+    );
     assert_eq!(capture.bytes, b"x");
 }
 
