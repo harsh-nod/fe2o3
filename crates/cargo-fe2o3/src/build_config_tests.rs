@@ -472,6 +472,11 @@ fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
             .unwrap(),
         ProductionSourceIsaObservationKindV1::Characteristic
     );
+    assert_eq!(
+        parse_source_isa_observation(&serde_json::json!({"kind": "production-census-v91"}))
+            .unwrap(),
+        ProductionSourceIsaObservationKindV1::ProductionCensusV91
+    );
     for rejected in [
         serde_json::json!({"kind": "source-isa-summary-v2"}),
         serde_json::json!({"kind": "source-isa-summary-v1", "output": "stderr"}),

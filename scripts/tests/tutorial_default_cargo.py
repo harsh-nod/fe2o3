@@ -152,7 +152,10 @@ run_all_rustc_codegen_shards() { :; }
         self.assertTrue(all(case["expectedNegativeMatched"] is None for case in report["cases"]))
 
     def test_runtime_path_is_exact_production_requirement_not_cli_override(self):
-        source = (ROOT / "crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_publish_v53.rs").read_text()
+        wrapper = (ROOT / "crates/rustc-codegen-fe2o3/src/production_pipeline_source_predicated_publish_v90.rs").read_text()
+        self.assertIn('include!("production_pipeline_source_mixed_publish_family.rs")', wrapper)
+        self.assertIn("publish_predicated_worker_handoff_v90", wrapper)
+        source = (ROOT / "crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_publish_family.rs").read_text()
         self.assertIn('"' + str(harness.RUNTIME) + '"', source)
         with patch.object(Path, "is_dir", return_value=False):
             failures = harness.prerequisites(Path("/unavailable/cli"), {})
@@ -343,6 +346,7 @@ def signal_fixture(directory, during_spawn):
             patch.object(harness.subprocess, "Popen", side_effect=tracked_popen), \
             patch.object(harness, "stop_group", side_effect=checked_stop):
         status = harness.main(["--repo-root", str(ROOT), "--cargo-fe2o3", sys.executable,
+                               "--legacy-compile-census",
                                "--target-dir", str(directory / "cache"),
                                "--output", str(directory / "output")])
     cleanup["exitCode"] = status
