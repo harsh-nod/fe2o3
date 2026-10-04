@@ -11,7 +11,7 @@ macro_rules! mixed_descriptor_family {
         $contract:ident, $contract_error:ident, $max_contract:ident, $codec_storage:ident,
         $decode_contract:ident, $decode:ident, $encoded_len:ident, $encode:ident
     ) => {
-        use crate::mixed_conditional_v26::mixed_descriptor_subject_v26;
+        use crate::mixed_conditional_v26::{MixedContractErrorV26, mixed_descriptor_subject_v26};
         use crate::nominal_v3::{Output, pay};
         use crate::wire_common::Reader;
         use crate::*;
@@ -175,6 +175,19 @@ macro_rules! mixed_descriptor_family {
             Ok(())
         }
 
+        // The nominal hash is shared, not the contract decoder or its identity.
+        fn descriptor_subject<E>(
+            nominal: &DeviceDescriptorTableV3<'_>,
+            charge: &mut impl FnMut(usize) -> std::result::Result<(), E>,
+        ) -> Result<[u8; 32], E> {
+            mixed_descriptor_subject_v26(nominal, charge).map_err(|error| {
+                $error::Contract(match error {
+                    MixedContractErrorV26::Resource(error) => $contract_error::Resource(error),
+                    MixedContractErrorV26::Invalid(rule) => $contract_error::Invalid(rule),
+                })
+            })
+        }
+
         /// Decode every contract and its exact nominal ABI association, with no fallback.
         /// Callers prepay the family-specific reader storage before this query.
         pub fn $decode<'a, E>(
@@ -198,7 +211,7 @@ macro_rules! mixed_descriptor_family {
             if count != nominal.kernel_count() || count == 0 {
                 return Err($error::Binding("complete kernel contract roster"));
             }
-            let descriptor = mixed_descriptor_subject_v26(&nominal, charge)?;
+            let descriptor = descriptor_subject(&nominal, charge)?;
             pay(charge, MAX_KERNELS * 2)?;
             let mut contracts = [(0, 0); MAX_KERNELS];
             let mut census = RootCensus::new(charge)?;
@@ -233,7 +246,7 @@ macro_rules! mixed_descriptor_family {
             if contracts.len() != nominal.kernel_count() || contracts.is_empty() {
                 return Err($error::Binding("complete kernel contract roster"));
             }
-            let descriptor = mixed_descriptor_subject_v26(&nominal, charge)?;
+            let descriptor = descriptor_subject(&nominal, charge)?;
             let mut census = RootCensus::new(charge)?;
             let mut total = HEADER
                 .checked_add(nominal_bytes.len())
