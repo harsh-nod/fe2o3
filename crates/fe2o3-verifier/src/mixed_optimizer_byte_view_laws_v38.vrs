@@ -102,7 +102,7 @@ proof fn native_entry_rejects_unused_initialized_guarded_fragment_v38(
         0 <= index < memory.live[allocation].bytes.len(),
         index < memory.live[allocation].initialized.len(),
         memory.live[allocation].initialized[index],
-        memory.live[allocation].bytes[index] == MemoryByteV37::PointerFragment { pointer, width, ordinal },
+        memory.live[allocation].bytes[index] == (MemoryByteV37::PointerFragment { pointer, width, ordinal }),
         pointer.view == Some(view), 0 < view.guards.len(),
     ensures !byte_native_view_inputs_v38(memory, values),
 {}

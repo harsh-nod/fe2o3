@@ -572,7 +572,7 @@ open spec fn byte_private_frames_live_v30(
                 0 <= owner && 0 <= invocation && 0 <= generation
                 && 0 <= site.function && 0 <= site.block && 0 <= site.operation
                 && exists|i: int| 0 <= i < frames.active.len()
-                    && frames.active[i] == MemoryDynamicFrameV30 { owner, invocation },
+                    && frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),
         }
 }
 

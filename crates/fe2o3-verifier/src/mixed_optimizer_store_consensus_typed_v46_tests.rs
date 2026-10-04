@@ -339,7 +339,21 @@ fn typed_store_consensus_emits_both_actual_interpreters_and_nominal_entry() {
                 assert!(text.contains(name), "missing {name}");
             }
             assert!(text.contains("forwarding_before_fact_v46(3, n, little_endian)"));
-            assert!(text.contains("observation.operation == MemorySourceOperationV30 { function: 0, block: 3, operation: 0 }"));
+            assert!(text.contains("observation.operation == (MemorySourceOperationV30 { function: 0, block: 3, operation: 0 })"));
+            assert!(text.contains("forwarding_slot_site_v46(slot) == (MemoryPrivateSiteV30 { owner, invocation, site })"));
+            assert!(text.contains(
+                "forwarding_slot_site_v46(0) == (MemoryPrivateSiteV30 { owner, invocation, site })"
+            ));
+            assert!(text.contains(
+                "frames.active[0] == (MemoryDynamicFrameV30 { owner: 0, invocation: 0 })"
+            ));
+            for constructor in [
+                "MemorySourceOperationV30",
+                "MemoryPrivateSiteV30",
+                "MemoryDynamicFrameV30",
+            ] {
+                assert!(!text.contains(&format!("== {constructor} {{")));
+            }
             assert!(text.contains("forall|allocation: MemoryAllocationV30| external.live.contains_key(allocation) ==> matches!(allocation, MemoryAllocationV30::External"));
             assert!(!text.contains("assume("));
             assert!(!text.contains("ConsensusOtherV46"));

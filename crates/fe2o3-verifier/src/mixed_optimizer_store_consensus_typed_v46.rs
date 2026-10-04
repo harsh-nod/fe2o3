@@ -275,7 +275,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     );
     emit!(
         out,
-        "open spec fn forwarding_selected_allocation_v46(allocation: MemoryAllocationV30) -> bool {{ match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (exists|slot: int| 0 <= slot < forwarding_slot_count_v46() && forwarding_slot_site_v46(slot) == MemoryPrivateSiteV30 {{ owner, invocation, site }}), MemoryAllocationV30::External {{ .. }} => false }} }}\n"
+        "open spec fn forwarding_selected_allocation_v46(allocation: MemoryAllocationV30) -> bool {{ match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (exists|slot: int| 0 <= slot < forwarding_slot_count_v46() && forwarding_slot_site_v46(slot) == (MemoryPrivateSiteV30 {{ owner, invocation, site }})), MemoryAllocationV30::External {{ .. }} => false }} }}\n"
     );
     emit!(
         out,
@@ -290,7 +290,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
         };
         emit!(
             out,
-            " || (forwarding_slot_site_v46({slot}) == MemoryPrivateSiteV30 {{ owner, invocation, site }} && object.bytes.len() == {} && object.base_alignment == {alignment})",
+            " || (forwarding_slot_site_v46({slot}) == (MemoryPrivateSiteV30 {{ owner, invocation, site }}) && object.bytes.len() == {} && object.base_alignment == {alignment})",
             row.bits / 8
         );
     }
@@ -321,7 +321,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
         let coordinate = row.coordinate;
         emit!(
             out,
-            " || (observation.operation == MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }} && observation.before.values.len() == forwarding_definition_count_v46() && observation.after.values.len() == forwarding_definition_count_v46() && match observation.effect {{ MemoryOperationEffectV30::Read {{ address, width, alignment, value }} => address == observation.before.values[{}] && width == {} && alignment == {} && value == observation.after.values[{}] && match address {{ MemoryValueV30::Pointer(pointer) => forwarding_selected_allocation_v46(pointer.allocation), _ => false }}, _ => false }})",
+            " || (observation.operation == (MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}) && observation.before.values.len() == forwarding_definition_count_v46() && observation.after.values.len() == forwarding_definition_count_v46() && match observation.effect {{ MemoryOperationEffectV30::Read {{ address, width, alignment, value }} => address == observation.before.values[{}] && width == {} && alignment == {} && value == observation.after.values[{}] && match address {{ MemoryValueV30::Pointer(pointer) => forwarding_selected_allocation_v46(pointer.allocation), _ => false }}, _ => false }})",
             coordinate.block.function.0,
             coordinate.block.block,
             coordinate.operation,

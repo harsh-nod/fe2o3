@@ -131,7 +131,7 @@ impl AllocaByteOperationV30 {
         // Alloca site's generation; it never retires older generations.
         emit!(
             out,
-            " let {} = {valid} && byte_frame_runtime_well_formed_v30({frames}) && {frames}.active.len() == 1 && {frames}.active[0] == MemoryDynamicFrameV30 {{ owner: {owner}, invocation: 0 }} && private_generation_counters_valid_v30({generations}, {memory}) && 0 <= allocation_generation_v30 && !{memory}.live.contains_key(allocation_v30);\n",
+            " let {} = {valid} && byte_frame_runtime_well_formed_v30({frames}) && {frames}.active.len() == 1 && {frames}.active[0] == (MemoryDynamicFrameV30 {{ owner: {owner}, invocation: 0 }}) && private_generation_counters_valid_v30({generations}, {memory}) && 0 <= allocation_generation_v30 && !{memory}.live.contains_key(allocation_v30);\n",
             after.valid
         );
         emit!(
