@@ -24,6 +24,8 @@ mod nominal_v3;
 mod nominal_v4;
 #[path = "public_api/nominal_v5.rs"]
 mod nominal_v5;
+#[path = "public_api/mixed_v89.rs"]
+mod mixed_v89;
 
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;

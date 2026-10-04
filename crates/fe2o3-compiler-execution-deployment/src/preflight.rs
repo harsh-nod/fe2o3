@@ -37,8 +37,20 @@ fe2o3-anchor:x:998:\n\
 fe2o3-qualification-client:x:997:\n";
 
 const VERSION_ARGS_V1: &[&str] = &["/usr/bin/systemd-analyze", "--version"];
-const SYSUSERS_ARGS_V1: &[&str] = &["/usr/bin/systemd-sysusers", "--no-pager"];
-const TMPFILES_ARGS_V1: &[&str] = &["/usr/bin/systemd-tmpfiles", "--create", "--no-pager"];
+const SYSUSERS_ARGS_V1: &[&str] = &[
+    "/usr/bin/systemd-sysusers",
+    "--root=/",
+    "--no-pager",
+    "/usr/lib/sysusers.d/fe2o3-compiler-execution.conf",
+    "/usr/lib/sysusers.d/fe2o3-qualification-client.conf",
+];
+const TMPFILES_ARGS_V1: &[&str] = &[
+    "/usr/bin/systemd-tmpfiles",
+    "--root=/",
+    "--create",
+    "--no-pager",
+    "/usr/lib/tmpfiles.d/fe2o3-compiler-execution.conf",
+];
 const ANALYZE_ARGS_V1: &[&str] = &[
     "/usr/bin/systemd-analyze",
     "--man=no",
@@ -588,6 +600,32 @@ mod tests {
     use std::os::fd::AsFd as _;
 
     use super::*;
+
+    #[test]
+    fn account_and_directory_creation_select_only_authenticated_qualification_configs() {
+        assert_eq!(
+            SYSUSERS_ARGS_V1,
+            [
+                "/usr/bin/systemd-sysusers",
+                "--root=/",
+                "--no-pager",
+                "/usr/lib/sysusers.d/fe2o3-compiler-execution.conf",
+                "/usr/lib/sysusers.d/fe2o3-qualification-client.conf",
+            ]
+        );
+        assert_eq!(
+            TMPFILES_ARGS_V1,
+            [
+                "/usr/bin/systemd-tmpfiles",
+                "--root=/",
+                "--create",
+                "--no-pager",
+                "/usr/lib/tmpfiles.d/fe2o3-compiler-execution.conf",
+            ]
+        );
+        assert_eq!(PREFLIGHT_COMMANDS_V1[1].arguments, SYSUSERS_ARGS_V1);
+        assert_eq!(PREFLIGHT_COMMANDS_V1[2].arguments, TMPFILES_ARGS_V1);
+    }
 
     #[test]
     fn command_plan_is_exact_and_runs_one_revalidation_per_success() {

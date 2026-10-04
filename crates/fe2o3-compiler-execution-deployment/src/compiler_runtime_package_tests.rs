@@ -570,8 +570,25 @@ fn original_sources_profile_and_path_custody_survive_until_final_verification() 
                     if case < 2 {
                         let bytes = fs::read(&path).unwrap();
                         let original_mode = fs::metadata(&path).unwrap().mode() & 0o7777;
-                        fs::remove_file(&path).unwrap();
+                        let retained_profile = if case == 1 {
+                            let displaced = f.temporary.path().join("displaced-profile");
+                            fs::rename(&path, &displaced).unwrap();
+                            Some(displaced)
+                        } else {
+                            fs::remove_file(&path).unwrap();
+                            None
+                        };
                         write(&path, &bytes, original_mode);
+                        if let Some(displaced) = retained_profile {
+                            let retained = fs::metadata(displaced).unwrap();
+                            let replacement = fs::metadata(&path).unwrap();
+                            assert_eq!(retained.nlink(), 1);
+                            assert_eq!(replacement.nlink(), 1);
+                            assert_ne!(
+                                (retained.dev(), retained.ino()),
+                                (replacement.dev(), replacement.ino())
+                            );
+                        }
                     } else {
                         fs::rename(&path, f.temporary.path().join("displaced")).unwrap();
                         fs::create_dir(&path).unwrap();

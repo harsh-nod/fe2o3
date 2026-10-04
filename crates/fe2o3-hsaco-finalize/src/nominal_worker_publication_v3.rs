@@ -204,6 +204,7 @@ pub(super) enum RecoveredPublicationRef<'a> {
     V1(&'a RecoveredProtectedWorkerV3HsacoPublicationV1),
     NominalV3(&'a RecoveredNominalWorkerPublicationV3),
     MixedV53(&'a super::mixed_v53::RecoveredMixedWorkerPublicationV53),
+    MixedV89(&'a super::mixed_v89::RecoveredMixedWorkerPublicationV89),
 }
 impl<'a> RecoveredPublicationRef<'a> {
     pub(super) fn intent(self) -> SealedProtectedWorkerV3HsacoPublicationIntentV1 {
@@ -211,6 +212,7 @@ impl<'a> RecoveredPublicationRef<'a> {
             Self::V1(v) => v.intent,
             Self::NominalV3(v) => v.intent,
             Self::MixedV53(v) => v.intent,
+            Self::MixedV89(v) => v.intent,
         }
     }
     fn record(self) -> WorkerV3PublicationIntentRecordV1 {
@@ -218,6 +220,7 @@ impl<'a> RecoveredPublicationRef<'a> {
             Self::V1(v) => v.record,
             Self::NominalV3(v) => v.record,
             Self::MixedV53(v) => v.record,
+            Self::MixedV89(v) => v.record,
         }
     }
     pub(super) fn finalized(self) -> FinalizedRef<'a> {
@@ -225,6 +228,7 @@ impl<'a> RecoveredPublicationRef<'a> {
             Self::V1(v) => FinalizedRef::V1(&v.finalized),
             Self::NominalV3(v) => FinalizedRef::NominalV3(&v.finalized),
             Self::MixedV53(v) => FinalizedRef::MixedV53(&v.finalized),
+            Self::MixedV89(v) => FinalizedRef::MixedV89(&v.finalized),
         }
     }
     pub(super) fn publication_binding(

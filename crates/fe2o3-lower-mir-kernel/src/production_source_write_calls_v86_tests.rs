@@ -1,4 +1,7 @@
 use super::*;
+#[path = "production_source_write_memory_payload_v88_tests.rs"]
+mod memory_payload_v88;
+
 use scoped_raw_admission_v29::issued_role_tests_v29::{
     copied_issued_rows_v18, issued_rows_v18, run_issued_role_owner_access_v86,
 };
@@ -6,13 +9,117 @@ use scoped_raw_admission_v29::issued_role_tests_v29::{
 const BOOL: SemanticTypeIdV1 = REFERENCE;
 const LIMIT: usize = 1_000_000_000;
 
+fn run_optimized_write_v87(
+    count: u32,
+    fault: Option<u8>,
+    work: usize,
+    storage: usize,
+    reached: &std::cell::Cell<bool>,
+) -> (
+    Result<(), ProductionSourceOptimizationErrorV18<ProductionSourceOwnedViewErrorV18>>,
+    usize,
+    usize,
+) {
+    scoped_raw_admission_v29::issued_role_tests_v29::run_issued_role_source_v87(
+        write_owner_count_v87(true, true, 0, count),
+        fe2o3_kernel_descriptor::AccessMode::WriteOnly,
+        work,
+        storage,
+        &std::cell::Cell::new(None),
+        |source, budget| {
+            let floor = budget.storage();
+            let (output, (), receipt) = source.with_checked_mixed_fixedpoint_optimization_v18(
+                budget,
+                |original, optimized, budget| {
+                    slice_view_v1::test_optimized_writes_v87(
+                        original,
+                        optimized,
+                        count as usize,
+                        fault,
+                        reached,
+                        budget,
+                    )?;
+                    Ok::<_, ProductionSourceOwnedViewErrorV18>(((), 0))
+                },
+            )?;
+            assert_eq!(
+                receipt.retained_storage(),
+                size_of::<fe2o3_pliron::KirNeutralOwnedOriginStorageV1>()
+            );
+            assert_eq!(output.execution().policy_version(), 11);
+            drop(output);
+            assert_eq!(budget.storage(), floor);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn optimized_thread_write_transports_actual_suffix_and_commoned_producers() {
+    for count in [1, 2, 4] {
+        let reached = std::cell::Cell::new(false);
+        run_optimized_write_v87(count, None, LIMIT, LIMIT, &reached)
+            .0
+            .unwrap();
+        assert!(reached.get());
+    }
+}
+
+#[test]
+fn optimized_thread_write_rejects_wrong_producer_index_and_root_descendants() {
+    for fault in 0..4 {
+        let reached = std::cell::Cell::new(false);
+        assert!(
+            run_optimized_write_v87(2, Some(fault), LIMIT, LIMIT, &reached)
+                .0
+                .is_err()
+        );
+        assert!(
+            reached.get(),
+            "mutation {fault} must reach checked optimizer transport"
+        );
+    }
+}
+
+#[test]
+fn optimized_thread_write_transaction_has_exact_resource_boundaries() {
+    let reached = std::cell::Cell::new(false);
+    let (result, work, storage) = run_optimized_write_v87(2, None, LIMIT, LIMIT, &reached);
+    result.unwrap();
+    assert!(reached.get());
+    let reached = std::cell::Cell::new(false);
+    let (exact, exact_work, exact_storage) =
+        run_optimized_write_v87(2, None, work, storage, &reached);
+    exact.unwrap();
+    assert!(reached.get());
+    assert_eq!((exact_work, exact_storage), (work, storage));
+    for (work, storage) in [(work - 1, storage), (work, storage - 1)] {
+        let reached = std::cell::Cell::new(false);
+        assert!(
+            run_optimized_write_v87(2, None, work, storage, &reached)
+                .0
+                .is_err()
+        );
+    }
+}
+
 // This is admitted semantic MIR with captured SSA occurrences, not a rustc receipt.
 fn write_owner(
     consume_bool: bool,
     copied_value: bool,
     receiver: usize,
 ) -> ProductionSemanticSsaOwnerV1 {
+    write_owner_count_v87(consume_bool, copied_value, receiver, 1)
+}
+
+pub(super) fn write_owner_count_v87(
+    consume_bool: bool,
+    copied_value: bool,
+    receiver: usize,
+    count: u32,
+) -> ProductionSemanticSsaOwnerV1 {
     assert!(receiver < 2);
+    assert!((1..=252).contains(&count));
     let base = owner_with_shape_uncaptured(1, 0);
     let mut types = base.source_semantic().types()[..8].to_vec();
     types[BOOL.index() as usize] = declaration(
@@ -63,16 +170,31 @@ fn write_owner(
     if copied_value {
         statements.push(assign(6, U32, SemanticRvalueKindV1::Use(constant())));
     }
-    let mut blocks = vec![
-        block(0, statements, call(1, vec![], 4, WITNESS, 1)),
-        block(
-            1,
-            vec![],
+    let mut blocks = vec![block(0, statements, call(1, vec![], 4, WITNESS, 1))];
+    for ordinal in 1..=count {
+        blocks.push(block(
+            u8::try_from(ordinal).unwrap(),
+            if ordinal == 1 {
+                vec![]
+            } else {
+                vec![assign(
+                    3,
+                    BORROW,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Mutable,
+                        place: place(receiver as u32 + 1, CARRIER),
+                    },
+                )]
+            },
             call(
                 2,
                 vec![
                     SemanticOperandV1::Move(place(3, BORROW)),
-                    SemanticOperandV1::Move(place(4, WITNESS)),
+                    if ordinal == count {
+                        SemanticOperandV1::Move(place(4, WITNESS))
+                    } else {
+                        SemanticOperandV1::Copy(place(4, WITNESS))
+                    },
                     if copied_value {
                         SemanticOperandV1::Copy(place(6, U32))
                     } else {
@@ -81,34 +203,34 @@ fn write_owner(
                 ],
                 5,
                 BOOL,
-                2,
+                ordinal + 1,
             ),
-        ),
-    ];
+        ));
+    }
     if consume_bool {
         blocks.push(block(
-            2,
+            u8::try_from(count + 1).unwrap(),
             vec![],
             SemanticTerminatorKindV1::SwitchInt {
                 discriminant: SemanticOperandV1::Copy(place(5, BOOL)),
                 targets: SemanticSwitchTargetsV1::new(
                     vec![SemanticSwitchTargetV1::new(
                         1,
-                        edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                        edge(SemanticEdgeRoleV1::SwitchValue, count + 2),
                     )],
-                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 4),
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, count + 3),
                 )
                 .unwrap(),
             },
         ));
         blocks.push(block(
-            3,
+            u8::try_from(count + 2).unwrap(),
             vec![],
-            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 4)),
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, count + 3)),
         ));
     }
     blocks.push(block(
-        if consume_bool { 4 } else { 2 },
+        u8::try_from(if consume_bool { count + 3 } else { count + 1 }).unwrap(),
         vec![assign(
             0,
             UNIT,

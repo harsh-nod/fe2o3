@@ -4,6 +4,9 @@ use crate::{CompilerGeneratedKernelProfileV1, MixedWorkerV53PreparationError};
 use fe2o3_artifacts::PointerWidth;
 use fe2o3_device::KernelMarkerV1;
 
+#[path = "generated_kfd_predicated_preparation_v89_tests.rs"]
+mod predicated_v89_tests;
+
 struct MixedKernel;
 fn marker() {}
 unsafe impl KernelMarkerV1 for MixedKernel {

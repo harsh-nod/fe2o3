@@ -7,6 +7,9 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 #[path = "generated_kfd_mixed_preparation_v53_tests.rs"]
 mod preparation_v53_tests;
 
+#[path = "generated_kfd_mixed_contract_v88_tests.rs"]
+mod predicated_v88_tests;
+
 fn free(_: usize) -> std::result::Result<(), Resource> {
     Ok(())
 }

@@ -1,124 +1,20 @@
 //! Descriptor-finalization accounting on a real finite protocol ledger.
-use crate::{
-    InertProtectedFirstBuildWorkerV3EvidenceV1, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53,
-    NominalWorkerFinalizationErrorV53, PreparedFinalizedNominalWorkerHsacoV53,
-    derive_unfinalized_nominal_hsaco_v53, finalize_protected_worker_nominal_hsaco_v53,
-};
-use fe2o3_kernel_ir::{
-    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
-    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
-};
-use std::{error::Error, fmt, mem::size_of};
 
-/// Finite ordinary Cargo descriptor-finalization work ceiling. This is not an
-/// admission promise for every artifact below the independent format ceilings.
-pub const MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53: usize = 1_000_000_000;
-/// Finite ordinary Cargo descriptor scratch/header ceiling. Retained evidence,
-/// ELF/AMDHSA allocations and output bytes keep their existing bounded domains.
-pub const MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53: usize =
-    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53 + 64 * 1024;
+use crate::mixed_worker_resources_family::mixed_worker_resources_family;
 
-/// Exact accounting or structural refusal; neither variant grants authority.
-#[derive(Debug)]
-pub enum MixedWorkerFinalizationBudgetErrorV53 {
-    /// Reservation, prior denial, work debit or accounting failure.
-    Resource(Resource),
-    /// Unchanged raw-artifact reconstruction failure, including nested denial.
-    Artifact(crate::NominalFinalizationErrorV53<Resource>),
-    /// Unchanged strict finalization failure, including nested work denial.
-    Finalization(NominalWorkerFinalizationErrorV53<Resource>),
-}
-impl From<Resource> for MixedWorkerFinalizationBudgetErrorV53 {
-    fn from(error: Resource) -> Self {
-        Self::Resource(error)
-    }
-}
-impl fmt::Display for MixedWorkerFinalizationBudgetErrorV53 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Resource(error) => write!(f, "mixed finalization resources refused: {error}"),
-            Self::Artifact(error) => error.fmt(f),
-            Self::Finalization(error) => error.fmt(f),
-        }
-    }
-}
-impl Error for MixedWorkerFinalizationBudgetErrorV53 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(match self {
-            Self::Resource(error) => error,
-            Self::Artifact(error) => error,
-            Self::Finalization(error) => error,
-        })
-    }
-}
-type Failure = MixedWorkerFinalizationBudgetErrorV53;
-type Work<'a> = dyn FnMut(usize) -> Result<(), Resource> + 'a;
-
-fn scope<T, F>(budget: &mut Budget<'_>, run: F) -> Result<T, Failure>
-where
-    F: FnOnce(usize, &mut Work<'_>) -> Result<T, Failure>,
-{
-    // Only a work callback is lent out. The callee cannot release the scratch,
-    // replace the ledger, or turn a declared capacity into a reservation.
-    budget.check_prior_denials_v1()?;
-    let frame = NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53
-        .checked_add(size_of::<F>())
-        .and_then(|n| n.checked_add(size_of::<Budget<'_>>()))
-        .and_then(|n| n.checked_add(size_of::<&mut Work<'_>>()))
-        .and_then(|n| n.checked_add(3 * size_of::<usize>()))
-        .and_then(|n| n.checked_add(size_of::<T>()))
-        .and_then(|n| n.checked_add(2 * size_of::<Result<T, Failure>>()))
-        .and_then(|n| {
-            n.checked_add(size_of::<
-                Result<Result<T, Failure>, Box<dyn std::any::Any + Send>>,
-            >())
-        })
-        .ok_or(Resource::Arithmetic)?;
-    budget.with_prepaid_scope(budget.storage(), 1, 1, frame, |budget| {
-        run(NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53, &mut |n| {
-            budget.charge_work(n)
-        })
-    })
-}
-
-/// Finalize the complete V53 artifact using real scratch reservation and work
-/// debit on the caller's finite ledger. No synthetic prepaid capacity or free
-/// callback is accepted by this entry. The original input is never mutated.
-///
-/// Scratch is restored on success, error and unwind; work/peak/first-denial
-/// history remains. Returned artifact/evidence allocations are in the existing
-/// bounded protocol domain, not charged as descriptor scratch or source IR.
-pub fn finalize_protected_worker_nominal_hsaco_on_budget_v53(
-    source: InertProtectedFirstBuildWorkerV3EvidenceV1,
-    budget: &mut Budget<'_>,
-) -> Result<PreparedFinalizedNominalWorkerHsacoV53, Failure> {
-    scope(budget, |scratch, work| {
-        finalize_protected_worker_nominal_hsaco_v53(source, scratch, &mut |n| work(n))
-            .map_err(Failure::Finalization)
-    })
-}
-
-/// Reconstruct exact raw V53 bytes with real reservation and cumulative debit
-/// before descriptor inspection or cloning. The finalized input is immutable;
-/// only the declared code-digest field is cleared in the new bounded output.
-/// Returned bytes remain in the separate existing artifact allocation domain.
-pub fn derive_unfinalized_nominal_hsaco_on_budget_v53(
-    bytes: &[u8],
-    budget: &mut Budget<'_>,
-) -> Result<Vec<u8>, Failure> {
-    scope(budget, |scratch, work| {
-        derive_unfinalized_nominal_hsaco_v53(bytes, scratch, &mut |n| work(n))
-            .map_err(Failure::Artifact)
-    })
-}
-
-pub(crate) fn derive_raw_default(bytes: &[u8]) -> Result<Vec<u8>, Failure> {
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
-        MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
-    );
-    let mut budget = Budget::new(&mut work, MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53);
-    derive_unfinalized_nominal_hsaco_on_budget_v53(bytes, &mut budget)
-}
+mixed_worker_resources_family!(
+    NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53,
+    NominalWorkerFinalizationErrorV53,
+    PreparedFinalizedNominalWorkerHsacoV53,
+    derive_unfinalized_nominal_hsaco_v53,
+    finalize_protected_worker_nominal_hsaco_v53,
+    MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
+    MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53,
+    MixedWorkerFinalizationBudgetErrorV53,
+    NominalFinalizationErrorV53,
+    finalize_protected_worker_nominal_hsaco_on_budget_v53,
+    derive_unfinalized_nominal_hsaco_on_budget_v53
+);
 
 #[cfg(test)]
 mod tests {

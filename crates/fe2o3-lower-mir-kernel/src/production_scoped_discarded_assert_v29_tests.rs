@@ -765,10 +765,10 @@ fn reject_failure_receipt_tampering(
             )
         })
         .unwrap_err();
-        let expected = if mutation == 6 || mutation == 7 {
-            "typed object source payload differs from its actual operation"
-        } else {
-            "scoped memory anchors differ from their source instance"
+        let expected = match mutation {
+            6 => "compiler enum access lacks its exact retained payload role",
+            7 => "typed object source payload differs from its actual operation",
+            _ => "scoped memory anchors differ from their source instance",
         };
         assert!(
             matches!(error, ProductionSemanticKirErrorV1::Unsupported { detail, .. } if detail == expected),

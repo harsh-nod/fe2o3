@@ -1892,3 +1892,438 @@ mod private_target_frame_resource_tests {
         }
     }
 }
+
+/// Same-name/domain join only. The enclosing checked optimizer owns B -> O
+/// correspondence; this private helper never turns a name into source authority.
+fn private_bf16_checked_output_kernel_v1<'o>(
+    output: &'o Module,
+    source: &Module,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<&'o Kernel, ProductionSemanticKirErrorV1> {
+    budget.check_prior_denials_v1()?;
+    budget.charge_work(8)?;
+    let ([kernel], [original]) = (output.kernels.as_slice(), source.kernels.as_slice()) else {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    };
+    let names = kernel
+        .id
+        .as_str()
+        .len()
+        .checked_add(kernel.entry.as_str().len())
+        .and_then(|n| n.checked_add(original.id.as_str().len()))
+        .and_then(|n| n.checked_add(original.entry.as_str().len()))
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
+    budget.charge_work(names)?;
+    if kernel.id != original.id
+        || kernel.entry != original.entry
+        || kernel.domain != original.domain
+    {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    Ok(kernel)
+}
+
+fn with_private_bf16_actual_output_formal_v1<'work, I>(
+    output: &Module,
+    source: &Module,
+    max_operations: usize,
+    selected_root: u32,
+    budget: &mut ArgumentBudgetV1<'work>,
+    inspect: I,
+) -> Result<(), ProductionSemanticKirErrorV1>
+where
+    I: FnOnce(
+        &PrivateBf16FormalAttemptV1,
+        &PrivateBf16GuardedFormalResultV1,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+{
+    let kernel = private_bf16_checked_output_kernel_v1(output, source, budget)?;
+    let extents = crate::production_formal_memory_v1::witness_extents(&kernel.domain);
+    with_private_bf16_formal_frame_v1(
+        budget,
+        || {
+            fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+                output,
+                &kernel.id,
+                fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                    rank: kernel.domain.rank(),
+                    extents,
+                },
+                fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+            )
+        },
+        |attempt, budget| {
+            with_private_bf16_ranked_formal_frame_v1(
+                output,
+                kernel,
+                extents,
+                max_operations,
+                selected_root,
+                attempt,
+                budget,
+                inspect,
+            )
+        },
+    )
+}
+
+impl ProductionPrivateBf16FormalMemoryOwnerV1 {
+    /// Private borrowed actual-O rule, not a legacy Direct/Erased source anchor.
+    /// Fresh nominal/source/formal replay selects this intact owner's original
+    /// operation limit; a new raw analysis and guard proof use ONLY actual O.
+    /// The caller must already own and replay the exact checked B -> O relation,
+    /// target binding, O backing and both original accounts. This method proves
+    /// no lineage for an arbitrary separately borrowed canonical output.
+    ///
+    /// Original Incomplete reasons remain unchanged borrowed discharged records.
+    /// The callback returns unit; ignoring its typed proof cannot waive refusal.
+    /// Bounds/alias obligations remain unauthenticated runtime requirements.
+    /// Fixed frames, location payload and one unchanged guard allowance use the
+    /// supplied original account. Legacy formal/tree/definition/payload work is
+    /// still excluded; this is not whole-engine, allocator, stack or RSS metering.
+    /// No ordinary admission, LLVM, artifact or launch authority is created.
+    #[doc(hidden)]
+    pub fn with_private_bf16_checked_output_guarded_formal_v1<'work, I>(
+        &self,
+        output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'work>,
+        inspect: I,
+    ) -> Result<(), crate::ProductionFormalMemoryErrorV1>
+    where
+        I: FnOnce(
+            &Result<
+                fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+                fe2o3_kernel_ir::FormalMemoryObligationError,
+            >,
+            &Result<(), ProductionMemoryDischargeFailureV1>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    {
+        self.with_private_bf16_target_source_v1(
+            expected_root,
+            expected_return,
+            budget,
+            |source, _function, _source_obligations, budget| {
+                with_private_bf16_actual_output_formal_v1(
+                    output.module(),
+                    source,
+                    self.attached.receipt.materialized.limits.max_operations,
+                    expected_root.index(),
+                    budget,
+                    inspect,
+                )
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+mod private_checked_output_guard_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, *};
+
+    // Actual formal/structural checker control, not rustc or optimizer lineage.
+    // O has a different block and one leading operation from the source fixture.
+    fn graph(shifted: bool, mutation: u8) -> Module {
+        let slice = Type::slice(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let mut block = BasicBlock::new(BlockId(if shifted { 42 } else { 0 }));
+        if shifted {
+            block.operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(11), Type::INDEX),
+                OperationKind::Constant(Constant::Index(99)),
+            ));
+        }
+        for (id, ty, kind) in [
+            (
+                3,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            (
+                4,
+                Type::INDEX,
+                OperationKind::SliceLength {
+                    slice: ValueId(if mutation == 2 { 1 } else { 0 }),
+                },
+            ),
+            (
+                5,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(if mutation == 3 { 1 } else { 0 })),
+            ),
+            (
+                6,
+                Type::Scalar(ScalarType::U16),
+                OperationKind::Constant(Constant::U16(0)),
+            ),
+            (
+                7,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: if mutation == 1 {
+                        ComparePredicate::GreaterThan
+                    } else {
+                        ComparePredicate::LessThan
+                    },
+                    lhs: ValueId(2),
+                    rhs: ValueId(4),
+                },
+            ),
+            (
+                8,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: ValueId(7),
+                    true_value: ValueId(if mutation == 4 { 4 } else { 2 }),
+                    false_value: ValueId(5),
+                },
+            ),
+            (
+                9,
+                pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(3),
+                    offset: ValueId(8),
+                },
+            ),
+            (
+                10,
+                Type::Scalar(ScalarType::U16),
+                OperationKind::GuardedLoad {
+                    pointer: ValueId(9),
+                    predicate: ValueId(7),
+                    fallback: ValueId(6),
+                    access: MemoryAccess::new(AddressSpace::Global, 2),
+                },
+            ),
+        ] {
+            block
+                .operations
+                .push(Operation::effect_free(ValueDef::new(ValueId(id), ty), kind));
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("private-actual-output-guard-control");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(vec![slice.clone(), slice, Type::INDEX], vec![]),
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "entry",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        module
+    }
+
+    fn observe(
+        raw: &PrivateBf16FormalAttemptV1,
+        proof: &PrivateBf16GuardedFormalResultV1,
+        _: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let analysis = raw.as_ref().unwrap();
+        assert!(!analysis.is_complete());
+        assert_eq!(
+            analysis.incomplete_reasons(),
+            &[
+                FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                    location: FunctionOperationLocation::new(BlockId(42), 8),
+                }
+            ]
+        );
+        assert!(proof.is_ok());
+        Ok(())
+    }
+
+    fn trial(work_cap: usize, storage_cap: usize, mutation: u8) -> (bool, usize, usize, bool) {
+        let source = graph(false, 0);
+        let output = graph(true, mutation);
+        let mut work = Work::new(work_cap);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_cap);
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = with_private_bf16_actual_output_formal_v1(
+            &output,
+            &source,
+            64,
+            0,
+            &mut budget,
+            |raw, proof, budget| {
+                if mutation == 0 {
+                    observe(raw, proof, budget)
+                } else {
+                    assert!(raw.as_ref().is_ok_and(|r| !r.is_complete()));
+                    assert!(proof.is_err());
+                    // Ignoring a real guard refusal must not produce success.
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(budget.storage(), 7);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        (
+            result.is_ok(),
+            budget.work(),
+            budget.peak_storage(),
+            budget.check_prior_denials_v1().is_err(),
+        )
+    }
+
+    #[test]
+    fn actual_output_guard_uses_fresh_shifted_locations_and_preserves_raw_reasons() {
+        let (accepted, _, _, denied) = trial(1_000_000, 1_000_000, 0);
+        assert!(accepted && !denied);
+    }
+
+    #[test]
+    fn actual_output_guard_changed_predicate_slice_select_and_index_refuse() {
+        for mutation in 1..=4 {
+            let (accepted, _, _, denied) = trial(1_000_000, 1_000_000, mutation);
+            assert!(!accepted && !denied);
+        }
+    }
+
+    #[test]
+    fn actual_output_guard_exact_and_one_short_work_storage_restore_floor() {
+        let (accepted, used, peak, denied) = trial(1_000_000, 1_000_000, 0);
+        assert!(accepted && !denied);
+        assert!(trial(used, peak, 0).0);
+        for (work, storage) in [(used - 1, peak), (used, peak - 1)] {
+            let (accepted, _, _, denied) = trial(work, storage, 0);
+            assert!(!accepted && denied);
+        }
+    }
+
+    #[test]
+    fn actual_output_guard_roster_name_entry_and_domain_substitution_refuse() {
+        let source = graph(false, 0);
+        for mutation in 0..5 {
+            let mut output = graph(true, 0);
+            match mutation {
+                0 => output.kernels.clear(),
+                1 => output.kernels.push(output.kernels[0].clone()),
+                2 => output.kernels[0].id = KernelId::new("other"),
+                3 => output.kernels[0].entry = FunctionId::new("other"),
+                _ => {
+                    output.kernels[0].domain = LaunchDomain::D1 {
+                        x: LaunchExtent::Static(32),
+                    }
+                }
+            }
+            let mut work = Work::new(1_000_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            assert!(matches!(
+                private_bf16_checked_output_kernel_v1(&output, &source, &mut budget),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+            ));
+            assert_eq!(budget.storage(), 7);
+            assert_eq!(budget.failed_work(), None);
+        }
+    }
+
+    #[test]
+    fn actual_output_guard_original_denials_precede_any_new_debit() {
+        let source = graph(false, 0);
+        let output = graph(true, 0);
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let prior = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(matches!(with_private_bf16_actual_output_formal_v1(
+                    &output, &source, 64, 0, &mut budget, |_, _, _| panic!("denied before callback")),
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) if error == prior));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn actual_output_guard_source_coordinates_and_duplicate_coverage_are_not_proofs() {
+        for duplicate in [false, true] {
+            let output = graph(true, 0);
+            let source = if duplicate {
+                graph(true, 0)
+            } else {
+                graph(false, 0)
+            };
+            let mut attempt = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+                &source,
+                &source.kernels[0].id,
+                ExplicitLaunchExtent::Exact {
+                    rank: 1,
+                    extents: [64, 1, 1],
+                },
+                FormalIndexWidth::Bits64,
+            );
+            if duplicate {
+                let Ok(FormalMemoryObligationAnalysis::Incomplete { reasons, .. }) = &mut attempt
+                else {
+                    panic!("guarded fixture");
+                };
+                reasons.push(reasons[0].clone());
+            }
+            let mut work = Work::new(1_000_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+            budget.reserve_storage(7).unwrap();
+            assert!(
+                with_private_bf16_ranked_formal_frame_v1(
+                    &output,
+                    &output.kernels[0],
+                    [64, 1, 1],
+                    64,
+                    0,
+                    &attempt,
+                    &mut budget,
+                    |_, proof, _| {
+                        assert!(proof.is_err());
+                        Ok(())
+                    },
+                )
+                .is_err()
+            );
+            assert_eq!(budget.storage(), 7);
+            assert!(budget.check_prior_denials_v1().is_ok());
+        }
+    }
+}

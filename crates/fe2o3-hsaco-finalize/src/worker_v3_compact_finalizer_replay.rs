@@ -965,6 +965,19 @@ pub fn prepare_mixed_worker_compact_finalizer_replay_v53(
     )
 }
 
+/// Preserve the V89 predicate and formation contract through the same strict
+/// replay, without a conversion to V53 or a proof/launch authority upgrade.
+pub fn prepare_mixed_worker_compact_finalizer_replay_v89(
+    finalized: crate::PreparedFinalizedNominalWorkerHsacoV89,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    prepare_versioned_compact_finalizer_replay(
+        crate::worker_v3_finalized_schema::FinalizedOwner::MixedV89(finalized),
+    )
+}
+
 #[derive(Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ProtectedWorkerV3CompactFinalizerReplayErrorV1 {

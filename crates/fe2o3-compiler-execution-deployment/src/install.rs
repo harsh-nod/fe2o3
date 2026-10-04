@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::Write as _;
 use std::os::unix::fs::FileExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustix::fs::{
     AtFlags, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Uid, fchmod, fchown, fstat, mkdirat,
@@ -227,6 +227,8 @@ struct InstalledDeployment {
     root_name: String,
     publication: CompilerExecutionInstalledRootPublicationV1,
     root: File,
+    parent: File,
+    parent_path: PathBuf,
 }
 
 impl fmt::Debug for InstalledDeployment {
@@ -302,6 +304,79 @@ impl InstalledCompilerExecutionDeploymentV1 {
     pub(super) fn retained_root(&self) -> &File {
         &self.inner.root
     }
+
+    #[cfg(test)]
+    pub(super) fn namespace_descriptors_for_test(&self) -> [&File; 2] {
+        [&self.inner.parent, &self.inner.root]
+    }
+
+    pub(super) fn refresh_mount_namespace_descriptors(
+        &mut self,
+        owner: (u32, u32),
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        let installed = &mut self.inner;
+        revalidate_installed(installed, owner)?;
+        let parent_before = snapshot(&fstat(&installed.parent).map_err(|source| {
+            io_error(
+                "snapshot retained install parent before namespace refresh",
+                source,
+            )
+        })?);
+        let root_before = snapshot(&fstat(&installed.root).map_err(|source| {
+            io_error(
+                "snapshot retained installed root before namespace refresh",
+                source,
+            )
+        })?);
+        let parent = open_install_parent(&installed.parent_path, owner)?;
+        require_same_installed_directory(&installed.parent, &parent)?;
+        let root = open_named_root(&parent, &installed.root_name)?
+            .ok_or_else(|| changed("installed lower root disappeared during namespace refresh"))?;
+        require_same_installed_directory(&installed.root, &root)?;
+        verify_installed_root(&root, owner, &installed.deployment)?;
+        revalidate_installed(installed, owner)?;
+        verify_install_parent_path(&installed.parent_path, &parent, owner)?;
+        let named_root = open_named_root(&parent, &installed.root_name)?
+            .ok_or_else(|| changed("installed lower root disappeared before namespace transfer"))?;
+        require_same_installed_directory(&root, &named_root)?;
+        require_same_installed_directory(&installed.parent, &parent)?;
+        require_same_installed_directory(&installed.root, &root)?;
+        if snapshot(&fstat(&parent).map_err(|source| {
+            io_error("reinspect install parent after namespace refresh", source)
+        })?) != parent_before
+            || snapshot(&fstat(&root).map_err(|source| {
+                io_error("reinspect installed root after namespace refresh", source)
+            })?) != root_before
+        {
+            return Err(changed(
+                "installed custody changed during namespace refresh",
+            ));
+        }
+        // Keep both original descriptors until the complete current-namespace tree is checked.
+        installed.parent = parent;
+        installed.root = root;
+        Ok(())
+    }
+}
+
+fn require_same_installed_directory(
+    retained: &File,
+    reopened: &File,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let retained =
+        snapshot(&fstat(retained).map_err(|source| {
+            io_error("inspect retained installed namespace directory", source)
+        })?);
+    let reopened =
+        snapshot(&fstat(reopened).map_err(|source| {
+            io_error("inspect reopened installed namespace directory", source)
+        })?);
+    if retained != reopened {
+        return Err(changed(
+            "installed namespace directory differs from retained custody",
+        ));
+    }
+    Ok(())
 }
 
 /// Derives the sole V1 final-root name from an admitted manifest SHA-256.
@@ -700,7 +775,10 @@ fn install_for_owner_with_hooks(
 ) -> Result<InstalledDeployment, DeploymentVerificationErrorV1> {
     validate_sealed_file(&deployment.manifest)?;
     validate_sealed_files(&deployment.files)?;
-    let parent = open_install_parent(install_parent, owner)?;
+    let parent_path = std::path::absolute(install_parent).map_err(|source| {
+        std_io_error("retain absolute compiler-execution install parent", source)
+    })?;
+    let parent = open_install_parent(&parent_path, owner)?;
     let parent_snapshot =
         snapshot(&fstat(&parent).map_err(|source| io_error("inspect install parent", source))?);
     let root_name = install_root_name(deployment.profile, deployment.manifest_sha256);
@@ -713,6 +791,8 @@ fn install_for_owner_with_hooks(
             root_name,
             CompilerExecutionInstalledRootPublicationV1::Reacquired,
             root,
+            parent,
+            parent_path,
         ));
     }
 
@@ -748,11 +828,14 @@ fn install_for_owner_with_hooks(
             })?;
             verify_installed_root(&existing, owner, &deployment)?;
             staging.cleanup()?;
+            drop(staging);
             return Ok(installed_result(
                 deployment,
                 root_name,
                 CompilerExecutionInstalledRootPublicationV1::Reacquired,
                 existing,
+                parent,
+                parent_path,
             ));
         }
         Err(source) => {
@@ -800,11 +883,14 @@ fn install_for_owner_with_hooks(
         .root
         .take()
         .expect("published staging root retains its descriptor");
+    drop(staging);
     Ok(installed_result(
         deployment,
         root_name,
         CompilerExecutionInstalledRootPublicationV1::Created,
         root,
+        parent,
+        parent_path,
     ))
 }
 
@@ -813,12 +899,16 @@ fn installed_result(
     root_name: String,
     publication: CompilerExecutionInstalledRootPublicationV1,
     root: File,
+    parent: File,
+    parent_path: PathBuf,
 ) -> InstalledDeployment {
     InstalledDeployment {
         deployment,
         root_name,
         publication,
         root,
+        parent,
+        parent_path,
     }
 }
 

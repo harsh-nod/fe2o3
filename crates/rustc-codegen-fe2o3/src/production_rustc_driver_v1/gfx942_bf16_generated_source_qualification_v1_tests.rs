@@ -550,6 +550,8 @@ fn actual_generated_source() {
 }
 
 struct OwningBody<'a> {
+    output_diagnostic: bool,
+    checked_optimizer: bool,
     target_bound: bool,
     formal_owner: bool,
     ranked_formal: bool,
@@ -576,7 +578,67 @@ impl Callbacks for OwningBody<'_> {
             crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         ) {
             Ok(transaction) => {
-                let (result, phase) = if self.target_bound {
+                let (result, phase) = if self.output_diagnostic && self.checked_optimizer {
+                    transaction.observe_bf16_owned_output_guard_for_test_v1(
+                        owning_requested_permutation(self.config.session)
+                            .expect("selected Identity/Swap01"),
+                        |source, emission, budget| {
+                            use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                            budget.charge_work(256)?;
+                            if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                                || super::lower_hex_v1(source.source().sha256())
+                                    != self.record.spec.source.sha256
+                                || Some(emission.return_permutation())
+                                    != owning_requested_permutation(self.config.session)
+                            {
+                                return Err(E::Unavailable(
+                                    "actual owning source/requested Return differs",
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                } else if self.output_diagnostic {
+                    transaction.observe_bf16_owned_output_diagnostic_for_test_v1(
+                        owning_requested_permutation(self.config.session)
+                            .expect("selected Identity/Swap01"),
+                        |source, emission, budget| {
+                            use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                            budget.charge_work(256)?;
+                            if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                                || super::lower_hex_v1(source.source().sha256())
+                                    != self.record.spec.source.sha256
+                                || Some(emission.return_permutation())
+                                    != owning_requested_permutation(self.config.session)
+                            {
+                                return Err(E::Unavailable(
+                                    "actual owning source/requested Return differs",
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                } else if self.checked_optimizer {
+                    transaction.observe_bf16_owned_optimizer_stage_for_test_v1(
+                        owning_requested_permutation(self.config.session)
+                            .expect("selected Identity/Swap01"),
+                        |source, emission, budget| {
+                            use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                            budget.charge_work(256)?;
+                            if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                                || super::lower_hex_v1(source.source().sha256())
+                                    != self.record.spec.source.sha256
+                                || Some(emission.return_permutation())
+                                    != owning_requested_permutation(self.config.session)
+                            {
+                                return Err(E::Unavailable(
+                                    "actual owning source/requested Return differs",
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                } else if self.target_bound {
                     transaction.observe_bf16_owned_target_stage_for_test_v1(
                         owning_requested_permutation(self.config.session)
                             .expect("selected Identity/Swap01"),
@@ -793,6 +855,8 @@ fn actual_generated_owning_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: false,
@@ -931,6 +995,8 @@ fn actual_generated_roster_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: false,
@@ -1038,6 +1104,8 @@ fn actual_generated_module_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: false,
@@ -1148,6 +1216,8 @@ fn actual_generated_attached_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: false,
@@ -1261,6 +1331,8 @@ fn actual_generated_formal_diagnostic_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: false,
@@ -1370,6 +1442,8 @@ fn actual_generated_ranked_formal_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: false,
         ranked_formal: true,
@@ -1482,6 +1556,8 @@ fn actual_generated_formal_owner_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: false,
         formal_owner: true,
         ranked_formal: false,
@@ -1598,6 +1674,8 @@ fn actual_generated_target_bound_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: false,
         target_bound: true,
         formal_owner: false,
         ranked_formal: false,
@@ -1704,5 +1782,394 @@ fn actual_generated_target_bound_source() {
     assert!(
         collected && final_deadline,
         "private target binding refused; no ordinary/LLVM/launch qualification"
+    );
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 private checked V12 optimizer stage only; root owns finite process/output supervision"]
+fn actual_generated_checked_optimizer_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        output_diagnostic: false,
+        checked_optimizer: true,
+        target_bound: false,
+        formal_owner: false,
+        ranked_formal: false,
+        formal: false,
+        attached: false,
+        module: false,
+        roster: false,
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // Success requires the real target/formal/source owner, actual checked V12
+    // optimizer and fresh occurrence replay plus wrong-Return refusal and cleanup.
+    // O is not newly formally admitted, lowered to LLVM or authorized for launch.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let collected = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-checked-optimizer-observation-v1",
+        "session":config.session,
+        "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "optimizer_entry_completed":body.completed,
+        "optimizer_collection_completed":collected,
+        "exact_retained_reason_rows_in_stderr":body.completed,
+        "ranked_guard_discharge_completed":body.completed,
+        "raw_analysis_retained":body.completed,
+        "production_stage_constructed":body.completed,
+        "production_stage_replayed":body.completed,
+        "consuming_stage_boundaries_completed":body.completed,
+        "wrong_return_refused":body.completed,
+    });
+    let serde_json::Value::Object(optimizer_fields) = json!({
+        "target_binding_completed":body.completed,
+        "geometry_checked":body.completed,
+        "optimizer_invoked":body.completed,
+        "checked_v12_output_retained":body.completed,
+        "fresh_occurrence_relation_rechecked":body.completed,
+        "exact_optimizer_rows_in_stderr":body.completed,
+        "phase":body.phase, "failure":body.failure,
+        "root_supervision_required":true, "qualification_accepted":false,
+        "formal_admission":false, "optimized_formal_admission":false,
+        "normal_qualified":false, "legacy_connected":false,
+        "legacy_lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "llvm_emitted":false,
+        "launch_inputs_authenticated":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    }) else {
+        unreachable!("object literal");
+    };
+    frame.as_object_mut().unwrap().extend(optimizer_fields);
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private checked-optimizer-stage observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_CHECKED_OPTIMIZER_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        collected && final_deadline,
+        "private checked optimizer refused; no ordinary/LLVM/launch qualification"
+    );
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 actual checked-output raw diagnostic only; root owns finite process/output supervision"]
+fn actual_generated_checked_output_diagnostic_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        output_diagnostic: true,
+        checked_optimizer: false,
+        target_bound: false,
+        formal_owner: false,
+        ranked_formal: false,
+        formal: false,
+        attached: false,
+        module: false,
+        roster: false,
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // Collection requires the actual complete-only O consumer, then a fresh raw
+    // O report exactly joined to its typed outcome. Incomplete/conflict is a
+    // retained refusal, not O formal/ordinary/LLVM/launch admission.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let collected = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-checked-output-diagnostic-observation-v1",
+        "session":config.session,
+        "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "output_diagnostic_entry_completed":body.completed,
+        "output_collection_completed":collected,
+        "complete_only_consumer_invoked":body.completed,
+        "complete_only_outcome_in_stderr":body.completed,
+        "raw_output_analysis_collected":body.completed,
+        "full_partial_obligations_in_stderr":body.completed,
+        "exact_output_reason_rows_in_stderr":body.completed,
+        "consumer_raw_join_completed":body.completed,
+        "geometry_target_completed":body.completed,
+        "production_stage_constructed":body.completed,
+    });
+    let serde_json::Value::Object(output_fields) = json!({
+        "production_stage_replayed":body.completed,
+        "consuming_stage_boundaries_completed":body.completed,
+        "wrong_return_refused":body.completed,
+        "optimizer_invoked":body.completed,
+        "checked_v12_output_retained":body.completed,
+        "fresh_occurrence_relation_rechecked":body.completed,
+        "phase":body.phase, "failure":body.failure,
+        "root_supervision_required":true, "qualification_accepted":false,
+        "formal_admission":false, "optimized_formal_admission":false,
+        "normal_qualified":false, "legacy_connected":false,
+        "legacy_lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "llvm_emitted":false,
+        "launch_inputs_authenticated":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    }) else {
+        unreachable!("object literal");
+    };
+    frame.as_object_mut().unwrap().extend(output_fields);
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private checked-output diagnostic observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_CHECKED_OUTPUT_DIAGNOSTIC_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        collected && final_deadline,
+        "private checked optimizer refused; no ordinary/LLVM/launch qualification"
+    );
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 actual checked-output structural guard only; root owns finite process/output supervision"]
+fn actual_generated_checked_output_guard_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        output_diagnostic: true,
+        checked_optimizer: true,
+        target_bound: false,
+        formal_owner: false,
+        ranked_formal: false,
+        formal: false,
+        attached: false,
+        module: false,
+        roster: false,
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // Success requires the actual private O guard consumer and an independent
+    // fresh raw O analysis/guard proof, retaining original Incomplete reasons.
+    // Runtime bounds/aliases and all ordinary/LLVM/launch fences remain.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let collected = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-checked-output-guard-observation-v1",
+        "session":config.session,
+        "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "output_guard_entry_completed":body.completed,
+        "output_guard_collection_completed":collected,
+        "guarded_consumer_completed":body.completed,
+        "actual_output_guard_proved":body.completed,
+        "raw_output_analysis_collected":body.completed,
+        "full_partial_obligations_in_stderr":body.completed,
+        "exact_output_reason_rows_in_stderr":body.completed,
+        "raw_incomplete_preserved":body.completed,
+        "geometry_target_completed":body.completed,
+        "production_stage_constructed":body.completed,
+    });
+    let serde_json::Value::Object(output_fields) = json!({
+        "production_stage_replayed":body.completed,
+        "consuming_stage_boundaries_completed":body.completed,
+        "wrong_return_refused":body.completed,
+        "optimizer_invoked":body.completed,
+        "checked_v12_output_retained":body.completed,
+        "fresh_occurrence_relation_rechecked":body.completed,
+        "phase":body.phase, "failure":body.failure,
+        "root_supervision_required":true, "qualification_accepted":false,
+        "formal_admission":false, "optimized_formal_admission":false,
+        "normal_qualified":false, "legacy_connected":false,
+        "legacy_lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "llvm_emitted":false,
+        "launch_inputs_authenticated":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    }) else {
+        unreachable!("object literal");
+    };
+    frame.as_object_mut().unwrap().extend(output_fields);
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private checked-output guard observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_CHECKED_OUTPUT_GUARD_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        collected && final_deadline,
+        "private checked optimizer refused; no ordinary/LLVM/launch qualification"
     );
 }

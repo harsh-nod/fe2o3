@@ -27,7 +27,9 @@ pub mod ffi_contract;
 mod launch_policy;
 pub mod mixed_conditional_v26;
 pub mod mixed_conditional_v86;
+mod mixed_descriptor_family;
 mod mixed_descriptor_v53;
+mod mixed_descriptor_v89;
 mod model;
 mod nominal_v3;
 mod requirements_v2;
@@ -60,6 +62,7 @@ pub use launch_policy::{
     KernelInterfaceIdentityV1, KernelLaunchPolicyIdentityV1, TypedKernelFamilyVariantExpectationV1,
 };
 pub use mixed_descriptor_v53::*;
+pub use mixed_descriptor_v89::*;
 pub use model::{
     AccessMode, AliasSemantics, BlockSizeV1, BuildEvidenceV1, CapabilityV1, CodeObjectVersion,
     CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1,
