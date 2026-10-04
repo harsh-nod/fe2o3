@@ -406,18 +406,19 @@ impl Callbacks for PreparationCallbacks {
                 let mut budget = Budget::new(&mut work, storage_limit);
                 budget.reserve_storage(FLOOR).unwrap();
                 let ledger = budget.work_ledger_identity_v1();
-                let result = transaction()?
-                    .with_original_source_predicated_publication_on_account_v90(
-                        &mut budget,
-                        observe as Consumer,
-                    );
+                let pending = transaction()?;
+                // Root-phase owners remain charged until their enclosing scope ends.
+                let result = budget.with_prepaid_scope(FLOOR, 0, 0, 0, |budget| {
+                    pending
+                        .with_original_source_predicated_publication_on_account_v90(
+                            budget,
+                            observe as Consumer,
+                        )
+                        .map(|value| value.into_observation())
+                });
                 assert_eq!(budget.storage(), FLOOR);
                 assert!(budget.work_ledger_identity_v1() == ledger);
-                Ok::<_, String>((
-                    result.map(|value| value.into_observation()),
-                    budget.work(),
-                    budget.peak_storage(),
-                ))
+                Ok::<_, String>((result, budget.work(), budget.peak_storage()))
             };
             let (measured, work, storage) = run(WORK, STORAGE)?;
             let measured =
@@ -476,16 +477,20 @@ impl Callbacks for PreparationCallbacks {
             let mut work = Work::new(WORK);
             let mut budget = Budget::new(&mut work, STORAGE);
             budget.reserve_storage(FLOOR).unwrap();
-            let selected = transaction()?
-                .with_original_source_predicated_publication_on_account_v90(
-                    &mut budget,
-                    |_, _| -> Result<(), Error> {
-                        callbacks[1] += 1;
-                        Err(Error::Unsupported(
-                            "selected predicated preparation consumer",
-                        ))
-                    },
-                );
+            let selected_transaction = transaction()?;
+            let selected = budget.with_prepaid_scope(FLOOR, 0, 0, 0, |budget| {
+                selected_transaction
+                    .with_original_source_predicated_publication_on_account_v90(
+                        budget,
+                        |_, _| -> Result<(), Error> {
+                            callbacks[1] += 1;
+                            Err(Error::Unsupported(
+                                "selected predicated preparation consumer",
+                            ))
+                        },
+                    )
+                    .map(|value| value.into_observation())
+            });
             assert!(matches!(
                 selected,
                 Err(Error::Unsupported(
@@ -495,13 +500,17 @@ impl Callbacks for PreparationCallbacks {
             assert_eq!(budget.storage(), FLOOR);
             let panic_transaction = transaction()?;
             let unwind = catch_unwind(AssertUnwindSafe(|| {
-                panic_transaction.with_original_source_predicated_publication_on_account_v90(
-                    &mut budget,
-                    |_, _| -> Result<(), Error> {
-                        callbacks[2] += 1;
-                        std::panic::panic_any(9090u32)
-                    },
-                )
+                budget.with_prepaid_scope(FLOOR, 0, 0, 0, |budget| {
+                    panic_transaction
+                        .with_original_source_predicated_publication_on_account_v90(
+                            budget,
+                            |_, _| -> Result<(), Error> {
+                                callbacks[2] += 1;
+                                std::panic::panic_any(9090u32)
+                            },
+                        )
+                        .map(|value| value.into_observation())
+                })
             }));
             let payload = match unwind {
                 Err(payload) => payload,
