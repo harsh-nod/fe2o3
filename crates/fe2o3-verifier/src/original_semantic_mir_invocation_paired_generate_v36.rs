@@ -5,6 +5,9 @@ use super::super::super::super::byte_function_v30::{emit_pointer_value_type, emi
 use super::*;
 use std::fmt::Write as _;
 
+#[path = "original_semantic_mir_source_conservation_generate_v81.rs"]
+mod conservation;
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
@@ -12,6 +15,7 @@ macro_rules! emit {
 pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.reserve_storage(headers())?;
     emit!(out, "{PAIRED_V36}");
+    emit!(out, "{}", conservation::SHARED);
     emit!(
         out,
         "{}",
@@ -23,7 +27,10 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
         related(model, root, row, out)?;
         observed(model, root, row, out)?;
         initial(model, root, row, out)?;
-        proofs(root, out)?;
+        if let Some(fuels) = &row.conservation_fuels {
+            conservation::emit(root, fuels, out)?;
+        }
+        proofs(root, row.conservation_fuels.is_some(), out)?;
     }
     Ok(())
 }
@@ -563,7 +570,7 @@ fn initial(
     Ok(())
 }
 
-fn proofs(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+fn proofs(root: usize, conservation: bool, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
         r#"spec fn invocation_paired_source_defined_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat) -> bool
@@ -590,7 +597,18 @@ proof fn invocation_paired_step_{root}_v36(source: InvocationSourceByteStateV36,
  invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events),
  invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted,
 source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target)),
-{{ }}
+{{
+"#
+    );
+    if conservation {
+        emit!(
+            out,
+            " invocation_paired_source_preserved_{root}_v77(source, target);\n"
+        );
+    }
+    emit!(
+        out,
+        r#"}}
 #[verifier::spinoff_prover]
 proof fn invocation_paired_finite_trace_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30, fuel: nat)
  requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, fuel),
@@ -653,7 +671,8 @@ spec fn invocation_actual_boundary_join_v36(block: int, head: MemoryBlockResultV
 "#;
 
 fn headers() -> usize {
-    24 * size_of::<usize>()
+    size_of::<bool>()
+        + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
         + 6 * size_of::<Result<()>>()
         + size_of::<Option<usize>>()

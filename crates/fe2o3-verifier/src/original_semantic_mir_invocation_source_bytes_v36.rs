@@ -197,6 +197,18 @@ pub(super) struct TypedOperand {
     kind: OperandKind,
 }
 
+impl TypedOperand {
+    pub(super) fn scalar_local_for_conservation(self) -> bool {
+        matches!(
+            self.kind,
+            OperandKind::Scalar {
+                value: Value::Local { .. },
+                ..
+            }
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Destination {
     Local(usize),

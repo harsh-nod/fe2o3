@@ -75,6 +75,32 @@ fn storage_markers(function: &Function, out: &mut Writer<'_, '_>) -> Result<Vec<
 }
 
 impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
+    pub(super) fn heap_conservation_shape(&self, out: &mut Writer<'_, '_>) -> Result<bool> {
+        let source = self.slots.correspondence(out)?.source(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(source
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        out.budget.charge_work(
+            self.arguments
+                .len()
+                .checked_add(1)
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        Ok(self.allocations.is_empty()
+            && self.arguments.iter().all(|argument| {
+                matches!(
+                    argument,
+                    Some(Argument {
+                        class: Class::Scalar(_),
+                        descriptor: None,
+                        ..
+                    })
+                )
+            }))
+    }
+
     pub(super) fn entry(&self) -> usize {
         self.entry
     }

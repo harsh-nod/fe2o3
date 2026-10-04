@@ -30,6 +30,9 @@ mod index_calls;
 #[path = "original_semantic_mir_source_assert_control_v40.rs"]
 mod assertions;
 
+#[path = "original_semantic_mir_source_conservation_v81.rs"]
+mod conservation;
+
 enum End {
     Unreachable,
     Abort,
@@ -77,6 +80,15 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
 }
 
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
+    pub(super) fn conservation_fuels(
+        &self,
+        root: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<Vec<usize>>> {
+        self.source_slots(out)?;
+        conservation::derive(self, root, out)
+    }
+
     pub(super) fn in_place_call(
         &self,
         root: usize,

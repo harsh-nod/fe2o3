@@ -241,7 +241,16 @@ fn original_mir_paired_consumer_preserves_independent_source_validity_and_physic
         assert!(out.text.contains("!invocation_byte_cut_0_v36(target.pc)"));
         assert!(out.text.contains("fuel == 0 || target.pc <"));
         assert!(out.text.contains("source.machine.frames.active.len() == 0"));
-        assert!(!out.text.contains("byte_end_frame_v30"));
+        for actual in out
+            .text
+            .split("spec fn invocation_paired_actual_step_")
+            .skip(1)
+        {
+            let actual = actual.split("spec fn").next().unwrap();
+            assert!(!actual.contains("byte_end_frame_v30"));
+            assert!(!actual.contains("byte_pop_frame_v30"));
+            assert!(!actual.contains("invocation_source_return_v36"));
+        }
         assert!(
             !out.text
                 .contains("invocation_source_byte_activate_v36(source, target")
@@ -287,6 +296,22 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                 }
                 super::super::byte_bindings::SourceByteBindings::derive(slots, out)?.emit(out)?;
                 paired.emit(out)?;
+                assert!(
+                    paired
+                        .roots
+                        .iter()
+                        .all(|root| root.conservation_fuels.is_none())
+                );
+                assert!(
+                    !out.text
+                        .contains("proof fn invocation_paired_source_preserved_")
+                );
+                for root in 0..paired.roots.len() {
+                    assert!(
+                        out.text
+                            .contains(&format!("proof fn invocation_paired_step_{root}_v36("))
+                    );
+                }
                 assert!(out.text.contains("MemoryOperationEffectV30::Allocate"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Read"));
                 assert!(out.text.contains("MemoryOperationEffectV30::Write"));
@@ -315,6 +340,38 @@ fn original_mir_paired_consumer_exact_and_one_short_complete_resource_replay() {
     execute(measured.1, measured.3).0.unwrap();
     assert!(execute(measured.1 - 1, measured.3).0.is_err());
     assert!(execute(measured.1, measured.3 - 1).0.is_err());
+}
+
+#[test]
+fn original_mir_paired_source_conservation_is_conditional_and_keeps_all_step_conclusions() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        for (root, row) in paired.roots.iter().enumerate() {
+            let fuels = row.conservation_fuels.as_ref().unwrap();
+            assert_eq!(fuels, &[1, 2, 2]);
+            for (instance, fuel) in fuels.iter().enumerate() {
+                assert!(out.text.contains(&format!(
+                    "reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});"
+                )));
+            }
+            let step = out.text.split(&format!("proof fn invocation_paired_step_{root}_v36("))
+                .nth(1).unwrap().split("proof fn").next().unwrap();
+            let requires = step.split(" requires ").nth(1).unwrap().split(" ensures ").next().unwrap();
+            assert_eq!(requires.trim(), format!(
+                "invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),"
+            ));
+            for conclusion in [
+                format!("invocation_paired_related_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state)"),
+                format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
+                format!("invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted"),
+                format!("source.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))"),
+                format!("invocation_paired_source_preserved_{root}_v77(source, target);"),
+            ] {
+                assert!(step.contains(&conclusion), "{conclusion}");
+            }
+        }
+        Ok(())
+    }).0.unwrap();
 }
 
 #[test]

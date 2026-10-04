@@ -100,6 +100,7 @@ struct Root {
     instances: Range<usize>,
     owner: u32,
     parameters: Vec<RootArgument>,
+    conservation_fuels: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -679,6 +680,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 instances: scope.instances.clone(),
                 owner: scope.function.index(),
                 parameters,
+                conservation_fuels: program.conservation_fuels(root, out)?,
             });
         }
         if result.instances.len() != total {

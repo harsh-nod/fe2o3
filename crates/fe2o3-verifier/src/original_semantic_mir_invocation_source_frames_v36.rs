@@ -54,6 +54,20 @@ fn mismatch() -> Error {
 }
 
 impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
+    pub(super) fn heap_conservation_shape(&self, out: &mut Writer<'_, '_>) -> Result<bool> {
+        let source = self.slots.correspondence(out)?.source(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(source
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        out.budget.charge_work(4)?;
+        Ok(self.class == ReturnClass::Unit
+            && self.destination_component.is_none()
+            && self.destination_memory.is_none()
+            && self.descriptor_destination.is_none())
+    }
+
     pub(super) fn derive(
         plan: &InvocationPlan<'_, '_>,
         slots: &'slots SourceSlots<'view, 'source>,
