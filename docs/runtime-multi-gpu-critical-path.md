@@ -30,13 +30,22 @@ switching the ordinary host/supervisor route; the isolated manager fixture does
 not establish production deployment readiness.
 
 The next deployment change must extend the closed compiler-only bundle/installer
-inventory with the proof manager, application controller and manager unit; install
+using a distinct proof profile, preserving the existing V1 inventory. Include
+the proof manager, application controller and manager unit; install
 the analyzer's immutable loader/LLVM closure and the protected Verus runtime; then
 provision application approval before manager approval against their final paths.
 The manager approval also pins the installed coordinator image. Development-tree
 analyzer measurements cannot be reused after relocation because they include
 mapped paths, and the manager service hides home directories. Activate the manager
 independently; service ordering alone does not start it.
+
+The [production proof provisioner](runtime-proof-deployment-provisioning-v1.md)
+now separates non-root final-resource inspection from independently pinned root
+approval installation. It validates installed images and credential separation,
+and publishes the application/manager approval pair atomically. The static proof
+builder includes the manager, controller and provisioner. This does not complete
+the analyzer/Verus closure package, positively qualify inspection or establish
+ordinary application admission. Keep the next effort on that final resource layout.
 
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already

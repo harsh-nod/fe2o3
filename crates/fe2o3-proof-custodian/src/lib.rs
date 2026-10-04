@@ -14,6 +14,7 @@ mod cgroup;
 mod deployment;
 mod launch;
 mod manager;
+mod provisioning;
 mod wire;
 #[allow(unsafe_code)]
 mod worker;
@@ -29,6 +30,7 @@ pub use launch::{
     RootRetainedConditionalFillProofV1, RootStagedApplicationProofControllerV1,
 };
 pub use manager::run_fixed_proof_manager_v1;
+pub use provisioning::run_proof_custodian_provisioner_v1;
 pub use worker::run_inherited_conditional_fill_proof_controller_v1;
 
 use std::io;
