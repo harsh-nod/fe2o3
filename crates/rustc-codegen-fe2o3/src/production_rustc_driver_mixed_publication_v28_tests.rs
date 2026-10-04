@@ -2,6 +2,8 @@
 //! Worker pipeline. Extraction custody cannot become protected custody.
 
 use super::*;
+#[path = "production_rustc_driver_mixed_execution_v50_tests.rs"]
+mod execution_v50_tests;
 #[path = "production_rustc_driver_original_mir_v30_tests.rs"]
 mod original_mir_v30_tests;
 use crate::production_pipeline::source_owned_v29::mixed_worker_v28::publication::{
@@ -225,7 +227,7 @@ fn observe_execution_preparation(
 ) -> Result<(), Error> {
     let floor = budget.storage();
     let subject = candidate.refinement_subject(budget)?;
-    let prepared = candidate.prepare_execution_for_test(budget)?;
+    let prepared = candidate.prepare_execution_for_test(budget, 1)?;
     assert!(!prepared.authenticates_executed_proof());
     let witness = prepared
         .prefix_witness(budget)
@@ -299,7 +301,7 @@ impl Callbacks for PublicationCallbacks {
                 |candidate, budget| -> Result<(), Error> {
                     let source = candidate.source(budget)?;
                     let floor = budget.storage();
-                    let pending = candidate.prepare_execution_for_test(budget)?;
+                    let pending = candidate.prepare_execution_for_test(budget, 1)?;
                     assert!(budget.storage() > floor);
                     let refused = budget.charge_work(500_000_001).unwrap_err();
                     let expected = match &refused {

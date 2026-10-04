@@ -43,12 +43,13 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
     pub(crate) fn prepare_execution_for_test<'r>(
         &'r self,
         budget: &mut Budget<'_>,
+        timeout_seconds: u32,
     ) -> Result<fe2o3_verifier::PreparedTypedSourceTailExecutionV50<'r, 'a, 'v, 'v, 'v, 's>, Error>
     {
         self.check(budget)?;
         self.inputs
             .composed
-            .prepare_typed_execution_v50(budget, 1)
+            .prepare_typed_execution_v50(budget, timeout_seconds)
             .map_err(Error::MixedRelocationExpressions)
     }
 }
