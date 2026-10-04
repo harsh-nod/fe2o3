@@ -368,6 +368,21 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         Ok(self.relation)
     }
 
+    pub(super) fn check_query_storage_floor(
+        &self,
+        required: usize,
+        budget: &Budget<'_>,
+    ) -> Result<()> {
+        self.relation.check_query_v18(budget)?;
+        if budget.storage() < self.required || budget.storage() < required {
+            return Err(self
+                .relation
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        Ok(())
+    }
+
     pub(super) fn with_source_query_v42<T>(
         &self,
         out: &mut Writer<'_, '_>,

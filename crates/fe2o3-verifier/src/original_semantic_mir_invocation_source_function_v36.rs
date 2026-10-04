@@ -116,6 +116,8 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         &self,
         out: &mut Writer<'_, '_>,
     ) -> Result<&'slots SourceSlots<'view, 'source>> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
         let source = self.slots.correspondence(out)?.source(out.budget)?;
         if out.budget.storage() < self.required {
             return Err(source
