@@ -249,8 +249,10 @@ impl ResidentBackend for NativeResident<'_> {
         &mut self,
         state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
     ) -> Result<[u32; 284]> {
-        self.0
-            .observe_wave_qkv_attention_output_tiles_state_v6(state)
+        // SAFETY: run_resident brackets each initial/terminal pair with fresh
+        // full group fences, retains this exclusive borrow, and never publishes
+        // or marks Completed until the corresponding post-fence succeeds.
+        unsafe { super::wave_qkv_attention_output_tiles_state_v6::observe_within_resident_fence(self.0, state) }
     }
 
     fn submit_and_complete(

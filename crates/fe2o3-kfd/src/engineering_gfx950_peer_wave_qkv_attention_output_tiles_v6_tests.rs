@@ -500,3 +500,20 @@ fn resident_v6_rejects_aliases_even_readonly_and_wrong_physical_extents() {
         assert!(validate_pair_regions(&values).is_err());
     }
 }
+
+#[test]
+fn resident_v6_native_adapter_routes_to_private_guard_not_public_observer() {
+    let mut owner = group();
+    owner.shared_full_currentness = true;
+    let mut states = make_states();
+    states[0].activation = Activation::Initialized;
+    // The public observer would attempt a full fence over this empty context
+    // roster. The private adapter must reject the phase before any backend I/O.
+    let error = NativeResident(&mut owner).observe(&states[0]).unwrap_err();
+    assert_eq!(error, "prefix tiles V6 private resident observation activation");
+    assert!(owner.poisoned);
+    assert_eq!(
+        owner.require_active().unwrap_err(),
+        "peer group is closed or quarantined"
+    );
+}

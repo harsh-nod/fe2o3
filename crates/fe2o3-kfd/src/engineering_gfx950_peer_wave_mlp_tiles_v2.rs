@@ -244,7 +244,10 @@ impl ResidentBackend for NativeResident<'_> {
     }
 
     fn observe(&mut self, state: &Gfx950EngineeringPeerWaveMlpTilesStateV2) -> Result<[u32; 548]> {
-        self.0.observe_wave_mlp_tiles_state_v2(state)
+        // SAFETY: run_resident brackets each initial/terminal pair with fresh
+        // full group fences, retains this exclusive borrow, and never publishes
+        // or marks Completed until the corresponding post-fence succeeds.
+        unsafe { super::wave_mlp_tiles_state_v2::observe_within_resident_fence(self.0, state) }
     }
 
     fn submit_and_complete(

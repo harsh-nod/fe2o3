@@ -352,3 +352,73 @@ fn v2_rearm_uses_stores_and_publishes_ready_only_after_readback_and_fence() {
     assert!(rearm_terminal(&mut fake, &mut token, &expected).is_err());
     assert_eq!(token.activation, Activation::Submitted);
 }
+
+#[test]
+fn v2_private_resident_read_checks_active_phase_and_owner_before_storage() {
+    for (closed, poisoned) in [(true, false), (false, true)] {
+        let mut owner = group();
+        owner.closed = closed;
+        owner.poisoned = poisoned;
+        // SAFETY: the negative group guard refuses before any storage access.
+        let error = unsafe {
+            observe_within_resident_fence(&mut owner, &state(Activation::Ready))
+        }
+        .unwrap_err();
+        assert_eq!(error, "peer group is closed or quarantined");
+    }
+    for activation in [
+        Activation::Allocated,
+        Activation::Initialized,
+        Activation::Completed,
+    ] {
+        let mut owner = group();
+        let token = state(activation);
+        // SAFETY: the negative activation guard refuses before storage access.
+        let error = unsafe { observe_within_resident_fence(&mut owner, &token) }.unwrap_err();
+        assert_eq!(error, "MLP tiles V2 private resident observation activation");
+        assert!(owner.poisoned);
+        assert_eq!(token.activation, activation);
+    }
+    for activation in [Activation::Ready, Activation::Submitted] {
+        let mut owner = group();
+        let token = state(activation);
+        // SAFETY: this empty-context fixture cannot reach a native mapping.
+        let error = unsafe { observe_within_resident_fence(&mut owner, &token) }.unwrap_err();
+        assert_eq!(error, "MLP tiles V2 state owner outside group");
+        assert!(owner.poisoned);
+        assert_eq!(token.activation, activation);
+    }
+}
+
+#[test]
+fn v2_private_resident_read_keeps_token_kind_extent_and_mapping_refusals() {
+    for change in 0..10 {
+        let mut owner = group();
+        let mut token = state(Activation::Ready);
+        match change {
+            0 => owner.incarnation += 1,
+            1 => token.buffer.owner = 1,
+            2 => token.buffer.id += 1,
+            3 => {
+                token.buffer.bytes += 4;
+                owner.buffers.get_mut(&3).unwrap().token = token.buffer;
+            }
+            4 => owner.buffers.get_mut(&3).unwrap().kind = BufferKind::PublicVram,
+            5 => owner.buffers.get_mut(&3).unwrap().mapping.peers.push(1),
+            6 => owner.buffers.get_mut(&3).unwrap().mapping.mapped = 1,
+            7 => owner.buffers.get_mut(&3).unwrap().mapping.unmapped = 1,
+            8 => owner.buffers.get_mut(&3).unwrap().mapping.phase = Phase::Released,
+            _ => owner.buffers.clear(),
+        }
+        // SAFETY: every corrupted record must refuse before local storage;
+        // the empty context roster also prevents accidental native access.
+        let error = unsafe { observe_within_resident_fence(&mut owner, &token) }.unwrap_err();
+        assert_ne!(error, "MLP tiles V2 state owner outside group", "change {change}");
+        assert!(owner.poisoned, "change {change}");
+        assert_eq!(token.activation, Activation::Ready);
+        assert_eq!(
+            owner.require_active().unwrap_err(),
+            "peer group is closed or quarantined"
+        );
+    }
+}

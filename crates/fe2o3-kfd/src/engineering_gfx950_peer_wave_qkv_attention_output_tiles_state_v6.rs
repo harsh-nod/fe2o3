@@ -311,6 +311,36 @@ impl StateBackend for NativeState<'_> {
     }
 }
 
+/// Read one private resident state inside its coordinator's full-fence pair.
+/// The public observer keeps its own fences; only the paired resident path
+/// may use this accessor. No topology snapshot or reuse capability escapes.
+///
+/// # Safety
+/// A fresh successful all-participant idle/currentness fence must precede this
+/// read, and another must follow the entire state pair before publication or
+/// completed activations escape. Retain the exclusive group borrow and all
+/// mappings throughout; no dispatch, map, release, or rearm may interleave.
+pub(super) unsafe fn observe_within_resident_fence(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+) -> Result<[u32; STATE_WORDS]> {
+    group.require_active()?;
+    let result = (|| {
+        if !matches!(state.activation, Activation::Ready | Activation::Submitted) {
+            return Err("prefix tiles V6 private resident observation activation".into());
+        }
+        // Keep the private entry's identity/kind/mapping refusal before storage
+        // access. NativeState also checks the owner and exact local allocation.
+        validate_state_record(state, group.validate_token(state.buffer)?)?;
+        NativeState {
+            group: &mut *group,
+            owner: state.owner_rank(),
+        }
+        .observe(state)
+    })();
+    group.finish(result)
+}
+
 impl Gfx950EngineeringPeerGroupV1 {
     /// Allocate exactly 1136 coherent bytes and initialize all 284 real atomics.
     /// Failure poisons the group and retains its underlying allocation records.
