@@ -391,12 +391,20 @@ fn checked_write_suffix_precharges_exact_work_and_borrows_storage() {
         let result = check_checked_write_tail_v85(inputs, &rows, &mut budget);
         if limit == 128 {
             result.unwrap();
+            assert_eq!(budget.work(), 128);
+            assert_eq!(budget.failed_work(), None);
         } else {
             assert!(
                 matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                 ArgumentResourceV1::Work(error))) if error.actual() == 128 && error.limit() == 127)
             );
-            assert!(budget.charge_work(0).is_err());
+            assert_eq!(budget.failed_work(), Some(128));
+            for _ in 0..2 {
+                assert!(matches!(budget.check_prior_denials_v1(),
+                    Err(ArgumentResourceV1::Work(error))
+                    if error.actual() == 128 && error.limit() == 127));
+            }
+            assert_eq!(budget.work(), 0);
         }
         assert_eq!(budget.storage(), 0);
     }
