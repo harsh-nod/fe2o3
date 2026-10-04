@@ -11,6 +11,36 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Full private BF16 validation and observed debugger startup — 2026-10-04
+
+The private owning BF16 path now runs the full MIR-to-PLIRON translation
+validator against the actual retained source and emitted graph, on the original
+account. Its closed roster preserves two executable bodies and admits only the
+exact optional Trap declaration, joined to actual root Trap calls. Extra bodies,
+imports, detached owners, malformed calls and prior resource denials still
+refuse. This corrects a genuine owning-frontend failure; the original failed
+attempt and temporary diagnostic observations remain separate retained evidence.
+
+Fresh qualification passed 2,059 lowerer tests, then 3,897 compiler library tests
+(224 ignored), 73 extractor tests and two API tests in both debug and release.
+The fresh thirteen-child candidate campaign passed 36 positive and 32 negative
+CPU requests and both mandatory candidate checks. Two additional fresh release
+frontend sessions, Identity and swapped-input, each completed the actual full
+lowerer validation and private owning entry on the same account. They produced
+no sidecar, ordinary admission, lowerer attachment or launch authority. The
+earlier debug-only Identity diagnostic is not substituted for these release runs.
+
+The private debugger also passed its actual no-inferior startup: the exact
+private queue-health provider was mapped, the MI2 exchange completed, and the
+owned service family joined cleanup. Five benign cleanup cases, 77 profile and
+controller source controls, and the rebuilt controller's 64 protocol and
+97 native-controller CPU tests passed. Retrospective checks observed the six
+named service cgroups absent; they do not prove global or continuous exclusion.
+
+Same-stop physical capture, the remaining consuming BF16 continuation, ordinary
+ranked admission, LLVM/GPU qualification and the remaining curriculum work are
+still open. Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private owning handoff and debugger source packages — 2026-10-04
 
 The private BF16 owning constructor now retains the real materialized source,

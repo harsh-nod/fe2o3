@@ -4235,6 +4235,7 @@ enum NormalizedScalarExpressionV1 {
 }
 
 include!("production_semantic_kir_v1/scalar_value_correspondence_v1.rs");
+mod bf16_nominal_translation_context_v1;
 mod native_helper_value_context_v1;
 mod native_helper_value_expansion_v1;
 mod native_helper_value_template_v1;
@@ -6978,11 +6979,16 @@ fn validate_mir_pliron_translation_inner_v1(
     if kir_synchronization != ranked_synchronization {
         return Err(ProductionMirPlironTranslationErrorV1::SynchronizationMismatch);
     }
-    let kir_tensors = kir_tensor_contracts_v1(body)?;
-    let ranked_tensors = ranked_tensor_contracts_v1(recipe)?;
-    if kir_tensors != ranked_tensors {
-        return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
-    }
+    let tensor_operations = if let Some(count) = helpers.nominal_tensors(function, recipe)? {
+        count
+    } else {
+        let kir_tensors = kir_tensor_contracts_v1(body)?;
+        let ranked_tensors = ranked_tensor_contracts_v1(recipe)?;
+        if kir_tensors != ranked_tensors {
+            return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
+        }
+        kir_tensors.len()
+    };
     let conservative_ranked_effects = recipe
         .blocks()
         .iter()
@@ -6998,7 +7004,7 @@ fn validate_mir_pliron_translation_inner_v1(
         semantic_sha256: *correspondence.semantic_sha256(),
         memory_effects,
         synchronization_effects: kir_synchronization.len(),
-        tensor_operations: kir_tensors.len(),
+        tensor_operations,
         value_expressions,
         conservative_ranked_effects,
     })

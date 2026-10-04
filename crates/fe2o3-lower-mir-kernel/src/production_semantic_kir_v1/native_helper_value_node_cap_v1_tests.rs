@@ -91,7 +91,7 @@ fn actual_normalizer_caps_shallow_dag_expansion_before_tree_allocation() {
         meter.reserve(bytes).unwrap();
         {
             let mut expansion = NativeValueExpansion {
-                helpers: None,
+                source: ValueSource::None,
                 meter: &mut meter,
                 reserved: 0,
                 temporary_nodes_remaining: active.then_some(NODES),
@@ -153,7 +153,7 @@ fn per_argument_failure_restores_enclosing_allowance_and_keeps_correlation_limit
     meter.reserve(bytes).unwrap();
     {
         let mut expansion = NativeValueExpansion {
-            helpers: None,
+            source: ValueSource::None,
             meter: &mut meter,
             reserved: 0,
             temporary_nodes_remaining: Some(17),
@@ -207,7 +207,7 @@ fn argument_allowance_restores_original_state_and_panic_payload() {
     };
     for original in [None, Some(0), Some(17)] {
         let mut expansion = NativeValueExpansion {
-            helpers: None,
+            source: ValueSource::None,
             meter: &mut meter,
             reserved: 0,
             temporary_nodes_remaining: original,

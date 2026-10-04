@@ -7,7 +7,7 @@ use std::cell::Cell;
 const FLOOR: usize = 23;
 const WORK: usize = 10_000_000;
 
-fn synthetic(permutation: [u8; 4]) -> (SealedBf16CallRelationV1, Function, Function) {
+pub(super) fn synthetic(permutation: [u8; 4]) -> (SealedBf16CallRelationV1, Function, Function) {
     let types = (0..12)
         .map(|i| {
             Type::Scalar(if i < 8 {

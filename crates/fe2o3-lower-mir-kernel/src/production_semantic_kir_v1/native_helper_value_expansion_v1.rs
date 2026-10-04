@@ -33,6 +33,35 @@ impl TranslationAllowanceV1 {
         }
     }
 
+    /// Sole private nominal phase: its header was just paid on this same Budget.
+    /// This seeds only actual already-paid work; it does not refill an allowance.
+    pub(super) fn with_prepaid_header_v1(
+        budget: &ArgumentBudgetV1<'_>,
+        incoming_floor: usize,
+        work_limit: usize,
+        storage_limit: usize,
+    ) -> Result<Self, ProductionMirPlironTranslationErrorV1> {
+        let header = std::mem::size_of::<Self>();
+        if header > work_limit
+            || header > storage_limit
+            || incoming_floor.checked_add(header) != Some(budget.storage())
+        {
+            return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
+        }
+        Ok(Self {
+            ledger: budget.work_ledger_identity_v1(),
+            floor: incoming_floor,
+            work: header,
+            work_limit,
+            storage_limit,
+            failed: false,
+        })
+    }
+
+    pub(super) fn refused_v1(&self) -> bool {
+        self.failed
+    }
+
     fn refuse<T>(&mut self) -> Result<T, &'static str> {
         self.failed = true;
         Err("native helper local translation allowance exhausted")
@@ -122,6 +151,15 @@ impl NativeTranslationErrorV1 {
 
 impl NativeHelperMeter for NativeValueMeter<'_, '_> {
     fn check_call(&mut self, query: NativeHelperCallQuery<'_>) -> Result<bool, &'static str> {
+        self.check_original_bounded(|budget| query.check(budget))
+    }
+}
+
+impl NativeValueMeter<'_, '_> {
+    fn check_original_bounded(
+        &mut self,
+        check: impl FnOnce(&mut ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<bool, &'static str> {
         let ledger = self.identity()?;
         let floor = self.budget.storage();
         let start = self.budget.work();
@@ -142,8 +180,7 @@ impl NativeHelperMeter for NativeValueMeter<'_, '_> {
             return Err("native helper checked-call allowance accounting");
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.budget
-                .with_bounded_scratch_v1(work, storage, |budget| query.check(budget))
+            self.budget.with_bounded_scratch_v1(work, storage, check)
         }));
         let consumed = self.budget.work().checked_sub(start);
         let intact = self.identity()? == ledger && self.budget.storage() == floor;
@@ -198,9 +235,7 @@ impl NativeHelperMeter for NativeValueMeter<'_, '_> {
             Err(_) => Ok(false),
         }
     }
-}
 
-impl NativeValueMeter<'_, '_> {
     fn resource<T>(&mut self, result: Result<T, ArgumentResourceV1>) -> Result<T, &'static str> {
         result.map_err(|error| {
             self.resource_error.get_or_insert(error);
@@ -260,8 +295,15 @@ impl Meter for NativeValueMeter<'_, '_> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ValueSource<'a> {
+    None,
+    Native(&'a NativeHelperValues<'a>),
+    Nominal(&'a bf16_nominal_translation_context_v1::Context<'a>),
+}
+
 pub(super) struct NativeValueExpansion<'a, 'm> {
-    helpers: Option<&'a NativeHelperValues<'a>>,
+    source: ValueSource<'a>,
     meter: &'m mut dyn Meter,
     reserved: usize,
     temporary_nodes_remaining: Option<usize>,
@@ -280,7 +322,7 @@ pub(super) fn with_no_helpers_for_test_v1<R>(
         resource_error: None,
     };
     let mut expansion = NativeValueExpansion {
-        helpers: None,
+        source: ValueSource::None,
         meter: &mut meter,
         reserved: 0,
         temporary_nodes_remaining: None,
@@ -289,6 +331,26 @@ pub(super) fn with_no_helpers_for_test_v1<R>(
 }
 
 impl NativeValueExpansion<'_, '_> {
+    pub(super) fn nominal_tensors(
+        &mut self,
+        function: &Function,
+        recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+    ) -> Result<Option<usize>, ProductionMirPlironTranslationErrorV1> {
+        let ValueSource::Nominal(context) = self.source else {
+            return Ok(None);
+        };
+        context
+            .tensors(function, recipe, self.meter)
+            .map(Some)
+            .map_err(|_| {
+                if self.meter.exhausted() {
+                    ProductionMirPlironTranslationErrorV1::ResourceLimit
+                } else {
+                    ProductionMirPlironTranslationErrorV1::TensorContractMismatch
+                }
+            })
+    }
+
     pub(super) fn charge_normalization_node_v1(&mut self) -> Option<()> {
         if let Some(remaining) = &mut self.temporary_nodes_remaining {
             *remaining = remaining.checked_sub(1)?;
@@ -342,7 +404,12 @@ impl NativeValueExpansion<'_, '_> {
         visiting: &mut BTreeSet<ValueId>,
         budget: &mut UnsupportedIndexCorrelationBudgetV1,
     ) -> Option<NormalizedScalarExpressionV1> {
-        let context = self.helpers?;
+        let context = match self.source {
+            ValueSource::Native(context) => context,
+            // The checked four-component nominal Call is not a scalar native
+            // template. Any requested index/value normalization still refuses.
+            ValueSource::None | ValueSource::Nominal(_) => return None,
+        };
         let template = context
             .root_call(function, location, operation, self.meter)
             .ok()?;
@@ -405,7 +472,7 @@ impl NativeValueExpansion<'_, '_> {
 }
 
 fn run<'a>(
-    helpers: Option<&'a NativeHelperValues<'a>>,
+    source: ValueSource<'a>,
     meter: &mut dyn Meter,
     action: impl FnOnce(
         &mut NativeValueExpansion<'_, '_>,
@@ -418,7 +485,7 @@ fn run<'a>(
         .identity()
         .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let mut expansion = NativeValueExpansion {
-        helpers,
+        source,
         meter,
         reserved: 0,
         temporary_nodes_remaining: None,
@@ -515,7 +582,7 @@ pub(super) fn with_native_value_expansion_and_allowance_resources_v1(
     };
     let result = (|| {
         let Some(semantic) = semantic else {
-            return run(None, &mut meter, action);
+            return run(ValueSource::None, &mut meter, action);
         };
         let work = module
             .kernels
@@ -568,7 +635,7 @@ pub(super) fn with_native_value_expansion_and_allowance_resources_v1(
             }
         }
         if !needed {
-            return run(None, &mut meter, action);
+            return run(ValueSource::None, &mut meter, action);
         }
         let mut result = None;
         let checked = with_native_helper_values(
@@ -579,7 +646,7 @@ pub(super) fn with_native_value_expansion_and_allowance_resources_v1(
             entry,
             &mut meter,
             |context, meter| {
-                result = Some(run(Some(context), meter, action));
+                result = Some(run(ValueSource::Native(context), meter, action));
                 Ok(())
             },
         );
@@ -614,3 +681,134 @@ mod resource_error_tests;
 #[cfg(test)]
 #[path = "native_helper_checked_caps_v1_tests.rs"]
 mod checked_caps_tests;
+
+fn nominal_frame_bytes<F>() -> Result<usize, ArgumentResourceV1> {
+    [
+        BF16_CALL_QUERY_SCRATCH_V1,
+        std::mem::size_of::<bf16_nominal_translation_context_v1::Rows<'static>>(),
+        std::mem::size_of::<bf16_nominal_translation_context_v1::Context<'static>>(),
+        std::mem::size_of::<NativeValueExpansion<'static, 'static>>(),
+        std::mem::size_of::<NativeValueMeter<'static, 'static>>(),
+        std::mem::size_of::<ProductionMirPlironTranslationValidationV1>(),
+        std::mem::size_of::<NativeTranslationErrorV1>(),
+        std::mem::size_of::<F>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, bytes| {
+        bytes
+            .checked_mul(2)
+            .and_then(|n| sum.checked_add(n))
+            .ok_or(ArgumentResourceV1::Arithmetic)
+    })
+}
+
+// The original Budget and existing local translation allowance cover the new
+// selected context before construction. Only this frame's exact receipt is
+// refunded. Callback-owned surplus is never reset to an entry snapshot.
+fn with_nominal_meter<F>(
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut TranslationAllowanceV1>,
+    action: F,
+) -> Result<ProductionMirPlironTranslationValidationV1, NativeTranslationErrorV1>
+where
+    F: FnOnce(
+        &mut NativeValueMeter<'_, '_>,
+    ) -> Result<
+        ProductionMirPlironTranslationValidationV1,
+        ProductionMirPlironTranslationErrorV1,
+    >,
+{
+    let frame = nominal_frame_bytes::<F>().map_err(NativeTranslationErrorV1::Resource)?;
+    let mut meter = NativeValueMeter {
+        budget,
+        allowance,
+        failed: false,
+        resource_error: None,
+    };
+    let selected = (|| {
+        let ledger = meter
+            .identity()
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        meter
+            .reserve(frame)
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        let protected = meter.budget.storage();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            meter
+                .work(frame)
+                .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            action(&mut meter)
+        }));
+        if meter.identity().ok() != Some(ledger) || meter.budget.storage() < protected {
+            drop(outcome);
+            meter
+                .resource_error
+                .get_or_insert(ArgumentResourceV1::Accounting);
+            return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
+        }
+        let result = match outcome {
+            Ok(result) => result,
+            Err(payload) => {
+                drop(payload);
+                Err(ProductionMirPlironTranslationErrorV1::KernelShape)
+            }
+        };
+        // Keep existing local-first denial classification. A denial hidden by a
+        // callback which never entered the meter still prevents acceptance.
+        if !meter.exhausted() {
+            let prior = meter.budget.check_prior_denials_v1();
+            let _ = meter.resource(prior);
+        }
+        meter
+            .release(frame)
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        if meter.exhausted() {
+            return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
+        }
+        result
+    })();
+    match meter.resource_error {
+        Some(error) => Err(NativeTranslationErrorV1::Resource(error)),
+        None => selected.map_err(NativeTranslationErrorV1::Translation),
+    }
+}
+
+/// Private nominal sibling. The scalar helper path and all public attachment
+/// gates remain unchanged. Nominal Call components have no scalar expansion.
+pub(super) fn with_nominal_value_expansion_and_allowance_resources_v1(
+    owner: &ProductionPreRankedKirOwnerV1,
+    kernel: &str,
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut TranslationAllowanceV1>,
+    action: impl FnOnce(
+        &mut NativeValueExpansion<'_, '_>,
+    ) -> Result<
+        ProductionMirPlironTranslationValidationV1,
+        ProductionMirPlironTranslationErrorV1,
+    >,
+) -> Result<ProductionMirPlironTranslationValidationV1, NativeTranslationErrorV1> {
+    with_nominal_meter(budget, allowance, |meter| {
+        let rows = bf16_nominal_translation_context_v1::Rows::resolve(owner, kernel, meter)
+            .map_err(|_| {
+                if meter.exhausted() {
+                    ProductionMirPlironTranslationErrorV1::ResourceLimit
+                } else {
+                    ProductionMirPlironTranslationErrorV1::KernelShape
+                }
+            })?;
+        let checked = meter
+            .check_original_bounded(|budget| rows.check_components(budget))
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        if !checked {
+            return Err(ProductionMirPlironTranslationErrorV1::KernelShape);
+        }
+        let context = rows
+            .bind(meter)
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        run(ValueSource::Nominal(&context), meter, action)
+    })
+}
+
+#[cfg(test)]
+#[path = "bf16_nominal_translation_v1_tests.rs"]
+mod nominal_translation_tests;
