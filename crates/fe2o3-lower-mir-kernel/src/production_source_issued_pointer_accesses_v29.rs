@@ -654,7 +654,9 @@ fn check_source_issued_memory_payload_v30(
         }
         if read.writing
             || read.value != value
-            || !matches!(operation.kind, OperationKind::Store { value: stored, .. } if stored == value)
+            || !matches!(operation.kind,
+                OperationKind::Store { value: stored, .. }
+                | OperationKind::GuardedStore { value: stored, .. } if stored == value)
             || !actual_value
                 .operation
                 .is_some_and(|producer| std::ptr::eq(producer, read_operation))
