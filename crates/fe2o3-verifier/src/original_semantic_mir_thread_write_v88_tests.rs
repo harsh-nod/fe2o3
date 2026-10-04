@@ -358,6 +358,56 @@ fn run_write_attempt(
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
+#[ignore = "diagnostic-only complete ThreadWrite model export; never executes or approves a proof"]
+fn diagnostic_complete_thread_write_models_export_without_execution_v91() {
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("FE2O3_DIAGNOSTIC_THREAD_WRITE_EXPORT")
+            .expect("owned diagnostic output directory"),
+    );
+    assert!(destination.is_absolute());
+    assert!(
+        std::fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_dir()
+    );
+    for (disjoint, copied, label) in [
+        (false, false, "plain_move"),
+        (false, true, "plain_copy"),
+        (true, false, "disjoint_move"),
+    ] {
+        let path = destination.join(format!("{label}.rs"));
+        let mut exported = false;
+        let result = run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert!(!text.is_empty() && text.len() <= 16 * 1024 * 1024);
+            let input = crate::CanonicalGeneratedVerusProofInputV3::new(text.as_bytes().to_vec())
+                .expect("identical complete canonical ThreadWrite proof input");
+            drop(input);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .expect("fresh diagnostic export file");
+            std::io::Write::write_all(&mut file, text.as_bytes())
+                .expect("complete diagnostic export");
+            file.sync_all().expect("retain diagnostic export bytes");
+            assert_eq!(std::fs::read(&path).unwrap(), text.as_bytes());
+            println!(
+                "DIAGNOSTIC_ONLY_THREAD_WRITE_MODEL_EXPORT variant={label} bytes={}",
+                text.len()
+            );
+            exported = true;
+        });
+        result
+            .0
+            .expect("generate the unchanged complete source-write proof");
+        assert!(exported);
+        assert_eq!(result.2, 37);
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
 #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
 fn protected_original_thread_write_preserves_logical_extent_value_and_bool() {
     use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusRuntimeLeaseV1};
