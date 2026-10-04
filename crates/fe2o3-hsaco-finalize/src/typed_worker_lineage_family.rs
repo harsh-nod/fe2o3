@@ -278,9 +278,15 @@ mod tests {
                     );
                 }
                 let before = (budget.work(), budget.storage(), budget.peak_storage());
+                // The low-level scope permits smaller charges; retained replay
+                // checks the original denial explicitly before further work.
                 let repeated = budget
-                    .with_prepaid_scope(FLOOR, 0, 0, scratch, |_| -> Result<(), Error> {
-                        panic!("sticky refusal must precede callback entry")
+                    .check_prior_denials_v1()
+                    .map_err(Error::from)
+                    .and_then(|()| {
+                        budget.with_prepaid_scope(FLOOR, 0, 0, scratch, |_| -> Result<(), Error> {
+                            panic!("sticky refusal must precede callback entry")
+                        })
                     })
                     .unwrap_err();
                 assert!(matches!(repeated, Error::Resource(actual) if actual == first));
