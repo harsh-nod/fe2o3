@@ -174,7 +174,12 @@ pub(super) fn release_interrupts(tree: &mut Tracees, deadline: Instant) -> Resul
     Ok(())
 }
 
-pub(super) fn birth_request(pid: i32, r: &UserRegistersX86_64) -> Result<Option<Birth>> {
+pub(super) fn birth_request(
+    pid: i32,
+    r: &UserRegistersX86_64,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<Option<Birth>> {
     let birth = match r.orig_rax as u32 {
         57 => Birth::Fork,
         58 => Birth::Vfork,
@@ -191,7 +196,7 @@ pub(super) fn birth_request(pid: i32, r: &UserRegistersX86_64) -> Result<Option<
             }
         },
         CLONE3_SYSCALL => {
-            validate_clone3_request(pid, r)?;
+            validate_clone3_request(pid, r, policy, role)?;
             let memory = File::open(format!("/proc/{pid}/mem"))
                 .map_err(|_| io_process_failure("open stable clone flags"))?;
             let mut bytes = [0; 8];
@@ -371,6 +376,7 @@ fn register_child(
 pub(super) fn complete_request(
     tree: &mut Tracees,
     pid: i32,
+    policy: GeneratedProofProcessPolicyV2,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
     created: &mut usize,
@@ -385,7 +391,14 @@ pub(super) fn complete_request(
         initial.orig_rax as u32,
         OPEN_SYSCALL | OPENAT_SYSCALL | PRCTL_SYSCALL
     ) {
-        return validate_sensitive_registers(pid, &initial, allowed, validate_maps);
+        return validate_sensitive_registers_with_policy(
+            pid,
+            &initial,
+            allowed,
+            validate_maps,
+            policy,
+            tree[&pid].role,
+        );
     }
     let deadline = deadline.min(Instant::now() + STABLE_TIMEOUT);
     park_all(tree, deadline, progress)?;
@@ -423,7 +436,7 @@ pub(super) fn complete_request(
             progress,
         );
     }
-    let birth = birth_request(pid, &registers)?;
+    let birth = birth_request(pid, &registers, policy, tree[&pid].role)?;
     if birth.is_some_and(|kind| kind != Birth::Thread)
         && let Some(contexts) = contexts
     {
@@ -437,7 +450,14 @@ pub(super) fn complete_request(
             ));
         }
     } else {
-        validate_sensitive_registers(pid, &registers, allowed, validate_maps)?;
+        validate_sensitive_registers_with_policy(
+            pid,
+            &registers,
+            allowed,
+            validate_maps,
+            policy,
+            tree[&pid].role,
+        )?;
     }
     #[cfg(test)]
     super::stable_tests::probe(pid, &registers, false)?;
@@ -493,6 +513,7 @@ pub(super) fn complete_request(
                     run_vfork_to_exec(
                         tree,
                         new,
+                        policy,
                         allowed,
                         validate_maps,
                         created,
@@ -549,6 +570,7 @@ pub(super) fn complete_request(
 fn run_vfork_to_exec(
     tree: &mut Tracees,
     child: i32,
+    policy: GeneratedProofProcessPolicyV2,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
     created: &mut usize,
@@ -569,6 +591,7 @@ fn run_vfork_to_exec(
                 complete_request(
                     tree,
                     child,
+                    policy,
                     allowed,
                     validate_maps,
                     created,

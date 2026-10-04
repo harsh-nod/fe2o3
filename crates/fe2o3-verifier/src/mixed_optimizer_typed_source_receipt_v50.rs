@@ -32,6 +32,7 @@ type Request<'h, 'n, 'p, 'v, 's> = PreparedTypedSourceTailV50<'h, 'n, 'p, 'v, 's
 const MAGIC: &[u8] = b"FE2O3/MIXED/TYPED-SOURCE-TAIL/V50\0";
 const EXECUTION_DOMAIN: &[u8] = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V50\0";
 const EXECUTION_DOMAIN_V66: &[u8] = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V66\0";
+const EXECUTION_DOMAIN_V67: &[u8] = b"FE2O3/V18/POLICY11/TYPED-SOURCE-TAIL/EXECUTION/V67\0";
 const UNSIGNED: usize = MAGIC.len() + 6 + 2 * 32 + 4 * 40 + 4 * 32 + 2 * 8 + 6 * 8 + 8 * 32;
 const WIRE: usize = UNSIGNED + 64;
 
@@ -65,7 +66,10 @@ fn bind_execution_policy(
                 .checked_add(8)
                 .ok_or(Resource::Arithmetic)?,
         )?;
-        digest.update(EXECUTION_DOMAIN_V66);
+        digest.update(match policy {
+            crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3 => EXECUTION_DOMAIN_V67,
+            _ => EXECUTION_DOMAIN_V66,
+        });
         digest.update(count(policy.canonical_bytes().len())?.to_le_bytes());
         digest.update(policy.canonical_bytes());
     }

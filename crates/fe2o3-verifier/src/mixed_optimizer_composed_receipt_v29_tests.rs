@@ -80,6 +80,20 @@ fn composed_execution_identity_preserves_legacy_transcript_and_binds_process_pol
     assert_eq!(actual(Policy::PinnedSingleThreadContextsV2), contexts);
     assert_ne!(legacy, contexts);
 
+    let interpreter_policy = b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V3\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal;verifier-thread-stack-max=1073741824;other-thread-stack-max=33554432;process-stack-max=33554432";
+    assert_eq!(
+        Policy::PinnedSingleThreadContextsV3.canonical_bytes(),
+        interpreter_policy
+    );
+    let mut interpreter = b"FE2O3/V18/POLICY11/COMPOSED-CFG/EXECUTION/V67\0".to_vec();
+    interpreter.extend_from_slice(&(interpreter_policy.len() as u64).to_le_bytes());
+    interpreter.extend_from_slice(interpreter_policy);
+    interpreter.extend_from_slice(&old[old_domain.len()..]);
+    let interpreter: [u8; 32] = Sha256::digest(&interpreter).into();
+    assert_eq!(actual(Policy::PinnedSingleThreadContextsV3), interpreter);
+    assert_ne!(interpreter, legacy);
+    assert_ne!(interpreter, contexts);
+
     // Inert codec fixtures isolate this coordinate; they do not execute a proof.
     let key = SigningKey::from_bytes(&[45; 32]);
     let mut legacy_expected = expected(key.verifying_key().to_bytes());
@@ -92,6 +106,18 @@ fn composed_execution_identity_preserves_legacy_transcript_and_binds_process_pol
     import(&contexts_expected, &contexts_wire).unwrap();
     assert!(import(&legacy_expected, &contexts_wire).is_err());
     assert!(import(&contexts_expected, &legacy_wire).is_err());
+    for accepted in [legacy, contexts, interpreter] {
+        for observed in [legacy, contexts, interpreter] {
+            let mut expected = legacy_expected;
+            expected.execution = accepted;
+            let mut substituted = expected;
+            substituted.execution = observed;
+            assert_eq!(
+                import(&expected, &sign(&substituted, &key)).is_ok(),
+                accepted == observed
+            );
+        }
+    }
 }
 
 #[test]
@@ -99,41 +125,43 @@ fn composed_execution_policy_hash_has_exact_incremental_work_and_sticky_refusal(
     use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2 as Policy;
 
     let policy = b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V2\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal";
-    let expected_work = 8 + policy.len();
     assert_eq!(EXECUTION_DOMAIN.len(), EXECUTION_DOMAIN_V66.len());
-    for limit in [expected_work, expected_work - 1] {
-        let mut work = Work::new(limit);
-        let mut budget = Budget::new(&mut work, 31);
-        budget.reserve_storage(31).unwrap();
-        let mut digest = Sha256::new();
-        let before: [u8; 32] = digest.clone().finalize().into();
-        let result = bind_execution_policy(
-            &mut digest,
-            Policy::PinnedSingleThreadContextsV2,
-            &mut budget,
-        );
-        if limit == expected_work {
-            result.unwrap();
-            assert_eq!(budget.work(), expected_work);
-            assert!(budget.check_prior_denials_v1().is_ok());
-        } else {
-            assert!(matches!(result, Err(Error::Resource(Resource::Work(error)))
+    assert_eq!(EXECUTION_DOMAIN.len(), EXECUTION_DOMAIN_V67.len());
+    let interpreter_policy = b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V3\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal;verifier-thread-stack-max=1073741824;other-thread-stack-max=33554432;process-stack-max=33554432";
+    for (selected, bytes) in [
+        (Policy::PinnedSingleThreadContextsV2, policy.as_slice()),
+        (
+            Policy::PinnedSingleThreadContextsV3,
+            interpreter_policy.as_slice(),
+        ),
+    ] {
+        let expected_work = 8 + bytes.len();
+        for limit in [expected_work, expected_work - 1] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 31);
+            budget.reserve_storage(31).unwrap();
+            let mut digest = Sha256::new();
+            let before: [u8; 32] = digest.clone().finalize().into();
+            let result = bind_execution_policy(&mut digest, selected, &mut budget);
+            if limit == expected_work {
+                result.unwrap();
+                assert_eq!(budget.work(), expected_work);
+                assert!(budget.check_prior_denials_v1().is_ok());
+            } else {
+                assert!(matches!(result, Err(Error::Resource(Resource::Work(error)))
                 if error.limit() == limit && error.actual() == expected_work));
-            assert_eq!(budget.failed_work(), Some(expected_work));
-            assert_eq!(<[u8; 32]>::from(digest.clone().finalize()), before);
-            // A cheaper later attempt cannot erase the recorded original refusal.
-            assert!(budget.charge_work(0).is_ok());
-            let retry = bind_execution_policy(
-                &mut digest,
-                Policy::PinnedSingleThreadContextsV2,
-                &mut budget,
-            );
-            assert!(matches!(retry, Err(Error::Resource(Resource::Work(error)))
+                assert_eq!(budget.failed_work(), Some(expected_work));
+                assert_eq!(<[u8; 32]>::from(digest.clone().finalize()), before);
+                // A cheaper later attempt cannot erase the recorded original refusal.
+                assert!(budget.charge_work(0).is_ok());
+                let retry = bind_execution_policy(&mut digest, selected, &mut budget);
+                assert!(matches!(retry, Err(Error::Resource(Resource::Work(error)))
                 if error.limit() == limit && error.actual() == expected_work));
-            assert_eq!(budget.failed_work(), Some(expected_work));
-            assert_eq!(<[u8; 32]>::from(digest.finalize()), before);
+                assert_eq!(budget.failed_work(), Some(expected_work));
+                assert_eq!(<[u8; 32]>::from(digest.finalize()), before);
+            }
+            assert_eq!(budget.storage(), 31);
         }
-        assert_eq!(budget.storage(), 31);
     }
     let mut work = Work::new(0);
     let mut budget = Budget::new(&mut work, 0);

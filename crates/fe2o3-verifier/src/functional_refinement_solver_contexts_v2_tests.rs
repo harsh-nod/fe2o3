@@ -1,5 +1,72 @@
 use super::*;
 
+#[test]
+fn interpreter_stack_policy_keeps_pending_live_total_and_sticky_terminal_census() {
+    let policy = GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3;
+    assert_eq!(policy.max_live(), MAX_LIVE_CONTEXTS_V2);
+    let mut census = SolverContextsV2::with_policy(policy, false);
+    for _ in 0..4096 {
+        start(&mut census, 10);
+        census
+            .terminal(TraceeRole::Solver, 10, true, 0, false)
+            .unwrap();
+    }
+    census.finish().unwrap();
+    assert!(census.birth(TraceeRole::Verifier, 10).is_err());
+    assert!(census.finish().is_err());
+    let mut census = SolverContextsV2::with_policy(policy, false);
+    census.birth(TraceeRole::Verifier, 10).unwrap();
+    census.birth(TraceeRole::Verifier, 20).unwrap();
+    assert_eq!((census.born, census.executed), (2, 0));
+    assert!(census.birth(TraceeRole::Verifier, 30).is_err());
+    assert!(census.finish().is_err());
+    let mut census = SolverContextsV2::with_policy(policy, false);
+    start(&mut census, 10);
+    start(&mut census, 20);
+    assert!(
+        census
+            .terminal(TraceeRole::Solver, 10, true, 1 << 8, false)
+            .is_err()
+    );
+    assert!(
+        census
+            .terminal(TraceeRole::Solver, 20, true, 0, false)
+            .is_err()
+    );
+    assert!(census.finish().is_err());
+}
+
+#[test]
+fn context_terminal_diagnostic_preserves_zero_and_incomplete_census_refusal() {
+    for born in 0..=2 {
+        let mut census = SolverContextsV2::new(false);
+        for index in 0..born {
+            census.birth(TraceeRole::Verifier, 10 + index).unwrap();
+        }
+        if born == 2 {
+            census.executed(10, TraceeRole::Solver).unwrap();
+        }
+        let error = census.finish().unwrap_err();
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
+        let executed = usize::from(born == 2);
+        assert!(error.detail().contains(&format!(
+            "born={born} executed={executed} completed=0 live={born}"
+        )));
+        assert!(error.detail().contains("prior_failed=false auxiliary_required=false auxiliary_complete=true auxiliary_pending=false"));
+        assert!(census.failed);
+        assert!(
+            census
+                .finish()
+                .unwrap_err()
+                .detail()
+                .contains("prior_failed=true")
+        );
+    }
+}
+
 fn start(census: &mut SolverContextsV2, pid: i32) {
     census.birth(TraceeRole::Verifier, pid).unwrap();
     census.executed(pid, TraceeRole::Solver).unwrap();

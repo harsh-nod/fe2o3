@@ -974,7 +974,15 @@ fn data_and_cross_process_sharing_are_not_clone_authority() {
             rdi: flags,
             ..Default::default()
         };
-        assert!(stable::birth_request(std::process::id() as i32, &r).is_err());
+        assert!(
+            stable::birth_request(
+                std::process::id() as i32,
+                &r,
+                GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+                TraceeRole::Verifier
+            )
+            .is_err()
+        );
     }
 }
 

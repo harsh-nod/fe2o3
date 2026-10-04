@@ -187,6 +187,14 @@ pub(crate) fn open_retained_generated_verus_context_runtime_v2(
     Ok(owner)
 }
 
+pub(crate) fn open_retained_generated_verus_context_runtime_v3(
+    root: &Path,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut owner = open_retained_generated_verus_runtime_v1(root)?;
+    owner.policy = GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3;
+    Ok(owner)
+}
+
 fn runtime_manifest(root: &Path) -> Result<ManifestV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_absolute_path(root)?;
     validate_runtime_root_path(root)?;

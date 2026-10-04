@@ -11,7 +11,7 @@ use crate::retained_functional_refinement_runtime_v1::{
     GeneratedProofProcessPolicyV2, RetainedFunctionalRefinementRuntimeErrorV1,
     RetainedFunctionalRefinementRuntimeOutputV1, RetainedGeneratedVerusRuntimeBackendV1,
     RuntimeAttemptV1, open_retained_generated_verus_context_runtime_v2,
-    open_retained_generated_verus_runtime_v1,
+    open_retained_generated_verus_context_runtime_v3, open_retained_generated_verus_runtime_v1,
 };
 
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
@@ -87,6 +87,23 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         root: impl AsRef<Path>,
     ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
         let backend = open_retained_generated_verus_context_runtime_v2(root.as_ref())
+            .map_err(runtime_error_from_backend)?;
+        Ok(Self {
+            identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
+            backend,
+        })
+    }
+
+    /// Opens the exact pinned tools under the explicit V3 context/stack policy.
+    ///
+    /// V3 retains the V2 solver census and permits the pinned interpreter's at most
+    /// 1 GiB clone3 stack only for authenticated verifier threads. Other thread and
+    /// process stacks retain the 32 MiB limit. No environment or request selects
+    /// these bounds, and this resource policy grants no proof or signer authority.
+    pub fn open_pinned_contexts_v3(
+        root: impl AsRef<Path>,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let backend = open_retained_generated_verus_context_runtime_v3(root.as_ref())
             .map_err(runtime_error_from_backend)?;
         Ok(Self {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
@@ -224,9 +241,19 @@ mod tests {
 
     #[test]
     fn immutable_runtime_output_policy_rejects_cross_policy_substitution() {
-        use GeneratedProofProcessPolicyV2::{LegacySingleSolverV1, PinnedSingleThreadContextsV2};
-        for expected in [LegacySingleSolverV1, PinnedSingleThreadContextsV2] {
-            for actual in [LegacySingleSolverV1, PinnedSingleThreadContextsV2] {
+        use GeneratedProofProcessPolicyV2::{
+            LegacySingleSolverV1, PinnedSingleThreadContextsV2, PinnedSingleThreadContextsV3,
+        };
+        for expected in [
+            LegacySingleSolverV1,
+            PinnedSingleThreadContextsV2,
+            PinnedSingleThreadContextsV3,
+        ] {
+            for actual in [
+                LegacySingleSolverV1,
+                PinnedSingleThreadContextsV2,
+                PinnedSingleThreadContextsV3,
+            ] {
                 assert_eq!(
                     check_output_policy(expected, actual).is_ok(),
                     expected == actual
@@ -238,7 +265,7 @@ mod tests {
     #[test]
     #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
     fn protected_pinned_context_policy_accepts_stock_modules_and_spinoffs() {
-        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v2(
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v3(
             PROTECTED_RUNTIME_ROOT,
         )
         .expect("admit exact pinned tools under explicit context policy");
@@ -267,7 +294,7 @@ mod separate_bucket {
             .expect("stock modules and bit-vector spinoff retain every solver terminal");
         assert_eq!(
             output.policy,
-            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3
         );
         crate::functional_refinement_receipt_v2::validate_proved_output(&output).unwrap();
         let (born, executed, completed, peak) =

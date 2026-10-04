@@ -1,6 +1,64 @@
 use super::*;
 use std::io::Cursor;
 
+#[test]
+fn context_terminal_failure_retains_category_status_counts_and_captured_cause() {
+    let error = context_terminal_failure(
+        process_failure("census: born=0 executed=0 completed=0 live=0"),
+        (Some(1), None),
+        b"summary\n",
+        b"error: invalid proof\n\xff",
+    );
+    assert_eq!(
+        error.kind(),
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+    );
+    let detail = error.detail();
+    assert!(detail.contains("born=0 executed=0 completed=0 live=0"));
+    assert!(detail.contains("verifier=(Some(1), None)"));
+    assert!(detail.contains("stderr_bytes=22 stderr=\"error: invalid proof\\n\\xff\""));
+    assert!(detail.contains("stdout_bytes=8 stdout=\"summary\\n\""));
+    assert!(!detail.contains("(truncated)"));
+    assert!(detail.is_ascii());
+    assert!(!detail.chars().any(char::is_control));
+}
+
+#[test]
+fn context_terminal_failure_prefixes_have_independent_fixed_bounds_and_complete_escapes() {
+    for remaining in [3, 4] {
+        let mut bytes = vec![b'x'; MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES - remaining];
+        bytes.extend_from_slice(b"\xffHIDDEN_SUFFIX");
+        let (prefix, truncated) =
+            bounded_output_prefix_with_limit(&bytes, &[], MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES);
+        assert!(truncated);
+        assert_eq!(prefix.len(), if remaining == 4 { 512 } else { 509 });
+        assert_eq!(prefix.ends_with("\\xff"), remaining == 4);
+        let error = context_terminal_failure(
+            process_failure("unchanged refusal"),
+            (Some(1), None),
+            &bytes,
+            &bytes,
+        );
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
+        assert_eq!(error.detail().matches("(truncated)").count(), 2);
+        assert!(!error.detail().contains("HIDDEN_SUFFIX"));
+        assert!(error.detail().len() <= 2 * MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES + 256);
+    }
+    let bytes = vec![b'x'; 16 * 1024];
+    let error = context_terminal_failure(
+        process_failure("C".repeat(16 * 1024)),
+        (None, Some(9)),
+        &bytes,
+        &bytes,
+    );
+    assert_eq!(error.detail().matches("(truncated)").count(), 3);
+    assert!(error.detail().len() <= 3 * MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES + 256);
+    assert!(error.detail().contains("verifier=(None, Some(9))"));
+}
+
 fn capture(bytes: &[u8]) -> Capture {
     Capture {
         bytes: bytes.to_vec(),

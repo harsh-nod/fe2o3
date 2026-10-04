@@ -63,6 +63,9 @@ const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXE
 const POLICY_CONFIGURATION_DOMAIN_V3: &[u8] =
     b"FE2O3/FUNCTIONAL-REFINEMENT/PROCESS-POLICY-CONFIG/V3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V3\0";
+const POLICY_CONFIGURATION_DOMAIN_V4: &[u8] =
+    b"FE2O3/FUNCTIONAL-REFINEMENT/PROCESS-POLICY-CONFIG/V4\0";
+const EXECUTION_IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V4\0";
 
 fn process_configuration_digest(
     domain: &[u8],
@@ -73,7 +76,10 @@ fn process_configuration_digest(
         return domain_digest(domain, configuration);
     }
     let mut digest = Sha256::new();
-    put_blob(&mut digest, POLICY_CONFIGURATION_DOMAIN_V3);
+    put_blob(&mut digest, match policy {
+        crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3 => POLICY_CONFIGURATION_DOMAIN_V4,
+        _ => POLICY_CONFIGURATION_DOMAIN_V3,
+    });
     put_blob(&mut digest, domain);
     put_blob(&mut digest, configuration);
     put_blob(&mut digest, policy.canonical_bytes());
@@ -1608,7 +1614,10 @@ fn execution_identity_for_runtime(
     if observed.policy.is_legacy() {
         digest.update(EXECUTION_IDENTITY_DOMAIN);
     } else {
-        digest.update(EXECUTION_IDENTITY_DOMAIN_V3);
+        digest.update(match observed.policy {
+            crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3 => EXECUTION_IDENTITY_DOMAIN_V4,
+            _ => EXECUTION_IDENTITY_DOMAIN_V3,
+        });
         put_blob(&mut digest, observed.policy.canonical_bytes());
     }
     put_blob(&mut digest, &runtime_identity);

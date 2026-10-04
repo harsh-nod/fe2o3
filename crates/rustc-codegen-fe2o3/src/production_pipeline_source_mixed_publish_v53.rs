@@ -686,7 +686,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
         let runtime =
-            fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v2(
+            fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v3(
                 "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5",
             )
             .map_err(ProductionPipelineError::MixedRuntime)?;

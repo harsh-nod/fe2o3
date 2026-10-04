@@ -903,8 +903,8 @@ fn supervise_run(
         let mut process_descendants_created = 0_usize;
         let mut auxiliary_started = false;
         let mut solver_started = false;
-        let mut contexts =
-            (!policy.is_legacy()).then(|| SolverContextsV2::new(require_auxiliary_verifier));
+        let mut contexts = (!policy.is_legacy())
+            .then(|| SolverContextsV2::with_policy(policy, require_auxiliary_verifier));
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
@@ -1034,6 +1034,7 @@ fn supervise_run(
                             stable::complete_request(
                                 tracees,
                                 process,
+                                policy,
                                 allowed_mappings,
                                 validate_mappings,
                                 &mut process_descendants_created,
@@ -1114,7 +1115,14 @@ fn supervise_run(
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
         if let Some(contexts) = &mut contexts {
-            contexts.finish()?;
+            contexts.finish().map_err(|error| {
+                context_terminal_failure(
+                    error,
+                    verifier_terminal,
+                    &stdout_capture.bytes,
+                    &stderr_capture.bytes,
+                )
+            })?;
             return Ok(verifier_terminal);
         }
         let solver_terminal = solver_terminal.ok_or_else(|| {
@@ -1400,14 +1408,33 @@ fn descriptor_numbers(
     Ok(result)
 }
 
+#[cfg(test)]
 fn validate_sensitive_registers(
     process: i32,
     registers: &UserRegistersX86_64,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_mappings: bool,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    validate_sensitive_registers_with_policy(
+        process,
+        registers,
+        allowed,
+        validate_mappings,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        TraceeRole::Verifier,
+    )
+}
+
+fn validate_sensitive_registers_with_policy(
+    process: i32,
+    registers: &UserRegistersX86_64,
+    allowed: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     match u32::try_from(registers.orig_rax) {
-        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers),
+        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers, policy, role),
         Ok(OPEN_SYSCALL) => validate_read_only_open(registers.rsi),
         Ok(OPENAT_SYSCALL) => validate_read_only_open(registers.rdx),
         Ok(PRCTL_SYSCALL) if registers.rdi == PR_SET_NAME && registers.rsi != 0 => Ok(()),
@@ -1481,6 +1508,8 @@ fn validate_read_only_open(flags: u64) -> Result<(), RetainedFunctionalRefinemen
 fn validate_clone3_request(
     process: i32,
     registers: &UserRegistersX86_64,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if registers.rsi != CLONE3_ARGUMENT_BYTES || registers.rdi == 0 {
         return Err(process_failure(
@@ -1499,6 +1528,14 @@ fn validate_clone3_request(
     for (index, chunk) in bytes.chunks_exact(8).enumerate() {
         arguments[index] = u64::from_ne_bytes(chunk.try_into().expect("eight-byte chunk"));
     }
+    validate_clone3_arguments(arguments, policy, role)
+}
+
+fn validate_clone3_arguments(
+    arguments: [u64; 11],
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let [
         flags,
         pidfd,
@@ -1516,7 +1553,6 @@ fn validate_clone3_request(
         && set_tid_size == 0
         && cgroup == 0
         && stack != 0
-        && (1..=MAX_CLONE_STACK_BYTES).contains(&stack_size)
         && stack.checked_add(stack_size).is_some();
     let rust_thread = flags == RUST_THREAD_CLONE3_FLAGS
         && exit_signal == 0
@@ -1531,7 +1567,15 @@ fn validate_clone3_request(
         && child_tid == 0
         && parent_tid == 0
         && tls == 0;
-    if common && (rust_thread || rust_process) {
+    // Only roles established by the retained executable checks can use V3's
+    // pinned interpreter stack. The pending child and solver never inherit it.
+    let stack_limit =
+        if rust_thread && matches!(role, TraceeRole::Verifier | TraceeRole::AuxiliaryVerifier) {
+            policy.verifier_thread_stack_bytes()
+        } else {
+            MAX_CLONE_STACK_BYTES
+        };
+    if common && (1..=stack_limit).contains(&stack_size) && (rust_thread || rust_process) {
         Ok(())
     } else {
         Err(process_failure(format!(
@@ -2118,15 +2162,51 @@ fn output_too_large(
 const MAX_ESCAPED_OUTPUT_PREFIX_BYTES: usize = 1024;
 
 fn bounded_output_prefix(retained: &[u8], incoming: &[u8]) -> (String, bool) {
-    let mut prefix = String::with_capacity(MAX_ESCAPED_OUTPUT_PREFIX_BYTES);
+    bounded_output_prefix_with_limit(retained, incoming, MAX_ESCAPED_OUTPUT_PREFIX_BYTES)
+}
+
+fn bounded_output_prefix_with_limit(
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> (String, bool) {
+    let mut prefix = String::with_capacity(limit);
     for byte in retained.iter().chain(incoming) {
         let escaped = std::ascii::escape_default(*byte);
-        if escaped.len() > MAX_ESCAPED_OUTPUT_PREFIX_BYTES - prefix.len() {
+        if escaped.len() > limit - prefix.len() {
             return (prefix, true);
         }
         prefix.extend(escaped.map(char::from));
     }
     (prefix, false)
+}
+
+const MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES: usize = 512;
+
+fn context_terminal_failure(
+    error: RetainedFunctionalRefinementRuntimeErrorV1,
+    verifier: (Option<i32>, Option<i32>),
+    stdout: &[u8],
+    stderr: &[u8],
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let prefix = |bytes: &[u8]| {
+        bounded_output_prefix_with_limit(bytes, &[], MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES)
+    };
+    let (cause, cause_truncated) = prefix(error.detail().as_bytes());
+    let (out, out_truncated) = prefix(stdout);
+    let (err, err_truncated) = prefix(stderr);
+    let marker = |truncated| if truncated { " (truncated)" } else { "" };
+    RetainedFunctionalRefinementRuntimeErrorV1::new(
+        error.kind(),
+        format!(
+            "{cause}{}; verifier={verifier:?}; stderr_bytes={} stderr=\"{err}\"{}; stdout_bytes={} stdout=\"{out}\"{}",
+            marker(cause_truncated),
+            stderr.len(),
+            marker(err_truncated),
+            stdout.len(),
+            marker(out_truncated),
+        ),
+    )
 }
 
 fn drain_to_eof(
@@ -2200,6 +2280,10 @@ mod memory_tests;
 #[cfg(test)]
 #[path = "functional_refinement_process_tree_v1_stable_tests.rs"]
 mod stable_tests;
+
+#[cfg(test)]
+#[path = "functional_refinement_clone3_stack_v3_tests.rs"]
+mod clone3_stack_v3_tests;
 
 #[cfg(test)]
 #[path = "functional_refinement_process_tree_v1_quarantine_tests.rs"]

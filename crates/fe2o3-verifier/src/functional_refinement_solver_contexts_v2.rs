@@ -31,9 +31,20 @@ pub(super) struct SolverContextsV2 {
 }
 
 impl SolverContextsV2 {
+    #[cfg(test)]
     pub(super) fn new(auxiliary_required: bool) -> Self {
+        Self::with_policy(
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2,
+            auxiliary_required,
+        )
+    }
+
+    pub(super) fn with_policy(
+        policy: GeneratedProofProcessPolicyV2,
+        auxiliary_required: bool,
+    ) -> Self {
         Self {
-            policy: GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2,
+            policy,
             auxiliary_required,
             auxiliary: None,
             auxiliary_complete: !auxiliary_required,
@@ -249,8 +260,19 @@ impl SolverContextsV2 {
             || self.executed != self.completed
             || (!self.auxiliary_required && !self.auxiliary_complete)
         {
-            return self
-                .refuse("solver context census lacks complete successful authenticated terminals");
+            let detail = format!(
+                "solver context census lacks complete successful authenticated terminals: prior_failed={} auxiliary_required={} auxiliary_complete={} auxiliary_pending={} born={} executed={} completed={} live={}",
+                self.failed,
+                self.auxiliary_required,
+                self.auxiliary_complete,
+                self.auxiliary.is_some(),
+                self.born,
+                self.executed,
+                self.completed,
+                self.solvers.iter().flatten().count(),
+            );
+            self.failed = true;
+            return Err(process_failure(detail));
         }
         #[cfg(test)]
         FINISHED_TEST_SOLVER_CONTEXTS.set(Some((
