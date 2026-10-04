@@ -192,6 +192,7 @@ pub fn check_inert_predicated_typed_source_receipt_v90<'a>(
     input: MixedMiddleEndInputV90<'a>,
     budget: &mut Budget<'_>,
 ) -> Result<InertPredicatedTypedSourceReceiptV90<'a>> {
+    budget.check_prior_denials_v1()?;
     let floor = budget.storage();
     let header = size_of::<Expected>() * 2
         + size_of::<Binding>()
