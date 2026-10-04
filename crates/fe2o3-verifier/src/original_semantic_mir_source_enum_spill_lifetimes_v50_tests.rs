@@ -199,13 +199,16 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                     |slots, out| {
                         let relation = slots.correspondence(out)?;
                         let mut lifetimes = [[0usize; 2]; 2];
+                        // Moving the field leaves only the saved scalar tag live at the join.
+                        let joins_enum = mode != EndPayload::MoveField;
+                        let expected_spills = if joins_enum { 2 } else { 0 };
                         for root in 0..2 {
                             assert_eq!(
                                 relation.enum_spill_count_v48(root, out.budget)?,
-                                2,
-                                "each helper's dynamic pointer field needs an authenticated spill"
+                                expected_spills,
+                                "{mode:?}, root {root}: only a joined enum needs each helper's authenticated payload spill"
                             );
-                            for ordinal in 0..2 {
+                            for ordinal in 0..expected_spills {
                                 let receipt = relation.enum_spill_v48(root, ordinal, out.budget)?;
                                 let (definition, operation) = receipt.allocation(out.budget)?;
                                 let inventory = relation.inventory(out.budget)?;
@@ -236,6 +239,24 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                                 if !row.active || instance == 0 {
                                     continue;
                                 }
+                                let original =
+                                    relation.source(out.budget)?.source_ssa(out.budget)?;
+                                let live_in = original
+                                    .plan_for_function(row.function)
+                                    .unwrap()
+                                    .plan()
+                                    .live_in(fe2o3_mir_model::SsaBlockIdV1::new(3))
+                                    .unwrap();
+                                assert_eq!(
+                                    live_in.contains(&fe2o3_mir_model::SsaVariableIdV1::new(4)),
+                                    joins_enum,
+                                    "{mode:?}: exact original enum liveness at the join"
+                                );
+                                assert_eq!(
+                                    live_in.contains(&fe2o3_mir_model::SsaVariableIdV1::new(5)),
+                                    !joins_enum,
+                                    "{mode:?}: only the pre-move scalar discriminant crosses the join"
+                                );
                                 let body =
                                     SourceByteBody::derive(plan, slots, root, instance, out)?;
                                 let context = body.context(out)?;
