@@ -276,4 +276,3 @@ proof fn invocation_source_put_local_well_formed_v78(
         }
     }
 }
-
