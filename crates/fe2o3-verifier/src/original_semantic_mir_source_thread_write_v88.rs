@@ -47,11 +47,7 @@ impl ThreadWriteCall {
         )?;
         out.budget.charge_work(6)?;
         let (local, bits) = self.normalization_coordinates().ok_or_else(mismatch)?;
-        write!(
-            out,
-            " hide(invocation_source_thread_write_v88);\n let normalized_write = "
-        )
-        .map_err(|_| out.error())?;
+        write!(out, " let normalized_write = ").map_err(|_| out.error())?;
         self.emit_literal(out)?;
         write!(out, ";\n invocation_thread_write_local_normal_form_v93(source, normalized_write, {local}, {bits}, {root}, {instance}, invocation_runtime_little_endian_v36());\n")
             .map_err(|_| out.error())

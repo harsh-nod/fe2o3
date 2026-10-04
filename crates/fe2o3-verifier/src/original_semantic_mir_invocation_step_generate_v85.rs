@@ -93,6 +93,10 @@ pub(super) fn emit(
                         }
                     }
                     _ => {
+                        out.budget.charge_work(1)?;
+                        if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
+                            emit!(out, " hide(invocation_source_thread_write_v88);\n");
+                        }
                         if constructor.is_some() && matches!(goal, Goal::Map) {
                             emit!(
                                 out,
