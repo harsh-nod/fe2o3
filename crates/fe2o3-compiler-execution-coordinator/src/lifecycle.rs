@@ -1,16 +1,20 @@
 use std::fs::File;
 use std::os::fd::AsFd;
+#[cfg(test)]
 use std::path::Path;
 
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1, COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
-};
-use rustix::fs::{FileType, FlockOperation, Mode, OFlags, flock, openat};
+use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1;
+#[cfg(test)]
+use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1;
+#[cfg(test)]
+use rustix::fs::{FileType, Mode, OFlags, openat};
+use rustix::fs::{FlockOperation, flock};
 
 use crate::CompilerExecutionCoordinatorErrorV1;
 use crate::inherited::{RootFileSnapshotV1, validate_provisioned_file};
 
 const LIFECYCLE_LOCK_ROLE_V1: &str = "compiler-execution lifecycle lock";
+#[cfg(test)]
 const LIFECYCLE_PARENT_MODE_V1: u32 = 0o755;
 const ROOT_ID_V1: u32 = 0;
 
@@ -42,9 +46,33 @@ impl CompilerExecutionLifecycleLeaseV1 {
     pub(crate) fn admit_service_from_root(
         root: &impl AsFd,
     ) -> Result<Self, CompilerExecutionCoordinatorErrorV1> {
-        Self::admit_service_from_root_for_owner(root, ROOT_ID_V1, ROOT_ID_V1)
+        use fe2o3_compiler_execution_lifecycle::{
+            CompilerExecutionLifecycleRootV89, CompilerExecutionServiceLifecycleLeaseV1,
+        };
+        let lease = CompilerExecutionServiceLifecycleLeaseV1::open_for_root_coordinator_v89(
+            root,
+            CompilerExecutionLifecycleRootV89::Supervisor,
+        )
+        .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
+        let file = rustix::io::fcntl_dupfd_cloexec(&lease, 0).map_err(|source| {
+            CompilerExecutionCoordinatorErrorV1::Io {
+                operation: "retain admitted coordinator lifecycle lease",
+                source: source.into(),
+            }
+        })?;
+        let admitted = Self::admit(
+            File::from(file),
+            CompilerExecutionLifecycleLeaseModeV1::SharedService,
+            ROOT_ID_V1,
+            ROOT_ID_V1,
+        )?;
+        lease
+            .revalidate()
+            .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
+        Ok(admitted)
     }
 
+    #[cfg(test)]
     fn admit_service_from_root_for_owner(
         root: &impl AsFd,
         expected_uid: u32,
@@ -131,6 +159,7 @@ impl CompilerExecutionLifecycleLeaseV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_parent(
     parent: &impl AsFd,
     expected_uid: u32,
@@ -316,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn service_lease_is_derived_from_the_supervisor_root_parent() {
+    fn legacy_same_owner_parent_route_retains_shared_lock() {
         let fixture = tempfile::tempdir().unwrap();
         std::fs::set_permissions(
             fixture.path(),

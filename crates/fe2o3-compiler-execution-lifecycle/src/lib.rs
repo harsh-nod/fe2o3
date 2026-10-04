@@ -11,6 +11,9 @@
 
 mod native;
 mod provisioning;
+mod root_coordinator_v89;
+
+pub use root_coordinator_v89::CompilerExecutionLifecycleRootV89;
 
 pub use native::{
     CompilerExecutionServiceLifecycleLeaseV2, LifecycleLeaseErrorV2, LifecycleLeaseStorageV2,
@@ -127,6 +130,14 @@ impl CompilerExecutionServiceLifecycleLeaseV1 {
         expected_gid: u32,
     ) -> Result<Self, LifecycleLeaseErrorV1> {
         let parent = open_parent(state_root)?;
+        Self::open_from_parent(parent, expected_uid, expected_gid)
+    }
+
+    fn open_from_parent(
+        parent: File,
+        expected_uid: u32,
+        expected_gid: u32,
+    ) -> Result<Self, LifecycleLeaseErrorV1> {
         validate_parent(&parent, expected_uid, expected_gid)?;
         let file = File::from(
             openat(
