@@ -24,19 +24,22 @@ pub(super) fn execute(
             ),
         ));
     };
-    let (element, layout) = match element {
-        Type::Scalar(element) => (*element, None),
-        _ => crate::storage_scalar_v18::scalar_layout(engine.module, element, engine.target)
-            .map(|(layout, element)| (element, Some(layout)))
-            .ok_or_else(|| {
-                engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "preflighted scalar storage allocation",
-                    ),
-                )
-            })?,
-    };
+    let (element, layout, element_bytes) = match element {
+        Type::Scalar(element) => engine
+            .target
+            .scalar_bytes(*element)
+            .map(|bytes| (*element, None, bytes)),
+        _ => crate::storage_scalar_v18::allocation_layout(engine.module, element, engine.target)
+            .map(|(layout, element, bytes)| (element, Some(layout), bytes)),
+    }
+    .ok_or_else(|| {
+        engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "preflighted private allocation layout",
+            ),
+        )
+    })?;
     if *address_space != AddressSpace::Private {
         return Err(engine.at(
             site,
@@ -50,12 +53,6 @@ pub(super) fn execute(
         }
         None => 1,
     };
-    let element_bytes = engine.target.scalar_bytes(element).ok_or_else(|| {
-        engine.at(
-            site,
-            SimulationExecutionErrorKindV1::InternalInvariant("preflighted allocation element"),
-        )
-    })?;
     let bytes = count.checked_mul(element_bytes).ok_or_else(|| {
         engine.at(
             site,

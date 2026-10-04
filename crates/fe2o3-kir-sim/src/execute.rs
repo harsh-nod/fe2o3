@@ -691,6 +691,10 @@ pub enum SimulationExecutionErrorKindV1 {
     UndefinedIntegerOperation(&'static str),
     IntegerOutOfRange,
     PointerOffsetOverflow,
+    StorageArrayIndexOutOfBounds {
+        index: u64,
+        length: u64,
+    },
     PointerDistanceDifferentAllocation {
         pointer_allocation: u64,
         origin_allocation: u64,
@@ -790,6 +794,7 @@ impl SimulationExecutionErrorKindV1 {
             | Self::UndefinedIntegerOperation(_)
             | Self::IntegerOutOfRange
             | Self::PointerOffsetOverflow
+            | Self::StorageArrayIndexOutOfBounds { .. }
             | Self::PointerDistanceDifferentAllocation { .. }
             | Self::PointerDistanceOutOfBounds
             | Self::PointerDistanceNotDivisible { .. }

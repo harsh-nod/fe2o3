@@ -3532,6 +3532,9 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::PointerOffsetOverflow => {
             ErrorKind::ExecutionPointerOffsetOverflow
         }
+        SimulationExecutionErrorKindV1::StorageArrayIndexOutOfBounds { .. } => {
+            ErrorKind::ExecutionStorageArrayIndexOutOfBounds
+        }
         SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation { .. } => {
             ErrorKind::ExecutionPointerDistanceDifferentAllocation
         }
