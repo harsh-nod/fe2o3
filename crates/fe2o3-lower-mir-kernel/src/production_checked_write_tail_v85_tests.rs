@@ -372,9 +372,16 @@ fn checked_write_suffix_precharges_exact_work_and_borrows_storage() {
             assert_eq!(budget.storage(), header);
             budget.release_storage(header).unwrap();
         } else {
-            assert!(reserved.is_err());
+            assert!(matches!(reserved, Err(ArgumentResourceV1::Storage(error))
+                if error.actual() == header && error.limit() == header - 1));
             assert_eq!(budget.work(), 0);
-            assert!(budget.reserve_storage(0).is_err());
+            assert_eq!(budget.failed_storage(), Some(header));
+            for _ in 0..2 {
+                assert!(matches!(budget.check_prior_denials_v1(),
+                    Err(ArgumentResourceV1::Storage(error))
+                    if error.actual() == header && error.limit() == header - 1));
+            }
+            assert_eq!(budget.work(), 0);
         }
         assert_eq!(budget.storage(), 0);
     }
