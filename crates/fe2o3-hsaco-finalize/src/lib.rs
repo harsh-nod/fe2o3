@@ -34,9 +34,14 @@ mod first_build_worker_v3;
 mod link_plan;
 mod mixed_worker_lineage_v29;
 mod typed_worker_lineage_v50;
+mod typed_worker_lineage_v90;
 pub use typed_worker_lineage_v50::{
     PreparedFinalizedTypedContentV50, TypedWorkerLineageErrorV50,
     finalize_protected_worker_typed_content_v50,
+};
+pub use typed_worker_lineage_v90::{
+    PredicatedTypedWorkerLineageErrorV90, PreparedFinalizedPredicatedTypedContentV90,
+    finalize_protected_worker_predicated_typed_content_v90,
 };
 mod mixed_descriptor_finalization_family;
 mod mixed_descriptor_finalization_v53;
