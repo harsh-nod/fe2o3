@@ -47,6 +47,29 @@ the MI350 headers agree with the reused KFD/DRM wire layouts; the separate
 profile records the MI350 source provenance without changing the gfx942
 admission manifest.
 
+`CheckedGfx950XnackMinusDevice::observe_clock_correlation()` samples raw KFD
+GPU, CPU and system counters through that token's retained descriptor. Full
+currentness checks bracket the ioctl. A wrong GPU ID, nonzero reserved padding,
+zero system-counter frequency, syscall error or failed check permanently
+poisons the token. Counter values themselves are not required to be nonzero
+or increasing: wrap/reset detection belongs to a later correlation consumer.
+
+With `engineering-gfx950`, an idle peer group can call
+`observe_clock_correlation_v1()` to obtain one inert
+`Gfx950EngineeringPeerClockObservationV1` per rank. The sampler authenticates
+the whole 2- or 8-rank roster before sampling, takes fresh group entry/exit
+checks and verifies each device identity and queue epoch again on exit.
+Failure quarantines the group and returns no partial vector. Each sample
+retains group/rank identity, device unique ID, queue epoch and a process-local
+`Instant` bracket around its checked device call. Ranks are sampled sequentially.
+This does not allocate GPU resources or change queues or performance policy.
+
+The frequency returned by KFD describes the **system counter**, not the GPU
+counter. Neither API converts completion ticks to nanoseconds, establishes a
+completion-counter clock-domain relationship, or aligns different devices.
+Successful CPU tests of this API do not establish successful native sampling
+or calibration on MI350.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

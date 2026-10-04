@@ -54,6 +54,12 @@ pub(super) struct LinuxMemoryBackendFor<D> {
 
 #[cfg(feature = "engineering-gfx950")]
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
+    pub(super) fn observe_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, MemorySessionError> {
+        self.device.observe_clock_correlation().map_err(Into::into)
+    }
+
     pub(super) fn engineering_peer_topology(&self) -> &crate::topology::HostTopologySnapshot {
         self.device.topology_snapshot()
     }

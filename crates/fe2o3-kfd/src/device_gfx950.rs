@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "device_gfx950_clock_correlation.rs"]
+mod clock_correlation;
+
 #[cfg(feature = "engineering-gfx950")]
 #[path = "device_gfx950_mi350_2.rs"]
 mod mi350_2;

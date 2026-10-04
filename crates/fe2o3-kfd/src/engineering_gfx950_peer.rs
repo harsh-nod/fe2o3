@@ -5,6 +5,10 @@ use crate::memory::KernelOutcome;
 use crate::topology::{GfxTarget, HostTopologySnapshot, KfdTopologyLinkSetV1};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "engineering_gfx950_peer_clock_correlation.rs"]
+mod clock_correlation;
+pub use clock_correlation::Gfx950EngineeringPeerClockObservationV1;
+
 #[path = "engineering_gfx950_peer_performance.rs"]
 mod performance;
 pub use performance::Gfx950EngineeringPeerDispatchV1;
