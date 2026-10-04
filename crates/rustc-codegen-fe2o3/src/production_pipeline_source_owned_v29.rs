@@ -27,6 +27,12 @@ mod original_source_v18;
 #[path = "production_pipeline_source_formal_context_v19.rs"]
 mod formal_context_v19;
 
+#[path = "production_pipeline_source_reference_obligations_v69.rs"]
+mod reference_obligations_v69;
+
+#[cfg(test)]
+pub(crate) use reference_obligations_v69::tests::ReferenceObligationObservationV69;
+
 /// Borrows the original compiler bindings through the lexical source visit.
 /// A copied ABI roster or target string cannot construct this private context.
 struct SourceBindingContextV29<'bindings> {
@@ -66,6 +72,7 @@ pub(crate) enum Error {
     FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
     FormalPaths(Box<formal_context_v19::PathOptimizationErrorV20>),
     Resource(Resource),
+    ReferenceObligations(reference_obligations_v69::ReferenceObligationErrorV69),
     Unsupported(&'static str),
 }
 impl std::fmt::Display for Error {
@@ -99,6 +106,7 @@ impl std::error::Error for Error {
             Self::FormalReports(error) => Some(error.as_ref()),
             Self::FormalPaths(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error),
+            Self::ReferenceObligations(error) => Some(error),
             Self::Unsupported(_) => None,
         }
     }
@@ -572,18 +580,13 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch.into());
         }
-        // Functional-reference obligations need their genuine later consumer.
-        if !ssa
-            .stage
-            .bindings
-            .reference_effect_bindings
-            .as_slice()
-            .is_empty()
-        {
-            return Err(Error::Unsupported(
-                "source-owned scalar reference obligations",
-            ));
-        }
+        // Binding and independent CPU replay are not a semantic proof. Until
+        // the source-owned consumer exists, every nonempty obligation set refuses.
+        reference_obligations_v69::require_discharged(
+            &ssa.stage.semantic_ssa,
+            &ssa.stage.bindings,
+            budget,
+        )?;
         let prepared = ssa.prepare_materialization_inputs_v29(|roots| {
             roots.iter().map(|root| {
                 let launch = root.source_launch().ok_or(ProductionPipelineError::Geometry(

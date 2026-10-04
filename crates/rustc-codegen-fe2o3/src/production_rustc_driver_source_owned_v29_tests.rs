@@ -20,6 +20,9 @@ mod integer_handoff_tests;
 #[path = "production_rustc_driver_original_source_v18_tests.rs"]
 mod original_source_tests;
 
+#[path = "production_rustc_driver_source_reference_obligations_v69_tests.rs"]
+mod reference_obligation_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ScalarResult {
     source: [u8; 32],
