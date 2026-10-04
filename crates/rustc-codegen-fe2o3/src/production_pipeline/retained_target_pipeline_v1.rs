@@ -303,3 +303,66 @@ impl RetainedMaterializationPhaseV1<PrivateBf16TargetBoundCompilationV1> {
         })
     }
 }
+
+impl RetainedMaterializationPhaseV1<PrivateBf16TargetBoundCompilationV1> {
+    /// The original materialization account encloses the complete target,
+    /// admitted V12 input, checked output and original projection phase.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn optimize_private_bf16_target_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1>> {
+        self.try_map(|owner, _original_materialization_account| {
+            owner
+                .optimize_private_bf16_target_v1(requested_return)
+                .map_err(Box::new)
+        })
+    }
+}
+
+impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn revalidate_private_bf16_optimization_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .revalidate_private_bf16_optimization_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}
+
+impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_safety_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .verify_private_bf16_output_safety_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}
+
+impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
+    /// The complete checked owner still drops before the original materialization
+    /// account on refusal. No detached observer record crosses this consuming map.
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_guarded_safety_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .verify_private_bf16_output_guarded_safety_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}

@@ -123,6 +123,19 @@ insertion and parent-path replacement.
 The root-only mount transaction runs only after entering a new mount namespace
 from a dedicated single-threaded process and making `/` recursively private.
 The namespace identity is retained and rechecked before every operation.
+The installed lower root and its original install parent are also reopened in
+the current namespace before loop attachment. Their complete object snapshots,
+original no-symlink/no-magic-link path policy, deterministic root name, and full
+sealed deployment projection must agree before either retained descriptor is
+replaced. A descriptor opened before namespace entry still refers to the old
+mount object even when its inode is unchanged; OverlayFS refuses to clone that
+foreign-namespace lower. Reopening is custody preservation, not new authority.
+Staging descriptors are reopened in that namespace with the original no-symlink,
+no-cross-filesystem resolver and exact retained tree identities. Mount attachment
+and cleanup require Linux 6.8 or newer with `STATX_MNT_ID_UNIQUE`; the returned
+mask and nonzero unique ID are checked before attachment, with no older-ID
+fallback. This is an additional kernel prerequisite, not a service qualification
+claim.
 
 The sealed base memfd is attached with atomic Linux `LOOP_CONFIGURE`; legacy
 partial loop setup is not used. A separate narrow crate validates loop-control
@@ -141,12 +154,34 @@ installed deployment root : sealed SquashFS base
 ```
 
 Only the staged `upper` and `work` descriptors provide writable overlay state.
+Their backing filesystem must support OverlayFS upper/work directories. In
+particular, OverlayFS itself cannot provide either directory; the transaction
+rejects that known unsupported backing before attaching a loop device or mount.
+A disposable root that already uses OverlayFS must place its private
+qualification parent on a separately owned supported filesystem, such as bounded
+tmpfs, while retaining the same parent metadata and descriptor custody. This
+early check is not a general filesystem qualification or a fallback mount path.
+Staging still starts with seven empty `0700` children under its private `0700`
+root. At composition, only the validated upper inode transitions to `0755`,
+which OverlayFS uses for the composed root. The overlay explicitly uses
+`uuid=null,index=off`: this disposable lane does not retain persistent file
+handles or an inode index. Its kernel-created `work/work` must be the exact
+retained, root-owned, empty `0000` directory, with no extra work entries or
+xattrs. Pristine upper state still admits no xattrs or children. After completed
+preflight writes, upper state admits only the optional single
+`trusted.overlay.impure=y` copy-up marker, never other backing xattrs. Existing
+composed-root and installed-file metadata checks remain unchanged. These checks
+describe the supported mount profile, not successful service qualification.
 After attachment, the transaction checks SquashFS and OverlayFS magic,
 mountpoint-to-retained-descriptor identity, loop status, qualification-parent
 continuity, and every installed manifest/content file against sealed deployment
 custody. The move-only mounted value still grants no boot or execution
 authority by itself. Cleanup unmounts overlay first, SquashFS second, releases the
 autoclear loop device, and then preflights and removes the exact staging tree.
+Before ordinary unmount, it checks the exact mount instance and releases only
+its own mounted-directory descriptors. An external borrower still causes
+`EBUSY`; the attachment state and unique mount identity remain for a checked
+retry. A same-root bind replacement is refused even if device and inode match.
 The recursive removal is descriptor-relative, follows no symlink, crosses no
 mount, and enforces the same 64-level and 131,072-entry bounds as interrupted
 worker recovery. This permits later systemd steps to populate only the

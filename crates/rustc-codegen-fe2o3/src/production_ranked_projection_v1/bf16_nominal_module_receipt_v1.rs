@@ -2303,3 +2303,2320 @@ mod private_target_observation {
         }
     }
 }
+
+type PrivateBf16OptimizationErrorV1 = crate::production_pipeline::ProductionPipelineError;
+type PrivateBf16OptimizationResultV1 =
+    Result<PrivateBf16OptimizationPayloadV1, PrivateBf16OptimizationErrorV1>;
+
+/// Both actual V12 endpoints remain owned. The checked result drops before B.
+struct PrivateBf16OptimizationPayloadV1 {
+    checked: fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    input: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    retained: usize,
+}
+
+/// This private B -> O continuation does not replace the nominal source owner
+/// with a legacy Connected value. Target/formal/source custody and the original
+/// projection account drop last; materialization remains owned by the caller.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16OptimizedV1 {
+    optimization: PrivateBf16OptimizationPayloadV1,
+    target: PrivateBf16TargetBoundV1,
+}
+
+fn private_bf16_optimization_scratch_v1() -> usize {
+    std::mem::size_of::<Option<PrivateBf16OptimizationResultV1>>()
+}
+
+fn reserve_private_bf16_optimization_output_v1(
+    budget: &mut Budget<'_>,
+) -> Result<(usize, usize), E> {
+    budget.check_prior_denials_v1().map_err(resource)?;
+    budget.charge_work(1).map_err(resource)?;
+    // Conservative complete destination header in addition to separately paid
+    // endpoint and payload headers. No existing header credit is reused here.
+    let retained = std::mem::size_of::<PrivateBf16OptimizedV1>();
+    let scratch = private_bf16_optimization_scratch_v1();
+    budget
+        .reserve_storage(sum(retained, scratch)?)
+        .map_err(resource)?;
+    Ok((retained, scratch))
+}
+
+/// Recheck the real B/O owners and immutable occurrence rows. This is only the
+/// existing fixed local rewrite relation, not a new formal proof about O.
+/// There are no callbacks or escaping borrowed views in this scratch scope.
+fn recheck_private_bf16_optimization_v1(
+    bound: &fe2o3_kernel_ir::Module,
+    input: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), PrivateBf16OptimizationErrorV1> {
+    use fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1 as Replay;
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let floor = budget.storage();
+    let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget.charge_work(3).map_err(Replay::Resource)?;
+        let bytes = input.canonical().canonical_bytes();
+        let historical = checked.native_input_audit_bytes();
+        // Canonical encoding injectively bounds the complete module comparison,
+        // as in V12 admission; history is compared in full, never by digest.
+        budget.charge_work(bytes.len()).map_err(Replay::Resource)?;
+        if input.module() != bound {
+            return Err(Replay::InputHistory);
+        }
+        let comparison = bytes
+            .len()
+            .checked_add(historical.len())
+            .ok_or(Replay::Resource(Resource::Arithmetic))?;
+        budget.charge_work(comparison).map_err(Replay::Resource)?;
+        if bytes != historical {
+            return Err(Replay::InputHistory);
+        }
+        let (input_inventory, input_storage) =
+            fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(input, budget)
+                .map_err(Replay::Inventory)?;
+        budget
+            .reserve_storage(input_storage.retained_storage())
+            .map_err(Replay::Resource)?;
+        let (output_inventory, output_storage) =
+            fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(checked.owner(), budget)
+                .map_err(Replay::Inventory)?;
+        budget
+            .reserve_storage(output_storage.retained_storage())
+            .map_err(Replay::Resource)?;
+        let (view, storage) = fe2o3_kernel_analysis::check_canonical_kir_transition_v1(
+            &input_inventory,
+            &output_inventory,
+            checked.occurrences().candidate(),
+            budget,
+        )
+        .map_err(Replay::Transition)?;
+        budget
+            .reserve_storage(storage.retained_storage())
+            .map_err(Replay::Resource)?;
+        drop(view);
+        drop(output_inventory);
+        drop(input_inventory);
+        Ok(())
+    }));
+    let result = match attempted {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(Replay::Panicked)
+        }
+    };
+    // Only this no-callback scratch can be above floor. On unwind all inventory
+    // owners and the checked borrow have already dropped. Work/history persist.
+    let restored = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(Resource::Accounting)
+        .and_then(|bytes| budget.release_storage(bytes));
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    restored.map_err(private_bf16_target_resource_v1)?;
+    result.map_err(PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay)
+}
+
+/// Construction-only scope. Success keeps B, O and their paid payload alive;
+/// failure drops every newly constructed owner before restoring this floor.
+fn derive_private_bf16_optimization_v1(
+    bound: &fe2o3_kernel_ir::Module,
+    budget: &mut Budget<'_>,
+) -> PrivateBf16OptimizationResultV1 {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let floor = budget.storage();
+    let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget
+            .charge_work(1)
+            .map_err(private_bf16_target_resource_v1)?;
+        let header = std::mem::size_of::<PrivateBf16OptimizationPayloadV1>();
+        budget
+            .reserve_storage(header)
+            .map_err(private_bf16_target_resource_v1)?;
+        let (input, input_storage) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12::
+                from_module_ref_with_verification_budget_v12(bound, budget)
+                .map_err(PrivateBf16OptimizationErrorV1::PrivateBf16CanonicalInput)?;
+        budget
+            .reserve_storage(input_storage.retained_storage())
+            .map_err(private_bf16_target_resource_v1)?;
+        let checked = fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_v1(&input, budget)
+            .map_err(PrivateBf16OptimizationErrorV1::PrivateBf16Optimization)?;
+        budget
+            .reserve_storage(checked.storage().retained_storage())
+            .map_err(private_bf16_target_resource_v1)?;
+        recheck_private_bf16_optimization_v1(bound, &input, &checked, budget)?;
+        budget
+            .charge_work(3)
+            .map_err(private_bf16_target_resource_v1)?;
+        let retained = header
+            .checked_add(input_storage.retained_storage())
+            .and_then(|bytes| bytes.checked_add(checked.storage().retained_storage()))
+            .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+        if budget.storage().checked_sub(floor) != Some(retained) {
+            return Err(private_bf16_target_resource_v1(Resource::Accounting));
+        }
+        Ok(PrivateBf16OptimizationPayloadV1 {
+            checked,
+            input,
+            retained,
+        })
+    }));
+    let result = match attempted {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(
+                PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay(
+                    fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1::Panicked,
+                ),
+            )
+        }
+    };
+    let prior = budget.check_prior_denials_v1();
+    if result.is_ok() && prior.is_ok() {
+        return result;
+    }
+    // Consume a possible successful payload before any credit is refunded.
+    let error = match result {
+        Ok(payload) => {
+            drop(payload);
+            private_bf16_target_resource_v1(prior.expect_err("denial checked above"))
+        }
+        Err(error) => error,
+    };
+    let restored = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(Resource::Accounting)
+        .and_then(|bytes| budget.release_storage(bytes));
+    if let Err(error) = prior {
+        return Err(private_bf16_target_resource_v1(error));
+    }
+    restored.map_err(private_bf16_target_resource_v1)?;
+    Err(error)
+}
+
+impl PrivateBf16TargetBoundV1 {
+    #[allow(dead_code)]
+    pub(crate) fn optimize_private_bf16_target_v1(
+        mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<PrivateBf16OptimizedV1, PrivateBf16OptimizationErrorV1> {
+        // Fresh full nominal/formal replay and actual geometry/target rebinding
+        // precede borrowing B. No earlier observation authorizes this phase.
+        self.revalidate_private_bf16_target_v1(requested_return, typed_roots, profile)?;
+        self.formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+        let bound = &self.target.bound;
+        let result = self.formal.verification.phase.with_budget(|budget| {
+            let (retained, scratch) = reserve_private_bf16_optimization_output_v1(budget)?;
+            let output = derive_private_bf16_optimization_v1(bound.module(), budget);
+            match output {
+                Ok(optimization) => {
+                    budget.release_storage(scratch).map_err(resource)?;
+                    Ok(Ok(optimization))
+                }
+                Err(error) => {
+                    budget
+                        .release_storage(sum(retained, scratch)?)
+                        .map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Err(error))
+                }
+            }
+        });
+        self.formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+        let optimization = result.map_err(PrivateBf16OptimizationErrorV1::RankedVerification)??;
+        Ok(PrivateBf16OptimizedV1 {
+            optimization,
+            target: self,
+        })
+    }
+}
+
+impl PrivateBf16OptimizedV1 {
+    #[allow(dead_code)]
+    pub(crate) fn revalidate_private_bf16_optimization_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16OptimizationErrorV1> {
+        self.target
+            .revalidate_private_bf16_target_v1(requested_return, typed_roots, profile)?;
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+        let bound = &self.target.target.bound;
+        let optimization = &self.optimization;
+        let result = self.target.formal.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            Ok(recheck_private_bf16_optimization_v1(
+                bound.module(),
+                &optimization.input,
+                &optimization.checked,
+                budget,
+            ))
+        });
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod private_checked_v12_optimizer_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, *};
+
+    fn limits() -> (usize, usize) {
+        (
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        )
+    }
+
+    // A real binder/optimizer component control, not a nominal rustc proof.
+    fn module() -> Module {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(0), Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(7)),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("private-checked-v12-optimizer-control");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        let mut kernel = Kernel::new(
+            "entry",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        module.kernels.push(kernel);
+        module
+    }
+
+    #[test]
+    fn private_checked_output_header_exact_and_one_short() {
+        let total =
+            std::mem::size_of::<PrivateBf16OptimizedV1>() + private_bf16_optimization_scratch_v1();
+        for cap in [7 + total, 7 + total - 1] {
+            let mut work = Work::new(1);
+            let mut budget = Budget::new(&mut work, cap);
+            budget.reserve_storage(7).unwrap();
+            let result = reserve_private_bf16_optimization_output_v1(&mut budget);
+            assert_eq!(result.is_ok(), cap == 7 + total);
+            if let Ok((retained, scratch)) = result {
+                assert_eq!(retained + scratch, total);
+                budget.release_storage(total).unwrap();
+            } else {
+                assert!(budget.failed_storage().is_some());
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_checked_entry_preserves_exhausted_work_and_prior_denial_precedence() {
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let original = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(
+                    matches!(reserve_private_bf16_optimization_output_v1(&mut budget),
+                    Err(E::ConditionalResource(error)) if error == original)
+                );
+                assert!(
+                    matches!(derive_private_bf16_optimization_v1(&module(), &mut budget),
+                    Err(PrivateBf16OptimizationErrorV1::RankedVerification(
+                        E::ConditionalResource(error))) if error == original)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_checked_real_binder_changed_output_and_fresh_replay_keep_original_account() {
+        for profile in [
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let bound = dialect_amdgcn::bind_production_target_v1(&module(), profile).unwrap();
+            let (work_limit, storage_limit) = limits();
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let payload = derive_private_bf16_optimization_v1(bound.module(), &mut budget).unwrap();
+            assert_eq!(budget.storage(), 7 + payload.retained);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_ne!(
+                payload.input.canonical().identity(),
+                payload.checked.owner().canonical().identity()
+            );
+            assert_eq!(
+                payload.input.module().functions[0]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks[0]
+                    .operations
+                    .len(),
+                1
+            );
+            assert!(
+                payload.checked.owner().module().functions[0]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks[0]
+                    .operations
+                    .is_empty()
+            );
+            let floor = budget.storage();
+            let before = budget.work();
+            recheck_private_bf16_optimization_v1(
+                bound.module(),
+                &payload.input,
+                &payload.checked,
+                &mut budget,
+            )
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > before);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert!(!payload.checked.grants_authority());
+            let retained = payload.retained;
+            drop(payload);
+            budget.release_storage(retained).unwrap();
+            assert_eq!(budget.storage(), 7);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), None);
+        }
+    }
+
+    #[test]
+    fn private_checked_exact_and_one_short_construction_boundaries_restore_floor() {
+        let bound = dialect_amdgcn::bind_production_target_v1(
+            &module(),
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        )
+        .unwrap();
+        let (work_limit, storage_limit) = limits();
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        let payload = derive_private_bf16_optimization_v1(bound.module(), &mut budget).unwrap();
+        let exact_work = budget.work();
+        let exact_storage = budget.peak_storage();
+        let retained = payload.retained;
+        drop(payload);
+        budget.release_storage(retained).unwrap();
+        for (work_cap, storage_cap, accepted) in [
+            (exact_work, exact_storage, true),
+            (exact_work - 1, exact_storage, false),
+            (exact_work, exact_storage - 1, false),
+        ] {
+            let mut work = Work::new(work_cap);
+            let mut budget = Budget::new(&mut work, storage_cap);
+            budget.reserve_storage(7).unwrap();
+            let result = derive_private_bf16_optimization_v1(bound.module(), &mut budget);
+            assert_eq!(result.is_ok(), accepted);
+            if let Ok(payload) = result {
+                let retained = payload.retained;
+                drop(payload);
+                budget.release_storage(retained).unwrap();
+            } else {
+                assert!(budget.check_prior_denials_v1().is_err());
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_checked_replay_refuses_changed_target_or_historical_input() {
+        let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
+        let source = module();
+        let bound = dialect_amdgcn::bind_production_target_v1(&source, profile).unwrap();
+        let mut changed = source;
+        changed.id = fe2o3_kernel_ir::ModuleId::new("changed-input");
+        let other = dialect_amdgcn::bind_production_target_v1(&changed, profile).unwrap();
+        let (work_limit, storage_limit) = limits();
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        let payload = derive_private_bf16_optimization_v1(bound.module(), &mut budget).unwrap();
+        let other_payload =
+            derive_private_bf16_optimization_v1(other.module(), &mut budget).unwrap();
+        let floor = budget.storage();
+        for (actual_bound, actual_checked) in [
+            (other.module(), &payload.checked),
+            (bound.module(), &other_payload.checked),
+        ] {
+            assert!(matches!(
+                recheck_private_bf16_optimization_v1(
+                    actual_bound,
+                    &payload.input,
+                    actual_checked,
+                    &mut budget,
+                ),
+                Err(
+                    PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay(
+                        fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1::InputHistory
+                    )
+                )
+            ));
+            assert_eq!(budget.storage(), floor);
+        }
+        let retained = payload.retained + other_payload.retained;
+        drop(other_payload);
+        drop(payload);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn private_checked_replay_preserves_prior_resource_error_and_borrowed_owners() {
+        let bound = dialect_amdgcn::bind_production_target_v1(
+            &module(),
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        )
+        .unwrap();
+        let (work_limit, storage_limit) = limits();
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        let payload = derive_private_bf16_optimization_v1(bound.module(), &mut budget).unwrap();
+        assert!(budget.charge_work(work_limit).is_err());
+        let original = budget.check_prior_denials_v1().unwrap_err();
+        let before = (
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
+        for _ in 0..2 {
+            assert!(matches!(recheck_private_bf16_optimization_v1(
+                bound.module(), &payload.input, &payload.checked, &mut budget,
+            ), Err(PrivateBf16OptimizationErrorV1::RankedVerification(
+                E::ConditionalResource(error))) if error == original));
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+        }
+        let retained = payload.retained;
+        drop(payload);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn private_checked_malformed_input_is_refused_without_fallback_or_lost_credit() {
+        let mut source = module();
+        source.functions[0].body.as_mut().unwrap().blocks[0].terminator = None;
+        let (work_limit, storage_limit) = limits();
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        assert!(matches!(
+            derive_private_bf16_optimization_v1(&source, &mut budget),
+            Err(PrivateBf16OptimizationErrorV1::PrivateBf16CanonicalInput(_))
+        ));
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn private_checked_typed_errors_retain_display_and_source() {
+        use std::error::Error;
+        let error = PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay(
+            fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1::InputHistory,
+        );
+        assert!(error.to_string().contains("input history differs"));
+        assert!(error.source().is_some());
+    }
+}
+
+#[cfg(test)]
+mod private_checked_v12_genuine_observer {
+    use super::*;
+    use fe2o3_kernel_analysis::CanonicalKirInventoryV1;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1;
+
+    struct Observation {
+        ledger: CanonicalKernelIrWorkLedgerIdentityV1,
+        protected: usize,
+        entry_work: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+        input_bytes: usize,
+        output_bytes: usize,
+        input_functions: usize,
+        output_functions: usize,
+        input_operations: usize,
+        output_operations: usize,
+        input_sha: [u8; 32],
+        output_sha: [u8; 32],
+    }
+    struct Hex<'a>(&'a [u8; 32]);
+    impl std::fmt::Display for Hex<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for byte in self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+            Ok(())
+        }
+    }
+    impl Observation {
+        fn emit(self, requested: [u8; 4], retained: usize, scratch: usize) {
+            eprintln!(
+                "fe2o3-bf16-private-checked-optimizer-v1 permutation={} input_version=12 output_version=12 input_sha256={} output_sha256={} input_bytes={} output_bytes={} input_functions={} output_functions={} input_operations={} output_operations={} work={} storage={} peak={} retained_optimizer_storage={} observation_storage={} same_account=true intact_owner=true checked_optimizer=true fresh_relation=true source_join=true wrong_return_refused=true raw_analysis=incomplete discharged_reasons=8 allocations=3 accesses=9 bounds=1 aliases=2 conflicts=0 cleanup_pending=true formal_admission=false normal_admission=false llvm=false launch_authenticated=false",
+                if requested == [0, 1, 2, 3] {
+                    "identity"
+                } else {
+                    "swap01"
+                },
+                Hex(&self.input_sha),
+                Hex(&self.output_sha),
+                self.input_bytes,
+                self.output_bytes,
+                self.input_functions,
+                self.output_functions,
+                self.input_operations,
+                self.output_operations,
+                self.work,
+                self.storage,
+                self.peak,
+                retained,
+                scratch,
+            );
+        }
+    }
+
+    impl PrivateBf16OptimizedV1 {
+        /// Observe only inside the already-surviving owning stage. No paid
+        /// observation crosses its consuming constructor or replay transitions.
+        pub(crate) fn observe_private_bf16_optimization_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), PrivateBf16OptimizationErrorV1> {
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+            let target = &self.target.target;
+            let formal = &self.target.formal.owner;
+            let optimization = &self.optimization;
+            let result = self.target.formal.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                let floor = budget.storage();
+                let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                budget.charge_work(256).map_err(resource)?;
+                let scratch = std::mem::size_of::<Observation>();
+                let protected = budget.storage().checked_add(scratch)
+                    .ok_or_else(|| resource(Resource::Arithmetic))?;
+                budget.reserve_storage(scratch).map_err(resource)?;
+                let mut row = Observation {
+                    ledger: budget.work_ledger_identity_v1(), protected,
+                    entry_work: budget.work(), work: 0, storage: 0, peak: 0,
+                    input_bytes: 0, output_bytes: 0, input_functions: 0, output_functions: 0,
+                    input_operations: 0, output_operations: 0, input_sha: [0;32], output_sha: [0;32],
+                };
+                if !matches!(requested, [0,1,2,3] | [1,0,2,3])
+                    || formal.root_count() != 1 || formal.raw_analysis_is_complete()
+                    || formal.grants_artifact_or_launch_authority()
+                    || optimization.checked.grants_authority()
+                {
+                    return Err(E::RosterMetadata("actual optimized owner domain differs"));
+                }
+                // A fresh actual B/O relation, not a prior boolean marker.
+                if let Err(error) = recheck_private_bf16_optimization_v1(
+                    target.bound.module(), &optimization.input, &optimization.checked, budget,
+                ) { return Ok(Err(error)); }
+                let (input, input_storage) = match
+                    CanonicalKirInventoryV1::derive(&optimization.input, budget) {
+                        Ok(value) => value,
+                        Err(error) => return Ok(Err(PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay(
+                            fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1::Inventory(error),
+                        ))),
+                    };
+                budget.reserve_storage(input_storage.retained_storage()).map_err(resource)?;
+                let (output, output_storage) = match
+                    CanonicalKirInventoryV1::derive(optimization.checked.owner(), budget) {
+                        Ok(value) => value,
+                        Err(error) => return Ok(Err(PrivateBf16OptimizationErrorV1::PrivateBf16OptimizationReplay(
+                            fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1::Inventory(error),
+                        ))),
+                    };
+                budget.reserve_storage(output_storage.retained_storage()).map_err(resource)?;
+                budget.charge_work(256).map_err(resource)?;
+                if !input.belongs_to(&optimization.input)
+                    || !output.belongs_to(optimization.checked.owner())
+                    || input.kernels().len() != 1 || output.kernels().len() != 1
+                {
+                    return Err(E::RosterMetadata("actual optimizer inventory custody differs"));
+                }
+                row.input_bytes = optimization.input.canonical().canonical_bytes().len();
+                row.output_bytes = optimization.checked.owner().canonical().canonical_bytes().len();
+                row.input_sha = *optimization.input.canonical().identity().digest();
+                row.output_sha = *optimization.checked.owner().canonical().identity().digest();
+                row.input_functions = input.functions().len();
+                row.output_functions = output.functions().len();
+                row.input_operations = input.operations().len();
+                row.output_operations = output.operations().len();
+                drop(output);
+                drop(input);
+                budget.release_storage(sum(input_storage.retained_storage(), output_storage.retained_storage())?)
+                    .map_err(resource)?;
+                let reasons = formal.ranked_discharged_reasons();
+                let obligations = formal.obligations();
+                budget.charge_work(64usize.checked_add(reasons.len().checked_mul(8)
+                    .ok_or_else(|| resource(Resource::Arithmetic))?)
+                    .ok_or_else(|| resource(Resource::Arithmetic))?).map_err(resource)?;
+                if reasons.len() != 8 || obligations.allocations().len() != 3
+                    || obligations.accesses().len() != 9 || obligations.bounds_requirements().len() != 1
+                    || obligations.runtime_alias_requirements().len() != 2
+                    || !obligations.inter_invocation_conflicts().is_empty()
+                    || reasons.iter().any(|reason| !matches!(reason,
+                        fe2o3_kernel_ir::FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }))
+                {
+                    return Err(E::RosterMetadata("actual optimized owner lost source obligations"));
+                }
+                for (ordinal, reason) in reasons.iter().enumerate() {
+                    eprintln!("fe2o3-bf16-private-checked-optimizer-reason-v1 ordinal={} value={:?}",
+                        ordinal, reason);
+                }
+                budget.check_prior_denials_v1().map_err(resource)?;
+                if row.ledger != budget.work_ledger_identity_v1()
+                    || budget.storage() != row.protected || budget.work() <= row.entry_work
+                    || budget.peak_storage() < budget.storage()
+                { return Err(resource(Resource::Accounting)); }
+                row.work = budget.work();
+                row.storage = budget.storage();
+                row.peak = budget.peak_storage();
+                row.emit(requested, optimization.retained, scratch);
+                budget.release_storage(scratch).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                Ok(Ok(()))
+                }));
+                // This observer returns only unit/diagnostics and lends no
+                // callback. All paid rows and inventory borrows have dropped.
+                let result = match attempted {
+                    Ok(result) => result,
+                    Err(payload) => {
+                        drop(payload);
+                        Err(E::RosterMetadata("private optimizer observer panicked"))
+                    }
+                };
+                let release = budget.storage().checked_sub(floor)
+                    .ok_or_else(|| resource(Resource::Accounting))?;
+                budget.release_storage(release).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                result
+            });
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16OptimizationErrorV1::RankedVerification)?
+        }
+    }
+}
+
+// Actual checked-output safety is deliberately separate from source guarded
+// admission. No historical ranked reason is imported into O's fresh analysis.
+type PrivateBf16OutputFormalResultV1<'o> = Result<
+    fe2o3_lower_mir_kernel::CheckedOutputFormalMemoryAnalysisV1<'o>,
+    fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1,
+>;
+
+fn reserve_private_bf16_output_formal_frame_v1(
+    budget: &mut Budget<'_>,
+) -> Result<usize, PrivateBf16TargetErrorV1> {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    budget
+        .charge_work(1)
+        .map_err(private_bf16_target_resource_v1)?;
+    let storage = std::mem::size_of::<PrivateBf16OutputFormalResultV1<'_>>();
+    budget
+        .reserve_storage(storage)
+        .map_err(private_bf16_target_resource_v1)?;
+    Ok(storage)
+}
+
+/// Existing complete-only formal analysis of the actual checked O. Its graph,
+/// trees and obligation payload retain the inherited formal-engine exclusion.
+/// Only this selected Result header and explicit join work use the original
+/// canonical account. On unwind the owning phase retains the accepted credit
+/// until its locals/owner drop; this helper is always called inside that phase.
+fn check_private_bf16_output_formal_v1(
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), PrivateBf16TargetErrorV1> {
+    let storage = reserve_private_bf16_output_formal_frame_v1(budget)?;
+    let analyzed = fe2o3_lower_mir_kernel::analyze_checked_output_formal_memory_v1(checked);
+    let result = match analyzed {
+        Ok(report) => {
+            let joined = (|| {
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(private_bf16_target_resource_v1)?;
+                // Pay fixed selections before accessing the singleton rosters.
+                budget
+                    .charge_work(6)
+                    .map_err(private_bf16_target_resource_v1)?;
+                let [kernel] = checked.owner().module().kernels.as_slice() else {
+                    return Err(private_bf16_target_closure_v1());
+                };
+                let [obligations] = report.kernels() else {
+                    return Err(private_bf16_target_closure_v1());
+                };
+                let lengths = kernel
+                    .id
+                    .as_str()
+                    .len()
+                    .checked_add(kernel.entry.as_str().len())
+                    .and_then(|n| n.checked_add(obligations.kernel().as_str().len()))
+                    .and_then(|n| n.checked_add(obligations.entry().as_str().len()))
+                    .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+                budget
+                    .charge_work(lengths)
+                    .map_err(private_bf16_target_resource_v1)?;
+                if !std::ptr::eq(report.output(), checked.owner())
+                    || obligations.kernel() != &kernel.id
+                    || obligations.entry() != &kernel.entry
+                    || obligations.index_width() != fe2o3_kernel_ir::FormalIndexWidth::Bits64
+                    || !obligations.inter_invocation_conflicts().is_empty()
+                {
+                    return Err(private_bf16_target_closure_v1());
+                }
+                Ok(())
+            })();
+            drop(report);
+            joined
+        }
+        // Keep the original typed Incomplete/Analysis/conflict payload. It is
+        // excluded diagnostic data, never a borrowed owner or proof receipt.
+        Err(error) => Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(error)),
+    };
+    // The paid analysis Result/report is consumed before this exact refund.
+    budget
+        .release_storage(storage)
+        .map_err(private_bf16_target_resource_v1)?;
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    result
+}
+
+fn require_private_bf16_output_bound_match_v1(
+    output: &fe2o3_kernel_ir::Module,
+    fresh: &dialect_amdgcn::ProductionTargetBoundKernelIrV1,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) -> Result<(), PrivateBf16TargetErrorV1> {
+    // This is an idempotence/exact-target check, not a replacement executable.
+    // Full equality and binder clone retain their existing excluded domain.
+    if fresh.profile() != profile || fresh.module() != output {
+        return Err(private_bf16_target_closure_v1());
+    }
+    Ok(())
+}
+
+fn check_private_bf16_output_target_v1(
+    output: &fe2o3_kernel_ir::Module,
+    function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+    source_obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), PrivateBf16TargetErrorV1> {
+    let (_, scratch) = reserve_private_bf16_target_output_v1(false, budget)
+        .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+    // Source obligations supply only the already-authenticated kernel-name
+    // join in this existing geometry/binder routine, not O memory proof.
+    let derived = private_bf16_target_derive_v1(
+        output,
+        function,
+        source_obligations,
+        typed_roots,
+        profile,
+        budget,
+    );
+    let result = match derived {
+        Ok(fresh) => {
+            let result = require_private_bf16_output_bound_match_v1(output, &fresh.bound, profile);
+            drop(fresh);
+            result
+        }
+        Err(error) => Err(error),
+    };
+    // Geometry and cloned bound candidate have died; O is never replaced.
+    budget
+        .release_storage(scratch)
+        .map_err(private_bf16_target_resource_v1)?;
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    result
+}
+
+impl PrivateBf16OptimizedV1 {
+    /// Private unit-only consumer of fresh O safety. Even success grants no
+    /// ordinary, LLVM, artifact, descriptor or authenticated-launch authority.
+    /// Source guards cannot discharge O here: the existing complete-only
+    /// analyzer's exact typed refusal is returned unchanged.
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16TargetErrorV1> {
+        self.revalidate_private_bf16_optimization_v1(requested_return, typed_roots, profile)?;
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        let checked = &self.optimization.checked;
+        let owner = &self.target.formal.owner;
+        let roots = &self.target.formal.verification.roots;
+        let result = self.target.formal.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata(
+                    "private output safety changed source roots",
+                ));
+            };
+            let storage = std::mem::size_of::<Option<Result<(), PrivateBf16TargetErrorV1>>>();
+            budget.reserve_storage(storage).map_err(resource)?;
+            let mut observed: Option<Result<(), PrivateBf16TargetErrorV1>> = None;
+            let loan = owner.with_private_bf16_target_source_v1(
+                root.semantic_root,
+                requested_return,
+                budget,
+                |_source_module, function, source_obligations, budget| {
+                    observed = Some(
+                        check_private_bf16_output_target_v1(
+                            checked.owner().module(),
+                            function,
+                            source_obligations,
+                            typed_roots,
+                            profile,
+                            budget,
+                        )
+                        .and_then(|()| check_private_bf16_output_formal_v1(checked, budget)),
+                    );
+                    Ok(())
+                },
+            );
+            if let Err(error) = loan {
+                drop(observed);
+                budget.release_storage(storage).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                return Err(E::FormalMemory(error));
+            }
+            // Consume the paid Option/Result before refund; only unit or a
+            // typed diagnostic moves out, never a report, owner or receipt.
+            let observed = observed.ok_or_else(|| resource(Resource::Accounting))?;
+            match observed {
+                Ok(()) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Ok(()))
+                }
+                Err(error) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Err(error))
+                }
+            }
+        });
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16TargetErrorV1::RankedVerification)?
+    }
+}
+
+#[cfg(test)]
+mod private_checked_output_safety_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, *};
+
+    fn limits() -> (usize, usize) {
+        (
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        )
+    }
+
+    // Actual binder/checked optimizer fixtures, not nominal source admission.
+    fn module(parameters: Vec<Type>, operations: Vec<Operation>) -> Module {
+        let arguments = (0..parameters.len())
+            .map(|i| ValueId(u32::try_from(i).unwrap()))
+            .collect();
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = operations;
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("private-output-safety-component");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(parameters, vec![]),
+            arguments,
+            vec![block],
+        ));
+        let mut kernel = Kernel::new(
+            "entry",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn with_checked(
+        source: Module,
+        inspect: impl FnOnce(&fe2o3_pliron::CheckedNeutralKernelIrOwnerV1, &mut Budget<'_>),
+    ) {
+        let bound = dialect_amdgcn::bind_production_target_v1(
+            &source,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        )
+        .unwrap();
+        let (work_limit, storage_limit) = limits();
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        let payload = derive_private_bf16_optimization_v1(bound.module(), &mut budget).unwrap();
+        let retained = payload.retained;
+        inspect(&payload.checked, &mut budget);
+        drop(payload);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn private_output_formal_frame_exact_and_one_short() {
+        let frame = std::mem::size_of::<PrivateBf16OutputFormalResultV1<'_>>();
+        for cap in [7 + frame, 7 + frame - 1] {
+            let mut work = Work::new(1);
+            let mut budget = Budget::new(&mut work, cap);
+            budget.reserve_storage(7).unwrap();
+            let result = reserve_private_bf16_output_formal_frame_v1(&mut budget);
+            assert_eq!(result.is_ok(), cap == 7 + frame);
+            if let Ok(storage) = result {
+                assert_eq!(storage, frame);
+                budget.release_storage(storage).unwrap();
+            } else {
+                assert!(budget.failed_storage().is_some());
+            }
+            assert_eq!(budget.work(), 1);
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_output_formal_frame_preserves_prior_work_storage_and_precedence() {
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let prior = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(
+                    matches!(reserve_private_bf16_output_formal_frame_v1(&mut budget),
+                    Err(PrivateBf16TargetErrorV1::RankedVerification(E::ConditionalResource(error)))
+                    if error == prior)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_output_complete_analysis_uses_actual_checked_owner_and_exact_selected_work() {
+        with_checked(module(vec![], vec![]), |checked, budget| {
+            let floor = budget.storage();
+            let work = budget.work();
+            let ledger = budget.work_ledger_identity_v1();
+            check_private_bf16_output_formal_v1(checked, budget).unwrap();
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.work(), work + 1 + 6 + 4 * "entry".len());
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), None);
+            let fresh =
+                fe2o3_lower_mir_kernel::analyze_checked_output_formal_memory_v1(checked).unwrap();
+            assert!(std::ptr::eq(fresh.output(), checked.owner()));
+            let [obligations] = fresh.kernels() else {
+                panic!("one actual output kernel");
+            };
+            assert_eq!(obligations.kernel().as_str(), "entry");
+            assert_eq!(obligations.entry().as_str(), "entry");
+            assert_eq!(obligations.accesses().len(), 0);
+            assert_eq!(obligations.index_width(), FormalIndexWidth::Bits64);
+            drop(fresh);
+        });
+    }
+
+    #[test]
+    fn private_output_incomplete_retains_exact_unknown_call_reason() {
+        let mut source = module(
+            vec![],
+            vec![Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: FunctionId::new("unknown_external"),
+                    arguments: vec![],
+                },
+            )],
+        );
+        source.functions.push(Function::declaration(
+            "unknown_external",
+            Signature::new(vec![], vec![]),
+        ));
+        with_checked(source, |checked, budget| {
+            let floor = budget.storage();
+            let work = budget.work();
+            let result = check_private_bf16_output_formal_v1(checked, budget);
+            let Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+                fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::Incomplete { reasons },
+            )) = result
+            else {
+                panic!("actual unknown call must stay incomplete");
+            };
+            assert!(matches!(reasons.as_ref(),
+                [FormalMemoryIncompleteReason::CallEffectsUnavailable { location, callee }]
+                    if location.block == BlockId(0) && location.operation_index == 0
+                        && callee.as_str() == "unknown_external"));
+            drop(reasons);
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.work(), work + 1);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), None);
+        });
+    }
+
+    #[test]
+    fn private_output_conflicts_are_typed_refusals_not_complete_admission() {
+        let source = module(
+            vec![
+                Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite),
+                Type::F32,
+            ],
+            vec![Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(0),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            )],
+        );
+        with_checked(source, |checked, budget| {
+            let floor = budget.storage();
+            let result = check_private_bf16_output_formal_v1(checked, budget);
+            let Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+                fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::InterInvocationConflicts {
+                    conflicts,
+                },
+            )) = result
+            else {
+                panic!("actual constant-address write must refuse");
+            };
+            assert_eq!(conflicts.len(), 1);
+            drop(conflicts);
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), None);
+        });
+    }
+
+    #[test]
+    fn private_output_formal_refuses_before_analysis_on_original_exhausted_account() {
+        with_checked(module(vec![], vec![]), |checked, budget| {
+            let (limit, _) = limits();
+            assert!(budget.charge_work(limit).is_err());
+            let prior = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(
+                    matches!(check_private_bf16_output_formal_v1(checked, budget),
+                    Err(PrivateBf16TargetErrorV1::RankedVerification(E::ConditionalResource(error)))
+                    if error == prior)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn private_output_target_is_exact_and_never_replaced_by_idempotent_clone() {
+        use fe2o3_amd_target::ProductionAmdTargetProfileV1::{Gfx942, Gfx950};
+        let source = module(vec![], vec![]);
+        let output = dialect_amdgcn::bind_production_target_v1(&source, Gfx942).unwrap();
+        let fresh = dialect_amdgcn::bind_production_target_v1(output.module(), Gfx942).unwrap();
+        require_private_bf16_output_bound_match_v1(output.module(), &fresh, Gfx942).unwrap();
+        assert!(!std::ptr::eq(output.module(), fresh.module()));
+        assert!(
+            require_private_bf16_output_bound_match_v1(output.module(), &fresh, Gfx950).is_err()
+        );
+        // Missing target requirements cannot be repaired by adopting the clone.
+        assert!(require_private_bf16_output_bound_match_v1(&source, &fresh, Gfx942).is_err());
+        let mut changed = output.module().clone();
+        changed.kernels[0].id = KernelId::new("different");
+        assert!(require_private_bf16_output_bound_match_v1(&changed, &fresh, Gfx942).is_err());
+        let mut changed = output.module().clone();
+        changed.functions[0].id = FunctionId::new("different");
+        assert!(require_private_bf16_output_bound_match_v1(&changed, &fresh, Gfx942).is_err());
+        let mut changed = output.module().clone();
+        changed.kernels[0].domain = LaunchDomain::D1 {
+            x: LaunchExtent::Static(7),
+        };
+        assert!(require_private_bf16_output_bound_match_v1(&changed, &fresh, Gfx942).is_err());
+    }
+}
+
+#[cfg(test)]
+mod private_checked_output_diagnostic {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkLedgerIdentityV1 as Ledger, FormalMemoryIncompleteReason as Reason,
+        FormalMemoryObligationAnalysis as Analysis, FormalMemoryObligationError as FormalError,
+    };
+    type Attempt = Result<Analysis, FormalError>;
+
+    // Selected fixed live observation, created after every consuming stage map.
+    // Engine payload, typed consumer diagnostics and formatter/control locals
+    // retain their explicitly inherited excluded domains.
+    struct Observation {
+        ledger: Ledger,
+        floor: usize,
+        initial_work: usize,
+        output_sha: [u8; 32],
+        output_bytes: u64,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+
+    fn prepay_error(error: &FormalError, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match error {
+            FormalError::InvalidModule(errors) => {
+                budget
+                    .charge_work(errors.diagnostics().len())
+                    .map_err(resource)?;
+                for row in errors.diagnostics() {
+                    budget.charge_work(32).map_err(resource)?;
+                    let bytes = row
+                        .location
+                        .module
+                        .as_str()
+                        .len()
+                        .checked_add(
+                            row.location
+                                .function
+                                .as_ref()
+                                .map_or(0, |v| v.as_str().len()),
+                        )
+                        .and_then(|n| {
+                            n.checked_add(
+                                row.location.kernel.as_ref().map_or(0, |v| v.as_str().len()),
+                            )
+                        })
+                        .and_then(|n| n.checked_add(row.message.len()))
+                        .ok_or_else(|| resource(Resource::Arithmetic))?;
+                    budget.charge_work(bytes).map_err(resource)?;
+                }
+            }
+            FormalError::MissingKernel { kernel } => {
+                budget
+                    .charge_work(kernel.as_str().len())
+                    .map_err(resource)?;
+            }
+            FormalError::InvalidInvocationRange(_) | FormalError::GuardedResource(_) => {}
+        }
+        Ok(())
+    }
+
+    fn prepay_attempt(attempt: &Attempt, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match attempt {
+            Err(error) => prepay_error(error, budget),
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                let rows = o
+                    .allocations()
+                    .len()
+                    .checked_add(o.accesses().len())
+                    .and_then(|n| n.checked_add(o.bounds_requirements().len()))
+                    .and_then(|n| n.checked_add(o.runtime_alias_requirements().len()))
+                    .and_then(|n| n.checked_add(o.inter_invocation_conflicts().len()))
+                    .and_then(|n| n.checked_add(analysis.incomplete_reasons().len()))
+                    .and_then(|n| n.checked_mul(128))
+                    .ok_or_else(|| resource(Resource::Arithmetic))?;
+                // Known row counts are paid before any traversal/comparison.
+                // This selected field-visit allowance is not formatter/RSS work.
+                budget.charge_work(rows).map_err(resource)?;
+                budget
+                    .charge_work(sum(o.kernel().as_str().len(), o.entry().as_str().len())?)
+                    .map_err(resource)?;
+                for reason in analysis.incomplete_reasons() {
+                    if let Reason::CallEffectsUnavailable { callee, .. } = reason {
+                        budget
+                            .charge_work(callee.as_str().len())
+                            .map_err(resource)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn prepay_consumer(
+        consumer: &Result<(), PrivateBf16TargetErrorV1>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), E> {
+        use fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1 as F;
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match consumer {
+            Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::Incomplete { reasons })) => {
+                budget
+                    .charge_work(
+                        reasons
+                            .len()
+                            .checked_mul(128)
+                            .ok_or_else(|| resource(Resource::Arithmetic))?,
+                    )
+                    .map_err(resource)?;
+                for reason in reasons.iter() {
+                    if let Reason::CallEffectsUnavailable { callee, .. } = reason {
+                        budget
+                            .charge_work(callee.as_str().len())
+                            .map_err(resource)?;
+                    }
+                }
+            }
+            Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::InterInvocationConflicts {
+                conflicts,
+            })) => {
+                budget
+                    .charge_work(
+                        conflicts
+                            .len()
+                            .checked_mul(128)
+                            .ok_or_else(|| resource(Resource::Arithmetic))?,
+                    )
+                    .map_err(resource)?;
+            }
+            Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::Analysis(error))) => {
+                prepay_error(error, budget)?
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn consumer_join(
+        consumer: &Result<(), PrivateBf16TargetErrorV1>,
+        attempt: &Attempt,
+    ) -> Result<&'static str, E> {
+        use fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1 as F;
+        match (consumer, attempt) {
+            (Ok(()), Ok(Analysis::Complete(o))) if o.inter_invocation_conflicts().is_empty() => {
+                Ok("complete")
+            }
+            (
+                Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::Incomplete {
+                    reasons: expected,
+                })),
+                Ok(Analysis::Incomplete { reasons, .. }),
+            ) if expected.as_ref() == reasons.as_slice() => Ok("incomplete"),
+            (
+                Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::InterInvocationConflicts {
+                    conflicts,
+                })),
+                Ok(Analysis::Complete(o)),
+            ) if !conflicts.is_empty() && conflicts.as_ref() == o.inter_invocation_conflicts() => {
+                Ok("conflict")
+            }
+            (
+                Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(F::Analysis(expected))),
+                Err(actual),
+            ) if expected == actual => Ok("analysis_error"),
+            _ => Err(E::RosterMetadata(
+                "actual checked O consumer and fresh raw analysis differ",
+            )),
+        }
+    }
+
+    fn emit_attempt(attempt: &Attempt, consumer: &str) {
+        match attempt {
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-summary-v1 consumer={} analysis={} allocations={} accesses={} bounds={} aliases={} conflicts={} incomplete_reasons={} optimized_formal_admission=false",
+                    consumer,
+                    if analysis.is_complete() {
+                        "complete"
+                    } else {
+                        "incomplete"
+                    },
+                    o.allocations().len(),
+                    o.accesses().len(),
+                    o.bounds_requirements().len(),
+                    o.runtime_alias_requirements().len(),
+                    o.inter_invocation_conflicts().len(),
+                    analysis.incomplete_reasons().len(),
+                );
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-header-v1 kernel={:?} entry={:?} index_width={:?} basis={:?} invocations={:?}",
+                    o.kernel(),
+                    o.entry(),
+                    o.index_width(),
+                    o.analysis_basis(),
+                    o.invocations(),
+                );
+                for (i, row) in o.allocations().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-allocation-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.accesses().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-access-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.bounds_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-bounds-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.runtime_alias_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-alias-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.inter_invocation_conflicts().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-conflict-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in analysis.incomplete_reasons().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-reason-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::InvalidModule(errors)) => {
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-error-v1 consumer={} kind=InvalidModule diagnostics={}",
+                    consumer,
+                    errors.diagnostics().len()
+                );
+                for (i, row) in errors.diagnostics().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-verifier-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::MissingKernel { kernel }) => eprintln!(
+                "fe2o3-bf16-private-checked-output-error-v1 consumer={} kind=MissingKernel value={:?}",
+                consumer, kernel
+            ),
+            Err(FormalError::InvalidInvocationRange(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-error-v1 consumer={} kind=InvalidInvocationRange value={:?}",
+                consumer, error
+            ),
+            Err(FormalError::GuardedResource(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-error-v1 consumer={} kind=GuardedResource value={:?}",
+                consumer, error
+            ),
+        }
+    }
+
+    impl Observation {
+        fn emit(self, requested: [u8; 4], consumer: &str, scratch: usize) {
+            struct Hex<'a>(&'a [u8; 32]);
+            impl std::fmt::Display for Hex<'_> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    for byte in self.0 {
+                        write!(f, "{byte:02x}")?;
+                    }
+                    Ok(())
+                }
+            }
+            eprintln!(
+                "fe2o3-bf16-private-checked-output-collected-v1 permutation={} consumer={} output_version=12 output_sha256={} output_bytes={} work={} storage={} peak={} observation_storage={} same_account=true actual_checked_output=true fresh_raw_analysis=true consumer_join=true geometry_target_completed=true cleanup_pending=true optimized_formal_admission=false normal_admission=false llvm=false launch_authenticated=false",
+                if requested == [0, 1, 2, 3] {
+                    "identity"
+                } else {
+                    "swap01"
+                },
+                consumer,
+                Hex(&self.output_sha),
+                self.output_bytes,
+                self.work,
+                self.storage,
+                self.peak,
+                scratch,
+            );
+        }
+    }
+
+    impl PrivateBf16OptimizedV1 {
+        pub(crate) fn observe_private_bf16_checked_output_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+            consumer: &Result<(), PrivateBf16TargetErrorV1>,
+        ) -> Result<(), PrivateBf16TargetErrorV1> {
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            let checked = &self.optimization.checked;
+            let result = self.target.formal.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(16).map_err(resource)?;
+                let [kernel] = checked.owner().module().kernels.as_slice() else {
+                    return Err(E::RosterMetadata(
+                        "raw output diagnostic requires one actual kernel",
+                    ));
+                };
+                let mut extents = [1_u64; 3];
+                for (axis, extent) in kernel.domain.extents().enumerate() {
+                    extents[axis] = match extent {
+                        fe2o3_kernel_ir::LaunchExtent::Static(n) => u64::from(n),
+                        fe2o3_kernel_ir::LaunchExtent::Dynamic => {
+                            fe2o3_lower_mir_kernel::PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1
+                        }
+                    };
+                }
+                let scratch = sum(
+                    std::mem::size_of::<Observation>(),
+                    std::mem::size_of::<Attempt>(),
+                )?;
+                let floor = budget.storage();
+                budget.reserve_storage(scratch).map_err(resource)?;
+                let mut observation = Observation {
+                    ledger: budget.work_ledger_identity_v1(),
+                    floor,
+                    initial_work: budget.work(),
+                    output_sha: *checked.owner().canonical().identity().digest(),
+                    output_bytes: checked.owner().canonical().identity().canonical_length(),
+                    work: 0,
+                    storage: 0,
+                    peak: 0,
+                };
+                let attempt = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+                    checked.owner().module(),
+                    &kernel.id,
+                    fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                        rank: kernel.domain.rank(),
+                        extents,
+                    },
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+                );
+                let inspected = (|| {
+                    prepay_attempt(&attempt, budget)?;
+                    prepay_consumer(consumer, budget)?;
+                    // Raw rows and the original typed consumer error are
+                    // compared, not reconstructed from source guard locations.
+                    let classification = consumer_join(consumer, &attempt)?;
+                    budget.charge_work(64).map_err(resource)?;
+                    if budget.work_ledger_identity_v1() != observation.ledger
+                        || budget.storage() != sum(observation.floor, scratch)?
+                        || budget.work() <= observation.initial_work
+                    {
+                        return Err(resource(Resource::Accounting));
+                    }
+                    emit_attempt(&attempt, classification);
+                    observation.work = budget.work();
+                    observation.storage = budget.storage();
+                    observation.peak = budget.peak_storage();
+                    // Non-Copy observation is consumed while both selected
+                    // headers are reserved. No account-paid scalar escapes.
+                    observation.emit(requested, classification, scratch);
+                    Ok(())
+                })();
+                drop(attempt);
+                // On an early failure the unused observation is dropped when
+                // the FnOnce inspection closure returns, before this refund.
+                budget.release_storage(scratch).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                inspected
+            });
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16TargetErrorV1::RankedVerification)
+        }
+    }
+
+    // Parser/join component controls: these do not substitute for the distinct
+    // genuine endpoint, which retains the actual checked O and both accounts.
+    fn raw_control(kind: u8) -> Attempt {
+        use fe2o3_kernel_ir::*;
+        let parameters = if kind == 2 {
+            vec![
+                Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite),
+                Type::F32,
+            ]
+        } else {
+            vec![]
+        };
+        let arguments = (0..parameters.len()).map(|i| ValueId(i as u32)).collect();
+        let mut block = BasicBlock::new(BlockId(0));
+        if kind == 1 {
+            block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: FunctionId::new("unknown"),
+                    arguments: vec![],
+                },
+            ));
+        } else if kind == 2 {
+            block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(0),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("raw-output-observer-control");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(parameters, vec![]),
+            arguments,
+            vec![block],
+        ));
+        if kind == 1 {
+            module.functions.push(Function::declaration(
+                "unknown",
+                Signature::new(vec![], vec![]),
+            ));
+        }
+        module.kernels.push(Kernel::new(
+            "entry",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        derive_kernel_memory_obligations_for_launch(
+            &module,
+            &module.kernels[0].id,
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [2, 1, 1],
+            },
+            FormalIndexWidth::Bits64,
+        )
+    }
+
+    #[test]
+    fn private_output_raw_join_distinguishes_complete_incomplete_and_conflict() {
+        use fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1 as F;
+        for kind in 0..3 {
+            let raw = raw_control(kind);
+            let analysis = raw.as_ref().unwrap();
+            let (consumer, expected) = match kind {
+                0 => (Ok(()), "complete"),
+                1 => (
+                    Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+                        F::Incomplete {
+                            reasons: analysis.incomplete_reasons().to_vec().into_boxed_slice(),
+                        },
+                    )),
+                    "incomplete",
+                ),
+                _ => (
+                    Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+                        F::InterInvocationConflicts {
+                            conflicts: analysis
+                                .obligations()
+                                .inter_invocation_conflicts()
+                                .to_vec()
+                                .into_boxed_slice(),
+                        },
+                    )),
+                    "conflict",
+                ),
+            };
+            assert_eq!(consumer_join(&consumer, &raw).unwrap(), expected);
+            if kind != 0 {
+                assert!(consumer_join(&Ok(()), &raw).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn private_output_raw_join_rejects_changed_reasons_and_keeps_exact_engine_error() {
+        use fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1 as F;
+        let raw = raw_control(1);
+        let wrong = Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+            F::Incomplete {
+                reasons: vec![Reason::GuardedAccessRequiresRankedProof {
+                    location: fe2o3_kernel_ir::FunctionOperationLocation {
+                        block: fe2o3_kernel_ir::BlockId(999),
+                        operation_index: 7,
+                    },
+                }]
+                .into_boxed_slice(),
+            },
+        ));
+        assert!(consumer_join(&wrong, &raw).is_err());
+        let error = FormalError::MissingKernel {
+            kernel: fe2o3_kernel_ir::KernelId::new("missing"),
+        };
+        let consumer = Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+            F::Analysis(error.clone()),
+        ));
+        assert_eq!(
+            consumer_join(&consumer, &Err(error)).unwrap(),
+            "analysis_error"
+        );
+        assert!(
+            consumer_join(
+                &consumer,
+                &Err(FormalError::MissingKernel {
+                    kernel: fe2o3_kernel_ir::KernelId::new("other"),
+                })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_output_raw_work_is_prepaid_at_exact_and_one_short_boundary() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        use fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1 as F;
+        let raw = raw_control(1);
+        let consumer = Err(PrivateBf16TargetErrorV1::FormalMemoryAdmission(
+            F::Incomplete {
+                reasons: raw
+                    .as_ref()
+                    .unwrap()
+                    .incomplete_reasons()
+                    .to_vec()
+                    .into_boxed_slice(),
+            },
+        ));
+        let mut work = Work::new(1_000_000);
+        let mut budget = Budget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        prepay_attempt(&raw, &mut budget).unwrap();
+        prepay_consumer(&consumer, &mut budget).unwrap();
+        let exact = budget.work();
+        for cap in [exact, exact - 1] {
+            let mut work = Work::new(cap);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            let result = prepay_attempt(&raw, &mut budget)
+                .and_then(|()| prepay_consumer(&consumer, &mut budget));
+            assert_eq!(result.is_ok(), cap == exact);
+            assert_eq!(budget.storage(), 7);
+            if cap != exact {
+                let prior = budget.check_prior_denials_v1().unwrap_err();
+                assert!(matches!(prepay_attempt(&raw, &mut budget),
+                    Err(E::ConditionalResource(error)) if error == prior));
+            }
+        }
+    }
+
+    #[test]
+    fn private_output_raw_prior_storage_refusal_wins_before_new_work() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        let raw = raw_control(0);
+        let mut work = Work::new(1);
+        let mut budget = Budget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        assert!(budget.reserve_storage(1).is_err());
+        budget.charge_work(1).unwrap();
+        let prior = budget.check_prior_denials_v1().unwrap_err();
+        let before = (
+            budget.work(),
+            budget.storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
+        for _ in 0..2 {
+            assert!(matches!(prepay_attempt(&raw, &mut budget),
+                Err(E::ConditionalResource(error)) if error == prior));
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+        }
+    }
+}
+
+impl PrivateBf16OptimizedV1 {
+    /// Separate actual-O structural guard continuation. The original raw
+    /// diagnostic and complete-only consumer keep their original refusal.
+    /// Source/O/target custody and both accounts remain intact; no report escapes.
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_guarded_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16TargetErrorV1> {
+        self.revalidate_private_bf16_optimization_v1(requested_return, typed_roots, profile)?;
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        let checked = &self.optimization.checked;
+        let owner = &self.target.formal.owner;
+        let roots = &self.target.formal.verification.roots;
+        let result = self.target.formal.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(2).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata(
+                    "private guarded output safety changed source roots",
+                ));
+            };
+            let storage = std::mem::size_of::<Option<Result<(), PrivateBf16TargetErrorV1>>>();
+            budget.reserve_storage(storage).map_err(resource)?;
+            let mut observed: Option<Result<(), PrivateBf16TargetErrorV1>> = None;
+            let loan = owner.with_private_bf16_target_source_v1(
+                root.semantic_root,
+                requested_return,
+                budget,
+                |_source_module, function, source_obligations, budget| {
+                    // Actual O geometry and exact target idempotence are checked
+                    // independently; source obligations provide no O guard proof.
+                    observed = Some(
+                        check_private_bf16_output_target_v1(
+                            checked.owner().module(),
+                            function,
+                            source_obligations,
+                            typed_roots,
+                            profile,
+                            budget,
+                        )
+                        .and_then(|()| {
+                            owner
+                                .with_private_bf16_checked_output_guarded_formal_v1(
+                                    checked.owner(),
+                                    root.semantic_root,
+                                    requested_return,
+                                    budget,
+                                    |_actual_output_attempt, _guard_result, _budget| Ok(()),
+                                )
+                                .map_err(PrivateBf16TargetErrorV1::FormalMemoryAdmission)
+                        }),
+                    );
+                    Ok(())
+                },
+            );
+            if let Err(error) = loan {
+                drop(observed);
+                budget.release_storage(storage).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                return Err(E::FormalMemory(error));
+            }
+            let observed = observed.ok_or_else(|| resource(Resource::Accounting))?;
+            match observed {
+                Ok(()) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Ok(()))
+                }
+                Err(error) => {
+                    budget.release_storage(storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Err(error))
+                }
+            }
+        });
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16TargetErrorV1::RankedVerification)?
+    }
+}
+
+#[cfg(test)]
+mod private_checked_output_guard_observer {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkLedgerIdentityV1 as Ledger, FormalMemoryIncompleteReason as Reason,
+        FormalMemoryObligationAnalysis as Analysis, FormalMemoryObligationError as FormalError,
+    };
+    type Attempt = Result<Analysis, FormalError>;
+    fn prepay_error(error: &FormalError, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match error {
+            FormalError::InvalidModule(errors) => {
+                budget
+                    .charge_work(errors.diagnostics().len())
+                    .map_err(resource)?;
+                for row in errors.diagnostics() {
+                    budget.charge_work(32).map_err(resource)?;
+                    let bytes = row
+                        .location
+                        .module
+                        .as_str()
+                        .len()
+                        .checked_add(
+                            row.location
+                                .function
+                                .as_ref()
+                                .map_or(0, |v| v.as_str().len()),
+                        )
+                        .and_then(|n| {
+                            n.checked_add(
+                                row.location.kernel.as_ref().map_or(0, |v| v.as_str().len()),
+                            )
+                        })
+                        .and_then(|n| n.checked_add(row.message.len()))
+                        .ok_or_else(|| resource(Resource::Arithmetic))?;
+                    budget.charge_work(bytes).map_err(resource)?;
+                }
+            }
+            FormalError::MissingKernel { kernel } => {
+                budget
+                    .charge_work(kernel.as_str().len())
+                    .map_err(resource)?;
+            }
+            FormalError::InvalidInvocationRange(_) | FormalError::GuardedResource(_) => {}
+        }
+        Ok(())
+    }
+
+    fn prepay_attempt(attempt: &Attempt, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(32).map_err(resource)?;
+        match attempt {
+            Err(error) => prepay_error(error, budget),
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                let rows = o
+                    .allocations()
+                    .len()
+                    .checked_add(o.accesses().len())
+                    .and_then(|n| n.checked_add(o.bounds_requirements().len()))
+                    .and_then(|n| n.checked_add(o.runtime_alias_requirements().len()))
+                    .and_then(|n| n.checked_add(o.inter_invocation_conflicts().len()))
+                    .and_then(|n| n.checked_add(analysis.incomplete_reasons().len()))
+                    .and_then(|n| n.checked_mul(128))
+                    .ok_or_else(|| resource(Resource::Arithmetic))?;
+                // Known row counts are paid before any traversal/comparison.
+                // This selected field-visit allowance is not formatter/RSS work.
+                budget.charge_work(rows).map_err(resource)?;
+                budget
+                    .charge_work(sum(o.kernel().as_str().len(), o.entry().as_str().len())?)
+                    .map_err(resource)?;
+                for reason in analysis.incomplete_reasons() {
+                    if let Reason::CallEffectsUnavailable { callee, .. } = reason {
+                        budget
+                            .charge_work(callee.as_str().len())
+                            .map_err(resource)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn emit_attempt(attempt: &Attempt, consumer: &str) {
+        match attempt {
+            Ok(analysis) => {
+                let o = analysis.obligations();
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-summary-v1 consumer={} analysis={} allocations={} accesses={} bounds={} aliases={} conflicts={} incomplete_reasons={} optimized_formal_admission=false",
+                    consumer,
+                    if analysis.is_complete() {
+                        "complete"
+                    } else {
+                        "incomplete"
+                    },
+                    o.allocations().len(),
+                    o.accesses().len(),
+                    o.bounds_requirements().len(),
+                    o.runtime_alias_requirements().len(),
+                    o.inter_invocation_conflicts().len(),
+                    analysis.incomplete_reasons().len(),
+                );
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-header-v1 kernel={:?} entry={:?} index_width={:?} basis={:?} invocations={:?}",
+                    o.kernel(),
+                    o.entry(),
+                    o.index_width(),
+                    o.analysis_basis(),
+                    o.invocations(),
+                );
+                for (i, row) in o.allocations().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-allocation-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.accesses().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-access-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.bounds_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-bounds-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.runtime_alias_requirements().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-alias-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in o.inter_invocation_conflicts().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-conflict-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+                for (i, row) in analysis.incomplete_reasons().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-reason-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::InvalidModule(errors)) => {
+                eprintln!(
+                    "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=InvalidModule diagnostics={}",
+                    consumer,
+                    errors.diagnostics().len()
+                );
+                for (i, row) in errors.diagnostics().iter().enumerate() {
+                    eprintln!(
+                        "fe2o3-bf16-private-checked-output-guard-verifier-v1 ordinal={} value={:?}",
+                        i, row
+                    );
+                }
+            }
+            Err(FormalError::MissingKernel { kernel }) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=MissingKernel value={:?}",
+                consumer, kernel
+            ),
+            Err(FormalError::InvalidInvocationRange(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=InvalidInvocationRange value={:?}",
+                consumer, error
+            ),
+            Err(FormalError::GuardedResource(error)) => eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-error-v1 consumer={} kind=GuardedResource value={:?}",
+                consumer, error
+            ),
+        }
+    }
+
+    // Non-Copy record only exists inside the surviving original phase loan.
+    struct Observation {
+        ledger: Ledger,
+        floor: usize,
+        initial_work: usize,
+        output_sha: [u8; 32],
+        output_bytes: u64,
+        discharged_reasons: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+    impl Observation {
+        fn emit(self, requested: [u8; 4], scratch: usize) {
+            struct Hex<'a>(&'a [u8; 32]);
+            impl std::fmt::Display for Hex<'_> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    for byte in self.0 {
+                        write!(f, "{byte:02x}")?;
+                    }
+                    Ok(())
+                }
+            }
+            eprintln!(
+                "fe2o3-bf16-private-checked-output-guard-collected-v1 permutation={} consumer=guarded output_version=12 output_sha256={} output_bytes={} discharged_reasons={} work={} storage={} peak={} observation_storage={} same_account=true actual_checked_output=true fresh_raw_analysis=true actual_output_guard_proved=true raw_incomplete_preserved=true geometry_target_completed=true cleanup_pending=true optimized_formal_admission=false normal_admission=false llvm=false launch_authenticated=false",
+                if requested == [0, 1, 2, 3] {
+                    "identity"
+                } else {
+                    "swap01"
+                },
+                Hex(&self.output_sha),
+                self.output_bytes,
+                self.discharged_reasons,
+                self.work,
+                self.storage,
+                self.peak,
+                scratch,
+            );
+        }
+    }
+
+    impl PrivateBf16OptimizedV1 {
+        pub(crate) fn observe_private_bf16_checked_output_guard_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), PrivateBf16TargetErrorV1> {
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            let checked = &self.optimization.checked;
+            let owner = &self.target.formal.owner;
+            let roots = &self.target.formal.verification.roots;
+            let result = self.target.formal.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(16).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata("actual O guard observer changed source roots"));
+                };
+                let slot_storage = std::mem::size_of::<Option<Result<(), E>>>();
+                budget.reserve_storage(slot_storage).map_err(resource)?;
+                let mut observed: Option<Result<(), E>> = None;
+                // This is another fresh, independently charged actual O analysis
+                // and structural proof, not replay of the shipping unit result.
+                let loan = owner.with_private_bf16_checked_output_guarded_formal_v1(
+                    checked.owner(), root.semantic_root, requested, budget,
+                    |attempt, proof, budget| {
+                        observed = Some((|| {
+                            prepay_attempt(attempt, budget)?;
+                            budget.charge_work(64).map_err(resource)?;
+                            emit_attempt(attempt, "guarded");
+                            if let Err(detail) = proof {
+                                eprintln!("fe2o3-bf16-private-checked-output-guard-refusal-v1 detail={:?}", detail);
+                                return Err(E::RosterMetadata("actual O structural proof refused"));
+                            }
+                            let analysis = attempt.as_ref().map_err(|_| E::RosterMetadata(
+                                "actual O guard observer requires a fresh raw analysis",
+                            ))?;
+                            if analysis.is_complete() || analysis.incomplete_reasons().is_empty()
+                                || !analysis.obligations().inter_invocation_conflicts().is_empty()
+                                || analysis.incomplete_reasons().iter().any(|r| !matches!(r,
+                                    Reason::GuardedAccessRequiresRankedProof { .. }))
+                            {
+                                return Err(E::RosterMetadata("actual O raw guarded reason roster changed"));
+                            }
+                            let scratch = std::mem::size_of::<Observation>();
+                            let floor = budget.storage();
+                            budget.reserve_storage(scratch).map_err(resource)?;
+                            let mut observation = Observation {
+                                ledger: budget.work_ledger_identity_v1(), floor,
+                                initial_work: budget.work(),
+                                output_sha: *checked.owner().canonical().identity().digest(),
+                                output_bytes: checked.owner().canonical().identity().canonical_length(),
+                                discharged_reasons: analysis.incomplete_reasons().len(),
+                                work: 0, storage: 0, peak: 0,
+                            };
+                            let inspected = (|| {
+                                budget.charge_work(64).map_err(resource)?;
+                                if budget.work_ledger_identity_v1() != observation.ledger
+                                    || budget.storage() != sum(observation.floor, scratch)?
+                                    || budget.work() <= observation.initial_work
+                                {
+                                    return Err(resource(Resource::Accounting));
+                                }
+                                observation.work = budget.work();
+                                observation.storage = budget.storage();
+                                observation.peak = budget.peak_storage();
+                                observation.emit(requested, scratch);
+                                Ok(())
+                            })();
+                            // The capture dies on success or early returned error
+                            // before its exact refund. Raw/proof remain lent and
+                            // paid by the unchanged inner lowerer frame.
+                            budget.release_storage(scratch).map_err(resource)?;
+                            budget.check_prior_denials_v1().map_err(resource)?;
+                            inspected
+                        })());
+                        Ok(())
+                    },
+                );
+                if let Err(error) = loan {
+                    drop(observed);
+                    budget.release_storage(slot_storage).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    return Err(E::FormalMemory(error));
+                }
+                let observed = observed.ok_or_else(|| resource(Resource::Accounting))?;
+                match observed {
+                    Ok(()) => {
+                        budget.release_storage(slot_storage).map_err(resource)?;
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        budget.release_storage(slot_storage).map_err(resource)?;
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        Err(error)
+                    }
+                }
+            });
+            self.target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16TargetErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16TargetErrorV1::RankedVerification)
+        }
+    }
+}

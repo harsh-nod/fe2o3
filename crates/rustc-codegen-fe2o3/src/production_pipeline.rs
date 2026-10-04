@@ -125,6 +125,9 @@ pub(crate) enum ProductionPipelineError {
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
+    PrivateBf16CanonicalInput(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
+    PrivateBf16Optimization(fe2o3_kernel_opt::KernelIrCheckedOptimizationErrorV1),
+    PrivateBf16OptimizationReplay(fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1),
     CheckedOutputStage(checked_output_policy4_v1::CheckedOutputStageErrorV1),
     CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
     CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
@@ -314,6 +317,9 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation target-KIR V11 optimization failed: {error}"
             ),
+            Self::PrivateBf16CanonicalInput(error) => write!(formatter, "private BF16 V12 input admission failed: {error}"),
+            Self::PrivateBf16Optimization(error) => write!(formatter, "private BF16 checked V12 optimization failed: {error}"),
+            Self::PrivateBf16OptimizationReplay(error) => write!(formatter, "private BF16 checked V12 replay failed: {error}"),
             Self::TargetKernelIrV8(error) => write!(
                 formatter,
                 "production compilation target-bound Kernel IR V8 identity failed: {error}"
@@ -411,6 +417,9 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetBinding(error) => Some(error),
             Self::TargetOptimization(error) => Some(error),
             Self::TargetOptimizationV3(error) => Some(error),
+            Self::PrivateBf16CanonicalInput(error) => Some(error),
+            Self::PrivateBf16Optimization(error) => Some(error),
+            Self::PrivateBf16OptimizationReplay(error) => Some(error),
             Self::CheckedOutputStage(error) => Some(error),
             Self::CheckedOutputPolicy5Stage(error) => Some(error),
             Self::CheckedOutputPolicy6Stage(error) => Some(error),
@@ -5069,6 +5078,76 @@ impl PrivateBf16TargetBoundCompilationV1 {
         requested_return: [u8; 4],
     ) -> Result<(), ProductionPipelineError> {
         self.bound.revalidate_private_bf16_target_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
+
+/// Private checked V12 B -> O stage. This retains the original authenticated
+/// bindings and intact target/formal/source owner. LLVM and ordinary admission
+/// remain unavailable; O's local rewrite proof is not fresh formal admission.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16OptimizedCompilationV1 {
+    optimized: crate::production_ranked_projection_v1::PrivateBf16OptimizedV1,
+    bindings: AuthenticatedProductionBindings,
+}
+
+impl PrivateBf16TargetBoundCompilationV1 {
+    #[allow(dead_code)]
+    fn optimize_private_bf16_target_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16OptimizedCompilationV1, ProductionPipelineError> {
+        let Self { bound, bindings } = self;
+        let optimized = bound.optimize_private_bf16_target_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16OptimizedCompilationV1 {
+            optimized,
+            bindings,
+        })
+    }
+}
+
+impl PrivateBf16OptimizedCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_optimization_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.optimized.revalidate_private_bf16_optimization_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
+
+impl PrivateBf16OptimizedCompilationV1 {
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.optimized.verify_private_bf16_output_safety_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
+
+impl PrivateBf16OptimizedCompilationV1 {
+    #[allow(dead_code)]
+    pub(crate) fn verify_private_bf16_output_guarded_safety_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.optimized.verify_private_bf16_output_guarded_safety_v1(
             requested_return,
             &self.bindings.typed_descriptor_roots,
             self.bindings.rustc_target.profile(),
