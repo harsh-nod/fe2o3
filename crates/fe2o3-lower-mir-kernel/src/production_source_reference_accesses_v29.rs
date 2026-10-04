@@ -122,7 +122,22 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         if self.plan.storage == SourceReferenceStorageV29::PromotedOnly {
             return Ok(());
         }
-        if resolved.loan.is_none() && !matches!(access, SourceReferenceAccessV29::Borrow(_)) {
+        // A logical enum snapshot can prove a read without allocating a source
+        // object. Retain every visit, including an unchecked one that revokes
+        // a previously retained claim at the same original occurrence.
+        let enum_read = access == SourceReferenceAccessV29::Read
+            && source.projections().first().is_some_and(|projection| {
+                matches!(projection.kind(), SemanticProjectionKindV1::Downcast(_))
+            });
+        let checked_enum_read = if enum_read {
+            source_enum_checked_read_v58::check(self, site, source, access, resolved, budget)?
+        } else {
+            None
+        };
+        if !enum_read
+            && resolved.loan.is_none()
+            && !matches!(access, SourceReferenceAccessV29::Borrow(_))
+        {
             if !self.plan.has_storage_demands {
                 return Ok(());
             }
@@ -186,8 +201,6 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 return Ok(());
             }
         }
-        let checked_enum_read =
-            source_enum_checked_read_v58::check(self, site, source, access, resolved, budget)?;
         let key = source_reference_access_key_v29(site, source, access);
         charge_execution_cfg_lookup_v29(self.plan.access_sites.len(), budget)?;
         if let Some(&index) = self.plan.access_sites.get(&key) {

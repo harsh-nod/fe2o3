@@ -29,6 +29,8 @@ fn checked_enum_read_requires_exact_original_occurrence_generation_and_path() {
     for case in [EnumCase::Construct(0), EnumCase::ConditionalVariants] {
         let mut checked = 0;
         run_enum(case, |plan, budget| {
+            assert!(!plan.has_storage_demands);
+            assert!(plan.storage_root.is_some());
             for row in &plan.accesses {
                 let Some(claim) = row.checked_enum_read else {
                     continue;
