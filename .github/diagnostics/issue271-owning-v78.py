@@ -12,8 +12,8 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "2193f899e345e885f61fb482641cdaae55570241"
-TREE = "63b242cfd10d2e269628a78f2dc7011fd60ce494"
+HEAD = "8a3e5eb115ba499a75fbc5df383b2c86c04ab6ec"
+TREE = "0ff2b52b528546355da3dd4faefff85b47e9646f"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
@@ -73,6 +73,20 @@ def group_tasks(pgid):
             if item.exists() and item.stat().st_uid == os.getuid():
                 raise
     return tasks
+
+
+def parse_coverage(log, filters):
+    roster_log = re.split(r"^failures:$", log, maxsplit=1, flags=re.M)[0]
+    rows = re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)(?:,.*)?$", roster_log, re.M)
+    assert len(rows) == 9 and len({name for name, _ in rows}) == 9
+    assert sorted(name.rsplit("::", 1)[-1] for name, _ in rows) == sorted(filters)
+    assert all(result == "ok" for _, result in rows)
+    assert re.findall(r"^running (\d+) tests?$", roster_log, re.M) == ["9"]
+    assert len(re.findall(r"^test result:", log, re.M)) == 1
+    summary = re.search(r"test result: ok\. 9 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in [0-9.]+s\s*\Z", log)
+    assert summary is not None
+    return {"passed": 9, "failed": 0, "ignored": 0, "filtered": int(summary.group(1)), "rows": rows,
+            "ignored_owning_parents_executed": False}
 
 
 def parse_parent(log, specification):
@@ -202,9 +216,10 @@ def run(name, args, environment, seconds, limit):
 
 before, error, coverage, tools, tool_pins = None, None, [], [], None
 sysroot_files, sysroot_pins = [], None
+ordinary_coverage = None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "bd52763b1a463fd345e475ed4efaf5279a0fb193a8c63be4574dbbe1e64df7b0"
+    assert before["roster_sha256"] == "8029465cc92a28a17496c0efe4053d556d9735323ad006e971fe7089b08e7c81"
     roster = json.loads(ROSTER.read_text())
     assert roster["head"] == HEAD and roster["package"] == "rustc-codegen-fe2o3"
     parents = roster["parents"]
@@ -243,6 +258,14 @@ try:
     run("sysroot-fetch", [cargo, "fetch", "--locked", "--manifest-path", str(sysroot_files[0])], environment, 300, 16 * 1024**2)
     assert {path.name: digest(path) for path in sysroot_files} == sysroot_pins
     environment["CARGO_NET_OFFLINE"] = "true"
+    ordinary = roster["ordinary"]
+    assert ordinary["package"] == "fe2o3-lower-mir-kernel" and len(ordinary["filters"]) == 9
+    assert len(set(ordinary["filters"])) == 9
+    ordinary_args = [cargo, "test", "--offline", "--locked", "--no-default-features", "-j", "2", "-p",
+                     ordinary["package"], "--lib", "--", "--test-threads=8", *ordinary["filters"]]
+    run("ordinary-contracts", ordinary_args, environment, 1800, 64 * 1024**2)
+    ordinary_coverage = parse_coverage((LOGS / "ordinary-contracts.log").read_text(), ordinary["filters"])
+    save("ordinary-contracts-coverage.json", ordinary_coverage)
     for specification in parents:
         args = [cargo, "test", "--offline", "--locked", "--no-default-features", "-j", "2", "-p",
                 roster["package"], "--lib", "--", "--exact", specification["parent"], "--ignored",
@@ -275,6 +298,7 @@ finally:
         cleanup_error = (cleanup_error or "") + " cleanup: " + repr(failure)
     save("result.json", {"head": HEAD, "error": error, "source_stable": stable, "tools_stable": tools_stable,
                          "cleanup_error": cleanup_error, "temporary_absent": not LANE.exists(), "coverage": coverage,
+                         "ordinary_coverage": ordinary_coverage,
                          "scope": "Actual-source custody only; required CI policy, protected proofs, service and publication remain unqualified."})
     print(json.dumps({"head": HEAD, "error": error, "source_stable": stable, "cleanup_error": cleanup_error, "coverage": coverage}))
 raise SystemExit(0 if error is None and stable and tools_stable and cleanup_error is None else 1)

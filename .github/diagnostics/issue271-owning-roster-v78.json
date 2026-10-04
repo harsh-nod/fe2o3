@@ -1,5 +1,5 @@
 {
-  "head": "2193f899e345e885f61fb482641cdaae55570241",
+  "head": "8a3e5eb115ba499a75fbc5df383b2c86c04ab6ec",
   "package": "rustc-codegen-fe2o3",
   "parents": [
     {
@@ -46,7 +46,30 @@
     {
       "path": "crates/rustc-codegen-fe2o3/src/production_rustc_driver_original_mir_v30_tests.rs",
       "sha256": "789cef589590b74d57399a4c7df8203120672558c64fc0d81c381621bc481028"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26.rs",
+      "sha256": "519cd3a2dc05b2c5524a001113cefa97ba6fd31d872bac97ec7629a01d8d5329"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
+      "sha256": "d6e518f5f648702cecf06774b1fb54ddef899c15433161091d76da89daee66af"
     }
   ],
-  "scope": "Actual source and resource/custody owning parents only. No protected proof, kernel execution, publication authority or service qualification."
+  "scope": "Actual source and resource/custody owning parents only. No protected proof, kernel execution, publication authority or service qualification.",
+  "ordinary": {
+    "package": "fe2o3-lower-mir-kernel",
+    "filters": [
+      "mixed_contract_diagnostic_preserves_wire_reason_and_resource_kind",
+      "mixed_pure_cse_contract_emits_shared_rmw_multiroot_and_nested_helper_occurrences",
+      "mixed_pure_cse_contract_has_exact_and_one_short_transaction_limits",
+      "mixed_pure_cse_contract_refuses_same_count_substitutions_and_missing_premises",
+      "mixed_source_contract_v26_descriptor_admission_rejects_noncanonical_component_and_layout_substitution",
+      "mixed_source_contract_v26_keeps_selected_root_and_nested_helper_occurrences_distinct",
+      "mixed_source_contract_v26_preserves_exact_and_one_short_whole_transaction_limits",
+      "mixed_source_contract_v26_projects_actual_shared_and_rmw_policy9_handoffs",
+      "mixed_source_contract_v26_refuses_same_count_kernel_type_launch_and_output_substitution"
+    ],
+    "scope": "Nine ordinary lowerer contract tests before the unchanged three authentic source parents; no protected proof."
+  }
 }

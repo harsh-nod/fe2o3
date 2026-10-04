@@ -9,9 +9,9 @@ permissions:
 
 jobs:
   source-owning-parents:
-    name: Exact 2193 actual source custody parents (diagnostic only)
+    name: Exact 8a3e5 actual source custody parents (diagnostic only)
     runs-on: ubuntu-24.04
-    timeout-minutes: 110
+    timeout-minutes: 140
     steps:
       - name: Check out diagnostic control
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 2193f899e345e885f61fb482641cdaae55570241
+          ref: 8a3e5eb115ba499a75fbc5df383b2c86c04ab6ec
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-owning-2193-r2-${{ github.run_attempt }}
+          name: issue271-owning-8a3e5-v79-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-owning-v78-logs/
           if-no-files-found: warn
           retention-days: 7
