@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_scoped_write_payload_v84_tests.rs"]
+mod write_payload_tests_v84;
+
 const SHARED: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
 const BOOL: SemanticTypeIdV1 = REFERENCE;
 const OTHER_WITNESS: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);

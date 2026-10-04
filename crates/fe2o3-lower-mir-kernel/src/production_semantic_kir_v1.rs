@@ -20848,6 +20848,33 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         precondition: Option<ValueId>,
         value_argument: usize,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.with_scoped_payload_header_v29(
+            argument_sum_v1(&[
+                scoped_checked_write_payload_header_v84()?,
+                checked_write_tail_headers_v85()?,
+            ])?,
+            |this| {
+                this.lower_checked_slice_write_inner_v84(
+                    block,
+                    call,
+                    operations,
+                    index,
+                    precondition,
+                    value_argument,
+                )
+            },
+        )
+    }
+
+    fn lower_checked_slice_write_inner_v84(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        index: SemanticValueBindingV1,
+        precondition: Option<ValueId>,
+        value_argument: usize,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let (slice, slice_ty) =
             self.lower_allocation_carrier_receiver_v29(block, call, 0, operations)?;
         let (index, index_ty) = index
@@ -20869,9 +20896,22 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "write-only disjoint receiver or index changed access contract",
             ));
         }
-        let value =
-            self.lower_operand(block, None, &call.arguments()[value_argument], operations)?;
-        let (value, value_ty) = value
+        let role = ExecutionOperandV29::CallArgument(
+            u32::try_from(value_argument).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+        );
+        let payload = self.prepare_scoped_operand_payload_v29(
+            execution_site_v29(block, None),
+            role,
+            &call.arguments()[value_argument],
+        )?;
+        let value_binding = self.lower_source_operand_v29(
+            block,
+            None,
+            Some(role),
+            &call.arguments()[value_argument],
+            operations,
+        )?;
+        let (value, value_ty) = value_binding
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
         if value_ty != *slice_type.element {
@@ -20882,6 +20922,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "write-only disjoint value type changed",
             ));
         }
+        let tail_start = operations.len();
         let length = self.emit_id(
             operations,
             Type::INDEX,
@@ -20937,17 +20978,46 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "write-only disjoint element has no exact scalar alignment",
             )
         })?;
-        self.push_operation(operations, || {
-            Operation::new(
-                Vec::new(),
-                OperationKind::GuardedStore {
-                    pointer,
-                    predicate: present,
-                    value,
-                    access: MemoryAccess::new(slice_type.address_space, alignment),
+        self.with_scoped_store_payload_v29(payload, value_binding, |this, _| {
+            this.with_scoped_memory_frame_v29(
+                ScopedMemoryFrameV29 {
+                    site: execution_site_v29(block, None),
+                    role: Some(ScopedMemoryRoleV29::IntrinsicWrite),
+                },
+                |this| {
+                    this.push_operation(operations, || {
+                        Operation::new(
+                            Vec::new(),
+                            OperationKind::GuardedStore {
+                                pointer,
+                                predicate: present,
+                                value,
+                                access: MemoryAccess::new(slice_type.address_space, alignment),
+                            },
+                        )
+                    })
                 },
             )
         })?;
+        let Type::Scalar(element) = value_ty else {
+            return Err(source_issued_error_v29());
+        };
+        let checked = self.with_emission_budget_v1(|_, budget| {
+            check_checked_write_tail_v85(
+                CheckedWriteInputsV85 {
+                    slice,
+                    index,
+                    precondition,
+                    value,
+                    element,
+                },
+                &operations[tail_start..],
+                budget,
+            )
+        })?;
+        if checked.predicate != present || checked.pointer != pointer {
+            return Err(source_issued_error_v29());
+        }
         Ok(SemanticValueBindingV1::Value {
             id: present,
             ty: Type::BOOL,

@@ -1548,6 +1548,11 @@ fn source_address_accesses_v29(
                                 Some(ScopedMemoryRoleV29::CallResult) => {
                                     scoped_source_call_destination_v29(original, frame.site)
                                 }
+                                Some(ScopedMemoryRoleV29::IntrinsicWrite) => {
+                                    return Err(source_reference_error_v29(
+                                        "checked intrinsic write requires its source address and guard replay",
+                                    ));
+                                }
                                 None => None,
                             }
                             .ok_or_else(source_raw_physical_error_v29)?;

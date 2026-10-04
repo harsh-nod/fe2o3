@@ -622,6 +622,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                     match role {
                         Some(ScopedMemoryRoleV29::Operand(_))
                         | Some(ScopedMemoryRoleV29::CallResult)
+                        | Some(ScopedMemoryRoleV29::IntrinsicWrite)
                         | None => {}
                     }
                 }

@@ -461,6 +461,7 @@ struct ScopedMemoryFrameV29 {
 enum ScopedMemoryRoleV29 {
     Operand(ExecutionOperandV29),
     CallResult,
+    IntrinsicWrite,
 }
 
 impl ScopedMemoryFrameV29 {
@@ -1293,7 +1294,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             if recorder.anchors.subject.ledger != budget.work_ledger_identity_v1() {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
-            let payload = scoped_recorded_payload_v29(recorder, this.types, this.function, kind, results, budget)?;
+            let payload = scoped_recorded_payload_v29(recorder, this.types, this.callables, this.function, kind, results, budget)?;
             let row = ScopedMemoryAnchorV29 {
                 block: recorder.block.ok_or_else(scoped_memory_error_v29)?,
                 position,

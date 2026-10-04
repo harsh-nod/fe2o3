@@ -1,5 +1,7 @@
 // Payloads bind the existing access row to its actual value producer. They do
 // not replace pointer read-from, initialization, lifetime or expression proofs.
+include!("production_scoped_write_payload_v84.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopedMemoryPayloadV29 {
     Load {
@@ -1001,6 +1003,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
 fn scoped_recorded_payload_v29(
     recorder: &ScopedMemoryRecorderV29,
     types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     kind: &OperationKind,
     results: &[ValueDef],
@@ -1054,6 +1057,22 @@ fn scoped_recorded_payload_v29(
             // A matching generated RHS is still not a source Store: its frame
             // must be the precise destination/result selected by the producer.
             let compatible = match source {
+                ScopedMemoryStoreSourceV29::Operand {
+                    site,
+                    role: ExecutionOperandV29::CallArgument(argument),
+                    ty,
+                    ..
+                } => {
+                    scoped_write_payload_operand_v84(
+                        function, callables, site, argument, ty, budget,
+                    )?;
+                    recorder.frame
+                        == Some(ScopedMemoryFrameV29 {
+                            site,
+                            role: Some(ScopedMemoryRoleV29::IntrinsicWrite),
+                        })
+                        && matches!(kind, OperationKind::GuardedStore { .. })
+                }
                 ScopedMemoryStoreSourceV29::Operand {
                     site,
                     role: ExecutionOperandV29::StoreValue,
@@ -1516,7 +1535,23 @@ fn check_scoped_payload_v29(
                     source,
                 } => {
                     let destination_role = match role {
-                        ExecutionOperandV29::StoreValue => ExecutionOperandV29::StoreDestination,
+                        ExecutionOperandV29::CallArgument(argument) => {
+                            scoped_write_payload_operand_v84(
+                                function,
+                                occurrences.owner().source_semantic().callables(),
+                                site,
+                                argument,
+                                ty,
+                                budget,
+                            )?;
+                            if !matches!(operation.kind, OperationKind::GuardedStore { .. }) {
+                                return Err(scoped_memory_error_v29());
+                            }
+                            ScopedMemoryRoleV29::IntrinsicWrite
+                        }
+                        ExecutionOperandV29::StoreValue => {
+                            ScopedMemoryRoleV29::Operand(ExecutionOperandV29::StoreDestination)
+                        }
                         ExecutionOperandV29::RvalueOperand(component) => {
                             if matches!(scoped_source_statement_v29(function, site),
                                 Some(SemanticStatementKindV1::Assign(assignment))
@@ -1534,12 +1569,15 @@ fn check_scoped_payload_v29(
                             } else if component != 0 {
                                 return Err(scoped_memory_error_v29());
                             }
-                            ExecutionOperandV29::Destination
+                            ScopedMemoryRoleV29::Operand(ExecutionOperandV29::Destination)
                         }
                         _ => return Err(scoped_memory_error_v29()),
                     };
                     if row.source
-                        != Some(ScopedMemoryFrameV29::operand(site, Some(destination_role)))
+                        != Some(ScopedMemoryFrameV29 {
+                            site,
+                            role: Some(destination_role),
+                        })
                     {
                         return Err(scoped_memory_error_v29());
                     }
