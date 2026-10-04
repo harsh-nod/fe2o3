@@ -134,7 +134,7 @@ fn run(root_traps: bool, work: usize, storage: usize) -> (Result<()>, usize, usi
                 program.emit(out)?;
                 let emitted = &out.text[start..];
                 let closed = emitted.split('\n').next().unwrap();
-                assert!(closed.starts_with("open spec fn invocation_source_abort_site_v50"));
+                assert!(closed.starts_with("spec fn invocation_source_abort_site_v50"));
                 for function in program.functions.iter().flatten() {
                     for (block, control) in function.control.iter().enumerate() {
                         if matches!(control.end, End::Abort) {

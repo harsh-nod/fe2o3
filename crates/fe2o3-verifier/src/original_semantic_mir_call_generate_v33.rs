@@ -45,7 +45,7 @@ pub(super) fn direct(transfer: &DirectTransfer, out: &mut Writer<'_, '_>) -> Res
     )?;
     emit!(
         out,
-        "open spec fn original_call_enabled_{key}_v33(s: OriginalControlStateV31) -> bool {{\n s.pc == {key}int && s.values.len() == s.defined.len() && s.values.len() >= {length}"
+        "spec fn original_call_enabled_{key}_v33(s: OriginalControlStateV31) -> bool {{\n s.pc == {key}int && s.values.len() == s.defined.len() && s.values.len() >= {length}"
     );
     for node in &transfer.operands.nodes {
         out.budget.charge_work(1)?;
@@ -62,7 +62,7 @@ pub(super) fn direct(transfer: &DirectTransfer, out: &mut Writer<'_, '_>) -> Res
     }
     emit!(
         out,
-        "\n}}\nopen spec fn original_call_enter_{key}_v33(s: OriginalControlStateV31) -> OriginalControlStateV31\n recommends original_call_enabled_{key}_v33(s),\n{{\n let n = original_call_arguments_trace_{key}_v30(s.values.subrange({caller_start}int, {caller_end}int));\n let values = s.values"
+        "\n}}\nspec fn original_call_enter_{key}_v33(s: OriginalControlStateV31) -> OriginalControlStateV31\n recommends original_call_enabled_{key}_v33(s),\n{{\n let n = original_call_arguments_trace_{key}_v30(s.values.subrange({caller_start}int, {caller_end}int));\n let values = s.values"
     );
     for &(target, node) in &transfer.arguments {
         out.budget.charge_work(1)?;
@@ -89,7 +89,7 @@ pub(super) fn direct(transfer: &DirectTransfer, out: &mut Writer<'_, '_>) -> Res
     );
     emit!(
         out,
-        "open spec fn original_call_return_enabled_{key}_v33(s: OriginalControlStateV31) -> bool {{\n s.values.len() == s.defined.len() && s.values.len() >= {length}"
+        "spec fn original_call_return_enabled_{key}_v33(s: OriginalControlStateV31) -> bool {{\n s.values.len() == s.defined.len() && s.values.len() >= {length}"
     );
     emit!(out, "\n && (false");
     for &block in &transfer.return_blocks {
@@ -109,7 +109,7 @@ pub(super) fn direct(transfer: &DirectTransfer, out: &mut Writer<'_, '_>) -> Res
     let destination = transfer.returned.destination;
     emit!(
         out,
-        "\n}}\nopen spec fn original_call_return_{key}_v33(s: OriginalControlStateV31) -> OriginalControlStateV31\n recommends original_call_return_enabled_{key}_v33(s),\n{{\n let values = s.values.update({destination}int, "
+        "\n}}\nspec fn original_call_return_{key}_v33(s: OriginalControlStateV31) -> OriginalControlStateV31\n recommends original_call_return_enabled_{key}_v33(s),\n{{\n let values = s.values.update({destination}int, "
     );
     if let Some(source) = transfer.returned.source {
         emit!(out, "s.values[{source}]");

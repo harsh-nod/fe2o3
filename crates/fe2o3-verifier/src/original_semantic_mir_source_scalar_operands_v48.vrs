@@ -13,7 +13,7 @@ struct InvocationSourceScalarOperandsResultV48 {
     observations: Seq<InvocationSourceEffectObservationV39>,
 }
 
-open spec fn invocation_source_scalar_operands_shape_v48(event: InvocationSourceScalarOperandsV48) -> bool {
+spec fn invocation_source_scalar_operands_shape_v48(event: InvocationSourceScalarOperandsV48) -> bool {
     if event.operation >= 10 {
         byte_float_shape_v52(event.operation, event.input_bits, event.output_bits)
             && !event.input_signed && (event.operation == 10) == event.right.is_none()
@@ -25,7 +25,7 @@ open spec fn invocation_source_scalar_operands_shape_v48(event: InvocationSource
         && (event.operation == 0) == event.right.is_none() }
 }
 
-open spec fn invocation_source_scalar_operands_value_v48(
+spec fn invocation_source_scalar_operands_value_v48(
     frames: MemoryFrameRuntimeV30, event: InvocationSourceScalarOperandsV48,
     left: MemoryValueV30, right: MemoryValueV30,
 ) -> MemoryValueV30 {
@@ -64,7 +64,7 @@ open spec fn invocation_source_scalar_operands_value_v48(
     } }
 }
 
-open spec fn invocation_source_scalar_operands_refused_v48(
+spec fn invocation_source_scalar_operands_refused_v48(
     source: InvocationSourceByteStateV36,
     observations: Seq<InvocationSourceEffectObservationV39>,
 ) -> InvocationSourceScalarOperandsResultV48 {
@@ -74,7 +74,7 @@ open spec fn invocation_source_scalar_operands_refused_v48(
             seq![MemoryOperationEffectV30::Refused], source, after) }
 }
 
-open spec fn invocation_source_scalar_operands_write_v48(
+spec fn invocation_source_scalar_operands_write_v48(
     source: InvocationSourceByteStateV36, event: InvocationSourceScalarOperandsV48,
     value: MemoryValueV30, observations: Seq<InvocationSourceEffectObservationV39>,
     root: int, instance: int, little_endian: bool,
@@ -118,7 +118,7 @@ open spec fn invocation_source_scalar_operands_write_v48(
     } }
 }
 
-open spec fn invocation_source_scalar_operands_v48(
+spec fn invocation_source_scalar_operands_v48(
     source: InvocationSourceByteStateV36, event: InvocationSourceScalarOperandsV48,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceScalarOperandsResultV48 {

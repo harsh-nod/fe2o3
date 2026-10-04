@@ -4,10 +4,10 @@ const OBSERVED: &str = include_str!("original_semantic_mir_observed_effects_v39.
 
 fn body(name: &str) -> &str {
     OBSERVED
-        .split_once(&format!("open spec fn {name}"))
+        .split_once(&format!("spec fn {name}"))
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap()
 }
@@ -153,10 +153,10 @@ fn original_mir_native_provenance_census_rejects_private_payloads_not_only_live_
 fn original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards() {
     let legacy = super::INVOCATION_EFFECTS_V36;
     let statement = legacy
-        .split_once("open spec fn invocation_source_statement_effects_v36")
+        .split_once("spec fn invocation_source_statement_effects_v36")
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap();
     assert!(!statement.contains("Some(_)"));
@@ -174,10 +174,10 @@ fn original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards() {
         assert!(statement.contains(&format!("InvocationSourceByteEventV36::{variant}")));
     }
     let operands = legacy
-        .split_once("open spec fn invocation_source_operands_effects_v36")
+        .split_once("spec fn invocation_source_operands_effects_v36")
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap();
     assert!(!operands.contains("_ =>"));

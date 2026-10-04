@@ -79,7 +79,7 @@ fn relation(
     let row = &input.functions()[function];
     emit!(
         out,
-        "open spec fn typed_licm_related_{function}_v48(before: MemoryStateV30, after: MemoryStateV30, little_endian: bool) -> bool {{\n before.valid && after.valid && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && before.values.len() == {} && after.values.len() == {}\n && byte_state_memory_well_formed_v30(before) && byte_state_memory_well_formed_v30(after)\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n",
+        "spec fn typed_licm_related_{function}_v48(before: MemoryStateV30, after: MemoryStateV30, little_endian: bool) -> bool {{\n before.valid && after.valid && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && before.values.len() == {} && after.values.len() == {}\n && byte_state_memory_well_formed_v30(before) && byte_state_memory_well_formed_v30(after)\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n",
         input.definitions().len(),
         output.definitions().len()
     );
@@ -185,12 +185,12 @@ fn function_laws(
     for (side, namespace) in [(1, input_namespace), (2, output_namespace)] {
         emit!(
             out,
-            "open spec fn typed_licm_step_{side}_{function}_v48(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, TypedLicmBlockEventV48> {{\n if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state, events: seq![], halted: true }} }} else {{ let result = byte_block_step_{namespace}_v30(state, little_endian); CfgStepV26 {{ state: result.state, events: seq![typed_licm_block_event_{side}_v48(result)], halted: !result.state.valid || result.state.pc < 0 }} }}\n}}\n"
+            "spec fn typed_licm_step_{side}_{function}_v48(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, TypedLicmBlockEventV48> {{\n if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state, events: seq![], halted: true }} }} else {{ let result = byte_block_step_{namespace}_v30(state, little_endian); CfgStepV26 {{ state: result.state, events: seq![typed_licm_block_event_{side}_v48(result)], halted: !result.state.valid || result.state.pc < 0 }} }}\n}}\n"
         );
     }
     emit!(
         out,
-        "open spec fn typed_licm_input_defined_{function}_v48(state: MemoryStateV30, little_endian: bool, fuel: nat) -> bool\n decreases fuel,\n{{ state.valid && (fuel == 0 || state.pc < 0 || typed_licm_input_defined_{function}_v48(typed_licm_step_1_{function}_v48(state, little_endian).state, little_endian, (fuel - 1) as nat)) }}\nproof fn typed_licm_step_{function}_v48(before: MemoryStateV30, after: MemoryStateV30, little_endian: bool)\n requires typed_licm_related_{function}_v48(before, after, little_endian), typed_licm_input_defined_{function}_v48(before, little_endian, 1),\n ensures typed_licm_related_{function}_v48(typed_licm_step_1_{function}_v48(before, little_endian).state, typed_licm_step_2_{function}_v48(after, little_endian).state, little_endian),\n typed_licm_step_1_{function}_v48(before, little_endian).events == typed_licm_step_2_{function}_v48(after, little_endian).events,\n typed_licm_step_1_{function}_v48(before, little_endian).halted == typed_licm_step_2_{function}_v48(after, little_endian).halted,\n{{ if before.pc >= 0 {{\n"
+        "spec fn typed_licm_input_defined_{function}_v48(state: MemoryStateV30, little_endian: bool, fuel: nat) -> bool\n decreases fuel,\n{{ state.valid && (fuel == 0 || state.pc < 0 || typed_licm_input_defined_{function}_v48(typed_licm_step_1_{function}_v48(state, little_endian).state, little_endian, (fuel - 1) as nat)) }}\nproof fn typed_licm_step_{function}_v48(before: MemoryStateV30, after: MemoryStateV30, little_endian: bool)\n requires typed_licm_related_{function}_v48(before, after, little_endian), typed_licm_input_defined_{function}_v48(before, little_endian, 1),\n ensures typed_licm_related_{function}_v48(typed_licm_step_1_{function}_v48(before, little_endian).state, typed_licm_step_2_{function}_v48(after, little_endian).state, little_endian),\n typed_licm_step_1_{function}_v48(before, little_endian).events == typed_licm_step_2_{function}_v48(after, little_endian).events,\n typed_licm_step_1_{function}_v48(before, little_endian).halted == typed_licm_step_2_{function}_v48(after, little_endian).halted,\n{{ if before.pc >= 0 {{\n"
     );
     for block in input.functions()[function].blocks.clone() {
         out.budget.charge_work(1)?;
@@ -257,7 +257,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             for side in [1, 2] {
                 emit!(
                     out,
-                    "open spec fn typed_licm_block_event_{side}_v48(result: MemoryBlockResultV30) -> TypedLicmBlockEventV48 {{ TypedLicmBlockEventV48 {{ observations: typed_observations_{side}_v48(result.observations), returned: if result.state.valid {{ result.returned }} else {{ seq![] }}, terminal: if !result.state.valid {{ -3 }} else if result.state.pc == -2 {{ -2 }} else if result.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
+                    "spec fn typed_licm_block_event_{side}_v48(result: MemoryBlockResultV30) -> TypedLicmBlockEventV48 {{ TypedLicmBlockEventV48 {{ observations: typed_observations_{side}_v48(result.observations), returned: if result.state.valid {{ result.returned }} else {{ seq![] }}, terminal: if !result.state.valid {{ -3 }} else if result.state.pc == -2 {{ -2 }} else if result.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
                 );
             }
             let output_base = input.functions().len();

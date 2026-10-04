@@ -381,10 +381,10 @@ fn aggregate_memory_cfg_preserves_typed_and_index_switch_edge_occurrences() {
         with_case(m, |input, continuation, _, budget| {
             let (text, _) = source(input, continuation, budget);
             let source_block = text
-                .split("open spec fn aggregate_block_n_1")
+                .split("spec fn aggregate_block_n_1")
                 .nth(1)
                 .unwrap()
-                .split("open spec fn aggregate_block_o_1")
+                .split("spec fn aggregate_block_o_1")
                 .next()
                 .unwrap();
             assert_eq!(source_block.matches("events: seq![0int,").count(), 3);

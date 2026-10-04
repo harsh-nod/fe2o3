@@ -77,7 +77,7 @@ impl SourceSlots<'_, '_> {
         self.with_source_query_v42(out, |out| {
             let source = self.relation.source(out.budget)?;
             let original = source.source_semantic(out.budget)?;
-            write!(out, "open spec fn invocation_source_checked_object_type_v47(ty: int, bits: int, signed: bool, bytes: int, alignment: int, value_offset: int, overflow_offset: int) -> bool {{ false").map_err(|_| out.error())?;
+            write!(out, "spec fn invocation_source_checked_object_type_v47(ty: int, bits: int, signed: bool, bytes: int, alignment: int, value_offset: int, overflow_offset: int) -> bool {{ false").map_err(|_| out.error())?;
             for (index, _) in original.types().iter().enumerate() {
                 out.budget.charge_work(1)?;
                 let ty = TypeId::from_index(u32::try_from(index).map_err(|_| Resource::Arithmetic)?);

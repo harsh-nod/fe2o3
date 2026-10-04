@@ -174,7 +174,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     let definitions = model.inventory.definitions().len();
     emit!(
         out,
-        "open spec fn byte_block_{namespace}_{block}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n if s.values.len() != {definitions} || s.pc != {block} {{ byte_block_refused_v58(s, Seq::empty()) }} else {{\n let current = s;\n"
+        "spec fn byte_block_{namespace}_{block}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n if s.values.len() != {definitions} || s.pc != {block} {{ byte_block_refused_v58(s, Seq::empty()) }} else {{\n let current = s;\n"
     );
     for operation in row.operations.clone() {
         out.budget.charge_work(1)?;
@@ -194,7 +194,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     );
     emit!(
         out,
-        "open spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n let trapped = "
+        "spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n let trapped = "
     );
     model.emit_trap_terminal(block, "done", "observations", out)?;
     emit!(
@@ -222,7 +222,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
             let selector = uses[0].definition;
             emit!(
                 out,
-                " let control_valid = matches!(done.values[{selector}], MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1));\n if done.values[{selector}] == MemoryValueV30::Scalar(1) "
+                " let control_valid = match done.values[{selector}] {{ MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1) => true, _ => false }};\n if done.values[{selector}] == MemoryValueV30::Scalar(1) "
             );
             emit_edge(model, row.edges.start, out)?;
             emit!(out, " else ");

@@ -200,7 +200,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let output_row = &output.functions()[function];
         emit!(
             out,
-            "open spec fn typed_prefix_related_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let after = cursor.micro.state;\n before.valid && after.valid && before.values.len() == {} && after.values.len() == {}\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && byte_state_memory_well_formed_v30(before) && typed_prefix_cursor_valid_{function}_v49(cursor, little_endian)\n && typed_allocation_environment_0_v48(before) == typed_allocation_environment_1_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ cursor.segment == before.pc && after.pc == before.pc }} else {{ before.pc == cursor.segment && (\n",
+            "spec fn typed_prefix_related_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let after = cursor.micro.state;\n before.valid && after.valid && before.values.len() == {} && after.values.len() == {}\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && byte_state_memory_well_formed_v30(before) && typed_prefix_cursor_valid_{function}_v49(cursor, little_endian)\n && typed_allocation_environment_0_v48(before) == typed_allocation_environment_1_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ cursor.segment == before.pc && after.pc == before.pc }} else {{ before.pc == cursor.segment && (\n",
             input.definitions().len(),
             output.definitions().len()
         );
@@ -330,7 +330,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         }
         emit!(
             out,
-            "open spec fn typed_prefix_entry_{function}_v49(before: MemoryStateV30) -> TypedPrefixCursorV49 {{\n let values = Seq::new({}, |i: int| MemoryValueV30::Undefined);\n",
+            "spec fn typed_prefix_entry_{function}_v49(before: MemoryStateV30) -> TypedPrefixCursorV49 {{\n let values = Seq::new({}, |i: int| MemoryValueV30::Undefined);\n",
             output.definitions().len()
         );
         for target in target_row.definitions.clone() {
@@ -360,7 +360,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         }
         emit!(
             out,
-            " typed_prefix_begin_{function}_v49(MemoryStateV30 {{ pc: {target_entry}, values, ..before }})\n}}\nopen spec fn typed_prefix_native_shape_{function}_v49(before: MemoryStateV30) -> bool {{ before.valid && before.pc == {original_entry} && before.values.len() == {}",
+            " typed_prefix_begin_{function}_v49(MemoryStateV30 {{ pc: {target_entry}, values, ..before }})\n}}\nspec fn typed_prefix_native_shape_{function}_v49(before: MemoryStateV30) -> bool {{ before.valid && before.pc == {original_entry} && before.values.len() == {}",
             input.definitions().len()
         );
         for (original, row) in input.definitions().iter().enumerate() {
@@ -404,7 +404,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let row = &input.functions()[original_function];
         emit!(
             out,
-            "open spec fn typed_prefix_source_step_{function}_v49(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, TypedPrefixEventV49> {{ if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state, events: seq![], halted: true }} }} else {{ let result = byte_block_step_{original_function}_v30(state, little_endian); CfgStepV26 {{ state: result.state, events: seq![typed_prefix_source_event_v49(result)], halted: !result.state.valid || result.state.pc < 0 }} }} }}\nopen spec fn typed_prefix_actual_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> CfgStepV26<TypedPrefixCursorV49, TypedPrefixEventV49> {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ CfgStepV26 {{ state: cursor, events: seq![], halted: true }} }} else {{ let result = typed_prefix_step_{function}_v49(cursor, little_endian); CfgStepV26 {{ state: result.cursor, events: seq![typed_prefix_actual_event_v49(result)], halted: !result.cursor.micro.state.valid || result.cursor.micro.state.pc < 0 }} }} }}\n"
+            "spec fn typed_prefix_source_step_{function}_v49(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, TypedPrefixEventV49> {{ if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state, events: seq![], halted: true }} }} else {{ let result = byte_block_step_{original_function}_v30(state, little_endian); CfgStepV26 {{ state: result.state, events: seq![typed_prefix_source_event_v49(result)], halted: !result.state.valid || result.state.pc < 0 }} }} }}\nspec fn typed_prefix_actual_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> CfgStepV26<TypedPrefixCursorV49, TypedPrefixEventV49> {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ CfgStepV26 {{ state: cursor, events: seq![], halted: true }} }} else {{ let result = typed_prefix_step_{function}_v49(cursor, little_endian); CfgStepV26 {{ state: result.cursor, events: seq![typed_prefix_actual_event_v49(result)], halted: !result.cursor.micro.state.valid || result.cursor.micro.state.pc < 0 }} }} }}\n"
         );
         for original in row.blocks.clone() {
             let Some(_) = self.segment(original, out)? else {
@@ -418,7 +418,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         }
         emit!(
             out,
-            "open spec fn typed_prefix_input_defined_{function}_v49(state: MemoryStateV30, little_endian: bool, fuel: nat) -> bool\n decreases fuel,\n{{ state.valid && (fuel == 0 || state.pc < 0 || typed_prefix_input_defined_{function}_v49(typed_prefix_source_step_{function}_v49(state, little_endian).state, little_endian, (fuel - 1) as nat)) }}\nproof fn typed_prefix_step_relation_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool)\n requires typed_prefix_related_{function}_v49(before, cursor, little_endian), typed_prefix_input_defined_{function}_v49(before, little_endian, 1),\n ensures typed_prefix_related_{function}_v49(typed_prefix_source_step_{function}_v49(before, little_endian).state, typed_prefix_actual_step_{function}_v49(cursor, little_endian).state, little_endian),\n typed_prefix_source_step_{function}_v49(before, little_endian).events == typed_prefix_actual_step_{function}_v49(cursor, little_endian).events,\n typed_prefix_source_step_{function}_v49(before, little_endian).halted == typed_prefix_actual_step_{function}_v49(cursor, little_endian).halted,\n{{ if before.pc >= 0 {{\n"
+            "spec fn typed_prefix_input_defined_{function}_v49(state: MemoryStateV30, little_endian: bool, fuel: nat) -> bool\n decreases fuel,\n{{ state.valid && (fuel == 0 || state.pc < 0 || typed_prefix_input_defined_{function}_v49(typed_prefix_source_step_{function}_v49(state, little_endian).state, little_endian, (fuel - 1) as nat)) }}\nproof fn typed_prefix_step_relation_{function}_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49, little_endian: bool)\n requires typed_prefix_related_{function}_v49(before, cursor, little_endian), typed_prefix_input_defined_{function}_v49(before, little_endian, 1),\n ensures typed_prefix_related_{function}_v49(typed_prefix_source_step_{function}_v49(before, little_endian).state, typed_prefix_actual_step_{function}_v49(cursor, little_endian).state, little_endian),\n typed_prefix_source_step_{function}_v49(before, little_endian).events == typed_prefix_actual_step_{function}_v49(cursor, little_endian).events,\n typed_prefix_source_step_{function}_v49(before, little_endian).halted == typed_prefix_actual_step_{function}_v49(cursor, little_endian).halted,\n{{ if before.pc >= 0 {{\n"
         );
         for original in row.blocks.clone() {
             if self.segment(original, out)?.is_some() {
@@ -719,7 +719,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             segments.emit_cursors(out)?;
             emit!(
                 out,
-                "struct TypedPrefixEventV49 {{ observations: Option<Seq<TypedMemoryObservationV48>>, returned: Seq<MemoryValueV30>, terminal: int }}\nopen spec fn typed_prefix_source_event_v49(result: MemoryBlockResultV30) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_0_v48(result.observations), returned: result.returned, terminal: if !result.state.valid {{ -3 }} else if result.state.pc == -2 {{ -2 }} else if result.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\nopen spec fn typed_prefix_actual_event_v49(result: TypedPrefixStepV49) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_1_v48(result.observations), returned: result.returned, terminal: if !result.cursor.micro.state.valid {{ -3 }} else if result.cursor.micro.state.pc == -2 {{ -2 }} else if result.cursor.micro.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
+                "struct TypedPrefixEventV49 {{ observations: Option<Seq<TypedMemoryObservationV48>>, returned: Seq<MemoryValueV30>, terminal: int }}\nspec fn typed_prefix_source_event_v49(result: MemoryBlockResultV30) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_0_v48(result.observations), returned: result.returned, terminal: if !result.state.valid {{ -3 }} else if result.state.pc == -2 {{ -2 }} else if result.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\nspec fn typed_prefix_actual_event_v49(result: TypedPrefixStepV49) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_1_v48(result.observations), returned: result.returned, terminal: if !result.cursor.micro.state.valid {{ -3 }} else if result.cursor.micro.state.pc == -2 {{ -2 }} else if result.cursor.micro.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
             );
             for (function, row) in output.functions().iter().enumerate() {
                 self.charge(1, out)?;

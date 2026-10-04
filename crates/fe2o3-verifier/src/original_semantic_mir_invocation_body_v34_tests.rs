@@ -73,13 +73,9 @@ fn inspect(plan: &mut InvocationPlan<'_, '_>, out: &mut Writer<'_, '_>) -> Resul
     let start = out.text.len();
     model.emit_steps(out)?;
     let text = &out.text[start..];
+    assert_eq!(text.matches("spec fn original_invocation_step_").count(), 2);
     assert_eq!(
-        text.matches("open spec fn original_invocation_step_")
-            .count(),
-        2
-    );
-    assert_eq!(
-        text.matches("open spec fn original_invocation_block_enabled_")
+        text.matches("spec fn original_invocation_block_enabled_")
             .count(),
         10
     );

@@ -142,9 +142,7 @@ fn emit_original_objects_v40(
         let entry = slots.object_activation(root, 0, 4, 0, out)?.unwrap();
         let enter = out
             .text
-            .split_once(&format!(
-                "open spec fn invocation_source_enter_{root}_0_v36("
-            ))
+            .split_once(&format!("spec fn invocation_source_enter_{root}_0_v36("))
             .unwrap()
             .1
             .split_once("\n}\n")
@@ -167,7 +165,7 @@ fn emit_original_objects_v40(
         let events = out
             .text
             .split_once(&format!(
-                "open spec fn invocation_source_byte_event_{root}_0_v36("
+                "spec fn invocation_source_byte_event_{root}_0_v36("
             ))
             .unwrap()
             .1
@@ -231,12 +229,12 @@ fn original_object_dead_only_marker_does_not_activate_catalogued_entry_storage()
                     assert!(matches!(body.event_at(0, 2, out)?, Event::Transfer {
                         value: Value::Read { access: Access { address: Address::Object { local: found, .. }, .. }, .. }, ..
                     } if found == local));
-                    let enter = out.text.split_once(&format!("open spec fn invocation_source_enter_{root}_0_v36("))
+                    let enter = out.text.split_once(&format!("spec fn invocation_source_enter_{root}_0_v36("))
                         .unwrap().1.split_once("\n}\n").unwrap().0;
                     assert!(!enter.contains("invocation_source_object_activate_v40("));
                     assert!(!enter.contains("invocation_source_byte_activate_v36("));
                 }
-                let object_address = SOURCE_BYTES_V36.split_once("open spec fn invocation_source_byte_address_v36(")
+                let object_address = SOURCE_BYTES_V36.split_once("spec fn invocation_source_byte_address_v36(")
                     .unwrap().1.split_once("InvocationSourceByteBaseV36::ObjectLocal(local) =>")
                     .unwrap().1.split_once("InvocationSourceByteBaseV36::Slot").unwrap().0;
                 assert!(object_address.contains("if source.objects.contains_key(local)"));
@@ -273,7 +271,7 @@ fn original_object_lifetime_source_program_has_exact_and_one_short_resources() {
 #[test]
 fn original_object_runtime_authenticates_bindings_and_restarts_dynamic_generations() {
     let wf = SOURCE_BYTES_V36
-        .split_once("open spec fn invocation_source_byte_state_well_formed_v36(")
+        .split_once("spec fn invocation_source_byte_state_well_formed_v36(")
         .unwrap()
         .1
         .split_once("\n}\n")
@@ -283,7 +281,7 @@ fn original_object_runtime_authenticates_bindings_and_restarts_dynamic_generatio
     assert!(wf.contains("source.slots.contains_key(source.objects[local].descriptor)"));
     assert!(wf.contains("source.objects[left].descriptor != source.objects[right].descriptor"));
     let activate = SOURCE_BYTES_V36
-        .split_once("open spec fn invocation_source_object_activate_v40(")
+        .split_once("spec fn invocation_source_object_activate_v40(")
         .unwrap()
         .1
         .split_once("\n}\n")
@@ -305,7 +303,7 @@ fn original_object_runtime_authenticates_bindings_and_restarts_dynamic_generatio
         .unwrap();
     assert!(authenticated < ended && ended < fresh && fresh < inserted);
     let end = SOURCE_BYTES_V36
-        .split_once("open spec fn invocation_source_object_end_v40(")
+        .split_once("spec fn invocation_source_object_end_v40(")
         .unwrap()
         .1
         .split_once("\n}\n")
@@ -318,7 +316,7 @@ fn original_object_runtime_authenticates_bindings_and_restarts_dynamic_generatio
                 .unwrap()
     );
     let allocate = SOURCE_BYTES_V36
-        .split_once("open spec fn invocation_source_byte_activate_v36(")
+        .split_once("spec fn invocation_source_byte_activate_v36(")
         .unwrap()
         .1
         .split_once("\n}\n")

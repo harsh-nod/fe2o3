@@ -220,7 +220,7 @@ pub(super) fn check(
 }
 
 pub(super) fn emit_prelude(out: &mut Writer<'_, '_>) -> Result<()> {
-    write!(out, "open spec fn source_signed_v30(value: int, modulus: int) -> int {{\n if value < modulus / 2 {{ value }} else {{ value - modulus }}\n}}\n")
+    write!(out, "spec fn source_signed_v30(value: int, modulus: int) -> int {{\n if value < modulus / 2 {{ value }} else {{ value - modulus }}\n}}\n")
         .map_err(|_| out.error())
 }
 

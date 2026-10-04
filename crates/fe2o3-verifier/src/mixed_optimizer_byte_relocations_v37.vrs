@@ -1,7 +1,7 @@
 
 // Pointer representation is nominal. No numeric address or integer-derived
 // provenance is introduced. An incomplete fragment remains opaque after copy.
-open spec fn byte_octet_v37(byte: MemoryByteV37) -> int
+spec fn byte_octet_v37(byte: MemoryByteV37) -> int
     recommends matches!(byte, MemoryByteV37::Octet(_)),
 {
     match byte {
@@ -10,7 +10,7 @@ open spec fn byte_octet_v37(byte: MemoryByteV37) -> int
     }
 }
 
-open spec fn byte_token_well_formed_v37(byte: MemoryByteV37) -> bool {
+spec fn byte_token_well_formed_v37(byte: MemoryByteV37) -> bool {
     match byte {
         MemoryByteV37::Octet(value) => 0 <= value < 256,
         MemoryByteV37::PointerFragment { pointer, width, ordinal } =>
@@ -19,11 +19,11 @@ open spec fn byte_token_well_formed_v37(byte: MemoryByteV37) -> bool {
     }
 }
 
-open spec fn byte_intervals_overlap_v37(a: int, a_width: int, b: int, b_width: int) -> bool {
+spec fn byte_intervals_overlap_v37(a: int, a_width: int, b: int, b_width: int) -> bool {
     0 < a_width && 0 < b_width && a < b + b_width && b < a + a_width
 }
 
-open spec fn byte_relocation_fragment_v37(
+spec fn byte_relocation_fragment_v37(
     relocation: MemoryRelocationV37, relative: int,
 ) -> MemoryByteV37
     recommends 0 <= relative < relocation.width,
@@ -36,7 +36,7 @@ open spec fn byte_relocation_fragment_v37(
     }
 }
 
-open spec fn byte_object_relocations_well_formed_v37(object: MemoryBytesV30) -> bool {
+spec fn byte_object_relocations_well_formed_v37(object: MemoryBytesV30) -> bool {
     object.bytes.len() == object.initialized.len()
     && (forall|i: int| 0 <= i < object.bytes.len() ==>
         byte_token_well_formed_v37(object.bytes[i]))
@@ -53,15 +53,19 @@ open spec fn byte_object_relocations_well_formed_v37(object: MemoryBytesV30) -> 
         !byte_intervals_overlap_v37(a, object.relocations[a].width, b, object.relocations[b].width))
 }
 
-open spec fn byte_plain_range_v37(
+spec fn byte_plain_range_v37(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
 ) -> bool {
     byte_range_live_v30(memory, pointer, width)
-    && forall|i: int| pointer.byte_offset <= i < pointer.byte_offset + width ==>
-        matches!(memory.live[pointer.allocation].bytes[i], MemoryByteV37::Octet(_))
+    && forall|i: int| #![trigger memory.live[pointer.allocation].bytes[i]]
+        pointer.byte_offset <= i < pointer.byte_offset + width ==>
+        match memory.live[pointer.allocation].bytes[i] {
+            MemoryByteV37::Octet(_) => true,
+            _ => false,
+        }
 }
 
-open spec fn byte_scalar_range_initialized_v37(
+spec fn byte_scalar_range_initialized_v37(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
 ) -> bool {
     byte_range_initialized_v30(memory, pointer, width)
@@ -70,17 +74,17 @@ open spec fn byte_scalar_range_initialized_v37(
 
 // Invalidates every intersecting complete pointer cell, even when a write's
 // new ordinary octets happen to equal some prior machine representation.
-open spec fn byte_relocations_without_overlap_v37(
+spec fn byte_relocations_without_overlap_v37(
     relocations: Map<int, MemoryRelocationV37>, start: int, width: int,
 ) -> Map<int, MemoryRelocationV37> {
     Map::new(
-        |at: int| relocations.contains_key(at)
-            && !byte_intervals_overlap_v37(at, relocations[at].width, start, width),
+        relocations.dom().filter(|at: int|
+            !byte_intervals_overlap_v37(at, relocations[at].width, start, width)),
         |at: int| relocations[at],
     )
 }
 
-open spec fn byte_pointer_load_valid_v37(
+spec fn byte_pointer_load_valid_v37(
     memory: ByteMemoryV30, address: MemoryPointerV30, width: int, little_endian: bool,
 ) -> bool {
     ordinary_memory_width_v30(width)
@@ -95,7 +99,7 @@ open spec fn byte_pointer_load_valid_v37(
     }
 }
 
-open spec fn byte_pointer_load_v37(
+spec fn byte_pointer_load_v37(
     memory: ByteMemoryV30, address: MemoryPointerV30, width: int, little_endian: bool,
 ) -> MemoryPointerV30
     recommends byte_pointer_load_valid_v37(memory, address, width, little_endian),
@@ -103,7 +107,7 @@ open spec fn byte_pointer_load_v37(
     memory.live[address.allocation].relocations[address.byte_offset].pointer
 }
 
-open spec fn byte_pointer_store_v37(
+spec fn byte_pointer_store_v37(
     memory: ByteMemoryV30, address: MemoryPointerV30, width: int,
     pointer: MemoryPointerV30, little_endian: bool,
 ) -> ByteMemoryV30
@@ -130,7 +134,7 @@ open spec fn byte_pointer_store_v37(
 
 // Source StorageDead/Deinit uses this representation transform only after its
 // own exact source place/lifetime admission. It is not a target-derived grant.
-open spec fn byte_deinitialize_v37(
+spec fn byte_deinitialize_v37(
     memory: ByteMemoryV30, address: MemoryPointerV30, width: int,
 ) -> ByteMemoryV30
     recommends byte_memory_well_formed_v30(memory), byte_range_live_v30(memory, address, width),
@@ -148,7 +152,7 @@ open spec fn byte_deinitialize_v37(
     }), view_contracts: memory.view_contracts }
 }
 
-open spec fn byte_copy_object_valid_v37(
+spec fn byte_copy_object_valid_v37(
     memory: ByteMemoryV30, source: MemoryPointerV30, destination: MemoryPointerV30,
     width: int, source_alignment: int, destination_alignment: int, nonoverlapping: bool,
 ) -> bool {
@@ -162,7 +166,7 @@ open spec fn byte_copy_object_valid_v37(
 // pointers select the same allocation and their ranges overlap. Padding and
 // uninitialized bytes are copied without claiming they contain readable values.
 // A copied partial cell retains its fragments, but gains no complete relocation.
-open spec fn byte_copy_object_v37(
+spec fn byte_copy_object_v37(
     memory: ByteMemoryV30, source: MemoryPointerV30, destination: MemoryPointerV30, width: int,
 ) -> ByteMemoryV30
     recommends byte_memory_well_formed_v30(memory),
@@ -175,7 +179,7 @@ open spec fn byte_copy_object_v37(
 // Source Move consumes the source after taking this snapshot, then writes the
 // destination. Keeping the snapshot independent preserves self/overlap moves
 // without reconstructing initialization or provenance from the consumed bytes.
-open spec fn byte_copy_snapshot_v39(
+spec fn byte_copy_snapshot_v39(
     memory: ByteMemoryV30, snapshot: MemoryBytesV30, source_offset: int,
     destination: MemoryPointerV30, width: int,
 ) -> ByteMemoryV30
@@ -192,7 +196,9 @@ open spec fn byte_copy_snapshot_v39(
         && copied(at) + snapshot.relocations[copied(at)].width <= source_offset + width;
     let retained = byte_relocations_without_overlap_v37(previous.relocations, destination.byte_offset, width);
     let relocations = Map::new(
-        |at: int| retained.contains_key(at) || complete(at),
+        retained.dom().union(snapshot.relocations.dom()
+            .map(|at: int| destination.byte_offset + at - source_offset)
+            .filter(complete)),
         |at: int| if complete(at) { snapshot.relocations[copied(at)] } else { retained[at] },
     );
     ByteMemoryV30 { live: memory.live.insert(destination.allocation, MemoryBytesV30 {

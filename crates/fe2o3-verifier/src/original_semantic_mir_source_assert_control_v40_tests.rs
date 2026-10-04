@@ -335,10 +335,10 @@ fn original_mir_assert_headers_are_independent() {
 #[test]
 fn original_mir_assert_trap_refusal_and_normal_return_remain_distinct() {
     let helper = SOURCE_FUNCTION_V36
-        .split_once("open spec fn invocation_source_byte_trap_v40")
+        .split_once("spec fn invocation_source_byte_trap_v40")
         .unwrap()
         .1
-        .split_once("open spec fn ")
+        .split_once("spec fn ")
         .unwrap()
         .0;
     assert!(helper.contains("!source.machine.valid || source.machine.pc < 0"));

@@ -11,7 +11,7 @@ struct InvocationSourceIntegerCastResultV43 {
     observations: Seq<InvocationSourceEffectObservationV39>,
 }
 
-open spec fn invocation_source_integer_cast_value_v43(
+spec fn invocation_source_integer_cast_value_v43(
     value: MemoryValueV30, input_bits: int, input_signed: bool, output_bits: int,
 ) -> MemoryValueV30 {
     if !(input_bits == 1 || input_bits == 8 || input_bits == 16
@@ -32,7 +32,7 @@ open spec fn invocation_source_integer_cast_value_v43(
     } }
 }
 
-open spec fn invocation_source_integer_cast_v43(
+spec fn invocation_source_integer_cast_v43(
     source: InvocationSourceByteStateV36, cast: InvocationSourceIntegerCastV43,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceIntegerCastResultV43 {

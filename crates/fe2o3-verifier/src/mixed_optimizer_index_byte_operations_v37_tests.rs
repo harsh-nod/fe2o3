@@ -161,22 +161,19 @@ fn byte_index_derivation_resources_scale_linearly_without_hidden_kernel_coordina
 fn byte_execution_context_is_never_fabricated_by_legacy_roots_or_changed_by_frames() {
     let text = super::super::byte_memory_v30::BYTE_MEMORY_V30;
     let legacy = text
-        .split("open spec fn byte_root_frame_v30")
+        .split("spec fn byte_root_frame_v30")
         .nth(1)
         .unwrap()
-        .split("open spec fn byte_execution_well_formed_v37")
+        .split("spec fn byte_execution_well_formed_v37")
         .next()
         .unwrap();
     assert!(legacy.contains("execution: None"));
     assert!(!legacy.contains("Some("));
     for (begin, end) in [
+        ("spec fn byte_enter_frame_v30", "spec fn byte_pop_frame_v30"),
         (
-            "open spec fn byte_enter_frame_v30",
-            "open spec fn byte_pop_frame_v30",
-        ),
-        (
-            "open spec fn byte_pop_frame_v30",
-            "open spec fn byte_allocation_in_frame_v30",
+            "spec fn byte_pop_frame_v30",
+            "spec fn byte_allocation_in_frame_v30",
         ),
     ] {
         let function = text.split(begin).nth(1).unwrap().split(end).next().unwrap();

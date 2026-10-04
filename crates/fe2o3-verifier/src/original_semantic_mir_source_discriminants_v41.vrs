@@ -11,7 +11,7 @@ struct InvocationSourceDiscriminantResultV41 {
     effect: MemoryOperationEffectV30,
 }
 
-open spec fn invocation_source_discriminant_read_v41(
+spec fn invocation_source_discriminant_read_v41(
     source: InvocationSourceByteStateV36, read: InvocationSourceDiscriminantReadV41,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceDiscriminantResultV41 {

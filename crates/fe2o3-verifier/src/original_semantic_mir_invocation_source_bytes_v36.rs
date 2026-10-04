@@ -781,7 +781,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
 
     pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         self.check(out)?;
-        write!(out, "open spec fn invocation_source_byte_event_{}_{}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n", self.root, self.instance).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_byte_event_{}_{}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n", self.root, self.instance).map_err(|_| out.error())?;
         for (block, range) in self.blocks.iter().enumerate() {
             out.budget.charge_work(1)?;
             for (statement, event) in self.events[range.clone()].iter().enumerate() {
@@ -1701,12 +1701,15 @@ struct InvocationSourceObjectV40 {
 
 // Object bindings use the generated original-owner roster. Dynamic allocation
 // currentness is still checked independently at each address use.
-open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
+spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
         && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
             !source.objects.contains_key(local)
-                && matches!(source.machine.values[local], MemoryValueV30::Slice(_)))
+                && match source.machine.values[local] {
+                    MemoryValueV30::Slice(_) => true,
+                    _ => false,
+                })
         && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
             source.machine.values[local] == MemoryValueV30::Undefined
                 && !source.objects.contains_key(local))
@@ -1807,14 +1810,14 @@ enum InvocationSourceByteEventV36 {
     StorageDead { descriptor: int, slot: InvocationSourceSlotV36, local: int },
 }
 
-open spec fn invocation_source_byte_refused_v36(source: InvocationSourceByteStateV36)
+spec fn invocation_source_byte_refused_v36(source: InvocationSourceByteStateV36)
     -> InvocationSourceByteStateV36
 {
     InvocationSourceByteStateV36 { machine: invocation_source_refused_v36(source.machine),
         ..source }
 }
 
-open spec fn invocation_source_byte_value_typed_v36(value: MemoryValueV30, bits: int) -> bool {
+spec fn invocation_source_byte_value_typed_v36(value: MemoryValueV30, bits: int) -> bool {
     match value {
         MemoryValueV30::Unit => bits == 0,
         MemoryValueV30::Scalar(value) =>
@@ -1826,7 +1829,7 @@ open spec fn invocation_source_byte_value_typed_v36(value: MemoryValueV30, bits:
     }
 }
 
-open spec fn invocation_source_byte_put_local_v36(
+spec fn invocation_source_byte_put_local_v36(
     source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -1841,7 +1844,7 @@ open spec fn invocation_source_byte_put_local_v36(
     }
 }
 
-open spec fn invocation_source_byte_slot_v36(
+spec fn invocation_source_byte_slot_v36(
     source: InvocationSourceByteStateV36, descriptor: int, slot: InvocationSourceSlotV36,
     root: int, instance: int,
 ) -> Option<MemoryPointerV30> {
@@ -1867,7 +1870,7 @@ open spec fn invocation_source_byte_slot_v36(
     }
 }
 
-open spec fn invocation_source_byte_address_v36(
+spec fn invocation_source_byte_address_v36(
     source: InvocationSourceByteStateV36, access: InvocationSourceByteAccessV36,
     root: int, instance: int,
 ) -> Option<MemoryPointerV30> {
@@ -1903,7 +1906,7 @@ open spec fn invocation_source_byte_address_v36(
     }
 }
 
-open spec fn invocation_source_byte_deinitialize_v36(
+spec fn invocation_source_byte_deinitialize_v36(
     source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, width: int,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -1923,7 +1926,7 @@ struct InvocationSourceByteEvaluationV36 {
     value: MemoryValueV30,
 }
 
-open spec fn invocation_source_byte_evaluate_v36(
+spec fn invocation_source_byte_evaluate_v36(
     source: InvocationSourceByteStateV36, value: InvocationSourceByteValueV36,
     bits: int, root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
@@ -1984,7 +1987,7 @@ open spec fn invocation_source_byte_evaluate_v36(
 
 // A carrier copy does not read pointee bytes or prove the pointee current. The
 // consuming access, call contract and frame-end escape checks remain distinct.
-open spec fn invocation_source_carrier_evaluate_v36(
+spec fn invocation_source_carrier_evaluate_v36(
     source: InvocationSourceByteStateV36, local: int, moved: bool, metadata_bits: int,
 ) -> InvocationSourceByteEvaluationV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -2011,7 +2014,7 @@ open spec fn invocation_source_carrier_evaluate_v36(
     }
 }
 
-open spec fn invocation_source_operand_evaluate_v36(
+spec fn invocation_source_operand_evaluate_v36(
     source: InvocationSourceByteStateV36, operand: InvocationSourceOperandV36,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
@@ -2030,7 +2033,7 @@ open spec fn invocation_source_operand_evaluate_v36(
 
 // Fresh source allocation is independent of the target and any refinement map.
 // Physical hoisting/reuse must be related to this effect by a separate theorem.
-open spec fn invocation_source_byte_activate_v36(
+spec fn invocation_source_byte_activate_v36(
     source: InvocationSourceByteStateV36, descriptor: int, slot: InvocationSourceSlotV36,
     local: int, root: int, instance: int,
 ) -> InvocationSourceByteStateV36 {
@@ -2060,7 +2063,7 @@ open spec fn invocation_source_byte_activate_v36(
     }
 }
 
-open spec fn invocation_source_byte_end_v36(
+spec fn invocation_source_byte_end_v36(
     source: InvocationSourceByteStateV36, descriptor: int, slot: InvocationSourceSlotV36,
     local: int, root: int, instance: int,
 ) -> InvocationSourceByteStateV36 {
@@ -2085,7 +2088,7 @@ open spec fn invocation_source_byte_end_v36(
     }
 }
 
-open spec fn invocation_source_object_end_v40(
+spec fn invocation_source_object_end_v40(
     source: InvocationSourceByteStateV36, local: int, root: int, instance: int,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -2098,7 +2101,7 @@ open spec fn invocation_source_object_end_v40(
     }
 }
 
-open spec fn invocation_source_object_activate_v40(
+spec fn invocation_source_object_activate_v40(
     source: InvocationSourceByteStateV36, descriptor: int, slot: InvocationSourceSlotV36,
     local: int, activation: int, root: int, instance: int,
 ) -> InvocationSourceByteStateV36 {
@@ -2118,7 +2121,7 @@ open spec fn invocation_source_object_activate_v40(
     }
 }
 
-open spec fn invocation_source_byte_step_v36(
+spec fn invocation_source_byte_step_v36(
     source: InvocationSourceByteStateV36, event: InvocationSourceByteEventV36,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {

@@ -53,7 +53,7 @@ pub(in crate::mixed_optimizer_refinement_v26) fn generate(
         };
         emit!(
             out,
-            "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {{\n{}\n// V30 concrete original private storage and exact actual secondary SSA graph.\nopen spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n",
+            "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {{\n{}\n// V30 concrete original private storage and exact actual secondary SSA graph.\nspec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n",
             cfg_trace::PRELUDE
         );
         select_prelude(input, output, out)?;

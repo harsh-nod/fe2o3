@@ -128,7 +128,7 @@ pub(super) fn generate(
 ) -> Result<()> {
     emit!(
         out,
-        "open spec fn aggregate_related_v30(n: AggregateStateV30, o: AggregateStateV30) -> bool {{\n n.values.len() == {} && o.values.len() == {}\n && n.cells.len() == {} && o.cells.len() == {}\n && n.initialized.len() == {} && o.initialized.len() == {}\n && n.pc == o.pc && -1 <= n.pc < {} && n.external == o.external",
+        "spec fn aggregate_related_v30(n: AggregateStateV30, o: AggregateStateV30) -> bool {{\n n.values.len() == {} && o.values.len() == {}\n && n.cells.len() == {} && o.cells.len() == {}\n && n.initialized.len() == {} && o.initialized.len() == {}\n && n.pc == o.pc && -1 <= n.pc < {} && n.external == o.external",
         memory.source_values,
         output.definitions().len(),
         memory.slots,
@@ -177,7 +177,7 @@ pub(super) fn generate(
     // Every actual argument is mapped by its checked original SSA definition.
     emit!(
         out,
-        "open spec fn aggregate_initial_output_v30(n: AggregateStateV30) -> AggregateStateV30\n recommends n.values.len() == {},\n{{\n let values = Seq::new({}, |i: int| ",
+        "spec fn aggregate_initial_output_v30(n: AggregateStateV30) -> AggregateStateV30\n recommends n.values.len() == {},\n{{\n let values = Seq::new({}, |i: int| ",
         memory.source_values,
         output.definitions().len()
     );

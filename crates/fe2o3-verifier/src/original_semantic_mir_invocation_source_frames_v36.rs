@@ -395,7 +395,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 .retain_query_resource_error_v18(Resource::Accounting)
                 .into());
         }
-        write!(out, "open spec fn invocation_source_return_{}_{}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceByteReturnV36 {{\n if !source.machine.valid || !byte_frame_runtime_well_formed_v30(source.machine.frames) || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.owners.len()).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_return_{}_{}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceByteReturnV36 {{\n if !source.machine.valid || !byte_frame_runtime_well_formed_v30(source.machine.frames) || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.owners.len()).map_err(|_| out.error())?;
         for (at, owner) in self.owners.iter().enumerate() {
             out.budget.charge_work(1)?;
             write!(
@@ -569,14 +569,14 @@ struct InvocationSourceReturnDestinationV42 {
     descriptor: Option<InvocationSourceDescriptorRecipeV51>,
 }
 
-open spec fn invocation_source_return_refused_v36(source: InvocationSourceByteStateV36)
+spec fn invocation_source_return_refused_v36(source: InvocationSourceByteStateV36)
     -> InvocationSourceByteReturnV36
 {
     InvocationSourceByteReturnV36 { source: invocation_source_byte_refused_v36(source),
         returned: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
 }
 
-open spec fn invocation_source_return_value_defined_v42(value: InvocationSourceValueV42) -> bool {
+spec fn invocation_source_return_value_defined_v42(value: InvocationSourceValueV42) -> bool {
     match value {
         InvocationSourceValueV42::Carrier(value) => match value {
             MemoryValueV30::Undefined => false, _ => true },
@@ -586,7 +586,7 @@ open spec fn invocation_source_return_value_defined_v42(value: InvocationSourceV
     }
 }
 
-open spec fn invocation_source_return_install_v42(
+spec fn invocation_source_return_install_v42(
     source: InvocationSourceByteStateV36, destination: InvocationSourceReturnDestinationV42,
     value: InvocationSourceValueV42, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -644,7 +644,7 @@ open spec fn invocation_source_return_install_v42(
     } }
 }
 
-open spec fn invocation_source_snapshot_escapes_frame_v42(
+spec fn invocation_source_snapshot_escapes_frame_v42(
     value: InvocationSourceValueV42, frame: MemoryDynamicFrameV30,
 ) -> bool {
     match value {
@@ -657,7 +657,7 @@ open spec fn invocation_source_snapshot_escapes_frame_v42(
     }
 }
 
-open spec fn invocation_source_value_escapes_frame_v36(
+spec fn invocation_source_value_escapes_frame_v36(
     value: MemoryValueV30, frame: MemoryDynamicFrameV30,
 ) -> bool {
     match value {
@@ -683,7 +683,7 @@ proof fn invocation_source_enum_return_cannot_hide_a_callee_pointer_v50(
 
 // Initialized pointer fragments retain nominal provenance even when they do
 // not authorize a complete pointer load. Deinitialized historical tokens do not.
-open spec fn invocation_source_memory_escapes_frame_v37(
+spec fn invocation_source_memory_escapes_frame_v37(
     memory: ByteMemoryV30, frame: MemoryDynamicFrameV30,
 ) -> bool {
     exists|allocation: MemoryAllocationV30, at: int|
@@ -702,7 +702,7 @@ open spec fn invocation_source_memory_escapes_frame_v37(
 
 // Called only by the exact source-instance wrapper. The independent statement
 // dispatcher still admits each stored-pointer operation separately.
-open spec fn invocation_source_return_v36(
+spec fn invocation_source_return_v36(
     source: InvocationSourceByteStateV36, begin: int, end: int,
     returned: InvocationSourceValueV42, destination: Option<InvocationSourceReturnDestinationV42>, continuation: int,
     little_endian: bool,
@@ -749,13 +749,13 @@ open spec fn invocation_source_return_v36(
                         generations: source.machine.generations,
                         frames: byte_pop_frame_v30(source.machine.frames), valid: true },
                     slots: Map::new(
-                        |descriptor: int| source.slots.contains_key(descriptor)
-                            && !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame),
+                        source.slots.dom().filter(|descriptor: int|
+                            !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame)),
                         |descriptor: int| source.slots[descriptor],
                     ),
                     objects: Map::new(
-                        |local: int| source.objects.contains_key(local)
-                            && !byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame),
+                        source.objects.dom().filter(|local: int|
+                            !byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame)),
                         |local: int| source.objects[local],
                     ),
                     logical,

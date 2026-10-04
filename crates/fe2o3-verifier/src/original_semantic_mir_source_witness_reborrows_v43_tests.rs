@@ -306,14 +306,11 @@ fn run(depth: usize, work: usize, storage: usize) -> (Result<()>, usize, usize, 
                 program.emit(out)?;
                 for root in 0..2 {
                     for instance in 1..=2 {
-                        let name = format!(
-                            "open spec fn invocation_source_byte_event_{root}_{instance}_v36"
-                        );
+                        let name =
+                            format!("spec fn invocation_source_byte_event_{root}_{instance}_v36");
                         let rest =
                             &out.text[out.text.find(&name).expect("original helper events")..];
-                        let end = rest[1..]
-                            .find("open spec fn ")
-                            .map_or(rest.len(), |at| at + 1);
+                        let end = rest[1..].find("spec fn ").map_or(rest.len(), |at| at + 1);
                         let table = &rest[..end];
                         assert_eq!(
                             table
@@ -426,10 +423,10 @@ fn original_witness_reborrow_emission_has_independent_text_and_resource_oracle()
 fn original_witness_reborrow_runtime_preserves_origin_version_frame_and_exact_parent_site() {
     let model = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
     let start = model
-        .find("open spec fn invocation_source_reborrow_witness_v43(")
+        .find("spec fn invocation_source_reborrow_witness_v43(")
         .unwrap();
     let end = model[start..]
-        .find("open spec fn invocation_source_read_witness_v38(")
+        .find("spec fn invocation_source_read_witness_v38(")
         .unwrap()
         + start;
     let body = &model[start..end];

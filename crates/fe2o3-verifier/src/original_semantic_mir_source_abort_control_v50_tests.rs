@@ -102,7 +102,7 @@ fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
                 program.emit(out)?;
                 let emitted = &out.text[start..];
                 let closed = emitted.split('\n').next().unwrap();
-                assert!(closed.starts_with("open spec fn invocation_source_abort_site_v50"));
+                assert!(closed.starts_with("spec fn invocation_source_abort_site_v50"));
                 assert_eq!(closed.matches(" || pc == ").count(), 4);
                 for pc in aborts.into_iter().flatten() {
                     assert!(closed.contains(&format!(" || pc == {pc}int")));

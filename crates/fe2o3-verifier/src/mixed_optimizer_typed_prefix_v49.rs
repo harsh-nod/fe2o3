@@ -311,7 +311,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         );
         emit!(
             out,
-            "open spec fn typed_prefix_refuse_v49(cursor: TypedPrefixCursorV49) -> TypedPrefixStepV49 {{ TypedPrefixStepV49 {{ cursor: TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..cursor.micro.state }}, ..cursor.micro }}, ..cursor }}, observations: seq![], returned: seq![] }} }}\n"
+            "spec fn typed_prefix_refuse_v49(cursor: TypedPrefixCursorV49) -> TypedPrefixStepV49 {{ TypedPrefixStepV49 {{ cursor: TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..cursor.micro.state }}, ..cursor.micro }}, ..cursor }}, observations: seq![], returned: seq![] }} }}\n"
         );
         self.emit_stage_cursors(AllocationSideV48::Prefix, &self.segments, out)
     }
@@ -357,7 +357,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         self.check(out)?;
         emit!(
             out,
-            "open spec fn typed_{stage}_head_v49(block: int) -> Option<int> {{\n"
+            "spec fn typed_{stage}_head_v49(block: int) -> Option<int> {{\n"
         );
         for (block, head) in self.heads.iter().enumerate() {
             self.bridge.charge(1, out)?;
@@ -375,7 +375,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
                 .ok_or(Resource::Arithmetic)?;
             emit!(
                 out,
-                "open spec fn typed_{stage}_observation_{function}_v49(block: int, index: int, observation: MemoryOperationObservationV30, little_endian: bool) -> bool {{\n observation.before.valid && observation.after.valid && observation.before.pc == block && (\n"
+                "spec fn typed_{stage}_observation_{function}_v49(block: int, index: int, observation: MemoryOperationObservationV30, little_endian: bool) -> bool {{\n observation.before.valid && observation.after.valid && observation.before.pc == block && (\n"
             );
             for block in row.blocks.clone() {
                 for (index, operation) in output.blocks()[block].operations.clone().enumerate() {
@@ -389,12 +389,12 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             emit!(out, " {{ false }})\n}}\n");
             emit!(
                 out,
-                "open spec fn typed_{stage}_begin_{function}_v49(state: MemoryStateV30) -> TypedPrefixCursorV49 {{\n if !state.valid || state.pc < 0 {{ TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state, observations: seq![], next_operation: -1 }}, segment: state.pc }} }} else {{ match typed_{stage}_head_v49(state.pc) {{ Some(segment) => TypedPrefixCursorV49 {{ micro: byte_micro_begin_{namespace}_v30(state), segment }}, None => TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..state }}, observations: seq![], next_operation: -1 }}, segment: -3 }} }} }}\n}}\n"
+                "spec fn typed_{stage}_begin_{function}_v49(state: MemoryStateV30) -> TypedPrefixCursorV49 {{\n if !state.valid || state.pc < 0 {{ TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state, observations: seq![], next_operation: -1 }}, segment: state.pc }} }} else {{ match typed_{stage}_head_v49(state.pc) {{ Some(segment) => TypedPrefixCursorV49 {{ micro: byte_micro_begin_{namespace}_v30(state), segment }}, None => TypedPrefixCursorV49 {{ micro: MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..state }}, observations: seq![], next_operation: -1 }}, segment: -3 }} }} }}\n}}\n"
             );
             self.emit_cursor_valid(stage, output, segments, function, out)?;
             emit!(
                 out,
-                "open spec fn typed_{stage}_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> TypedPrefixStepV49 {{\n if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ TypedPrefixStepV49 {{ cursor, observations: seq![], returned: seq![] }} }} else if !typed_{stage}_cursor_valid_{function}_v49(cursor, little_endian) {{ typed_prefix_refuse_v49(cursor) }} else {{\n"
+                "spec fn typed_{stage}_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> TypedPrefixStepV49 {{\n if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ TypedPrefixStepV49 {{ cursor, observations: seq![], returned: seq![] }} }} else if !typed_{stage}_cursor_valid_{function}_v49(cursor, little_endian) {{ typed_prefix_refuse_v49(cursor) }} else {{\n"
             );
             for (original, segment) in segments.iter().enumerate() {
                 let Some(segment) = segment else {
@@ -443,7 +443,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let row = &output.functions()[function];
         emit!(
             out,
-            "open spec fn typed_{stage}_cursor_valid_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let m = cursor.micro;\n m.state.valid && m.state.values.len() == {} && byte_state_memory_well_formed_v30(m.state) && (if m.state.pc < 0 {{ (m.state.pc == -1 || m.state.pc == -2) && cursor.segment == m.state.pc && m.next_operation == -1 && m.observations.len() == 0 }} else {{\n",
+            "spec fn typed_{stage}_cursor_valid_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let m = cursor.micro;\n m.state.valid && m.state.values.len() == {} && byte_state_memory_well_formed_v30(m.state) && (if m.state.pc < 0 {{ (m.state.pc == -1 || m.state.pc == -2) && cursor.segment == m.state.pc && m.next_operation == -1 && m.observations.len() == 0 }} else {{\n",
             output.definitions().len()
         );
         for (original, segment) in segments.iter().enumerate() {

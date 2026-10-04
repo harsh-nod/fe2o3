@@ -451,7 +451,7 @@ pub(super) fn generate(
         out.budget.charge_work(1)?;
         emit!(
             out,
-            "open spec fn cfg_live_{target}_v26(base: Seq<int>, optimized: Seq<int>{op_parameter}) -> bool {{\n base.len() == {} && optimized.len() == {}",
+            "spec fn cfg_live_{target}_v26(base: Seq<int>, optimized: Seq<int>{op_parameter}) -> bool {{\n base.len() == {} && optimized.len() == {}",
             input.definitions().len(),
             output.definitions().len()
         );
@@ -479,7 +479,7 @@ pub(super) fn generate(
     }
     emit!(
         out,
-        "open spec fn cfg_related_v26(n: CfgStateV26, o: CfgStateV26{op_parameter}) -> bool {{\n n.values.len() == {} && o.values.len() == {} && n.memory == o.memory\n && ((n.pc == -1 && o.pc == -1)",
+        "spec fn cfg_related_v26(n: CfgStateV26, o: CfgStateV26{op_parameter}) -> bool {{\n n.values.len() == {} && o.values.len() == {} && n.memory == o.memory\n && ((n.pc == -1 && o.pc == -1)",
         input.definitions().len(),
         output.definitions().len()
     );

@@ -223,7 +223,7 @@ fn generate_refinement_inner_v49(
         fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 8,
         fe2o3_kernel_ir::FormalIndexWidth::Unknown => return Err(mismatch()),
     };
-    write!(out, "open spec fn invocation_runtime_index_bytes_v36() -> int {{ {index_bytes} }}\nopen spec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}\n", matches!(endianness, fe2o3_kernel_ir::EndiannessV2::Little)).map_err(|_| out.error())?;
+    write!(out, "spec fn invocation_runtime_index_bytes_v36() -> int {{ {index_bytes} }}\nspec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}\n", matches!(endianness, fe2o3_kernel_ir::EndiannessV2::Little)).map_err(|_| out.error())?;
     for (root, (function, launch)) in byte_actual.iter().zip(launches).enumerate() {
         out.budget.charge_work(6)?;
         let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
@@ -236,9 +236,9 @@ fn generate_refinement_inner_v49(
         emitted.map_err(|error| {
             out.source_section_error(error, "original canonical byte functions")
         })?;
-        write!(out, "open spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{}, {}, {}]) }}\n", extents[0], extents[1], extents[2]).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{}, {}, {}]) }}\n", extents[0], extents[1], extents[2]).map_err(|_| out.error())?;
         emit_execution_v37(relation, root, out)?;
-        write!(out, "open spec fn invocation_source_initial_runtime_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationSourceByteStateV36 {{ invocation_source_byte_initial_{root}_v36(arguments, external, execution, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_source_block_runtime_{root}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceBlockResultV36 {{ invocation_source_byte_block_{root}_v36(source, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_actual_micro_runtime_{root}_v36(cursor: MemoryMicroStateV30) -> MemoryMicroResultV30 {{ byte_micro_step_{root}_v30(cursor, invocation_runtime_little_endian_v36()) }}\n").map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_initial_runtime_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationSourceByteStateV36 {{ invocation_source_byte_initial_{root}_v36(arguments, external, execution, invocation_runtime_little_endian_v36()) }}\nspec fn invocation_source_block_runtime_{root}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceBlockResultV36 {{ invocation_source_byte_block_{root}_v36(source, invocation_runtime_little_endian_v36()) }}\nspec fn invocation_actual_micro_runtime_{root}_v36(cursor: MemoryMicroStateV30) -> MemoryMicroResultV30 {{ byte_micro_step_{root}_v30(cursor, invocation_runtime_little_endian_v36()) }}\n").map_err(|_| out.error())?;
     }
     paired.emit(out).map_err(|error| {
         out.source_section_error(error, "original paired invocation obligations")
@@ -285,7 +285,7 @@ fn emit_execution_v37(
         .ok_or_else(mismatch)?
         .source_contract()
         .launch();
-    write!(out, "open spec fn invocation_runtime_execution_{root}_v37(execution: MemoryExecutionContextV37) -> bool {{\n byte_execution_well_formed_v37(execution) && execution.rank == invocation_runtime_launch_{root}_v36().0 && execution.extent == invocation_runtime_launch_{root}_v36().1\n && execution.workgroup[0] * execution.workgroup[1] * execution.workgroup[2] <= {}\n && (forall|axis: int| 0 <= axis < 3 ==> execution.extent[axis] <= memory_value_modulus_v30(invocation_runtime_index_bytes_v36()) && execution.workgroup[axis] < memory_value_modulus_v30(invocation_runtime_index_bytes_v36()))", fe2o3_mir_model::semantic_mir_v1::MAX_SEMANTIC_WORKGROUP_THREADS_V1).map_err(|_| out.error())?;
+    write!(out, "spec fn invocation_runtime_execution_{root}_v37(execution: MemoryExecutionContextV37) -> bool {{\n byte_execution_well_formed_v37(execution) && execution.rank == invocation_runtime_launch_{root}_v36().0 && execution.extent == invocation_runtime_launch_{root}_v36().1\n && execution.workgroup[0] * execution.workgroup[1] * execution.workgroup[2] <= {}\n && (forall|axis: int| 0 <= axis < 3 ==> execution.extent[axis] <= memory_value_modulus_v30(invocation_runtime_index_bytes_v36()) && execution.workgroup[axis] < memory_value_modulus_v30(invocation_runtime_index_bytes_v36()))", fe2o3_mir_model::semantic_mir_v1::MAX_SEMANTIC_WORKGROUP_THREADS_V1).map_err(|_| out.error())?;
     if let Some(required) = launch.and_then(|launch| launch.required()) {
         out.budget.charge_work(3)?;
         let [x, y, z] = required.as_array();

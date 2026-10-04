@@ -3,7 +3,7 @@ struct InvocationSourceDescriptorSnapshotV53 {
     reference: InvocationSourceDescriptorReferenceV51,
 }
 
-open spec fn invocation_source_descriptor_snapshot_current_v53(
+spec fn invocation_source_descriptor_snapshot_current_v53(
     source: InvocationSourceByteStateV36, snapshot: InvocationSourceDescriptorSnapshotV53,
     recipe: InvocationSourceDescriptorRecipeV51,
 ) -> bool {
@@ -27,7 +27,7 @@ open spec fn invocation_source_descriptor_snapshot_current_v53(
                     && source.machine.frames.active[i] == reference.loan.frame })
 }
 
-open spec fn invocation_source_descriptor_snapshot_v53(
+spec fn invocation_source_descriptor_snapshot_v53(
     source: InvocationSourceByteStateV36, local: int,
     recipe: InvocationSourceDescriptorRecipeV51,
 ) -> Option<InvocationSourceDescriptorSnapshotV53> {
@@ -41,7 +41,7 @@ open spec fn invocation_source_descriptor_snapshot_v53(
     }
 }
 
-open spec fn invocation_source_descriptor_snapshot_install_v53(
+spec fn invocation_source_descriptor_snapshot_install_v53(
     source: InvocationSourceByteStateV36, local: int,
     recipe: InvocationSourceDescriptorRecipeV51, snapshot: InvocationSourceDescriptorSnapshotV53,
 ) -> InvocationSourceByteStateV36 {
@@ -54,14 +54,14 @@ open spec fn invocation_source_descriptor_snapshot_install_v53(
     }
 }
 
-open spec fn invocation_source_descriptor_snapshot_escapes_frame_v53(
+spec fn invocation_source_descriptor_snapshot_escapes_frame_v53(
     snapshot: InvocationSourceDescriptorSnapshotV53, frame: MemoryDynamicFrameV30,
 ) -> bool {
     snapshot.reference.loan.frame == frame
         || invocation_source_value_escapes_frame_v36(snapshot.value, frame)
 }
 
-open spec fn invocation_source_descriptor_evaluate_v53(
+spec fn invocation_source_descriptor_evaluate_v53(
     source: InvocationSourceByteStateV36, local: int,
     recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
 ) -> InvocationSourceValueEvaluationV42 {

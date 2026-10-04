@@ -30,6 +30,7 @@ include!("mixed_optimizer_emitted_byte_functions_v55_tests.rs");
 include!("mixed_optimizer_transition_body_v56_tests.rs");
 include!("mixed_optimizer_byte_value_types_v57_tests.rs");
 include!("mixed_optimizer_byte_state_results_v58_tests.rs");
+include!("mixed_optimizer_verus_compatibility_v62_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {

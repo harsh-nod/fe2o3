@@ -331,7 +331,7 @@ fn generate_profile(
         );
         emit!(
             out,
-            "open spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
+            "spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
         );
         select_prelude(input, output, out)?;
         for width in [8, 16, 32, 64] {
@@ -348,7 +348,7 @@ fn generate_profile(
                 let label = side.label();
                 emit!(
                     out,
-                    "open spec fn block_{target}_{label}({PARAMETERS}) -> Seq<int>\n recommends base.len() == {},\n{{\n",
+                    "spec fn block_{target}_{label}({PARAMETERS}) -> Seq<int>\n recommends base.len() == {},\n{{\n",
                     input.definitions().len()
                 );
                 body(input, output, &plan, original, target, side, false, out)?;
@@ -566,7 +566,7 @@ fn opaque_total(kind: &OperationKind) -> bool {
     total(kind) && !matches!(kind, OperationKind::Select { .. })
 }
 
-const SELECT_PRELUDE: &str = "// Select uses the exact boolean branch and preserves the chosen value's representation.\nopen spec fn select_value_v28(condition: int, when_true: int, when_false: int) -> int { if condition == 1int { when_true } else { when_false } }\nproof fn select_same_value_v28(condition: int, value: int)\n ensures select_value_v28(condition, value, value) == value,\n{}\n";
+const SELECT_PRELUDE: &str = "// Select uses the exact boolean branch and preserves the chosen value's representation.\nspec fn select_value_v28(condition: int, when_true: int, when_false: int) -> int { if condition == 1int { when_true } else { when_false } }\nproof fn select_same_value_v28(condition: int, value: int)\n ensures select_value_v28(condition, value, value) == value,\n{}\n";
 
 fn select_prelude(
     input: &Inventory<'_>,

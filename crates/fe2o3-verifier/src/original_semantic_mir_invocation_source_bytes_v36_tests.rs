@@ -83,10 +83,10 @@ fn original_mir_stable_reference_currentness_requires_version_frame_and_exact_bo
         );
     }
     let initial = text
-        .split("open spec fn invocation_source_logical_initial_v38")
+        .split("spec fn invocation_source_logical_initial_v38")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_logical_well_formed_v38")
+        .split("spec fn invocation_source_logical_well_formed_v38")
         .next()
         .unwrap();
     assert!(initial.contains("witnesses: Map::empty(), references: Map::empty()"));
@@ -110,7 +110,7 @@ const LIMIT: usize = 100_000_000;
 fn original_mir_witness_transfers_preserve_full_nominal_loan_and_consume_before_write() {
     let text = SOURCE_BYTES_V36;
     let transfer = text
-        .split_once("open spec fn invocation_source_transfer_witness_v40")
+        .split_once("spec fn invocation_source_transfer_witness_v40")
         .unwrap()
         .1
         .split_once("proof fn invocation_source_same_value_write_invalidates_reference_v38")
@@ -390,10 +390,10 @@ fn original_mir_typed_operand_emission_keeps_pointer_slice_and_unit_tags_distinc
         ));
         assert!(out.text.contains("bits: 0int"));
         let carrier = SOURCE_BYTES_V36
-            .split("open spec fn invocation_source_carrier_evaluate_v36(")
+            .split("spec fn invocation_source_carrier_evaluate_v36(")
             .nth(1)
             .unwrap()
-            .split("open spec fn invocation_source_operand_evaluate_v36(")
+            .split("spec fn invocation_source_operand_evaluate_v36(")
             .next()
             .unwrap();
         let capture = carrier
@@ -493,7 +493,7 @@ fn original_mir_slice_operand_metadata_uses_unsigned_archived_scalar_pair() {
 #[test]
 fn original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_state() {
     let predicate = SOURCE_BYTES_V36
-        .split("open spec fn invocation_source_byte_state_well_formed_v36(")
+        .split("spec fn invocation_source_byte_state_well_formed_v36(")
         .nth(1)
         .unwrap()
         .split("enum InvocationSourceByteBaseV36")
@@ -510,10 +510,10 @@ fn original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_stat
     assert!(predicate.contains("source.slots[left].allocation != source.slots[right].allocation"));
     assert!(!predicate.contains("target"));
     let activate = SOURCE_BYTES_V36
-        .split("open spec fn invocation_source_byte_activate_v36(")
+        .split("spec fn invocation_source_byte_activate_v36(")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_byte_end_v36(")
+        .split("spec fn invocation_source_byte_end_v36(")
         .next()
         .unwrap();
     assert!(activate.contains("source.slots.contains_key(descriptor)"));
@@ -522,10 +522,10 @@ fn original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_stat
     );
     assert!(activate.contains("slots: source.slots.insert(descriptor"));
     let end = SOURCE_BYTES_V36
-        .split("open spec fn invocation_source_byte_end_v36(")
+        .split("spec fn invocation_source_byte_end_v36(")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_byte_step_v36(")
+        .split("spec fn invocation_source_byte_step_v36(")
         .next()
         .unwrap();
     assert!(end.contains("slots: cleared.slots.remove(descriptor)"));
@@ -557,10 +557,10 @@ fn original_mir_typed_operand_extraction_has_exact_and_one_short_resources() {
 #[test]
 fn original_mir_storage_dead_checks_all_initialized_pointer_fragments_before_deallocation() {
     let end = SOURCE_BYTES_V36
-        .split_once("open spec fn invocation_source_byte_end_v36(")
+        .split_once("spec fn invocation_source_byte_end_v36(")
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap();
     let census = end
@@ -577,7 +577,7 @@ fn original_mir_storage_dead_checks_all_initialized_pointer_fragments_before_dea
     assert!(end.contains("else { invocation_source_byte_refused_v36(cleared) }"));
     let shared = include_str!("original_semantic_mir_invocation_bytes_v36.rs");
     let census = shared
-        .split_once("open spec fn invocation_memory_names_allocation_v37(")
+        .split_once("spec fn invocation_memory_names_allocation_v37(")
         .unwrap()
         .1
         .split("struct InvocationByteLifetimeV36")

@@ -191,7 +191,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let row = &input.functions()[function];
         emit!(
             out,
-            "open spec fn typed_licm_cursor_related_{function}_v49(before_cursor: TypedPrefixCursorV49, after_cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let before = before_cursor.micro.state; let after = after_cursor.micro.state;\n typed_prefix_cursor_valid_{function}_v49(before_cursor, little_endian) && typed_relocated_cursor_valid_{function}_v49(after_cursor, little_endian)\n && before_cursor.segment == after_cursor.segment && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n"
+            "spec fn typed_licm_cursor_related_{function}_v49(before_cursor: TypedPrefixCursorV49, after_cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let before = before_cursor.micro.state; let after = after_cursor.micro.state;\n typed_prefix_cursor_valid_{function}_v49(before_cursor, little_endian) && typed_relocated_cursor_valid_{function}_v49(after_cursor, little_endian)\n && before_cursor.segment == after_cursor.segment && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n"
         );
         super::models::with_dominance(output, function, out, |output_flow, out| {
             let text = std::mem::take(&mut out.text);
@@ -284,7 +284,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let row = &input.functions()[function];
         emit!(
             out,
-            "open spec fn typed_relocated_actual_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> CfgStepV26<TypedPrefixCursorV49, TypedPrefixEventV49> {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ CfgStepV26 {{ state: cursor, events: seq![], halted: true }} }} else {{ let result = typed_relocated_step_{function}_v49(cursor, little_endian); CfgStepV26 {{ state: result.cursor, events: seq![typed_relocated_event_v49(result)], halted: !result.cursor.micro.state.valid || result.cursor.micro.state.pc < 0 }} }} }}\n"
+            "spec fn typed_relocated_actual_step_{function}_v49(cursor: TypedPrefixCursorV49, little_endian: bool) -> CfgStepV26<TypedPrefixCursorV49, TypedPrefixEventV49> {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 {{ CfgStepV26 {{ state: cursor, events: seq![], halted: true }} }} else {{ let result = typed_relocated_step_{function}_v49(cursor, little_endian); CfgStepV26 {{ state: result.cursor, events: seq![typed_relocated_event_v49(result)], halted: !result.cursor.micro.state.valid || result.cursor.micro.state.pc < 0 }} }} }}\n"
         );
         for (original, segment) in self.segments.iter().enumerate() {
             let Some(segment) = segment else {
@@ -301,7 +301,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         }
         emit!(
             out,
-            "open spec fn typed_composed_related_{function}_v49(original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49, little_endian: bool) -> bool {{ typed_prefix_related_{function}_v49(original, middle, little_endian) && typed_licm_cursor_related_{function}_v49(middle, actual, little_endian) }}\nproof fn typed_composed_step_{function}_v49(original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49, little_endian: bool)\n requires typed_composed_related_{function}_v49(original, middle, actual, little_endian), typed_prefix_input_defined_{function}_v49(original, little_endian, 1),\n ensures typed_composed_related_{function}_v49(typed_prefix_source_step_{function}_v49(original, little_endian).state, typed_prefix_actual_step_{function}_v49(middle, little_endian).state, typed_relocated_actual_step_{function}_v49(actual, little_endian).state, little_endian),\n typed_prefix_source_step_{function}_v49(original, little_endian).events == typed_relocated_actual_step_{function}_v49(actual, little_endian).events,\n typed_prefix_source_step_{function}_v49(original, little_endian).halted == typed_relocated_actual_step_{function}_v49(actual, little_endian).halted,\n{{ typed_prefix_step_relation_{function}_v49(original, middle, little_endian);\n if original.pc >= 0 {{\n"
+            "spec fn typed_composed_related_{function}_v49(original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49, little_endian: bool) -> bool {{ typed_prefix_related_{function}_v49(original, middle, little_endian) && typed_licm_cursor_related_{function}_v49(middle, actual, little_endian) }}\nproof fn typed_composed_step_{function}_v49(original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49, little_endian: bool)\n requires typed_composed_related_{function}_v49(original, middle, actual, little_endian), typed_prefix_input_defined_{function}_v49(original, little_endian, 1),\n ensures typed_composed_related_{function}_v49(typed_prefix_source_step_{function}_v49(original, little_endian).state, typed_prefix_actual_step_{function}_v49(middle, little_endian).state, typed_relocated_actual_step_{function}_v49(actual, little_endian).state, little_endian),\n typed_prefix_source_step_{function}_v49(original, little_endian).events == typed_relocated_actual_step_{function}_v49(actual, little_endian).events,\n typed_prefix_source_step_{function}_v49(original, little_endian).halted == typed_relocated_actual_step_{function}_v49(actual, little_endian).halted,\n{{ typed_prefix_step_relation_{function}_v49(original, middle, little_endian);\n if original.pc >= 0 {{\n"
         );
         for (original, segment) in self.segments.iter().enumerate() {
             if segment.is_some_and(|s| row.blocks.contains(&s.output_block)) {
@@ -335,7 +335,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         let entry = output.functions()[function].blocks.start;
         emit!(
             out,
-            "open spec fn typed_relocated_entry_{function}_v49(before: MemoryStateV30) -> TypedPrefixCursorV49 {{\n let values = Seq::new({}, |i: int| MemoryValueV30::Undefined);\n",
+            "spec fn typed_relocated_entry_{function}_v49(before: MemoryStateV30) -> TypedPrefixCursorV49 {{\n let values = Seq::new({}, |i: int| MemoryValueV30::Undefined);\n",
             output.definitions().len()
         );
         for definition in middle_row.definitions.clone() {
@@ -410,7 +410,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             self.emit_stage_cursors(AllocationSideV48::Relocated, &relocated, out)?;
             emit!(
                 out,
-                "open spec fn typed_relocated_event_v49(result: TypedPrefixStepV49) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_2_v48(result.observations), returned: result.returned, terminal: if !result.cursor.micro.state.valid {{ -3 }} else if result.cursor.micro.state.pc == -2 {{ -2 }} else if result.cursor.micro.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
+                "spec fn typed_relocated_event_v49(result: TypedPrefixStepV49) -> TypedPrefixEventV49 {{ TypedPrefixEventV49 {{ observations: typed_observations_2_v48(result.observations), returned: result.returned, terminal: if !result.cursor.micro.state.valid {{ -3 }} else if result.cursor.micro.state.pc == -2 {{ -2 }} else if result.cursor.micro.state.pc == -1 {{ -1 }} else {{ 0 }} }} }}\n"
             );
             for (function, row) in self.bridge.prefix.output().functions().iter().enumerate() {
                 self.bridge.charge(1, out)?;

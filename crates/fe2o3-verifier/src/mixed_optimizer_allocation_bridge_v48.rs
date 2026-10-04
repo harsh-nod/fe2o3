@@ -334,7 +334,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         };
         emit!(
             out,
-            "open spec fn typed_allocation_environment_{namespace}_v48(s: MemoryStateV30) -> Map<MemoryPrivateSiteV30, MemoryValueV30> {{\n let environment = Map::empty();\n"
+            "spec fn typed_allocation_environment_{namespace}_v48(s: MemoryStateV30) -> Map<MemoryPrivateSiteV30, MemoryValueV30> {{\n let environment = Map::empty();\n"
         );
         for row in &self.rows {
             self.charge(2, out)?;
@@ -354,7 +354,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         }
         emit!(
             out,
-            " environment\n}}\nopen spec fn typed_allocation_environment_shape_{namespace}_v48(s: MemoryStateV30) -> bool {{ s.values.len() == {} }}\n",
+            " environment\n}}\nspec fn typed_allocation_environment_shape_{namespace}_v48(s: MemoryStateV30) -> bool {{ s.values.len() == {} }}\n",
             self.inventory(side).definitions().len()
         );
         self.check(out)
@@ -370,7 +370,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         self.emit_environment(side, namespace, out)?;
         emit!(
             out,
-            "open spec fn typed_original_operation_{namespace}_v48(operation: MemorySourceOperationV30) -> Option<int> {{\n"
+            "spec fn typed_original_operation_{namespace}_v48(operation: MemorySourceOperationV30) -> Option<int> {{\n"
         );
         for (ordinal, row) in self.inventory(side).operations().iter().enumerate() {
             self.charge(2, out)?;
@@ -394,15 +394,15 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         emit!(out, " {{ None }}\n}}\n");
         emit!(
             out,
-            "open spec fn typed_event_state_{namespace}_v48(s: MemoryStateV30) -> TypedEventStateV48 {{ TypedEventStateV48 {{ memory: s.memory, generations: s.generations, frames: s.frames, allocations: typed_allocation_environment_{namespace}_v48(s), valid: s.valid }} }}\n"
+            "spec fn typed_event_state_{namespace}_v48(s: MemoryStateV30) -> TypedEventStateV48 {{ TypedEventStateV48 {{ memory: s.memory, generations: s.generations, frames: s.frames, allocations: typed_allocation_environment_{namespace}_v48(s), valid: s.valid }} }}\n"
         );
         emit!(
             out,
-            "open spec fn typed_observation_{namespace}_v48(observation: MemoryOperationObservationV30) -> Option<Seq<TypedMemoryObservationV48>> {{\n if !byte_observation_snapshots_valid_v39(observation) || !typed_allocation_environment_shape_{namespace}_v48(observation.before) || !typed_allocation_environment_shape_{namespace}_v48(observation.after) {{ None }} else {{\n let before = typed_event_state_{namespace}_v48(observation.before);\n let after = typed_event_state_{namespace}_v48(observation.after);\n if typed_observation_erases_pure_v48(observation, before, after) {{ Some(Seq::empty()) }} else {{ match typed_original_operation_{namespace}_v48(observation.operation) {{ Some(original) => Some(seq![TypedMemoryObservationV48 {{ original, before, after, effect: observation.effect }}]), None => None }} }}\n }}\n}}\n"
+            "spec fn typed_observation_{namespace}_v48(observation: MemoryOperationObservationV30) -> Option<Seq<TypedMemoryObservationV48>> {{\n if !byte_observation_snapshots_valid_v39(observation) || !typed_allocation_environment_shape_{namespace}_v48(observation.before) || !typed_allocation_environment_shape_{namespace}_v48(observation.after) {{ None }} else {{\n let before = typed_event_state_{namespace}_v48(observation.before);\n let after = typed_event_state_{namespace}_v48(observation.after);\n if typed_observation_erases_pure_v48(observation, before, after) {{ Some(Seq::empty()) }} else {{ match typed_original_operation_{namespace}_v48(observation.operation) {{ Some(original) => Some(seq![TypedMemoryObservationV48 {{ original, before, after, effect: observation.effect }}]), None => None }} }}\n }}\n}}\n"
         );
         emit!(
             out,
-            "open spec fn typed_observations_{namespace}_v48(observations: Seq<MemoryOperationObservationV30>) -> Option<Seq<TypedMemoryObservationV48>>\n decreases observations.len(),\n{{ if observations.len() == 0 {{ Some(Seq::empty()) }} else {{ match (typed_observation_{namespace}_v48(observations[0]), typed_observations_{namespace}_v48(observations.drop_first())) {{ (Some(head), Some(tail)) => Some(head + tail), _ => None }} }} }}\n"
+            "spec fn typed_observations_{namespace}_v48(observations: Seq<MemoryOperationObservationV30>) -> Option<Seq<TypedMemoryObservationV48>>\n decreases observations.len(),\n{{ if observations.len() == 0 {{ Some(Seq::empty()) }} else {{ match (typed_observation_{namespace}_v48(observations[0]), typed_observations_{namespace}_v48(observations.drop_first())) {{ (Some(head), Some(tail)) => Some(head + tail), _ => None }} }} }}\n"
         );
         self.check(out)
     }
@@ -457,7 +457,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
         };
         emit!(
             out,
-            "open spec fn typed_original_map_view_{namespace}_v48(s: MemoryStateV30) -> MemoryStateV30 {{\n let values = Seq::new({}, |definition: int|\n",
+            "spec fn typed_original_map_view_{namespace}_v48(s: MemoryStateV30) -> MemoryStateV30 {{\n let values = Seq::new({}, |definition: int|\n",
             self.prefix.input().definitions().len()
         );
         for row in self.rows.iter().flatten() {

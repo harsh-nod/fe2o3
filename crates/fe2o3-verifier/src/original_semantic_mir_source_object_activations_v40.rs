@@ -214,7 +214,7 @@ impl SourceObjects {
 
     pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.reserve_storage(headers())?;
-        write!(out, "open spec fn invocation_source_object_binding_v40(local: int, object: InvocationSourceObjectV40) -> bool {{ false")
+        write!(out, "spec fn invocation_source_object_binding_v40(local: int, object: InvocationSourceObjectV40) -> bool {{ false")
             .map_err(|_| out.error())?;
         for row in &self.rows {
             out.budget.charge_work(4)?;

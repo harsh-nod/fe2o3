@@ -7,7 +7,7 @@ struct InvocationSourceSliceReadV41 {
     alignment: int,
 }
 
-open spec fn invocation_source_slice_read_base_v41(
+spec fn invocation_source_slice_read_base_v41(
     source: InvocationSourceByteStateV36, recipe: InvocationSourceSliceReadV41,
     offset: int, width: int, alignment: int,
 ) -> Option<MemoryPointerV30> {

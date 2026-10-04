@@ -1,6 +1,6 @@
 // Shared constructor bodies only. The exact graph emitter still supplies every
 // checked operation, guard, successor component, effect and continuation.
-open spec fn byte_result_v55(
+spec fn byte_result_v55(
     before: MemoryStateV30, after: MemoryStateV30,
     operation: MemorySourceOperationV30, effect: MemoryOperationEffectV30,
 ) -> MemoryOperationResultV30 {
@@ -13,7 +13,7 @@ open spec fn byte_result_v55(
     }
 }
 
-open spec fn byte_refused_v55(
+spec fn byte_refused_v55(
     before: MemoryStateV30, operation: MemorySourceOperationV30,
 ) -> MemoryOperationResultV30 {
     byte_result_v55(
@@ -22,7 +22,7 @@ open spec fn byte_refused_v55(
     )
 }
 
-open spec fn byte_micro_result_v55(
+spec fn byte_micro_result_v55(
     before: MemoryMicroStateV30, result: MemoryOperationResultV30,
     next_operation: int,
 ) -> MemoryMicroResultV30 {
@@ -36,13 +36,13 @@ open spec fn byte_micro_result_v55(
     }
 }
 
-open spec fn byte_micro_refused_v55(before: MemoryMicroStateV30) -> MemoryMicroResultV30 {
+spec fn byte_micro_refused_v55(before: MemoryMicroStateV30) -> MemoryMicroResultV30 {
     byte_micro_result_v55(before, byte_refused_v55(
         before.state, MemorySourceOperationV30 { function: -1, block: -1, operation: -1 },
     ), -1)
 }
 
-open spec fn byte_block_refused_v58(
+spec fn byte_block_refused_v58(
     state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
 ) -> MemoryBlockResultV30 {
     MemoryBlockResultV30 {
@@ -51,7 +51,7 @@ open spec fn byte_block_refused_v58(
     }
 }
 
-open spec fn byte_micro_begin_result_v58(
+spec fn byte_micro_begin_result_v58(
     state: MemoryStateV30, next_operation: int,
 ) -> MemoryMicroStateV30 {
     MemoryMicroStateV30 { state, observations: Seq::empty(), next_operation }

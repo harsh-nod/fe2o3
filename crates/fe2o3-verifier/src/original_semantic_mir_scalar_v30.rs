@@ -223,7 +223,7 @@ fn emit_graph_v30<I: Iterator<Item = Result<Option<usize>>>>(
     )?;
     emit!(
         out,
-        "open spec fn original_{label}_trace_{root}_v30(base: Seq<int>) -> Seq<int>\n recommends base.len() == {arguments},\n{{\n"
+        "spec fn original_{label}_trace_{root}_v30(base: Seq<int>) -> Seq<int>\n recommends base.len() == {arguments},\n{{\n"
     );
     for (index, node) in nodes.iter().enumerate() {
         out.budget.charge_work(2)?;

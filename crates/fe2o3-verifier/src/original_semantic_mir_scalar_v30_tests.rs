@@ -388,8 +388,8 @@ fn original_mir_target_model_reads_actual_canonical_operator_and_operands() {
             relation::emit_prelude(&mut writer).unwrap();
             relation::emit(&source, &target, &endpoints, 0, &mut writer).unwrap();
             let text = writer.finish().unwrap();
-            assert!(text.contains("open spec fn original_mir_trace_0_v30"));
-            assert!(text.contains("open spec fn original_kir_trace_0_v30"));
+            assert!(text.contains("spec fn original_mir_trace_0_v30"));
+            assert!(text.contains("spec fn original_kir_trace_0_v30"));
             assert!(text.contains("proof fn original_mir_refines_canonical_0_v30"));
             assert!(text.contains("0int <= base[1] < 4294967296int"));
             assert!(!text.contains("assume("));

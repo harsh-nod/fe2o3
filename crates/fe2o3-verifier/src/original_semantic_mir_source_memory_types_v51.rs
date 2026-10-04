@@ -426,7 +426,7 @@ impl SourceMemoryTypesV51 {
 
     pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.reserve_storage(headers())?;
-        write!(out, "open spec fn invocation_source_memory_layout_v51(ty: int) -> Option<InvocationSourceMemoryLayoutV51> {{\n")
+        write!(out, "spec fn invocation_source_memory_layout_v51(ty: int) -> Option<InvocationSourceMemoryLayoutV51> {{\n")
             .map_err(|_| out.error())?;
         for (ty, row) in self.layouts.iter().enumerate() {
             out.budget.charge_work(2)?;

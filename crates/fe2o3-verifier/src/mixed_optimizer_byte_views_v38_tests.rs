@@ -1,9 +1,9 @@
 fn view_spec_body_v38(name: &str) -> &'static str {
     let text = super::super::byte_memory_v30::BYTE_MEMORY_V30;
-    text.split_once(&format!("open spec fn {name}"))
+    text.split_once(&format!("spec fn {name}"))
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap()
 }
@@ -343,7 +343,7 @@ fn byte_view_classified_context_uses_one_closed_registry_at_every_actual_entranc
             .0
             .unwrap();
             assert_eq!(
-                text.matches("open spec fn byte_target_view_contracts_73_v38(")
+                text.matches("spec fn byte_target_view_contracts_73_v38(")
                     .count(),
                 1
             );

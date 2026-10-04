@@ -249,10 +249,10 @@ fn original_mir_pointer_extractor_refuses_changed_types_mutability_and_stored_ca
 #[test]
 fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() {
     let borrow = SOURCE_POINTERS_V36
-        .split("open spec fn invocation_source_borrow_enabled_v36(")
+        .split("spec fn invocation_source_borrow_enabled_v36(")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_pointer_step_v36(")
+        .split("spec fn invocation_source_pointer_step_v36(")
         .next()
         .unwrap();
     assert!(borrow.contains("invocation_source_read_enabled_v36"));

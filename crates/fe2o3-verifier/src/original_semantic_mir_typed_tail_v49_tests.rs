@@ -397,8 +397,8 @@ fn assert_forwarding_reuses_exact_parent_byte_functions_v55(text: &str, has_oper
             continue;
         }
         let target = format!("byte_operation_{}", target.strip_suffix(',').unwrap());
-        assert_eq!(text.matches(&format!("open spec fn {source}(")).count(), 1);
-        assert!(!forwarding.contains(&format!("open spec fn {target}(")));
+        assert_eq!(text.matches(&format!("spec fn {source}(")).count(), 1);
+        assert!(!forwarding.contains(&format!("spec fn {target}(")));
         assert!(forwarding.contains(&format!(
             "ensures super::{source}(s, little_endian) == {target}(s, little_endian),"
         )));
@@ -416,7 +416,7 @@ fn assert_forwarding_reuses_exact_parent_byte_functions_v55(text: &str, has_oper
         aliases
     );
     assert_eq!(
-        forwarding.matches("open spec fn byte_operation_").count(),
+        forwarding.matches("spec fn byte_operation_").count(),
         aliases
     );
     let mut controls = 0usize;
@@ -433,13 +433,13 @@ fn assert_forwarding_reuses_exact_parent_byte_functions_v55(text: &str, has_oper
             continue;
         }
         let target = target.strip_suffix(',').unwrap();
-        assert_eq!(text.matches(&format!("open spec fn {source}(")).count(), 1);
-        assert!(!forwarding.contains(&format!("open spec fn {target}(")));
+        assert_eq!(text.matches(&format!("spec fn {source}(")).count(), 1);
+        assert!(!forwarding.contains(&format!("spec fn {target}(")));
     }
     assert!(controls > 0);
     assert_eq!(controls, blocks);
     assert_eq!(
-        forwarding.matches("open spec fn byte_control_").count(),
+        forwarding.matches("spec fn byte_control_").count(),
         controls
     );
 }

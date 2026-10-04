@@ -446,7 +446,7 @@ fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results
         );
         assert_eq!(
             expected
-                .matches("open spec fn typed_relocated_event_v49(")
+                .matches("spec fn typed_relocated_event_v49(")
                 .count(),
             1
         );
@@ -530,11 +530,11 @@ fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_res
                 continue;
             }
             let namespace = function.coordinate.0;
-            assert!(expected.contains(&format!("open spec fn byte_inputs_{namespace}_v55(")));
+            assert!(expected.contains(&format!("spec fn byte_inputs_{namespace}_v55(")));
             assert!(!expected.contains(&format!(" as byte_inputs_{namespace}_v55,")));
             for operation in function.operations.clone() {
                 assert!(expected.contains(&format!(
-                    "open spec fn byte_operation_{namespace}_{operation}_v30("
+                    "spec fn byte_operation_{namespace}_{operation}_v30("
                 )));
             }
         }

@@ -6,14 +6,14 @@ pub(super) const INVOCATION_EFFECTS_V36: &str = concat!(
     include_str!("original_semantic_mir_native_provenance_v39.vrs"),
     include_str!("original_semantic_mir_observed_effects_v39.vrs"),
     r#"
-open spec fn invocation_external_effect_v36(effect: MemoryOperationEffectV30) -> bool {
+spec fn invocation_external_effect_v36(effect: MemoryOperationEffectV30) -> bool {
     match invocation_project_effect_v39(effect) {
         Some(_) => true,
         None => false,
     }
 }
 
-open spec fn invocation_actual_effects_v36(observations: Seq<MemoryOperationObservationV30>)
+spec fn invocation_actual_effects_v36(observations: Seq<MemoryOperationObservationV30>)
     -> Seq<MemoryOperationEffectV30>
     decreases observations.len(),
 {
@@ -30,7 +30,7 @@ open spec fn invocation_actual_effects_v36(observations: Seq<MemoryOperationObse
     }
 }
 
-open spec fn invocation_source_read_effect_v36(
+spec fn invocation_source_read_effect_v36(
     source: InvocationSourceByteStateV36, value: InvocationSourceByteValueV36,
     bits: int, root: int, instance: int, little_endian: bool,
 ) -> Seq<MemoryOperationEffectV30> {
@@ -53,7 +53,7 @@ open spec fn invocation_source_read_effect_v36(
     }
 }
 
-open spec fn invocation_source_statement_effects_v36(
+spec fn invocation_source_statement_effects_v36(
     observation: InvocationSourceStatementObservationV36, little_endian: bool,
 ) -> Seq<MemoryOperationEffectV30> {
     if !observation.before.machine.valid || !observation.after.machine.valid {
@@ -142,7 +142,7 @@ open spec fn invocation_source_statement_effects_v36(
     }
 }
 
-open spec fn invocation_source_statements_effects_v36(
+spec fn invocation_source_statements_effects_v36(
     observations: Seq<InvocationSourceStatementObservationV36>, little_endian: bool,
 ) -> Seq<MemoryOperationEffectV30>
     decreases observations.len(),
@@ -153,7 +153,7 @@ open spec fn invocation_source_statements_effects_v36(
     }
 }
 
-open spec fn invocation_source_operands_effects_v36(
+spec fn invocation_source_operands_effects_v36(
     observations: Seq<InvocationSourceOperandObservationV36>, little_endian: bool,
 ) -> Seq<MemoryOperationEffectV30>
     decreases observations.len(),
@@ -180,7 +180,7 @@ open spec fn invocation_source_operands_effects_v36(
     }
 }
 
-open spec fn invocation_source_effects_v36(result: InvocationSourceBlockResultV36,
+spec fn invocation_source_effects_v36(result: InvocationSourceBlockResultV36,
     little_endian: bool,
 ) -> Seq<MemoryOperationEffectV30> {
     invocation_source_statements_effects_v36(result.observations, little_endian)

@@ -19,9 +19,9 @@ fn original_mir_actual_all_step_emission_consumes_each_checked_edge_and_dynamic_
                     _ => 1,
                 };
                 for ordinal in 0..edges {
-                    let name = format!("open spec fn actual_invocation_segment_{key}_{ordinal}_v36(");
+                    let name = format!("spec fn actual_invocation_segment_{key}_{ordinal}_v36(");
                     assert_eq!(out.text.matches(&name).count(), 1);
-                    let path = format!("open spec fn actual_invocation_path_{key}_{ordinal}_v36() -> Seq<int> {{ seq![{}int,", bindings.bindings[block].as_ref().unwrap().physical.block);
+                    let path = format!("spec fn actual_invocation_path_{key}_{ordinal}_v36() -> Seq<int> {{ seq![{}int,", bindings.bindings[block].as_ref().unwrap().physical.block);
                     assert!(out.text.contains(&path));
                 }
             }
@@ -192,18 +192,18 @@ fn original_mir_invocation_request_consumes_the_complete_retained_source() {
         assert!(text.starts_with("use vstd::prelude::*;"));
         assert!(text.contains("struct MemoryFrameRuntimeV30"));
         assert!(text.contains("struct InvocationByteMapV36"));
-        assert!(text.contains("open spec fn invocation_activation_witness_v36("));
-        assert!(text.contains("open spec fn invocation_source_read_enabled_v36("));
-        assert!(text.contains("open spec fn invocation_frame_end_witness_v36("));
-        assert!(text.contains("open spec fn invocation_source_slot_count_v36("));
-        assert!(text.contains("open spec fn invocation_source_byte_initial_0_v36("));
-        assert!(text.contains("open spec fn invocation_source_micro_step_0_0_v36("));
-        assert!(text.contains("open spec fn invocation_source_byte_storage_related_0_v36("));
-        assert!(text.contains("open spec fn invocation_runtime_index_bytes_v36() -> int { 8 }"));
+        assert!(text.contains("spec fn invocation_activation_witness_v36("));
+        assert!(text.contains("spec fn invocation_source_read_enabled_v36("));
+        assert!(text.contains("spec fn invocation_frame_end_witness_v36("));
+        assert!(text.contains("spec fn invocation_source_slot_count_v36("));
+        assert!(text.contains("spec fn invocation_source_byte_initial_0_v36("));
+        assert!(text.contains("spec fn invocation_source_micro_step_0_0_v36("));
+        assert!(text.contains("spec fn invocation_source_byte_storage_related_0_v36("));
+        assert!(text.contains("spec fn invocation_runtime_index_bytes_v36() -> int { 8 }"));
         assert!(
-            text.contains("open spec fn invocation_runtime_little_endian_v36() -> bool { true }")
+            text.contains("spec fn invocation_runtime_little_endian_v36() -> bool { true }")
         );
-        assert!(text.contains("open spec fn invocation_actual_micro_runtime_0_v36("));
+        assert!(text.contains("spec fn invocation_actual_micro_runtime_0_v36("));
         for root in 0..2 {
             assert!(text.contains(&format!(
                 "proof fn invocation_paired_finite_trace_{root}_v36("
@@ -285,7 +285,7 @@ fn original_mir_actual_microstep_observations_and_fuel_are_concretely_emitted() 
             assert_eq!(
                 out.text
                     .matches(&format!(
-                        "open spec fn invocation_actual_raw_initial_{root}_v36("
+                        "spec fn invocation_actual_raw_initial_{root}_v36("
                     ))
                     .count(),
                 1

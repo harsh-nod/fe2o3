@@ -140,7 +140,7 @@ fn source_step(root: usize, model: &RootControl, out: &mut Writer<'_, '_>) -> Re
     let locals = model.original.locals;
     emit!(
         out,
-        "open spec fn original_source_step_{root}_v31(s: OriginalControlStateV31) -> CfgStepV26<OriginalControlStateV31, int>\n recommends s.values.len() == {locals}, s.defined.len() == {locals},\n{{\n"
+        "spec fn original_source_step_{root}_v31(s: OriginalControlStateV31) -> CfgStepV26<OriginalControlStateV31, int>\n recommends s.values.len() == {locals}, s.defined.len() == {locals},\n{{\n"
     );
     for (block, binding) in model.bindings.iter().enumerate() {
         let Some(binding) = binding else { continue };
@@ -227,7 +227,7 @@ fn source_step(root: usize, model: &RootControl, out: &mut Writer<'_, '_>) -> Re
 fn target_step(root: usize, model: &RootControl, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
-        "open spec fn original_target_step_{root}_v31(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n{{\n"
+        "spec fn original_target_step_{root}_v31(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n{{\n"
     );
     for (block, target) in model.targets.iter().enumerate() {
         let key = model.block_start + block;
@@ -330,7 +330,7 @@ fn state_relation(
     let locals = model.original.locals;
     emit!(
         out,
-        "open spec fn original_control_related_{root}_v31(n: OriginalControlStateV31, o: AggregateStateV30) -> bool {{\n n.values.len() == {locals} && n.defined.len() == {locals} && o.values.len() == {definitions}\n && n.cells == o.cells && n.initialized == o.initialized && n.external == o.external\n && (if n.pc == -1int {{ o.pc == -1int }} else "
+        "spec fn original_control_related_{root}_v31(n: OriginalControlStateV31, o: AggregateStateV30) -> bool {{\n n.values.len() == {locals} && n.defined.len() == {locals} && o.values.len() == {definitions}\n && n.cells == o.cells && n.initialized == o.initialized && n.external == o.external\n && (if n.pc == -1int {{ o.pc == -1int }} else "
     );
     for (block, binding) in model.bindings.iter().enumerate() {
         let Some(binding) = binding else { continue };
@@ -372,7 +372,7 @@ fn initial(
     let source = &model.original;
     emit!(
         out,
-        "open spec fn original_control_arguments_{root}_v31(a: Seq<int>) -> bool {{ a.len() == {}",
+        "spec fn original_control_arguments_{root}_v31(a: Seq<int>) -> bool {{ a.len() == {}",
         source.arguments
     );
     for &(local, argument) in &source.initial {
@@ -382,7 +382,7 @@ fn initial(
     }
     emit!(
         out,
-        " }}\nopen spec fn original_control_source_initial_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> OriginalControlStateV31 {{\n OriginalControlStateV31 {{ pc: {}int, values: Seq::new({}nat, |i: int| ",
+        " }}\nspec fn original_control_source_initial_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> OriginalControlStateV31 {{\n OriginalControlStateV31 {{ pc: {}int, values: Seq::new({}nat, |i: int| ",
         source.entry.get(),
         source.locals
     );
@@ -399,7 +399,7 @@ fn initial(
     }
     emit!(
         out,
-        "), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nopen spec fn original_control_target_initial_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30 {{\n AggregateStateV30 {{ pc: {}int, values: Seq::new({definitions}nat, |i: int| ",
+        "), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nspec fn original_control_target_initial_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30 {{\n AggregateStateV30 {{ pc: {}int, values: Seq::new({definitions}nat, |i: int| ",
         model.block_start
     );
     for argument in 0..source.arguments {
@@ -412,7 +412,7 @@ fn initial(
     }
     emit!(
         out,
-        "0int), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nopen spec fn original_control_ready_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30 {{\n let s0 = original_control_target_initial_{root}_v31(a, p);\n"
+        "0int), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nspec fn original_control_ready_{root}_v31(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30 {{\n let s0 = original_control_target_initial_{root}_v31(a, p);\n"
     );
     for at in 0..model.prefix.len() {
         out.budget.charge_work(1)?;

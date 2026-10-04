@@ -1,0 +1,116 @@
+proof fn finite_filter_domain_v62<K, V>(original: Map<K, V>, keep: spec_fn(K) -> bool, key: K)
+    ensures
+        Map::new(original.dom().filter(keep), |k: K| original[k]).contains_key(key)
+            == (original.contains_key(key) && keep(key)),
+        original.contains_key(key) && keep(key) ==>
+            Map::new(original.dom().filter(keep), |k: K| original[k])[key] == original[key],
+{}
+
+proof fn byte_end_frame_domain_v62(memory: ByteMemoryV30, frame: MemoryDynamicFrameV30, key: MemoryAllocationV30)
+    ensures
+        byte_end_frame_v30(memory, frame).live.contains_key(key)
+            == (memory.live.contains_key(key) && !byte_allocation_in_frame_v30(key, frame)),
+        byte_end_frame_v30(memory, frame).live.contains_key(key) ==>
+            byte_end_frame_v30(memory, frame).live[key] == memory.live[key],
+        byte_end_frame_v30(memory, frame).view_contracts == memory.view_contracts,
+{}
+
+proof fn relocation_filter_domain_v62(original: Map<int, MemoryRelocationV37>, start: int, width: int, key: int)
+    ensures
+        byte_relocations_without_overlap_v37(original, start, width).contains_key(key)
+            == (original.contains_key(key) && !byte_intervals_overlap_v37(key, original[key].width, start, width)),
+        byte_relocations_without_overlap_v37(original, start, width).contains_key(key) ==>
+            byte_relocations_without_overlap_v37(original, start, width)[key] == original[key],
+{}
+
+proof fn relocation_copy_domain_v62(memory: ByteMemoryV30, snapshot: MemoryBytesV30, source_offset: int,
+    destination: MemoryPointerV30, width: int, key: int)
+    ensures {
+        let copied = |at: int| source_offset + at - destination.byte_offset;
+        let complete = |at: int| destination.byte_offset <= at && at < destination.byte_offset + width
+            && snapshot.relocations.contains_key(copied(at))
+            && copied(at) + snapshot.relocations[copied(at)].width <= source_offset + width;
+        let retained = byte_relocations_without_overlap_v37(memory.live[destination.allocation].relocations, destination.byte_offset, width);
+        let actual = byte_copy_snapshot_v39(memory, snapshot, source_offset, destination, width).live[destination.allocation].relocations;
+        actual.contains_key(key) == (retained.contains_key(key) || complete(key))
+            && (actual.contains_key(key) ==> actual[key] == if complete(key) { snapshot.relocations[copied(key)] } else { retained[key] })
+    },
+{
+    let forward = |at: int| destination.byte_offset + at - source_offset;
+    snapshot.relocations.dom().lemma_map_contains(forward, key);
+    if snapshot.relocations.contains_key(source_offset + key - destination.byte_offset) {
+        assert(forward(source_offset + key - destination.byte_offset) == key);
+    }
+}
+
+proof fn enum_fields_domain_v62(values: Seq<MemoryValueV30>, key: int)
+    ensures
+        Map::new(Set::range(0int, values.len() as int), |i: int| values[i]).contains_key(key)
+            == (0 <= key < values.len()),
+        0 <= key < values.len() ==>
+            Map::new(Set::range(0int, values.len() as int), |i: int| values[i])[key] == values[key],
+{}
+
+proof fn aggregate_suffix_domain_v62(original: Map<Seq<int>, MemoryValueV30>, path: Seq<int>, suffix: Seq<int>)
+    ensures {
+        let domain = original.dom().filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))
+            .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int));
+        domain.contains(suffix) == original.contains_key(path + suffix)
+    },
+{
+    let selected = original.dom().filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key));
+    let strip = |key: Seq<int>| key.subrange(path.len() as int, key.len() as int);
+    selected.lemma_map_contains(strip, suffix);
+    if original.contains_key(path + suffix) {
+        assert(invocation_source_path_prefix_v42(path, path + suffix));
+        assert(strip(path + suffix) =~= suffix);
+        assert(selected.contains(path + suffix));
+        assert(selected.map(strip).contains(suffix));
+    }
+    if selected.map(strip).contains(suffix) {
+        let key = choose|key: Seq<int>| selected.contains(key) && suffix == strip(key);
+        assert(path + suffix =~= key);
+        assert(original.contains_key(path + suffix));
+    }
+}
+
+proof fn aggregate_replace_domain_v62(original: Map<Seq<int>, MemoryValueV30>, replacement: Map<Seq<int>, MemoryValueV30>, path: Seq<int>, key: Seq<int>)
+    ensures {
+        let domain = original.dom().filter(|candidate: Seq<int>| !invocation_source_path_prefix_v42(path, candidate))
+            .union(replacement.dom().map(|suffix: Seq<int>| path + suffix));
+        domain.contains(key) == if invocation_source_path_prefix_v42(path, key) {
+            replacement.contains_key(key.subrange(path.len() as int, key.len() as int))
+        } else { original.contains_key(key) }
+    },
+{
+    let prepend = |suffix: Seq<int>| path + suffix;
+    replacement.dom().lemma_map_contains(prepend, key);
+    if invocation_source_path_prefix_v42(path, key) {
+        assert(path + key.subrange(path.len() as int, key.len() as int) =~= key);
+    }
+    if replacement.dom().map(prepend).contains(key) {
+        let suffix = choose|suffix: Seq<int>| replacement.dom().contains(suffix) && key == prepend(suffix);
+        assert(invocation_source_path_prefix_v42(path, key));
+        assert(key.subrange(path.len() as int, key.len() as int) =~= suffix);
+    }
+}
+
+mod private_parent_import_v62 {
+    use super::*;
+    use super::byte_scalar_type_v57 as imported_predicate;
+    proof fn private_parent_equation_v62(value: MemoryValueV30, modulus: int)
+        ensures imported_predicate(value, modulus) == match value {
+            MemoryValueV30::Scalar(bits) => 0 <= bits < modulus,
+            _ => false,
+        },
+    {}
+}
+
+proof fn indexed_match_conjunction_v62(values: Seq<MemoryValueV30>, index: int, enabled: bool)
+    requires 0 <= index < values.len(),
+    ensures
+        ({ let actual = values[index]; (match actual { MemoryValueV30::Unit => true, _ => false }) && enabled })
+            == (values[index] == MemoryValueV30::Unit && enabled),
+        (enabled && (match values[index] { MemoryValueV30::Unit => true, _ => false }))
+            == (enabled && values[index] == MemoryValueV30::Unit),
+{}

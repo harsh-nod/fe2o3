@@ -1,12 +1,12 @@
 // Closed strict scalar operation codes: negate 10; add/subtract/multiply/divide/
 // remainder 11..15; ordered Rust comparisons 16..21. This does not identify FMA,
 // conversions, fast-math, or reassociated expressions with any admitted code.
-open spec fn byte_float_shape_v52(operation: int, input_bits: int, output_bits: int) -> bool {
+spec fn byte_float_shape_v52(operation: int, input_bits: int, output_bits: int) -> bool {
     (input_bits == 32 || input_bits == 64) && 10 <= operation <= 21
         && output_bits == (if operation >= 16 { 1int } else { input_bits })
 }
 
-open spec fn byte_float_operand_v52(value: MemoryValueV30, bits: int) -> bool {
+spec fn byte_float_operand_v52(value: MemoryValueV30, bits: int) -> bool {
     (bits == 32 || bits == 64) && match value {
         MemoryValueV30::Scalar(v) => 0 <= v < memory_value_modulus_v30(bits / 8),
         _ => false,
@@ -17,7 +17,7 @@ open spec fn byte_float_operand_v52(value: MemoryValueV30, bits: int) -> bool {
 // Modulo is only the codomain restriction on raw result bits. No numerical
 // identity, rounding rule, NaN canonicalization, or native-value axiom is added.
 // Exact source/native operators must independently select the same closed key.
-open spec fn byte_float_value_v52(
+spec fn byte_float_value_v52(
     frames: MemoryFrameRuntimeV30, operation: int, input_bits: int, output_bits: int,
     left: MemoryValueV30, right: MemoryValueV30,
 ) -> MemoryValueV30 {

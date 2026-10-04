@@ -5,7 +5,7 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
             let (parent, rest) = text.split_once("mod typed_prefix_v49 {").unwrap();
             let (prefix, _) = rest.split_once("mod forwarding_v46 {").unwrap();
             let expected: std::collections::BTreeSet<_> = parent
-                .split("open spec fn ")
+                .split("spec fn ")
                 .skip(1)
                 .map(|definition| definition.split_once('(').unwrap().0)
                 .filter(|name| {
@@ -37,13 +37,10 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
                 let target = target.strip_suffix(',').unwrap();
                 assert!(imported.insert(source), "duplicate source alias: {source}");
                 assert!(targets.insert(target), "duplicate target alias: {target}");
-                assert_eq!(
-                    parent.matches(&format!("open spec fn {source}(")).count(),
-                    1
-                );
+                assert_eq!(parent.matches(&format!("spec fn {source}(")).count(), 1);
                 // Nested forwarding models have their own namespace numbering.
-                assert!(!prefix.contains(&format!("open spec fn {source}(")));
-                assert!(!prefix.contains(&format!("open spec fn {target}(")));
+                assert!(!prefix.contains(&format!("spec fn {source}(")));
+                assert!(!prefix.contains(&format!("spec fn {target}(")));
                 if source.starts_with("byte_inputs_") {
                     inputs += 1;
                 } else if source.starts_with("byte_operation_") {
@@ -70,7 +67,7 @@ fn original_source_typed_prefix_imports_complete_exact_root_models_once() {
             }
             assert_eq!(
                 operations,
-                parent.matches("open spec fn byte_operation_").count()
+                parent.matches("spec fn byte_operation_").count()
             );
             assert_eq!(
                 text.matches("proof fn typed_prefix_step_relation_").count(),

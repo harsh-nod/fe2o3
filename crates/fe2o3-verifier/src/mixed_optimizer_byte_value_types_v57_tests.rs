@@ -53,7 +53,7 @@ fn value_type_cases_v57(width: FormalIndexWidth) -> Vec<(Type, String, String)> 
             fe2o3_kernel_ir::VectorLayoutV12::Interleaved { factor: 2 },
         )),
         "byte_vector_type_v57(value, 4, 2)".to_owned(),
-        "match value { MemoryValueV30::Vector(v) => v.len() == 4 && (forall|lane: int| 0 <= lane < v.len() ==> 0 <= v[lane] < memory_value_modulus_v30(2)), _ => false }".to_owned(),
+        "match value { MemoryValueV30::Vector(v) => v.len() == 4 && (forall|lane: int| #![trigger v[lane]] 0 <= lane < v.len() ==> 0 <= v[lane] < memory_value_modulus_v30(2)), _ => false }".to_owned(),
     ));
     cases
 }
@@ -86,7 +86,7 @@ fn byte_value_type_shared_predicates_keep_every_shape_width_and_address_space() 
             ))
             .0
             .unwrap(),
-            "matches!(value, MemoryValueV30::Unit)",
+            "(match value { MemoryValueV30::Unit => true, _ => false })",
         );
         assert!(matches!(
             run(37, LIMIT, LIMIT, |out| emit_value_type(
@@ -117,7 +117,7 @@ fn value_type_census_v57(
         for segment in 0..32 {
             emit!(
                 out,
-                "open spec fn value_type_segment_{segment}_v57(values: Seq<MemoryValueV30>) -> bool {{ values.len() == 64"
+                "spec fn value_type_segment_{segment}_v57(values: Seq<MemoryValueV30>) -> bool {{ values.len() == 64"
             );
             for definition in 0..64 {
                 let (ty, _, old) = &cases[definition % cases.len()];
@@ -141,10 +141,7 @@ fn byte_value_type_sharing_bounds_complete_source_without_dropping_conditions() 
     let shared = value_type_census_v57(true, LIMIT, LIMIT).0.unwrap();
     let inline = value_type_census_v57(false, LIMIT, LIMIT).0.unwrap();
     for source in [&shared, &inline] {
-        assert_eq!(
-            source.matches("open spec fn value_type_segment_").count(),
-            32
-        );
+        assert_eq!(source.matches("spec fn value_type_segment_").count(), 32);
         assert_eq!(source.matches("&& ({ let value = values[").count(), 32 * 64);
         for helper in [
             "byte_scalar_type_v57",
@@ -152,10 +149,7 @@ fn byte_value_type_sharing_bounds_complete_source_without_dropping_conditions() 
             "byte_vector_type_v57",
             "byte_slice_type_v57",
         ] {
-            assert_eq!(
-                source.matches(&format!("open spec fn {helper}(")).count(),
-                1
-            );
+            assert_eq!(source.matches(&format!("spec fn {helper}(")).count(), 1);
         }
         assert!(!source.contains("assume("));
         assert!(!source.contains("external_body"));

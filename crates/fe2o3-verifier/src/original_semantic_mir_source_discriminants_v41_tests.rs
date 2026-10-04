@@ -222,10 +222,10 @@ fn original_mir_discriminant_runtime_keeps_original_validity_and_purpose_observa
     }
     let effects = include_str!("original_semantic_mir_observed_effects_v39.vrs");
     let projector = effects
-        .split_once("open spec fn invocation_project_effect_v39")
+        .split_once("spec fn invocation_project_effect_v39")
         .unwrap()
         .1
-        .split_once("open spec fn invocation_actual_observations_v39")
+        .split_once("spec fn invocation_actual_observations_v39")
         .unwrap()
         .0;
     let tag = projector
@@ -293,8 +293,8 @@ fn original_mir_source_registry_installation_follows_independent_native_intake()
             let mut program = super::super::super::source_function::SourceByteProgram::derive(plan, slots, out)?;
             program.emit(out)?;
             for root in 0..2 {
-                let initial = out.text.split_once(&format!("open spec fn invocation_source_byte_initial_{root}_v36(")).unwrap().1
-                    .split("open spec fn").next().unwrap();
+                let initial = out.text.split_once(&format!("spec fn invocation_source_byte_initial_{root}_v36(")).unwrap().1
+                    .split("spec fn").next().unwrap();
                 let gate = initial.find("let native =").unwrap();
                 let installed = initial.find("let entered_memory = if native {").unwrap();
                 assert!(gate < installed);

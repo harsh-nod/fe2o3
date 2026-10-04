@@ -334,7 +334,7 @@ impl<'view, 'source> SourceSlots<'view, 'source> {
         }
         emit!(
             out,
-            "open spec fn invocation_source_view_contracts_{namespace}_v39(little_endian: bool) -> MemoryViewContractsV38 {{\n MemoryViewContractsV38 {{ owner: {namespace}, rows: Map::empty()"
+            "spec fn invocation_source_view_contracts_{namespace}_v39(little_endian: bool) -> MemoryViewContractsV38 {{\n MemoryViewContractsV38 {{ owner: {namespace}, rows: Map::empty()"
         );
         for (ty, (row, class)) in semantic.types().iter().zip(&self.tags.classes).enumerate() {
             out.budget.charge_work(2)?;
@@ -439,7 +439,7 @@ impl<'view, 'source> SourceSlots<'view, 'source> {
         }
         emit!(
             out,
-            "\n }}\n}}\nopen spec fn invocation_source_view_contracts_match_{namespace}_v39(memory: ByteMemoryV30, little_endian: bool) -> bool {{ memory.view_contracts == invocation_source_view_contracts_{namespace}_v39(little_endian) }}\n"
+            "\n }}\n}}\nspec fn invocation_source_view_contracts_match_{namespace}_v39(memory: ByteMemoryV30, little_endian: bool) -> bool {{ memory.view_contracts == invocation_source_view_contracts_{namespace}_v39(little_endian) }}\n"
         );
         Ok(())
     }

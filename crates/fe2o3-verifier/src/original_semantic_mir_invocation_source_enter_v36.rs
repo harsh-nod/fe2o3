@@ -337,7 +337,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .retain_query_resource_error_v18(Resource::Accounting)
                 .into());
         }
-        write!(out, "open spec fn invocation_source_active_{}_{}_v36(source: InvocationSourceByteStateV36) -> bool {{ source.machine.valid && invocation_source_byte_state_well_formed_v36(source) && source.machine.values.len() >= {} && source.machine.frames.active.len() == {} && source.machine.frames.active[0].invocation == 0", self.root, self.instance, self.locals.end, self.owners.len()).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_active_{}_{}_v36(source: InvocationSourceByteStateV36) -> bool {{ source.machine.valid && invocation_source_byte_state_well_formed_v36(source) && source.machine.values.len() >= {} && source.machine.frames.active.len() == {} && source.machine.frames.active[0].invocation == 0", self.root, self.instance, self.locals.end, self.owners.len()).map_err(|_| out.error())?;
         for (i, owner) in self.owners.iter().enumerate() {
             out.budget.charge_work(1)?;
             write!(
@@ -352,7 +352,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         } else {
             self.owners.len() - 1
         };
-        write!(out, "open spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
         write!(
             out,
             " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",

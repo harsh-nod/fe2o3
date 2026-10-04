@@ -587,10 +587,10 @@ fn original_logical_enum_runtime_keeps_tag_definedness_move_order_and_escape_cen
     );
     assert!(runtime.contains("!moved && !invocation_source_enum_type_copyable_v47(source_type)"));
     let transfer = runtime
-        .split("open spec fn invocation_source_enum_transfer_v47")
+        .split("spec fn invocation_source_enum_transfer_v47")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_logical_enum_step_v47")
+        .split("spec fn invocation_source_logical_enum_step_v47")
         .next()
         .unwrap();
     assert!(
@@ -620,10 +620,10 @@ fn original_logical_enum_runtime_keeps_tag_definedness_move_order_and_escape_cen
 fn original_logical_enum_payloads_participate_in_ordinary_lifetime_end_after_local_clear() {
     let source = include_str!("original_semantic_mir_invocation_source_bytes_v36.rs");
     let end = source
-        .split("open spec fn invocation_source_byte_end_v36")
+        .split("spec fn invocation_source_byte_end_v36")
         .nth(1)
         .unwrap()
-        .split("open spec fn invocation_source_object_end_v40")
+        .split("spec fn invocation_source_object_end_v40")
         .next()
         .unwrap();
     let clear = end

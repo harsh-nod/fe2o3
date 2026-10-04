@@ -188,13 +188,13 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
         }
         for (root, range) in self.roots.iter().enumerate() {
             out.budget.charge_work(1)?;
-            write!(out, "open spec fn invocation_source_byte_map_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> InvocationByteMapV36 {{\n let private = Map::<MemoryAllocationV30, InvocationByteBindingV36>::empty();\n").map_err(|_| out.error())?;
+            write!(out, "spec fn invocation_source_byte_map_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> InvocationByteMapV36 {{\n let private = Map::<MemoryAllocationV30, InvocationByteBindingV36>::empty();\n").map_err(|_| out.error())?;
             for row in &self.rows[range.clone()] {
                 out.budget.charge_work(1)?;
                 let (descriptor, definition) = (row.descriptor, row.definition);
                 write!(out, " let private = if source.slots.contains_key({descriptor}) && {definition} < target.values.len() {{ match target.values[{definition}] {{ MemoryValueV30::Pointer(pointer) => private.insert(source.slots[{descriptor}].allocation, InvocationByteBindingV36 {{ target: pointer, extent: invocation_source_slot_{descriptor}_v36().extent, alignment: invocation_source_slot_{descriptor}_v36().alignment }}), _ => private }} }} else {{ private }};\n").map_err(|_| out.error())?;
             }
-            write!(out, " InvocationByteMapV36 {{ private }}\n}}\nopen spec fn invocation_source_byte_map_valid_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n invocation_source_byte_state_well_formed_v36(source) && target.values.len() == {} && (forall|descriptor: int| source.slots.contains_key(descriptor) ==> (false", self.definitions).map_err(|_| out.error())?;
+            write!(out, " InvocationByteMapV36 {{ private }}\n}}\nspec fn invocation_source_byte_map_valid_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n invocation_source_byte_state_well_formed_v36(source) && target.values.len() == {} && (forall|descriptor: int| source.slots.contains_key(descriptor) ==> (false", self.definitions).map_err(|_| out.error())?;
             for row in &self.rows[range.clone()] {
                 out.budget.charge_work(1)?;
                 write!(out, " || descriptor == {}", row.descriptor).map_err(|_| out.error())?;
@@ -206,7 +206,7 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
                     (row.descriptor, row.definition, row.physical_owner);
                 write!(out, "\n && (source.slots.contains_key({descriptor}) ==> {{ let slot = invocation_source_slot_{descriptor}_v36(); let original = source.slots[{descriptor}]; original.byte_offset == 0 && match original.allocation {{ MemoryAllocationV30::Private {{ owner, site, generation, .. }} => owner == slot.owner && site == slot.site && generation >= 0, _ => false }} && source.machine.memory.live.contains_key(original.allocation) && source.machine.memory.live[original.allocation].bytes.len() == slot.extent && source.machine.memory.live[original.allocation].base_alignment == slot.alignment && match target.values[{definition}] {{ MemoryValueV30::Pointer(pointer) => pointer.byte_offset == 0 && match pointer.allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => owner == {owner} && invocation == 0 && site == slot.site && generation >= 0, _ => false }} && target.memory.live.contains_key(pointer.allocation) && target.memory.live[pointer.allocation].bytes.len() == slot.extent && target.memory.live[pointer.allocation].base_alignment == slot.alignment, _ => false }} }})").map_err(|_| out.error())?;
             }
-            write!(out, "\n}}\nopen spec fn invocation_source_byte_storage_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{ invocation_source_byte_map_valid_{root}_v36(source, target) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target)) }}\n").map_err(|_| out.error())?;
+            write!(out, "\n}}\nspec fn invocation_source_byte_storage_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{ invocation_source_byte_map_valid_{root}_v36(source, target) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target)) }}\n").map_err(|_| out.error())?;
         }
         Ok(())
     }

@@ -25,13 +25,13 @@ struct InvocationSourceAggregatePlaceV42 {
     depth: int,
 }
 
-open spec fn invocation_source_aggregate_place_path_v42(place: InvocationSourceAggregatePlaceV42)
+spec fn invocation_source_aggregate_place_path_v42(place: InvocationSourceAggregatePlaceV42)
     -> Seq<int>
 {
     invocation_source_aggregate_leaf_path_v42(place.root_type, place.first_leaf).take(place.depth)
 }
 
-open spec fn invocation_source_aggregate_place_valid_v42(place: InvocationSourceAggregatePlaceV42)
+spec fn invocation_source_aggregate_place_valid_v42(place: InvocationSourceAggregatePlaceV42)
     -> bool
 {
     0 <= place.first_leaf < invocation_source_aggregate_leaf_count_v42(place.root_type)
@@ -41,12 +41,12 @@ open spec fn invocation_source_aggregate_place_valid_v42(place: InvocationSource
             invocation_source_aggregate_place_path_v42(place)) == Some(place.result_type)
 }
 
-open spec fn invocation_source_path_prefix_v42(prefix: Seq<int>, path: Seq<int>) -> bool {
+spec fn invocation_source_path_prefix_v42(prefix: Seq<int>, path: Seq<int>) -> bool {
     prefix.len() <= path.len()
         && forall|i: int| 0 <= i < prefix.len() ==> prefix[i] == path[i]
 }
 
-open spec fn invocation_source_aggregate_type_at_v42(source_type: int, path: Seq<int>)
+spec fn invocation_source_aggregate_type_at_v42(source_type: int, path: Seq<int>)
     -> Option<int>
     decreases path.len(),
 {
@@ -57,7 +57,7 @@ open spec fn invocation_source_aggregate_type_at_v42(source_type: int, path: Seq
     } }
 }
 
-open spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSourceAggregateV42) -> bool {
+spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSourceAggregateV42) -> bool {
     invocation_source_aggregate_leaf_count_v42(value.source_type) > 0
         && value.leaves.dom().finite()
         && (forall|path: Seq<int>| value.leaves.contains_key(path) ==>
@@ -67,13 +67,13 @@ open spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSource
                     invocation_source_aggregate_leaf_bits_v42(value.source_type, ordinal)))
 }
 
-open spec fn invocation_source_aggregate_complete_v42(value: InvocationSourceAggregateV42) -> bool {
+spec fn invocation_source_aggregate_complete_v42(value: InvocationSourceAggregateV42) -> bool {
     invocation_source_aggregate_well_formed_v42(value)
         && (forall|ordinal: int| 0 <= ordinal < invocation_source_aggregate_leaf_count_v42(value.source_type) ==>
             value.leaves.contains_key(invocation_source_aggregate_leaf_path_v42(value.source_type, ordinal)))
 }
 
-open spec fn invocation_source_aggregate_leaf_v42(
+spec fn invocation_source_aggregate_leaf_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>,
 ) -> Option<MemoryValueV30> {
     if source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
@@ -85,7 +85,7 @@ open spec fn invocation_source_aggregate_leaf_v42(
     } else { None }
 }
 
-open spec fn invocation_source_aggregate_snapshot_v42(
+spec fn invocation_source_aggregate_snapshot_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
     path: Seq<int>, result_type: int,
 ) -> Option<InvocationSourceAggregateV42> {
@@ -98,13 +98,15 @@ open spec fn invocation_source_aggregate_snapshot_v42(
     } else {
         let original = source.logical.aggregates[local];
         let snapshot = InvocationSourceAggregateV42 { source_type: result_type,
-            leaves: Map::new(|suffix: Seq<int>| original.leaves.contains_key(path + suffix),
+            leaves: Map::new(original.leaves.dom()
+                .filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))
+                .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int)),
                 |suffix: Seq<int>| original.leaves[path + suffix]) };
         if invocation_source_aggregate_complete_v42(snapshot) { Some(snapshot) } else { None }
     }
 }
 
-open spec fn invocation_source_aggregate_install_v42(
+spec fn invocation_source_aggregate_install_v42(
     source: InvocationSourceByteStateV36, local: int, value: InvocationSourceAggregateV42,
 ) -> InvocationSourceByteStateV36 {
     if source.objects.contains_key(local) || !invocation_source_aggregate_well_formed_v42(value) {
@@ -117,7 +119,7 @@ open spec fn invocation_source_aggregate_install_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_remove_v42(
+spec fn invocation_source_aggregate_remove_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -128,8 +130,9 @@ open spec fn invocation_source_aggregate_remove_v42(
     } else {
         let original = source.logical.aggregates[local];
         let remaining = InvocationSourceAggregateV42 { source_type,
-            leaves: Map::new(|key: Seq<int>| original.leaves.contains_key(key)
-                && !invocation_source_path_prefix_v42(path, key), |key: Seq<int>| original.leaves[key]) };
+            leaves: Map::new(original.leaves.dom()
+                .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key)),
+                |key: Seq<int>| original.leaves[key]) };
         invocation_source_aggregate_install_v42(source, local, remaining)
     }
 }
@@ -139,7 +142,7 @@ struct InvocationSourceAggregateEvaluationV42 {
     value: Option<InvocationSourceValueV42>,
 }
 
-open spec fn invocation_source_aggregate_evaluate_v42(
+spec fn invocation_source_aggregate_evaluate_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
     path: Seq<int>, result_type: int, moved: bool,
 ) -> InvocationSourceAggregateEvaluationV42 {
@@ -153,7 +156,7 @@ open spec fn invocation_source_aggregate_evaluate_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_leaf_evaluate_v42(
+spec fn invocation_source_aggregate_leaf_evaluate_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>, moved: bool,
 ) -> InvocationSourceAggregateEvaluationV42 {
     match invocation_source_aggregate_leaf_v42(source, local, source_type, path) {
@@ -166,7 +169,7 @@ open spec fn invocation_source_aggregate_leaf_evaluate_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_replace_v42(
+spec fn invocation_source_aggregate_replace_v42(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
     path: Seq<int>, value: InvocationSourceAggregateV42,
 ) -> InvocationSourceByteStateV36 {
@@ -181,10 +184,9 @@ open spec fn invocation_source_aggregate_replace_v42(
             source.logical.aggregates[local].leaves
         } else { Map::empty() };
         let replaced = InvocationSourceAggregateV42 { source_type,
-            leaves: Map::new(|key: Seq<int>|
-                if invocation_source_path_prefix_v42(path, key) {
-                    value.leaves.contains_key(key.subrange(path.len() as int, key.len() as int))
-                } else { original.contains_key(key) },
+            leaves: Map::new(original.dom()
+                .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key))
+                .union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix)),
                 |key: Seq<int>| if invocation_source_path_prefix_v42(path, key) {
                     value.leaves[key.subrange(path.len() as int, key.len() as int)]
                 } else { original[key] }) };
@@ -192,7 +194,7 @@ open spec fn invocation_source_aggregate_replace_v42(
     }
 }
 
-open spec fn invocation_source_checked_v42(
+spec fn invocation_source_checked_v42(
     source: InvocationSourceByteStateV36, destination: int, source_type: int,
     operation: int, bits: int, signed: bool,
     left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36,
@@ -232,7 +234,7 @@ open spec fn invocation_source_checked_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_place_evaluate_v42(
+spec fn invocation_source_aggregate_place_evaluate_v42(
     source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42, moved: bool,
 ) -> InvocationSourceValueEvaluationV42 {
     if !invocation_source_aggregate_place_valid_v42(place) {
@@ -249,7 +251,7 @@ open spec fn invocation_source_aggregate_place_evaluate_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_place_replace_v42(
+spec fn invocation_source_aggregate_place_replace_v42(
     source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42,
     value: InvocationSourceAggregateV42,
 ) -> InvocationSourceByteStateV36 {
@@ -259,7 +261,7 @@ open spec fn invocation_source_aggregate_place_replace_v42(
         invocation_source_aggregate_place_path_v42(place), value) }
 }
 
-open spec fn invocation_source_aggregate_place_deinitialize_v42(
+spec fn invocation_source_aggregate_place_deinitialize_v42(
     source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42,
 ) -> InvocationSourceByteStateV36 {
     if !invocation_source_aggregate_place_valid_v42(place)
@@ -274,7 +276,7 @@ open spec fn invocation_source_aggregate_place_deinitialize_v42(
     }
 }
 
-open spec fn invocation_source_aggregate_transfer_v42(
+spec fn invocation_source_aggregate_transfer_v42(
     source: InvocationSourceByteStateV36, destination: InvocationSourceAggregatePlaceV42,
     input: InvocationSourceAggregatePlaceV42, moved: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -289,7 +291,7 @@ open spec fn invocation_source_aggregate_transfer_v42(
     }
 }
 
-open spec fn invocation_source_value_evaluate_v42(
+spec fn invocation_source_value_evaluate_v42(
     source: InvocationSourceByteStateV36, operand: InvocationSourceOperandV36,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceValueEvaluationV42 {

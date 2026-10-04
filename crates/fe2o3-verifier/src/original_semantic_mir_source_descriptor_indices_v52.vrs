@@ -1,4 +1,4 @@
-open spec fn invocation_source_descriptor_index_v52(
+spec fn invocation_source_descriptor_index_v52(
     source: InvocationSourceByteStateV36, destination: int, input: int, index: int,
     recipe: InvocationSourceDescriptorRecipeV51, witness_type: int, option_type: int,
     moved_receiver: bool, moved_index: bool, little_endian: bool,

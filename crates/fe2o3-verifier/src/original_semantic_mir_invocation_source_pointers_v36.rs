@@ -454,7 +454,7 @@ enum InvocationSourcePointerEventV36 {
     Length { destination: int, local: int, metadata_bits: int, moved: bool },
 }
 
-open spec fn invocation_source_pointer_carrier_v36(value: MemoryValueV30, metadata_bits: int) -> bool {
+spec fn invocation_source_pointer_carrier_v36(value: MemoryValueV30, metadata_bits: int) -> bool {
     match value {
         MemoryValueV30::Pointer(pointer) => metadata_bits == 0 && byte_pointer_type_v30(pointer, 2, 8),
         MemoryValueV30::Slice(slice) =>
@@ -465,7 +465,7 @@ open spec fn invocation_source_pointer_carrier_v36(value: MemoryValueV30, metada
     }
 }
 
-open spec fn invocation_source_borrow_enabled_v36(
+spec fn invocation_source_borrow_enabled_v36(
     source: InvocationSourceByteStateV36, pointer: MemoryPointerV30,
     width: int, alignment: int, bits: int, little_endian: bool,
 ) -> bool {
@@ -477,7 +477,7 @@ open spec fn invocation_source_borrow_enabled_v36(
             byte_load_v30(source.machine.memory, pointer, width, little_endian)), bits)
 }
 
-open spec fn invocation_source_pointer_step_v36(
+spec fn invocation_source_pointer_step_v36(
     source: InvocationSourceByteStateV36, event: InvocationSourcePointerEventV36,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {

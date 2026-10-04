@@ -281,7 +281,7 @@ fn relations(
                     let coordinate = input.blocks()[block].coordinate;
                     emit!(
                         out,
-                        "open spec fn relocation_cut_{block}_v28(base: Seq<int>, optimized: Seq<int>, op: spec_fn(int, int, Seq<int>, int) -> int) -> bool {{\n base.len() == {} && optimized.len() == {}",
+                        "spec fn relocation_cut_{block}_v28(base: Seq<int>, optimized: Seq<int>, op: spec_fn(int, int, Seq<int>, int) -> int) -> bool {{\n base.len() == {} && optimized.len() == {}",
                         input.definitions().len(),
                         output.definitions().len()
                     );
@@ -338,7 +338,7 @@ fn relations(
     }
     emit!(
         out,
-        "open spec fn relocation_related_v28(n: CfgStateV26, o: CfgStateV26, op: spec_fn(int, int, Seq<int>, int) -> int) -> bool {{\n n.values.len() == {} && o.values.len() == {} && n.memory == o.memory && n.pc == o.pc\n && ((n.pc == -1)",
+        "spec fn relocation_related_v28(n: CfgStateV26, o: CfgStateV26, op: spec_fn(int, int, Seq<int>, int) -> int) -> bool {{\n n.values.len() == {} && o.values.len() == {} && n.memory == o.memory && n.pc == o.pc\n && ((n.pc == -1)",
         input.definitions().len(),
         output.definitions().len()
     );
@@ -439,7 +439,7 @@ pub(in super::super) fn generate(
         );
         emit!(
             out,
-            "// V28 prefix-to-final relocation only; generated obligations are not executed proofs.\nopen spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
+            "// V28 prefix-to-final relocation only; generated obligations are not executed proofs.\nspec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
         );
         select_prelude(input, output, out)?;
         for width in [8, 16, 32, 64] {
@@ -458,7 +458,7 @@ pub(in super::super) fn generate(
                 out.budget.charge_work(1)?;
                 emit!(
                     out,
-                    "open spec fn relocated_value_{definition}_v28(base: Seq<int>, op: spec_fn(int, int, Seq<int>, int) -> int) -> int\n recommends base.len() == {},\n{{ ",
+                    "spec fn relocated_value_{definition}_v28(base: Seq<int>, op: spec_fn(int, int, Seq<int>, int) -> int) -> int\n recommends base.len() == {},\n{{ ",
                     input.definitions().len()
                 );
                 expression(input, &plan, ordinal, result, out)?;

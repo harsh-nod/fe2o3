@@ -156,7 +156,7 @@ fn composed_relocation_select_is_concrete_and_non_select_operator_bridge_stays_c
             }));
             let floor = budget.storage();
             let text = generated_composed(checked, output, pair, budget).unwrap();
-            assert_eq!(text.matches("open spec fn select_value_v28(").count(), 2);
+            assert_eq!(text.matches("spec fn select_value_v28(").count(), 2);
             assert!(text.contains("select_value_v28(base[4],relocated_value_"));
             assert!(text.contains("proof fn composed_original_to_final_trace_0_v28"));
             let retained = text.retained;
@@ -204,7 +204,7 @@ fn composed_relocation_cfg_joins_actual_cse_and_motion_through_checked_operators
                 "proof fn prefix_step_interpretations_agree_v28",
                 "proof fn prefix_trace_interpretations_agree_v28",
                 "proof fn composed_original_to_final_trace_0_v28",
-                "open spec fn original_interpretation_v28",
+                "spec fn original_interpretation_v28",
                 "prefix_operator_v28(op)",
                 "super::cfg_trace_v26",
                 "child_state_v28(p)",

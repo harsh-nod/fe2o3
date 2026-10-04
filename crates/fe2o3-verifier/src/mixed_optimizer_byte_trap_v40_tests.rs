@@ -103,7 +103,7 @@ fn byte_trap_dispatch_preserves_exact_terminal_observation_and_machine_data() {
 #[test]
 fn byte_trap_terminal_guard_requires_exact_effect_locator_and_unchanged_snapshots() {
     let source = super::super::byte_memory_v30::BYTE_MEMORY_V30;
-    let start = source.find("open spec fn byte_trap_terminal_v40(").unwrap();
+    let start = source.find("spec fn byte_trap_terminal_v40(").unwrap();
     let body = source[start..].split_once("\n}\n").unwrap().0;
     for check in [
         "count > 0 && observations.len() == count && state.valid && state.pc == -2",

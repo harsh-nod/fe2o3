@@ -30,7 +30,7 @@ struct InvocationSourceEnumResultV43 {
     observations: Seq<InvocationSourceEffectObservationV39>,
 }
 
-open spec fn invocation_source_enum_reference_valid_v44(
+spec fn invocation_source_enum_reference_valid_v44(
     source: InvocationSourceByteStateV36, value: MemoryValueV30,
     width: int, alignment: int, bits: int, little_endian: bool,
 ) -> bool {
@@ -48,7 +48,7 @@ open spec fn invocation_source_enum_reference_valid_v44(
         }
 }
 
-open spec fn invocation_source_enum_field_valid_v44(
+spec fn invocation_source_enum_field_valid_v44(
     source: InvocationSourceByteStateV36, field: InvocationSourceEnumPayloadV43,
     value: MemoryValueV30, little_endian: bool,
 ) -> bool {
@@ -68,7 +68,7 @@ open spec fn invocation_source_enum_field_valid_v44(
     }
 }
 
-open spec fn invocation_source_enum_operands_v43(
+spec fn invocation_source_enum_operands_v43(
     source: InvocationSourceByteStateV36, fields: Seq<InvocationSourceEnumPayloadV43>,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceEnumOperandsV43
@@ -114,7 +114,7 @@ open spec fn invocation_source_enum_operands_v43(
     }
 }
 
-open spec fn invocation_source_enum_payloads_v43(
+spec fn invocation_source_enum_payloads_v43(
     source: InvocationSourceByteStateV36, base: MemoryPointerV30, extent: int,
     fields: Seq<InvocationSourceEnumPayloadV43>, values: Seq<MemoryValueV30>,
     little_endian: bool,
@@ -155,7 +155,7 @@ open spec fn invocation_source_enum_payloads_v43(
     }
 }
 
-open spec fn invocation_source_enum_tag_bits_v43(contract: MemoryTagContractV38, variant: int)
+spec fn invocation_source_enum_tag_bits_v43(contract: MemoryTagContractV38, variant: int)
     -> Option<Option<int>>
 {
     if !byte_tag_contract_shape_v38(contract)
@@ -176,7 +176,7 @@ open spec fn invocation_source_enum_tag_bits_v43(contract: MemoryTagContractV38,
     } }
 }
 
-open spec fn invocation_source_enum_refused_v43(
+spec fn invocation_source_enum_refused_v43(
     source: InvocationSourceByteStateV36, observations: Seq<InvocationSourceEffectObservationV39>,
 ) -> InvocationSourceEnumResultV43 {
     let after = invocation_source_byte_refused_v36(source);
@@ -185,7 +185,7 @@ open spec fn invocation_source_enum_refused_v43(
             seq![MemoryOperationEffectV30::Refused], source, after) }
 }
 
-open spec fn invocation_source_enum_construct_v43(
+spec fn invocation_source_enum_construct_v43(
     source: InvocationSourceByteStateV36, event: InvocationSourceEnumConstructV43,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceEnumResultV43 {

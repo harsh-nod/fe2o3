@@ -42,14 +42,14 @@ fn emitted_byte_functions_reuse_exact_memory_and_control_models_with_resource_bo
         let measured = run(floor, LIMIT, LIMIT, emit);
         let source = measured.0.unwrap();
         let reused = source.split_once("mod reused {").unwrap().1;
-        assert!(!reused.contains("open spec fn"));
+        assert!(!reused.contains("spec fn"));
         for function in 0..2 {
             let source_namespace = 50 + function;
             for operation in (function * 3)..(function * 3 + 3) {
                 assert_eq!(
                     source
                         .matches(&format!(
-                            "open spec fn byte_operation_{source_namespace}_{operation}_v30("
+                            "spec fn byte_operation_{source_namespace}_{operation}_v30("
                         ))
                         .count(),
                     1
@@ -156,7 +156,7 @@ fn emitted_scalar_bodies_keep_output_predicates_and_exact_changed_operations() {
                     let source = measured.0.unwrap();
                     let output_text = source.split_once("mod output {").unwrap().1;
                     assert_eq!(
-                        source.matches("open spec fn byte_scalar_body_").count(),
+                        source.matches("spec fn byte_scalar_body_").count(),
                         2 * count as usize
                     );
                     assert_eq!(
@@ -164,12 +164,12 @@ fn emitted_scalar_bodies_keep_output_predicates_and_exact_changed_operations() {
                         2 * (count as usize - 1)
                     );
                     assert_eq!(
-                        output_text.matches("open spec fn byte_operation_").count(),
+                        output_text.matches("spec fn byte_operation_").count(),
                         2 * count as usize
                     );
                     assert_eq!(
                         output_text
-                            .matches("open spec fn original_canonical_byte_scalar_trace_")
+                            .matches("spec fn original_canonical_byte_scalar_trace_")
                             .count(),
                         2
                     );
@@ -309,7 +309,7 @@ fn emitted_byte_functions_keep_large_complete_census_without_duplicate_interpret
         assert!(source.len() < super::super::super::SOURCE_LIMIT);
         assert_eq!(super::super::super::SOURCE_LIMIT, 2 * 1024 * 1024);
         assert_eq!(
-            source.matches("open spec fn byte_operation_55_").count(),
+            source.matches("spec fn byte_operation_55_").count(),
             count as usize
         );
         assert_eq!(
@@ -325,7 +325,7 @@ fn emitted_byte_functions_keep_large_complete_census_without_duplicate_interpret
             )));
             assert!(source.contains(&format!("function: 0, block: 0, operation: {operation}")));
         }
-        assert!(!source.contains("open spec fn byte_operation_0_"));
+        assert!(!source.contains("spec fn byte_operation_0_"));
     });
 }
 

@@ -27,14 +27,14 @@ struct InvocationSourceSlotV36 {
     alignment: int,
 }
 
-open spec fn invocation_private_allocation_v36(a: MemoryAllocationV30) -> bool {
+spec fn invocation_private_allocation_v36(a: MemoryAllocationV30) -> bool {
     match a {
         MemoryAllocationV30::Private { owner: _, invocation: _, site: _, generation: _ } => true,
         MemoryAllocationV30::External { identity: _, generation: _ } => false,
     }
 }
 
-open spec fn invocation_binding_disjoint_v36(
+spec fn invocation_binding_disjoint_v36(
     a: InvocationByteBindingV36, b: InvocationByteBindingV36,
 ) -> bool {
     a.target.allocation != b.target.allocation
@@ -42,7 +42,7 @@ open spec fn invocation_binding_disjoint_v36(
         || b.target.byte_offset + b.extent <= a.target.byte_offset
 }
 
-open spec fn invocation_view_registries_related_v40(
+spec fn invocation_view_registries_related_v40(
     source: ByteMemoryV30, target: ByteMemoryV30,
 ) -> bool {
     source.view_contracts == invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36())
@@ -51,7 +51,7 @@ open spec fn invocation_view_registries_related_v40(
         && byte_view_contracts_shape_v38(target.view_contracts)
 }
 
-open spec fn invocation_byte_heaps_related_v36(
+spec fn invocation_byte_heaps_related_v36(
     source: ByteMemoryV30, target: ByteMemoryV30, map: InvocationByteMapV36,
 ) -> bool {
     byte_memory_well_formed_v30(source) && byte_memory_well_formed_v30(target)
@@ -87,7 +87,7 @@ open spec fn invocation_byte_heaps_related_v36(
 
 // target.frames are physical allocation owners, not V36's separate logical
 // source-cut frame annotations. A logical return does not pop this target stack.
-open spec fn invocation_byte_states_related_v36(
+spec fn invocation_byte_states_related_v36(
     source: MemoryStateV30, target: MemoryStateV30, map: InvocationByteMapV36,
 ) -> bool {
     source.valid && target.valid
@@ -101,7 +101,7 @@ open spec fn invocation_byte_states_related_v36(
         && invocation_byte_heaps_related_v36(source.memory, target.memory, map)
 }
 
-open spec fn invocation_pointer_coordinates_related_v40(
+spec fn invocation_pointer_coordinates_related_v40(
     source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
 ) -> bool {
     if invocation_private_allocation_v36(source.allocation) {
@@ -112,7 +112,7 @@ open spec fn invocation_pointer_coordinates_related_v40(
     } else { source.allocation == target.allocation && source.byte_offset == target.byte_offset }
 }
 
-open spec fn invocation_pointer_related_v36(
+spec fn invocation_pointer_related_v36(
     source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -123,7 +123,7 @@ open spec fn invocation_pointer_related_v36(
 // The generated predicate is closed over the original owner-backed endpoint
 // census. Numeric type/layout equality, equal bytes and equal epochs are not
 // source/target correspondence evidence.
-open spec fn invocation_tag_guards_related_v40(
+spec fn invocation_tag_guards_related_v40(
     source: MemoryTagGuardV38, target: MemoryTagGuardV38, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -146,7 +146,7 @@ open spec fn invocation_tag_guards_related_v40(
 // Every enclosing guard is retained in both directions. Repeated equivalent
 // guards may differ in count, but no independent obligation can disappear.
 // Epochs are compared only to their own execution's current heap.
-open spec fn invocation_pointer_views_related_v40(
+spec fn invocation_pointer_views_related_v40(
     source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -169,7 +169,7 @@ open spec fn invocation_pointer_views_related_v40(
         }
 }
 
-open spec fn invocation_external_bytes_related_v38(
+spec fn invocation_external_bytes_related_v38(
     source: MemoryBytesV30, target: MemoryBytesV30, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -195,7 +195,7 @@ proof fn invocation_external_epoch_renaming_v38(
             MemoryBytesV30 { write_clock: clock, write_epochs: epochs, ..target }, map, source_memory, target_memory),
 { }
 
-open spec fn invocation_byte_token_related_v37(
+spec fn invocation_byte_token_related_v37(
     source: MemoryByteV37, target: MemoryByteV37, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -208,7 +208,7 @@ open spec fn invocation_byte_token_related_v37(
     }
 }
 
-open spec fn invocation_relocation_related_v37(
+spec fn invocation_relocation_related_v37(
     source: MemoryRelocationV37, target: MemoryRelocationV37, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -216,7 +216,7 @@ open spec fn invocation_relocation_related_v37(
         && invocation_pointer_related_v36(source.pointer, target.pointer, map, source_memory, target_memory)
 }
 
-open spec fn invocation_value_related_v36(
+spec fn invocation_value_related_v36(
     source: MemoryValueV30, target: MemoryValueV30, map: InvocationByteMapV36,
     source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
@@ -235,7 +235,7 @@ open spec fn invocation_value_related_v36(
 
 // The source read check is mandatory even if physical target storage contains
 // initialized bytes from an earlier logical invocation or lifetime generation.
-open spec fn invocation_source_read_enabled_v36(
+spec fn invocation_source_read_enabled_v36(
     source: MemoryStateV30, pointer: MemoryPointerV30, width: int, alignment: int,
 ) -> bool {
     source.valid && byte_memory_well_formed_v30(source.memory) && ordinary_memory_width_v30(width)
@@ -245,7 +245,7 @@ open spec fn invocation_source_read_enabled_v36(
 
 // This scalar operation requires ordinary octets. Stored pointer cells use a
 // separate typed operation; nominal fragments never become integer bits here.
-open spec fn invocation_source_store_enabled_v36(
+spec fn invocation_source_store_enabled_v36(
     source: MemoryStateV30, pointer: MemoryPointerV30, width: int, alignment: int,
     value: MemoryValueV30,
 ) -> bool {
@@ -257,7 +257,7 @@ open spec fn invocation_source_store_enabled_v36(
         }
 }
 
-open spec fn invocation_source_store_v36(
+spec fn invocation_source_store_v36(
     source: MemoryStateV30, pointer: MemoryPointerV30, width: int, alignment: int,
     value: MemoryValueV30, little_endian: bool,
 ) -> MemoryStateV30 {
@@ -273,7 +273,7 @@ open spec fn invocation_source_store_v36(
     }
 }
 
-open spec fn invocation_read_related_v36(
+spec fn invocation_read_related_v36(
     source: MemoryStateV30, target: MemoryStateV30, map: InvocationByteMapV36,
     source_pointer: MemoryPointerV30, target_pointer: MemoryPointerV30,
     width: int, alignment: int,
@@ -285,7 +285,7 @@ open spec fn invocation_read_related_v36(
         && byte_scalar_range_initialized_v37(target.memory, target_pointer, width)
 }
 
-open spec fn invocation_source_refused_v36(source: MemoryStateV30) -> MemoryStateV30 {
+spec fn invocation_source_refused_v36(source: MemoryStateV30) -> MemoryStateV30 {
     MemoryStateV30 { pc: source.pc, values: source.values, memory: source.memory,
         generations: source.generations, frames: source.frames, valid: false }
 }
@@ -300,7 +300,7 @@ struct InvocationByteActivationV36 {
 // target binding refuses the relation; it cannot redefine source execution.
 // Successful source projection must equal the target-free source activation.
 // Target bytes are never reset and give no source initialization credit.
-open spec fn invocation_activation_witness_v36(
+spec fn invocation_activation_witness_v36(
     source: MemoryStateV30, target: MemoryStateV30, map: InvocationByteMapV36,
     slot: InvocationSourceSlotV36, binding: InvocationByteBindingV36,
     root: int, instance: int,
@@ -333,7 +333,7 @@ open spec fn invocation_activation_witness_v36(
     }
 }
 
-open spec fn invocation_value_names_allocation_v36(value: MemoryValueV30, allocation: MemoryAllocationV30) -> bool {
+spec fn invocation_value_names_allocation_v36(value: MemoryValueV30, allocation: MemoryAllocationV30) -> bool {
     match value {
         MemoryValueV30::Pointer(pointer) => pointer.allocation == allocation,
         MemoryValueV30::Slice(slice) => slice.pointer.allocation == allocation,
@@ -341,7 +341,7 @@ open spec fn invocation_value_names_allocation_v36(value: MemoryValueV30, alloca
     }
 }
 
-open spec fn invocation_memory_names_allocation_v37(
+spec fn invocation_memory_names_allocation_v37(
     memory: ByteMemoryV30, allocation: MemoryAllocationV30,
 ) -> bool {
     exists|object: MemoryAllocationV30, at: int| object != allocation
@@ -363,7 +363,7 @@ struct InvocationByteLifetimeV36 {
 
 // retained indexes must be the complete source live-value/returned-value census
 // supplied by the same invocation consumer, not a caller-chosen subset.
-open spec fn invocation_lifetime_witness_v36(
+spec fn invocation_lifetime_witness_v36(
     source: MemoryStateV30, map: InvocationByteMapV36, allocation: MemoryAllocationV30,
     retained: Seq<int>,
 ) -> InvocationByteLifetimeV36 {
@@ -387,7 +387,7 @@ open spec fn invocation_lifetime_witness_v36(
 
 // No target memory parameter is returned or changed. Popping the source frame
 // cannot authorize deallocation of hoisted or reused physical target storage.
-open spec fn invocation_frame_end_witness_v36(
+spec fn invocation_frame_end_witness_v36(
     source: MemoryStateV30, map: InvocationByteMapV36, retained: Seq<int>,
 ) -> InvocationByteLifetimeV36 {
     if !source.valid || source.frames.active.len() == 0 {
@@ -406,8 +406,8 @@ open spec fn invocation_frame_end_witness_v36(
                 memory: byte_end_frame_v30(source.memory, frame), generations: source.generations,
                 frames: byte_pop_frame_v30(source.frames), valid: true },
                 map: InvocationByteMapV36 { private: Map::new(
-                    |allocation: MemoryAllocationV30| map.private.contains_key(allocation)
-                        && !byte_allocation_in_frame_v30(allocation, frame),
+                    map.private.dom().filter(|allocation: MemoryAllocationV30|
+                        !byte_allocation_in_frame_v30(allocation, frame)),
                     |allocation: MemoryAllocationV30| map.private[allocation],
                 ) } }
         }
@@ -471,7 +471,7 @@ mod tests {
         let text = INVOCATION_BYTES_V36;
         assert!(!text.contains("source.live[a] == target.live[a]"));
         let relation = text
-            .split("open spec fn invocation_external_bytes_related_v38")
+            .split("spec fn invocation_external_bytes_related_v38")
             .nth(1)
             .unwrap()
             .split("proof fn invocation_external_epoch_renaming_v38")

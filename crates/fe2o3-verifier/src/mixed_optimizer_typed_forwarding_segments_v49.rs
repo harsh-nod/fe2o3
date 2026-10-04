@@ -128,7 +128,7 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             .ok_or(Resource::Arithmetic)?;
         emit!(
             out,
-            "open spec fn forwarding_cursor_related_{function}_v49(left: TypedPrefixCursorV49, right: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n left.segment == right.segment && left.micro.next_operation == right.micro.next_operation\n && left.micro.state.valid && right.micro.state.valid && forwarding_states_related_v46(left.micro.state, right.micro.state)\n && typed_relocated_cursor_valid_{function}_v49(left, little_endian) && typed_forwarded_cursor_valid_{function}_v49(right, little_endian)\n && forwarding_project_observations_v46(left.micro.observations) == forwarding_project_observations_v46(right.micro.observations)\n && (left.micro.state.pc < 0 || (\n"
+            "spec fn forwarding_cursor_related_{function}_v49(left: TypedPrefixCursorV49, right: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n left.segment == right.segment && left.micro.next_operation == right.micro.next_operation\n && left.micro.state.valid && right.micro.state.valid && forwarding_states_related_v46(left.micro.state, right.micro.state)\n && typed_relocated_cursor_valid_{function}_v49(left, little_endian) && typed_forwarded_cursor_valid_{function}_v49(right, little_endian)\n && forwarding_project_observations_v46(left.micro.observations) == forwarding_project_observations_v46(right.micro.observations)\n && (left.micro.state.pc < 0 || (\n"
         );
         for (original, segment) in segments.iter().enumerate() {
             let Some(segment) = segment else {
@@ -223,13 +223,13 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
         self.bridge.charge(12, out)?;
         emit!(
             out,
-            r#"open spec fn typed_source_forwarded_follow_{root}_v49(cursor: TypedPrefixCursorV49, fuel: nat) -> TypedSourceBoundaryV49
+            r#"spec fn typed_source_forwarded_follow_{root}_v49(cursor: TypedPrefixCursorV49, fuel: nat) -> TypedSourceBoundaryV49
  decreases fuel
 {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 || invocation_byte_cut_{root}_v36(cursor.segment) {{ typed_source_boundary_empty_v49(cursor) }}
  else if fuel == 0 || cursor.segment < {start} || {end} <= cursor.segment {{ typed_source_boundary_empty_v49(typed_prefix_refuse_v49(cursor).cursor) }}
  else {{ let head = typed_forwarded_step_{function}_v49(cursor, invocation_runtime_little_endian_v36());
  typed_source_boundary_join_v49(cursor.segment, head, typed_source_forwarded_follow_{root}_v49(head.cursor, (fuel - 1) as nat)) }} }}
-open spec fn typed_source_forwarded_boundary_{root}_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {{
+spec fn typed_source_forwarded_boundary_{root}_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {{
  if cursor.micro.state.pc < 0 {{ typed_source_boundary_empty_v49(cursor) }}
  else if !cursor.micro.state.valid || !invocation_byte_cut_{root}_v36(cursor.segment) {{ typed_source_boundary_empty_v49(typed_prefix_refuse_v49(cursor).cursor) }}
  else {{ let head = typed_forwarded_step_{function}_v49(cursor, invocation_runtime_little_endian_v36());
@@ -261,7 +261,7 @@ proof fn forwarding_source_boundary_{root}_v49(left: TypedPrefixCursorV49, right
  forwarding_cursor_step_{function}_v49(left, right, invocation_runtime_little_endian_v36());
  forwarding_source_follow_{root}_v49(typed_relocated_step_{function}_v49(left, invocation_runtime_little_endian_v36()).cursor, typed_forwarded_step_{function}_v49(right, invocation_runtime_little_endian_v36()).cursor, {bound}nat);
 }} }}
-open spec fn typed_final_related_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, prefix: TypedPrefixCursorV49, relocated: TypedPrefixCursorV49, actual: TypedPrefixCursorV49) -> bool {{
+spec fn typed_final_related_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, prefix: TypedPrefixCursorV49, relocated: TypedPrefixCursorV49, actual: TypedPrefixCursorV49) -> bool {{
  typed_source_related_{root}_v49(source, original, prefix, relocated) && forwarding_cursor_related_{function}_v49(relocated, actual, invocation_runtime_little_endian_v36()) }}
 proof fn typed_final_source_step_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, prefix: TypedPrefixCursorV49, relocated: TypedPrefixCursorV49, actual: TypedPrefixCursorV49)
  requires typed_final_related_{root}_v49(source, original, prefix, relocated, actual), invocation_paired_source_defined_{root}_v36(source, 1),
@@ -273,10 +273,10 @@ proof fn typed_final_source_step_{root}_v49(source: InvocationSourceByteStateV36
  forwarding_source_boundary_{root}_v49(relocated, actual);
  forwarding_source_projection_v49(typed_source_relocated_boundary_{root}_v49(relocated).observations, typed_source_forwarded_boundary_{root}_v49(actual).observations);
 }}
-open spec fn typed_final_actual_step_{root}_v49(cursor: TypedPrefixCursorV49) -> CfgStepV26<TypedPrefixCursorV49, MemoryOperationObservationV30> {{
+spec fn typed_final_actual_step_{root}_v49(cursor: TypedPrefixCursorV49) -> CfgStepV26<TypedPrefixCursorV49, MemoryOperationObservationV30> {{
  let next = typed_source_forwarded_boundary_{root}_v49(cursor);
  CfgStepV26 {{ state: next.cursor, events: typed_source_mapped_observations_v49(next.observations), halted: next.cursor.micro.state.pc < 0 }} }}
-open spec fn typed_final_actual_initial_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
+spec fn typed_final_actual_initial_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
  let original = invocation_paired_raw_initial_{root}_v36(arguments, external, execution);
  let prefix = typed_prefix_entry_{function}_v49(original);
  let relocated = typed_relocated_entry_{function}_v49(prefix.micro.state);

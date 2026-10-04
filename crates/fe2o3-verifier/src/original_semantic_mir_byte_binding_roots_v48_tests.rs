@@ -50,7 +50,7 @@ fn original_byte_bindings_keep_genuine_inlined_imports_out_of_the_root_census() 
         bindings.emit(out)?;
         for root in 0..2 {
             assert!(out.text.contains(&format!(
-                "open spec fn invocation_source_byte_map_valid_{root}_v36"
+                "spec fn invocation_source_byte_map_valid_{root}_v36"
             )));
         }
         assert!(!out.text.contains("invocation_source_byte_map_valid_2_v36"));

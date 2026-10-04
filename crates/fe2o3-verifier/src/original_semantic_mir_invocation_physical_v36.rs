@@ -47,7 +47,7 @@ pub(super) fn emit(
             )?;
             emit!(
                 out,
-                "open spec fn invocation_physical_body_{key}_v36(v: Seq<int>) -> Seq<int>\n recommends v.len() == {definitions},\n{{\n let n = original_invocation_physical_trace_{key}_v30(v);\n v"
+                "spec fn invocation_physical_body_{key}_v36(v: Seq<int>) -> Seq<int>\n recommends v.len() == {definitions},\n{{\n let n = original_invocation_physical_trace_{key}_v30(v);\n v"
             );
             for (local, node) in target.program.definitions.iter().enumerate() {
                 out.budget.charge_work(2)?;
@@ -64,7 +64,7 @@ pub(super) fn emit(
         }
         emit!(
             out,
-            "open spec fn invocation_physical_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {definitions},\n{{\n"
+            "spec fn invocation_physical_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {definitions},\n{{\n"
         );
         for (block, target) in physical.targets.iter().enumerate() {
             out.budget.charge_work(2)?;
@@ -133,7 +133,7 @@ pub(super) fn compose(
     let definitions = model.inventory.definitions().len();
     emit!(
         out,
-        "open spec fn invocation_boundary_{root}_v36(s: AggregateStateV30) -> bool {{ s.values.len() == {definitions} && (s.pc == -1int"
+        "spec fn invocation_boundary_{root}_v36(s: AggregateStateV30) -> bool {{ s.values.len() == {definitions} && (s.pc == -1int"
     );
     for index in model.original.roots[root].clone() {
         out.budget.charge_work(1)?;
@@ -155,7 +155,7 @@ pub(super) fn compose(
         };
         emit!(
             out,
-            "open spec fn invocation_boundary_{name}_{root}_v36(s: AggregateStateV30) -> {result} {{\n"
+            "spec fn invocation_boundary_{name}_{root}_v36(s: AggregateStateV30) -> {result} {{\n"
         );
         for index in model.original.roots[root].clone() {
             out.budget.charge_work(1)?;
@@ -201,7 +201,7 @@ pub(super) fn compose(
     }
     emit!(
         out,
-        "open spec fn invocation_physical_boundary_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int> {{\n let run = cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_boundary_count_{root}_v36(s));\n CfgStepV26 {{ state: run.state, events: invocation_boundary_observations_{root}_v36(s), halted: run.halted }}\n}}\nproof fn invocation_boundary_concrete_{root}_v36(s: AggregateStateV30)\n requires invocation_boundary_{root}_v36(s),\n ensures invocation_physical_boundary_step_{root}_v36(s) == actual_invocation_step_{root}_v36(s),\n invocation_boundary_{root}_v36(invocation_physical_boundary_step_{root}_v36(s).state),\n invocation_boundary_count_{root}_v36(s) > 0,\n{{\n if s.pc == -1int {{ }} else "
+        "spec fn invocation_physical_boundary_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int> {{\n let run = cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_boundary_count_{root}_v36(s));\n CfgStepV26 {{ state: run.state, events: invocation_boundary_observations_{root}_v36(s), halted: run.halted }}\n}}\nproof fn invocation_boundary_concrete_{root}_v36(s: AggregateStateV30)\n requires invocation_boundary_{root}_v36(s),\n ensures invocation_physical_boundary_step_{root}_v36(s) == actual_invocation_step_{root}_v36(s),\n invocation_boundary_{root}_v36(invocation_physical_boundary_step_{root}_v36(s).state),\n invocation_boundary_count_{root}_v36(s) > 0,\n{{\n if s.pc == -1int {{ }} else "
     );
     for index in model.original.roots[root].clone() {
         out.budget.charge_work(1)?;
@@ -248,7 +248,7 @@ pub(super) fn compose(
     }
     emit!(
         out,
-        "{{ assert(false); }}\n}}\nopen spec fn invocation_physical_fuel_{root}_v36(s: AggregateStateV30, source_fuel: nat) -> nat\n decreases source_fuel,\n{{\n if source_fuel == 0 {{ 0nat }} else {{\n let head = invocation_physical_boundary_step_{root}_v36(s);\n let count = invocation_boundary_count_{root}_v36(s);\n if head.halted {{ count }} else {{ count + invocation_physical_fuel_{root}_v36(head.state, (source_fuel - 1) as nat) }}\n }}\n}}\nproof fn invocation_concrete_finite_trace_{root}_v36(s: AggregateStateV30, source_fuel: nat)\n requires invocation_boundary_{root}_v36(s),\n ensures cfg_trace_v26(|p: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(p), s, source_fuel).state == cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_physical_fuel_{root}_v36(s, source_fuel)).state,\n cfg_trace_v26(|p: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(p), s, source_fuel).halted == cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_physical_fuel_{root}_v36(s, source_fuel)).halted,\n decreases source_fuel,\n{{\n if source_fuel > 0 {{\n invocation_boundary_concrete_{root}_v36(s);\n let head = invocation_physical_boundary_step_{root}_v36(s);\n if !head.halted {{\n invocation_concrete_finite_trace_{root}_v36(head.state, (source_fuel - 1) as nat);\n invocation_physical_trace_split_v36(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_boundary_count_{root}_v36(s), invocation_physical_fuel_{root}_v36(head.state, (source_fuel - 1) as nat));\n }}\n }}\n}}\n"
+        "{{ assert(false); }}\n}}\nspec fn invocation_physical_fuel_{root}_v36(s: AggregateStateV30, source_fuel: nat) -> nat\n decreases source_fuel,\n{{\n if source_fuel == 0 {{ 0nat }} else {{\n let head = invocation_physical_boundary_step_{root}_v36(s);\n let count = invocation_boundary_count_{root}_v36(s);\n if head.halted {{ count }} else {{ count + invocation_physical_fuel_{root}_v36(head.state, (source_fuel - 1) as nat) }}\n }}\n}}\nproof fn invocation_concrete_finite_trace_{root}_v36(s: AggregateStateV30, source_fuel: nat)\n requires invocation_boundary_{root}_v36(s),\n ensures cfg_trace_v26(|p: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(p), s, source_fuel).state == cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_physical_fuel_{root}_v36(s, source_fuel)).state,\n cfg_trace_v26(|p: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(p), s, source_fuel).halted == cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_physical_fuel_{root}_v36(s, source_fuel)).halted,\n decreases source_fuel,\n{{\n if source_fuel > 0 {{\n invocation_boundary_concrete_{root}_v36(s);\n let head = invocation_physical_boundary_step_{root}_v36(s);\n if !head.halted {{\n invocation_concrete_finite_trace_{root}_v36(head.state, (source_fuel - 1) as nat);\n invocation_physical_trace_split_v36(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, invocation_boundary_count_{root}_v36(s), invocation_physical_fuel_{root}_v36(head.state, (source_fuel - 1) as nat));\n }}\n }}\n}}\n"
     );
     Ok(())
 }
@@ -325,7 +325,7 @@ pub(super) fn segment(
     let definitions = model.inventory.definitions().len();
     emit!(
         out,
-        "open spec fn invocation_segment_guard_{key}_{ordinal}_v36(s: AggregateStateV30) -> bool {{\n s.pc == {physical}int && s.values.len() == {definitions} && "
+        "spec fn invocation_segment_guard_{key}_{ordinal}_v36(s: AggregateStateV30) -> bool {{\n s.pc == {physical}int && s.values.len() == {definitions} && "
     );
     if let TargetBranch::Switch {
         selector, cases, ..
@@ -353,7 +353,7 @@ pub(super) fn segment(
     }
     emit!(
         out,
-        "\n}}\nopen spec fn invocation_segment_physical_{key}_{ordinal}_v36(s: AggregateStateV30) -> CfgTraceV26<AggregateStateV30, int> {{\n cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, {steps}nat)\n}}\nopen spec fn invocation_segment_observations_{key}_{ordinal}_v36(s: AggregateStateV30) -> Seq<int> {{\n let body = invocation_physical_body_{target_key}_v36(s.values);\n let end = invocation_segment_physical_{key}_{ordinal}_v36(s);\n seq!["
+        "\n}}\nspec fn invocation_segment_physical_{key}_{ordinal}_v36(s: AggregateStateV30) -> CfgTraceV26<AggregateStateV30, int> {{\n cfg_trace_v26(|p: AggregateStateV30| invocation_physical_step_{root}_v36(p), s, {steps}nat)\n}}\nspec fn invocation_segment_observations_{key}_{ordinal}_v36(s: AggregateStateV30) -> Seq<int> {{\n let body = invocation_physical_body_{target_key}_v36(s.values);\n let end = invocation_segment_physical_{key}_{ordinal}_v36(s);\n seq!["
     );
     for definition in &binding.assignments {
         out.budget.charge_work(1)?;

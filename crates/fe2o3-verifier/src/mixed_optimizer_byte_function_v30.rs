@@ -182,7 +182,10 @@ pub(super) fn emit_value_type(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     match ty {
-        Type::Unit => emit!(out, "matches!({value}, MemoryValueV30::Unit)"),
+        Type::Unit => emit!(
+            out,
+            "(match {value} {{ MemoryValueV30::Unit => true, _ => false }})"
+        ),
         Type::Scalar(scalar) => {
             emit!(out, "byte_scalar_type_v57({value}, ");
             if *scalar == ScalarType::Bool {
@@ -453,7 +456,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         let function = &self.inventory.functions()[self.function.0 as usize];
         emit!(
             out,
-            "open spec fn byte_inputs_{namespace}_v55(s: MemoryStateV30, little_endian: bool) -> bool {{ s.values.len() == {} && byte_state_memory_well_formed_v30(s) && ",
+            "spec fn byte_inputs_{namespace}_v55(s: MemoryStateV30, little_endian: bool) -> bool {{ s.values.len() == {} && byte_state_memory_well_formed_v30(s) && ",
             self.inventory.definitions().len()
         );
         self.interpretation.emit_state_predicate(
@@ -490,7 +493,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         emit!(
             out,
-            "open spec fn byte_micro_begin_{namespace}_v30(s: MemoryStateV30) -> MemoryMicroStateV30 {{\n"
+            "spec fn byte_micro_begin_{namespace}_v30(s: MemoryStateV30) -> MemoryMicroStateV30 {{\n"
         );
         for block in function.blocks.clone() {
             out.budget.charge_work(1)?;
@@ -512,7 +515,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         );
         emit!(
             out,
-            "open spec fn byte_micro_step_{namespace}_v30(m: MemoryMicroStateV30, little_endian: bool) -> MemoryMicroResultV30 {{\n"
+            "spec fn byte_micro_step_{namespace}_v30(m: MemoryMicroStateV30, little_endian: bool) -> MemoryMicroResultV30 {{\n"
         );
         for operation in function.operations.clone() {
             out.budget.charge_work(2)?;
@@ -538,7 +541,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         emit!(out, " {{ byte_micro_refused_v55(m) }}\n}}\n");
         emit!(
             out,
-            "open spec fn byte_micro_finish_{namespace}_v30(m: MemoryMicroStateV30) -> MemoryBlockResultV30 {{\n"
+            "spec fn byte_micro_finish_{namespace}_v30(m: MemoryMicroStateV30) -> MemoryBlockResultV30 {{\n"
         );
         for block in function.blocks.clone() {
             out.budget.charge_work(1)?;
@@ -559,7 +562,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         );
         emit!(
             out,
-            "open spec fn byte_block_step_{namespace}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n"
+            "spec fn byte_block_step_{namespace}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n"
         );
         for block in function.blocks.clone() {
             out.budget.charge_work(1)?;
@@ -585,7 +588,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         let block = block_index(self.inventory, coordinate.block)?;
         emit!(
             out,
-            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.pc != {block} || !byte_inputs_{namespace}_v55(s, little_endian)",
+            "spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.pc != {block} || !byte_inputs_{namespace}_v55(s, little_endian)",
             coordinate.block.function.0,
             coordinate.block.block,
             coordinate.operation
@@ -608,7 +611,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 }
                 emit!(
                     out,
-                    "open spec fn {name}_{namespace}_{operation}_v{version}(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n",
+                    "spec fn {name}_{namespace}_{operation}_v{version}(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n",
                     coordinate.block.function.0,
                     coordinate.block.block,
                     coordinate.operation

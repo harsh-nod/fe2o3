@@ -286,10 +286,10 @@ fn byte_storage_untagged_niche_is_inert_while_tag_overwrites_remain_ordered() {
             .0
             .unwrap();
             let noop = text
-                .split_once("open spec fn byte_operation_107_4_v30")
+                .split_once("spec fn byte_operation_107_4_v30")
                 .unwrap()
                 .1
-                .split("open spec fn ")
+                .split("spec fn ")
                 .next()
                 .unwrap();
             assert!(noop.contains("let valid = s.valid;"));
@@ -307,10 +307,10 @@ fn byte_storage_untagged_niche_is_inert_while_tag_overwrites_remain_ordered() {
                 assert!(!noop.contains(forbidden), "{forbidden}");
             }
             let write = text
-                .split_once("open spec fn byte_operation_107_0_v30")
+                .split_once("spec fn byte_operation_107_0_v30")
                 .unwrap()
                 .1
-                .split("open spec fn ")
+                .split("spec fn ")
                 .next()
                 .unwrap();
             assert!(write.contains("byte_store_v30"));
@@ -378,10 +378,10 @@ fn byte_storage_view_emission_keeps_exact_and_one_short_resources_across_widths(
 fn byte_storage_variant_helper_preserves_nested_views_and_checks_zero_width() {
     let text = super::super::byte_memory_v30::BYTE_MEMORY_V30;
     let read = text
-        .split_once("open spec fn byte_read_tag_v39")
+        .split_once("spec fn byte_read_tag_v39")
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap();
     assert!(read.contains("byte_range_live_v30(memory, pointer, contract.object_bytes)"));
@@ -389,10 +389,10 @@ fn byte_storage_variant_helper_preserves_nested_views_and_checks_zero_width() {
         read.contains("byte_range_aligned_v30(memory, byte_tag_address_v39(pointer, contract)")
     );
     let project = text
-        .split_once("open spec fn byte_variant_projection_v39")
+        .split_once("spec fn byte_variant_projection_v39")
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap();
     for required in [

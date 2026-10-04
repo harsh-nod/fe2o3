@@ -1,6 +1,6 @@
 // The checked host census supplies a closed actual Alloca site and register.
 // A register value, not bytes or a generation counter, supplies its pointer.
-open spec fn invocation_enum_spill_read_v49(
+spec fn invocation_enum_spill_read_v49(
     target: MemoryStateV30, definition: int, owner: int,
     site: MemorySourceOperationV30, width: int, alignment: int,
     pointer_payload: bool, little_endian: bool,

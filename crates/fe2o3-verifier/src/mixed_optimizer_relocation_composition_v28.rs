@@ -187,7 +187,7 @@ pub(in super::super) fn bridge_negative_controls(
 fn emit_bridge(bridge: &[usize], out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
-        "verus! {{\nopen spec fn original_interpretation_v28(op: spec_fn(int, int, Seq<int>, int) -> int, key: int, result: int, arguments: Seq<int>, memory: int) -> int {{\n"
+        "verus! {{\nspec fn original_interpretation_v28(op: spec_fn(int, int, Seq<int>, int) -> int, key: int, result: int, arguments: Seq<int>, memory: int) -> int {{\n"
     );
     for (key, &source) in bridge.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -200,11 +200,11 @@ fn emit_bridge(bridge: &[usize], out: &mut Writer<'_, '_>) -> Result<()> {
     }
     emit!(
         out,
-        "{{ 0int }}\n}}\nopen spec fn prefix_operator_v28(op: spec_fn(int, int, Seq<int>, int) -> int) -> spec_fn(int, int, Seq<int>, int) -> int {{\n |key: int, result: int, arguments: Seq<int>, memory: int| original_interpretation_v28(op, key, result, arguments, memory)\n}}\n"
+        "{{ 0int }}\n}}\nspec fn prefix_operator_v28(op: spec_fn(int, int, Seq<int>, int) -> int) -> spec_fn(int, int, Seq<int>, int) -> int {{\n |key: int, result: int, arguments: Seq<int>, memory: int| original_interpretation_v28(op, key, result, arguments, memory)\n}}\n"
     );
     emit!(
         out,
-        "open spec fn parent_state_v28(s: CfgStateV26) -> super::CfgStateV26 {{ super::CfgStateV26 {{ pc: s.pc, values: s.values, memory: s.memory }} }}\nopen spec fn child_state_v28(s: super::CfgStateV26) -> CfgStateV26 {{ CfgStateV26 {{ pc: s.pc, values: s.values, memory: s.memory }} }}\n"
+        "spec fn parent_state_v28(s: CfgStateV26) -> super::CfgStateV26 {{ super::CfgStateV26 {{ pc: s.pc, values: s.values, memory: s.memory }} }}\nspec fn child_state_v28(s: super::CfgStateV26) -> CfgStateV26 {{ CfgStateV26 {{ pc: s.pc, values: s.values, memory: s.memory }} }}\n"
     );
     Ok(())
 }

@@ -18,15 +18,15 @@ pub(super) fn generate(
     );
     emit!(
         out,
-        "open spec fn aggregate_physical_frame_v30(p: AggregatePhysicalStateV30) -> bool {{ p.values.len() == {original_values} && p.cells.len() == {slots} && p.initialized.len() == {slots} && -1 <= p.pc < {blocks} }}\n"
+        "spec fn aggregate_physical_frame_v30(p: AggregatePhysicalStateV30) -> bool {{ p.values.len() == {original_values} && p.cells.len() == {slots} && p.initialized.len() == {slots} && -1 <= p.pc < {blocks} }}\n"
     );
     emit!(
         out,
-        "open spec fn aggregate_erase_v30(n: AggregateStateV30) -> AggregatePhysicalStateV30\n recommends n.values.len() == {source_values},\n{{ AggregatePhysicalStateV30 {{ pc: n.pc, values: n.values.subrange(0, {original_values}), cells: n.cells, initialized: n.initialized, external: n.external }} }}\n"
+        "spec fn aggregate_erase_v30(n: AggregateStateV30) -> AggregatePhysicalStateV30\n recommends n.values.len() == {source_values},\n{{ AggregatePhysicalStateV30 {{ pc: n.pc, values: n.values.subrange(0, {original_values}), cells: n.cells, initialized: n.initialized, external: n.external }} }}\n"
     );
     emit!(
         out,
-        "open spec fn aggregate_lift_v30(p: AggregatePhysicalStateV30) -> AggregateStateV30\n recommends aggregate_physical_frame_v30(p),\n{{ AggregateStateV30 {{ pc: p.pc, values: p.values + Seq::new({}, |i: int| 0int), cells: p.cells, initialized: p.initialized, external: p.external }} }}\n",
+        "spec fn aggregate_lift_v30(p: AggregatePhysicalStateV30) -> AggregateStateV30\n recommends aggregate_physical_frame_v30(p),\n{{ AggregateStateV30 {{ pc: p.pc, values: p.values + Seq::new({}, |i: int| 0int), cells: p.cells, initialized: p.initialized, external: p.external }} }}\n",
         source_values - original_values
     );
     // The physical interpreter is the exact owner-derived source step with
@@ -34,11 +34,11 @@ pub(super) fn generate(
     // every snapshot value; the reset to zero is not a hidden source premise.
     emit!(
         out,
-        "open spec fn aggregate_physical_step_v30(p: AggregatePhysicalStateV30, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregatePhysicalStateV30, int>\n recommends aggregate_physical_frame_v30(p),\n{{ let step = aggregate_step_n(aggregate_lift_v30(p), op); CfgStepV26 {{ state: aggregate_erase_v30(step.state), events: step.events, halted: step.halted }} }}\n"
+        "spec fn aggregate_physical_step_v30(p: AggregatePhysicalStateV30, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregatePhysicalStateV30, int>\n recommends aggregate_physical_frame_v30(p),\n{{ let step = aggregate_step_n(aggregate_lift_v30(p), op); CfgStepV26 {{ state: aggregate_erase_v30(step.state), events: step.events, halted: step.halted }} }}\n"
     );
     emit!(
         out,
-        "open spec fn aggregate_erasure_related_v30(p: AggregatePhysicalStateV30, n: AggregateStateV30) -> bool {{ aggregate_physical_frame_v30(p) && n.values.len() == {source_values} && p == aggregate_erase_v30(n) }}\n"
+        "spec fn aggregate_erasure_related_v30(p: AggregatePhysicalStateV30, n: AggregateStateV30) -> bool {{ aggregate_physical_frame_v30(p) && n.values.len() == {source_values} && p == aggregate_erase_v30(n) }}\n"
     );
     emit!(
         out,
@@ -82,7 +82,7 @@ pub(super) fn generate(
             };
             emit!(
                 out,
-                "open spec fn aggregate_entry_{label}_{f}_v30(s: {state}, arguments: Seq<int>) -> bool {{ s.pc == {entry} && s.values.len() == {values} && s.cells.len() == {slots} && s.initialized.len() == {slots} && arguments.len() == {}",
+                "spec fn aggregate_entry_{label}_{f}_v30(s: {state}, arguments: Seq<int>) -> bool {{ s.pc == {entry} && s.values.len() == {values} && s.cells.len() == {slots} && s.initialized.len() == {slots} && arguments.len() == {}",
                 function.function.signature.parameters.len()
             );
             for argument in 0..function.function.signature.parameters.len() {

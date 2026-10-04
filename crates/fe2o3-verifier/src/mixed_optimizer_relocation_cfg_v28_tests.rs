@@ -48,7 +48,7 @@ fn relocation_cfg_obligations_use_expressions_at_zero_trip_and_nested_cuts() {
             for result in &plan.results {
                 let input = result.input;
                 let output = result.output;
-                assert!(text.contains(&format!("open spec fn relocated_value_{input}_v28")));
+                assert!(text.contains(&format!("spec fn relocated_value_{input}_v28")));
                 assert!(text.contains(&format!(
                     "optimized[{output}] == relocated_value_{input}_v28(base, op)"
                 )));
@@ -59,7 +59,7 @@ fn relocation_cfg_obligations_use_expressions_at_zero_trip_and_nested_cuts() {
             }
             let header = if nested { 3 } else { 1 };
             let cut = text
-                .split(&format!("open spec fn relocation_cut_{header}_v28"))
+                .split(&format!("spec fn relocation_cut_{header}_v28"))
                 .nth(1)
                 .unwrap()
                 .split("\n}\n")
@@ -168,7 +168,7 @@ fn relocation_cfg_function_relations_never_read_foreign_function_slots() {
         for function in input.functions() {
             for block in function.blocks.clone() {
                 let cut = text
-                    .split(&format!("open spec fn relocation_cut_{block}_v28"))
+                    .split(&format!("spec fn relocation_cut_{block}_v28"))
                     .nth(1)
                     .unwrap()
                     .split("\n}\n")
@@ -207,7 +207,7 @@ fn relocation_cfg_disconnected_blocks_are_not_execution_cut_assumptions() {
         let floor = budget.storage();
         let text = generated(pair, budget).unwrap();
         let cut = text
-            .split("open spec fn relocation_cut_4_v28")
+            .split("spec fn relocation_cut_4_v28")
             .nth(1)
             .unwrap()
             .split("\n}\n")

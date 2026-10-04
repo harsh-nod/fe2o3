@@ -281,7 +281,7 @@ fn original_memory_scalar_operator_types_retain_the_existing_primitive_contract(
 fn original_memory_scalar_effects_use_each_operand_snapshot_before_the_write() {
     let text = include_str!("original_semantic_mir_source_scalar_operands_v48.vrs");
     let step = text
-        .split_once("open spec fn invocation_source_scalar_operands_v48(")
+        .split_once("spec fn invocation_source_scalar_operands_v48(")
         .unwrap()
         .1;
     let left = step

@@ -36,20 +36,20 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
         let result = run_classified_production_v40(LIMIT, LIMIT, endianness, |text, census| {
             assert_eq!(census[0], 2);
             for function in [
-                "open spec fn invocation_source_view_contracts_0_v39(",
-                "open spec fn byte_target_view_contracts_1_v38(",
-                "open spec fn invocation_source_target_tag_pair_0_1_v40(",
+                "spec fn invocation_source_view_contracts_0_v39(",
+                "spec fn byte_target_view_contracts_1_v38(",
+                "spec fn invocation_source_target_tag_pair_0_1_v40(",
             ] {
                 assert_eq!(text.matches(function).count(), 1, "{function}");
             }
             for root in 0..2 {
                 let initial = text
                     .split(&format!(
-                        "open spec fn invocation_paired_raw_initial_{root}_v36("
+                        "spec fn invocation_paired_raw_initial_{root}_v36("
                     ))
                     .nth(1)
                     .unwrap()
-                    .split("open spec fn")
+                    .split("spec fn")
                     .next()
                     .unwrap();
                 let gate = format!(
@@ -58,12 +58,12 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 let installed = "let memory = if admitted { ByteMemoryV30 { view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external } } else { external }";
                 assert!(initial.find(&gate).unwrap() < initial.find(installed).unwrap());
                 assert!(initial.contains("valid: admitted"));
-                assert!(text.contains(&format!("open spec fn byte_block_step_{root}_v30(")));
+                assert!(text.contains(&format!("spec fn byte_block_step_{root}_v30(")));
                 let inputs = text
-                    .split(&format!("open spec fn byte_inputs_{root}_v55("))
+                    .split(&format!("spec fn byte_inputs_{root}_v55("))
                     .nth(1)
                     .unwrap()
-                    .split("open spec fn")
+                    .split("spec fn")
                     .next()
                     .unwrap();
                 assert!(inputs.contains("s.values.len() == "));
@@ -75,9 +75,9 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 );
             }
             let operations: Vec<_> = text
-                .split("open spec fn byte_operation_")
+                .split("spec fn byte_operation_")
                 .skip(1)
-                .map(|body| body.split("open spec fn").next().unwrap())
+                .map(|body| body.split("spec fn").next().unwrap())
                 .collect();
             assert_eq!(operations.len(), census[4]);
             for operation in operations {
@@ -87,18 +87,18 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 assert!(operation.contains("_v55(s, little_endian)"));
             }
             let refused = text
-                .split("open spec fn byte_refused_v55(")
+                .split("spec fn byte_refused_v55(")
                 .nth(1)
                 .unwrap()
-                .split("open spec fn")
+                .split("spec fn")
                 .next()
                 .unwrap();
             assert!(refused.contains("MemoryStateV30 { valid: false, ..before }"));
             assert!(refused.contains("operation, MemoryOperationEffectV30::Refused"));
             let controls: Vec<_> = text
-                .split("open spec fn byte_control_")
+                .split("spec fn byte_control_")
                 .skip(1)
-                .map(|body| body.split("open spec fn").next().unwrap())
+                .map(|body| body.split("spec fn").next().unwrap())
                 .collect();
             assert!(!controls.is_empty());
             for control in controls {

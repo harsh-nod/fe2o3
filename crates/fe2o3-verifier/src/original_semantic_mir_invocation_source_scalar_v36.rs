@@ -315,7 +315,7 @@ impl<'slots, 'view, 'source> SourceScalarStatements<'slots, 'view, 'source> {
                 out,
             )?;
         }
-        write!(out, "open spec fn invocation_source_scalar_{}_{}_{}_{}_v36(n: InvocationSourceByteStateV36) -> InvocationSourceByteStateV36 {{\n if !n.machine.valid", self.root, self.instance, block, ordinal).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_scalar_{}_{}_{}_{}_v36(n: InvocationSourceByteStateV36) -> InvocationSourceByteStateV36 {{\n if !n.machine.valid", self.root, self.instance, block, ordinal).map_err(|_| out.error())?;
         for input in &self.inputs {
             out.budget.charge_work(1)?;
             if let Some((_, global, scalar)) = *input {

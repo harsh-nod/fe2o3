@@ -133,7 +133,7 @@ impl SourceSlots<'_, '_> {
             let source = self.relation.source(out.budget)?;
             let types = source.source_semantic(out.budget)?.types();
             for function in ["field_count", "discriminant"] {
-                write!(out, "open spec fn invocation_source_enum_{function}_v47(ty: int, variant: int) -> Option<int> {{\n")
+                write!(out, "spec fn invocation_source_enum_{function}_v47(ty: int, variant: int) -> Option<int> {{\n")
                     .map_err(|_| out.error())?;
                 for (index, declaration) in types.iter().enumerate() {
                     out.budget.charge_work(1)?;
@@ -154,7 +154,7 @@ impl SourceSlots<'_, '_> {
                 }
                 write!(out, " {{ None }}\n}}\n").map_err(|_| out.error())?;
             }
-            write!(out, "open spec fn invocation_source_enum_field_type_v47(ty: int, variant: int, field: int) -> Option<InvocationSourceEnumFieldTypeV47> {{\n")
+            write!(out, "spec fn invocation_source_enum_field_type_v47(ty: int, variant: int, field: int) -> Option<InvocationSourceEnumFieldTypeV47> {{\n")
                 .map_err(|_| out.error())?;
             for (index, declaration) in types.iter().enumerate() {
                 out.budget.charge_work(1)?;

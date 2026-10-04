@@ -4,10 +4,7 @@ fn shared_byte_state_result_definitions_preserve_complete_unconditional_equivale
     let prelude = super::super::byte_memory_v30::BYTE_MEMORY_V30;
     assert_eq!(prelude.matches(source).count(), 1);
     for name in ["byte_block_refused", "byte_micro_begin_result"] {
-        assert_eq!(
-            source.matches(&format!("open spec fn {name}_v58(")).count(),
-            1
-        );
+        assert_eq!(source.matches(&format!("spec fn {name}_v58(")).count(), 1);
         assert_eq!(
             source
                 .matches(&format!("proof fn {name}_exact_v58("))
@@ -56,19 +53,19 @@ fn shared_byte_state_results_keep_each_model_guard_dispatch_and_observation() {
                 let blocks = function.blocks.len();
                 assert_eq!(
                     source
-                        .matches(&format!("open spec fn byte_block_{namespace}_"))
+                        .matches(&format!("spec fn byte_block_{namespace}_"))
                         .count(),
                     blocks
                 );
                 assert_eq!(
                     source
-                        .matches(&format!("open spec fn byte_control_{namespace}_"))
+                        .matches(&format!("spec fn byte_control_{namespace}_"))
                         .count(),
                     blocks
                 );
                 assert_eq!(
                     source
-                        .matches(&format!("open spec fn byte_operation_{namespace}_"))
+                        .matches(&format!("spec fn byte_operation_{namespace}_"))
                         .count(),
                     function.operations.len()
                 );
@@ -172,18 +169,9 @@ fn shared_byte_state_results_reduce_complete_source_without_dropping_blocks() {
         let blocks = count + 1;
         let helpers = include_str!("mixed_optimizer_byte_results_v55.vrs");
         assert_eq!(source.matches(helpers).count(), 1);
-        assert_eq!(
-            source.matches("open spec fn byte_block_258_").count(),
-            blocks
-        );
-        assert_eq!(
-            source.matches("open spec fn byte_control_258_").count(),
-            blocks
-        );
-        assert_eq!(
-            source.matches("open spec fn byte_operation_258_").count(),
-            count
-        );
+        assert_eq!(source.matches("spec fn byte_block_258_").count(), blocks);
+        assert_eq!(source.matches("spec fn byte_control_258_").count(), blocks);
+        assert_eq!(source.matches("spec fn byte_operation_258_").count(), count);
         // Expand only the six closed constructor shapes of this exact fixture.
         let mut inline = source.replace("byte_block_refused_v58(s, Seq::empty())", "MemoryBlockResultV30 { state: MemoryStateV30 { valid: false, ..s }, observations: Seq::empty(), returned: Seq::empty() }")
             .replace("byte_block_refused_v58(done, observations)", "MemoryBlockResultV30 { state: MemoryStateV30 { valid: false, ..done }, observations, returned: Seq::empty() }")
@@ -295,12 +283,9 @@ fn shared_byte_state_result_equivalence_program_is_complete_and_unconditional() 
     ] {
         assert_eq!(source.matches(&format!("proof fn {name}(")).count(), 1);
     }
-    assert_eq!(source.matches("open spec fn byte_block_258_").count(), 4);
-    assert_eq!(source.matches("open spec fn byte_control_258_").count(), 4);
-    assert_eq!(
-        source.matches("open spec fn byte_operation_258_").count(),
-        3
-    );
+    assert_eq!(source.matches("spec fn byte_block_258_").count(), 4);
+    assert_eq!(source.matches("spec fn byte_control_258_").count(), 4);
+    assert_eq!(source.matches("spec fn byte_operation_258_").count(), 3);
     assert!(source.starts_with("use vstd::prelude::*;\nverus! {\n"));
     assert!(source.ends_with("}\n"));
     assert!(!source.contains("assume("));

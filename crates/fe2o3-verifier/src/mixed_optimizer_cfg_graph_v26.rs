@@ -217,7 +217,7 @@ pub(super) fn generate(
             let label = side.label();
             emit!(
                 out,
-                "open spec fn cfg_block_{label}_{block}({PARAMETERS}) -> CfgStepV26<CfgStateV26, int>\n recommends base.len() == {},\n{{\n",
+                "spec fn cfg_block_{label}_{block}({PARAMETERS}) -> CfgStepV26<CfgStateV26, int>\n recommends base.len() == {},\n{{\n",
                 inventory.definitions().len()
             );
             body_in(
@@ -254,13 +254,13 @@ pub(super) fn generate(
         let label = side.label();
         emit!(
             out,
-            "open spec fn cfg_frame_{label}_v26(state: CfgStateV26) -> bool {{ state.values.len() == {} && 0 <= state.pc < {} }}\n",
+            "spec fn cfg_frame_{label}_v26(state: CfgStateV26) -> bool {{ state.values.len() == {} && 0 <= state.pc < {} }}\n",
             inventory.definitions().len(),
             inventory.blocks().len()
         );
         emit!(
             out,
-            "open spec fn cfg_step_{label}_v26(state: CfgStateV26, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<CfgStateV26, int>\n recommends state.values.len() == {},\n{{\n",
+            "spec fn cfg_step_{label}_v26(state: CfgStateV26, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<CfgStateV26, int>\n recommends state.values.len() == {},\n{{\n",
             inventory.definitions().len()
         );
         for block in 0..inventory.blocks().len() {
@@ -292,7 +292,7 @@ pub(super) fn generate(
             let ordinal = function.coordinate.0;
             emit!(
                 out,
-                "open spec fn cfg_entry_{label}_{ordinal}_v26(state: CfgStateV26, arguments: Seq<int>) -> bool {{\n cfg_frame_{label}_v26(state) && state.pc == {} && arguments.len() == {}",
+                "spec fn cfg_entry_{label}_{ordinal}_v26(state: CfgStateV26, arguments: Seq<int>) -> bool {{\n cfg_frame_{label}_v26(state) && state.pc == {} && arguments.len() == {}",
                 function.blocks.start,
                 function.function.signature.parameters.len()
             );

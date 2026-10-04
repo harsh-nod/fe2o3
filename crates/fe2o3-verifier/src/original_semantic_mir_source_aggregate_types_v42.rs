@@ -73,7 +73,7 @@ impl SourceAggregateTypesV42 {
         out.budget.reserve_storage(headers())?;
         write!(
             out,
-            "open spec fn invocation_source_aggregate_leaf_count_v42(ty: int) -> int {{\n"
+            "spec fn invocation_source_aggregate_leaf_count_v42(ty: int) -> int {{\n"
         )
         .map_err(|_| out.error())?;
         for (ty, range) in self.roots.iter().enumerate() {
@@ -83,7 +83,7 @@ impl SourceAggregateTypesV42 {
                     .map_err(|_| out.error())?;
             }
         }
-        write!(out, " {{ -1int }}\n}}\nopen spec fn invocation_source_aggregate_leaf_path_v42(ty: int, ordinal: int) -> Seq<int> {{\n").map_err(|_| out.error())?;
+        write!(out, " {{ -1int }}\n}}\nspec fn invocation_source_aggregate_leaf_path_v42(ty: int, ordinal: int) -> Seq<int> {{\n").map_err(|_| out.error())?;
         for (ty, range) in self.roots.iter().enumerate() {
             for (ordinal, leaf) in self.leaves[range.clone()].iter().enumerate() {
                 out.budget.charge_work(2)?;
@@ -96,7 +96,7 @@ impl SourceAggregateTypesV42 {
                 write!(out, "] }} else").map_err(|_| out.error())?;
             }
         }
-        write!(out, " {{ seq![] }}\n}}\nopen spec fn invocation_source_aggregate_leaf_bits_v42(ty: int, ordinal: int) -> int {{\n").map_err(|_| out.error())?;
+        write!(out, " {{ seq![] }}\n}}\nspec fn invocation_source_aggregate_leaf_bits_v42(ty: int, ordinal: int) -> int {{\n").map_err(|_| out.error())?;
         for (ty, range) in self.roots.iter().enumerate() {
             for (ordinal, leaf) in self.leaves[range.clone()].iter().enumerate() {
                 out.budget.charge_work(2)?;
@@ -108,7 +108,7 @@ impl SourceAggregateTypesV42 {
                 .map_err(|_| out.error())?;
             }
         }
-        write!(out, " {{ -1int }}\n}}\nopen spec fn invocation_source_aggregate_child_v42(ty: int, field: int) -> Option<int> {{\n").map_err(|_| out.error())?;
+        write!(out, " {{ -1int }}\n}}\nspec fn invocation_source_aggregate_child_v42(ty: int, field: int) -> Option<int> {{\n").map_err(|_| out.error())?;
         for (ty, kind) in self.kinds.iter().enumerate() {
             out.budget.charge_work(1)?;
             match *kind {

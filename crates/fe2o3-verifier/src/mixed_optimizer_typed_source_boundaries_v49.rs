@@ -9,10 +9,10 @@ struct TypedSourceBoundaryV49 {
     returned: Seq<MemoryValueV30>,
     blocks: Seq<int>,
 }
-open spec fn typed_source_boundary_empty_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {
+spec fn typed_source_boundary_empty_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {
     TypedSourceBoundaryV49 { cursor, observations: seq![], returned: seq![], blocks: seq![] }
 }
-open spec fn typed_source_boundary_join_v49(block: int, head: TypedPrefixStepV49,
+spec fn typed_source_boundary_join_v49(block: int, head: TypedPrefixStepV49,
     tail: TypedSourceBoundaryV49,
 ) -> TypedSourceBoundaryV49 {
     TypedSourceBoundaryV49 { cursor: tail.cursor,
@@ -20,7 +20,7 @@ open spec fn typed_source_boundary_join_v49(block: int, head: TypedPrefixStepV49
         returned: if head.cursor.micro.state.pc < 0 { head.returned } else { tail.returned },
         blocks: seq![block] + tail.blocks }
 }
-open spec fn typed_source_observations_valid_v49(observations: Seq<MemoryOperationObservationV30>) -> bool {
+spec fn typed_source_observations_valid_v49(observations: Seq<MemoryOperationObservationV30>) -> bool {
     forall|i: int| 0 <= i < observations.len() ==>
         byte_observation_snapshots_valid_v39(observations[i])
         && observations[i].before.valid && observations[i].after.valid
@@ -32,12 +32,12 @@ open spec fn typed_source_observations_valid_v49(observations: Seq<MemoryOperati
 }
 // Only the input to source map/effect predicates is projected. These records
 // are never passed to a ByteFunction, a source interpreter, or a cut step.
-open spec fn typed_source_mapped_observation_v49(observation: MemoryOperationObservationV30)
+spec fn typed_source_mapped_observation_v49(observation: MemoryOperationObservationV30)
     -> MemoryOperationObservationV30 {
     MemoryOperationObservationV30 { before: typed_original_map_view_2_v48(observation.before),
         after: typed_original_map_view_2_v48(observation.after), ..observation }
 }
-open spec fn typed_source_mapped_observations_v49(observations: Seq<MemoryOperationObservationV30>)
+spec fn typed_source_mapped_observations_v49(observations: Seq<MemoryOperationObservationV30>)
     -> Seq<MemoryOperationObservationV30> {
     let observable = invocation_actual_observations_v39(observations);
     Seq::new(observable.len(), |i: int| typed_source_mapped_observation_v49(observable[i]))
@@ -131,20 +131,20 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             self.bridge.charge(4, out)?;
             emit!(
                 out,
-                r#"open spec fn typed_source_{stage}_follow_{root}_v49(cursor: TypedPrefixCursorV49, fuel: nat) -> TypedSourceBoundaryV49
+                r#"spec fn typed_source_{stage}_follow_{root}_v49(cursor: TypedPrefixCursorV49, fuel: nat) -> TypedSourceBoundaryV49
  decreases fuel
 {{ if !cursor.micro.state.valid || cursor.micro.state.pc < 0 || invocation_byte_cut_{root}_v36(cursor.segment) {{ typed_source_boundary_empty_v49(cursor) }}
  else if fuel == 0 || cursor.segment < {start} || {end} <= cursor.segment {{ typed_source_boundary_empty_v49(typed_prefix_refuse_v49(cursor).cursor) }}
  else {{ let head = typed_{stage}_step_{function}_v49(cursor, invocation_runtime_little_endian_v36());
  let tail = typed_source_{stage}_follow_{root}_v49(head.cursor, (fuel - 1) as nat);
  typed_source_boundary_join_v49(cursor.segment, head, tail) }} }}
-open spec fn typed_source_{stage}_boundary_{root}_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {{
+spec fn typed_source_{stage}_boundary_{root}_v49(cursor: TypedPrefixCursorV49) -> TypedSourceBoundaryV49 {{
  if cursor.micro.state.pc < 0 {{ typed_source_boundary_empty_v49(cursor) }}
  else if !cursor.micro.state.valid || !invocation_byte_cut_{root}_v36(cursor.segment) {{ typed_source_boundary_empty_v49(typed_prefix_refuse_v49(cursor).cursor) }}
  else {{ let head = typed_{stage}_step_{function}_v49(cursor, invocation_runtime_little_endian_v36());
  let tail = typed_source_{stage}_follow_{root}_v49(head.cursor, {bound}nat);
  typed_source_boundary_join_v49(cursor.segment, head, tail) }} }}
-open spec fn typed_source_{stage}_cut_step_{root}_v49(cursor: TypedPrefixCursorV49) -> CfgStepV26<TypedPrefixCursorV49, ()> {{
+spec fn typed_source_{stage}_cut_step_{root}_v49(cursor: TypedPrefixCursorV49) -> CfgStepV26<TypedPrefixCursorV49, ()> {{
  let next = typed_source_{stage}_boundary_{root}_v49(cursor);
  CfgStepV26 {{ state: next.cursor, events: seq![], halted: next.cursor.micro.state.pc < 0 }} }}
 "#
@@ -190,7 +190,7 @@ proof fn typed_source_boundary_{root}_v49(original: MemoryStateV30, middle: Type
  typed_composed_step_{function}_v49(original, middle, actual, invocation_runtime_little_endian_v36());
  typed_source_follow_{root}_v49(head.state, typed_prefix_step_{function}_v49(middle, invocation_runtime_little_endian_v36()).cursor, typed_relocated_step_{function}_v49(actual, invocation_runtime_little_endian_v36()).cursor, {bound}nat);
 }} }}
-open spec fn typed_source_related_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49) -> bool {{
+spec fn typed_source_related_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49) -> bool {{
  invocation_paired_related_{root}_v36(source, original) && typed_composed_related_{function}_v49(original, middle, actual, invocation_runtime_little_endian_v36()) }}
 proof fn typed_source_step_{root}_v49(source: InvocationSourceByteStateV36, original: MemoryStateV30, middle: TypedPrefixCursorV49, actual: TypedPrefixCursorV49)
  requires typed_source_related_{root}_v49(source, original, middle, actual), invocation_paired_source_defined_{root}_v36(source, 1),
@@ -202,9 +202,9 @@ proof fn typed_source_step_{root}_v49(source: InvocationSourceByteStateV36, orig
 {{ invocation_paired_step_{root}_v36(source, original); typed_source_boundary_{root}_v49(original, middle, actual);
  typed_source_observation_transport_{root}_v49(invocation_byte_boundary_{root}_v36(original).observations, typed_source_relocated_boundary_{root}_v49(actual).observations);
  invocation_source_observations_extensionality_{root}_v49(invocation_paired_source_step_{root}_v36(source).events, invocation_actual_observations_v39(invocation_byte_boundary_{root}_v36(original).observations), typed_source_mapped_observations_v49(typed_source_relocated_boundary_{root}_v49(actual).observations)); }}
-open spec fn typed_source_middle_ready_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
+spec fn typed_source_middle_ready_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
  typed_source_prefix_follow_{root}_v49(typed_prefix_entry_{function}_v49(invocation_paired_raw_initial_{root}_v36(arguments, external, execution)), {bound}nat) }}
-open spec fn typed_source_actual_ready_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
+spec fn typed_source_actual_ready_{root}_v49(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> TypedSourceBoundaryV49 {{
  let original = invocation_paired_raw_initial_{root}_v36(arguments, external, execution);
  let middle = typed_prefix_entry_{function}_v49(original);
  typed_source_relocated_follow_{root}_v49(typed_relocated_entry_{function}_v49(middle.micro.state), {bound}nat) }}

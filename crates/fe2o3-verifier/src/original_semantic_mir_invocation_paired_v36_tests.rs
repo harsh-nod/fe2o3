@@ -292,7 +292,7 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
         for root in 0..2 {
             let predicate = out
                 .text
-                .split(&format!("open spec fn invocation_paired_native_inputs_{root}_v38"))
+                .split(&format!("spec fn invocation_paired_native_inputs_{root}_v38"))
                 .nth(1)
                 .unwrap()
                 .split("proof fn")
@@ -316,7 +316,7 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
                 .split(&format!("proof fn invocation_paired_source_ready_{root}_v38"))
                 .nth(1)
                 .unwrap()
-                .split("open spec fn")
+                .split("spec fn")
                 .next()
                 .unwrap();
             let required = readiness.split(" requires ").nth(1).unwrap();
@@ -329,8 +329,8 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
                 "invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid"
             )));
             let initial = out.text.split(&format!(
-                "open spec fn invocation_paired_raw_initial_{root}_v36("
-            )).nth(1).unwrap().split("open spec fn").next().unwrap();
+                "spec fn invocation_paired_raw_initial_{root}_v36("
+            )).nth(1).unwrap().split("spec fn").next().unwrap();
             let gate = format!("let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);");
             assert_eq!(initial.matches("let admitted =").count(), 1);
             let gated = initial.find(&gate).unwrap();

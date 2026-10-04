@@ -673,7 +673,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             out.budget.charge_work(12)?;
             let row = row.as_ref().ok_or_else(mismatch)?;
             let operation = row.allocation();
-            write!(out, "open spec fn invocation_source_slot_{ordinal}_v36() -> InvocationSourceSlotV36 {{ InvocationSourceSlotV36 {{ root: {}int, instance: {}int, owner: {}int, local: {}int, semantic_type: {}int, source_generation: ", row.root(), row.instance(), row.function().index(), row.local(), row.semantic_type().index()).map_err(|_| out.error())?;
+            write!(out, "spec fn invocation_source_slot_{ordinal}_v36() -> InvocationSourceSlotV36 {{ InvocationSourceSlotV36 {{ root: {}int, instance: {}int, owner: {}int, local: {}int, semantic_type: {}int, source_generation: ", row.root(), row.instance(), row.function().index(), row.local(), row.semantic_type().index()).map_err(|_| out.error())?;
             emit_option(row.source_generation(), out)?;
             write!(out, ", storage_layout: ").map_err(|_| out.error())?;
             emit_option(row.layout().map(|layout| layout.0), out)?;
@@ -681,7 +681,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         }
         write!(
             out,
-            "open spec fn invocation_source_slot_count_v36() -> nat {{ {}nat }}\n",
+            "spec fn invocation_source_slot_count_v36() -> nat {{ {}nat }}\n",
             self.frames.len()
         )
         .map_err(|_| out.error())?;

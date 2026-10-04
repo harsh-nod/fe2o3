@@ -346,15 +346,14 @@ fn call_program(moved: bool, work: usize, storage: usize) -> (Result<()>, usize,
                     paired.emit(out)?;
                     for root in 0..2 {
                         for instance in 1..3 {
-                            let enter = format!(
-                                "open spec fn invocation_source_enter_{root}_{instance}_v36("
-                            );
+                            let enter =
+                                format!("spec fn invocation_source_enter_{root}_{instance}_v36(");
                             let body = out
                                 .text
                                 .split(&enter)
                                 .nth(1)
                                 .expect("actual internal entry")
-                                .split("open spec fn ")
+                                .split("spec fn ")
                                 .next()
                                 .unwrap();
                             assert!(body.contains("InvocationSourceValueV42::Enum(value)"));
@@ -363,27 +362,25 @@ fn call_program(moved: bool, work: usize, storage: usize) -> (Result<()>, usize,
                                     "invocation_source_enum_snapshot_current_v50(entered"
                                 )
                             );
-                            let returned = format!(
-                                "open spec fn invocation_source_return_{root}_{instance}_v36("
-                            );
+                            let returned =
+                                format!("spec fn invocation_source_return_{root}_{instance}_v36(");
                             let body = out
                                 .text
                                 .split(&returned)
                                 .nth(1)
                                 .expect("actual internal return")
-                                .split("open spec fn ")
+                                .split("spec fn ")
                                 .next()
                                 .unwrap();
                             assert!(body.contains("invocation_source_enum_snapshot_v50(source"));
                         }
-                        let name =
-                            format!("open spec fn invocation_paired_control_values_{root}_v36(");
+                        let name = format!("spec fn invocation_paired_control_values_{root}_v36(");
                         let body = out
                             .text
                             .split(&name)
                             .nth(1)
                             .expect("actual snapshot relation")
-                            .split("open spec fn ")
+                            .split("spec fn ")
                             .next()
                             .unwrap();
                         assert!(body.contains("InvocationSourceValueV42::Enum(value)"));

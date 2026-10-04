@@ -129,12 +129,12 @@ pub(super) fn entry(
     )?;
     emit!(
         out,
-        "open spec fn actual_invocation_ready_{root}_v36(s: AggregateStateV30) -> AggregateStateV30\n recommends s.values.len() == {count},\n{{\n let n = original_invocation_entry_trace_{root}_v30(s.values);\n"
+        "spec fn actual_invocation_ready_{root}_v36(s: AggregateStateV30) -> AggregateStateV30\n recommends s.values.len() == {count},\n{{\n let n = original_invocation_entry_trace_{root}_v30(s.values);\n"
     );
     state(model, root, trace, Some(entry.physical.block as usize), out)?;
     emit!(
         out,
-        " state\n}}\nopen spec fn actual_invocation_prefix_{root}_v36() -> Seq<int> {{ seq!["
+        " state\n}}\nspec fn actual_invocation_prefix_{root}_v36() -> Seq<int> {{ seq!["
     );
     for &block in path {
         out.budget.charge_work(1)?;
@@ -194,7 +194,7 @@ pub(super) fn segment(
     )?;
     emit!(
         out,
-        "open spec fn actual_invocation_segment_{key}_{ordinal}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {count},\n{{\n let n = original_invocation_actual_trace_{graph}_v30(s.values);\n"
+        "spec fn actual_invocation_segment_{key}_{ordinal}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {count},\n{{\n let n = original_invocation_actual_trace_{graph}_v30(s.values);\n"
     );
     state(model, body.root, trace, target, out)?;
     emit!(out, " CfgStepV26 {{ state, events: seq![");
@@ -208,7 +208,7 @@ pub(super) fn segment(
     }
     emit!(
         out,
-        "], halted: {} }}\n}}\nopen spec fn actual_invocation_path_{key}_{ordinal}_v36() -> Seq<int> {{ seq![{}int,",
+        "], halted: {} }}\n}}\nspec fn actual_invocation_path_{key}_{ordinal}_v36() -> Seq<int> {{ seq![{}int,",
         next.is_none(),
         binding.physical.block
     );
@@ -290,7 +290,7 @@ fn dispatch(
     }
     emit!(
         out,
-        "open spec fn actual_invocation_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {definitions},\n{{\n"
+        "spec fn actual_invocation_step_{root}_v36(s: AggregateStateV30) -> CfgStepV26<AggregateStateV30, int>\n recommends s.values.len() == {definitions},\n{{\n"
     );
     for index in model.original.roots[root].clone() {
         out.budget.charge_work(1)?;
@@ -338,7 +338,7 @@ fn dispatch(
         let side = if source { "source" } else { "actual" };
         emit!(
             out,
-            "open spec fn invocation_{side}_frames_{root}_v36(pc: int, f: MemoryFrameRuntimeV30) -> MemoryFrameRuntimeV30 {{\n"
+            "spec fn invocation_{side}_frames_{root}_v36(pc: int, f: MemoryFrameRuntimeV30) -> MemoryFrameRuntimeV30 {{\n"
         );
         for index in model.original.roots[root].clone() {
             out.budget.charge_work(1)?;
@@ -367,7 +367,7 @@ fn dispatch(
     }
     emit!(
         out,
-        "open spec fn invocation_source_step_{root}_v36(s: OriginalInvocationRuntimeV36) -> CfgStepV26<OriginalInvocationRuntimeV36, int> {{\n let step = original_invocation_step_{root}_v34(s.scalar);\n CfgStepV26 {{ state: OriginalInvocationRuntimeV36 {{ scalar: step.state, frames: invocation_source_frames_{root}_v36(s.scalar.pc, s.frames) }}, events: step.events, halted: step.halted }}\n}}\nopen spec fn invocation_actual_step_{root}_v36(s: ActualInvocationRuntimeV36) -> CfgStepV26<ActualInvocationRuntimeV36, int> {{\n let step = invocation_physical_boundary_step_{root}_v36(s.scalar);\n CfgStepV26 {{ state: ActualInvocationRuntimeV36 {{ scalar: step.state, frames: invocation_actual_frames_{root}_v36(s.scalar.pc, s.frames) }}, events: step.events, halted: step.halted }}\n}}\n"
+        "spec fn invocation_source_step_{root}_v36(s: OriginalInvocationRuntimeV36) -> CfgStepV26<OriginalInvocationRuntimeV36, int> {{\n let step = original_invocation_step_{root}_v34(s.scalar);\n CfgStepV26 {{ state: OriginalInvocationRuntimeV36 {{ scalar: step.state, frames: invocation_source_frames_{root}_v36(s.scalar.pc, s.frames) }}, events: step.events, halted: step.halted }}\n}}\nspec fn invocation_actual_step_{root}_v36(s: ActualInvocationRuntimeV36) -> CfgStepV26<ActualInvocationRuntimeV36, int> {{\n let step = invocation_physical_boundary_step_{root}_v36(s.scalar);\n CfgStepV26 {{ state: ActualInvocationRuntimeV36 {{ scalar: step.state, frames: invocation_actual_frames_{root}_v36(s.scalar.pc, s.frames) }}, events: step.events, halted: step.halted }}\n}}\n"
     );
     Ok(())
 }
@@ -435,7 +435,7 @@ fn related(
     let definitions = model.inventory.definitions().len();
     emit!(
         out,
-        "open spec fn invocation_related_{root}_v36(n: OriginalInvocationRuntimeV36, o: ActualInvocationRuntimeV36) -> bool {{\n n.scalar.values.len() == {locals} && n.scalar.defined.len() == {locals} && o.scalar.values.len() == {definitions}\n && n.scalar.cells == o.scalar.cells && n.scalar.initialized == o.scalar.initialized && n.scalar.external == o.scalar.external\n && invocation_boundary_{root}_v36(o.scalar)\n && n.frames == o.frames && byte_frame_runtime_well_formed_v30(n.frames)\n && (if n.scalar.pc == -1int {{ o.scalar.pc == -1int && n.frames.active.len() == 0 }} else "
+        "spec fn invocation_related_{root}_v36(n: OriginalInvocationRuntimeV36, o: ActualInvocationRuntimeV36) -> bool {{\n n.scalar.values.len() == {locals} && n.scalar.defined.len() == {locals} && o.scalar.values.len() == {definitions}\n && n.scalar.cells == o.scalar.cells && n.scalar.initialized == o.scalar.initialized && n.scalar.external == o.scalar.external\n && invocation_boundary_{root}_v36(o.scalar)\n && n.frames == o.frames && byte_frame_runtime_well_formed_v30(n.frames)\n && (if n.scalar.pc == -1int {{ o.scalar.pc == -1int && n.frames.active.len() == 0 }} else "
     );
     for index in model.original.roots[root].clone() {
         out.budget.charge_work(1)?;
@@ -549,7 +549,7 @@ fn initial(
     let entry = key(body, body.control.entry.get() as usize)?;
     emit!(
         out,
-        "open spec fn invocation_arguments_{root}_v36(a: Seq<int>) -> bool {{ a.len() == {}",
+        "spec fn invocation_arguments_{root}_v36(a: Seq<int>) -> bool {{ a.len() == {}",
         body.control.arguments
     );
     for &(local, argument) in &body.control.initial {
@@ -559,7 +559,7 @@ fn initial(
     }
     emit!(
         out,
-        " }}\nopen spec fn invocation_source_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> OriginalInvocationRuntimeV36\n recommends invocation_arguments_{root}_v36(a),\n{{\n OriginalInvocationRuntimeV36 {{ frames: byte_root_frame_v30({owner}int), scalar: OriginalControlStateV31 {{ pc: {entry}int, values: Seq::new({locals}nat, |i: int| "
+        " }}\nspec fn invocation_source_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> OriginalInvocationRuntimeV36\n recommends invocation_arguments_{root}_v36(a),\n{{\n OriginalInvocationRuntimeV36 {{ frames: byte_root_frame_v30({owner}int), scalar: OriginalControlStateV31 {{ pc: {entry}int, values: Seq::new({locals}nat, |i: int| "
     );
     for &(local, argument) in &body.control.initial {
         out.budget.charge_work(1)?;
@@ -582,7 +582,7 @@ fn initial(
     }
     emit!(
         out,
-        "), cells: p.cells, initialized: p.initialized, external: p.external }} }}\n}}\nopen spec fn invocation_actual_raw_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30\n recommends invocation_arguments_{root}_v36(a),\n{{\n AggregateStateV30 {{ pc: 0int, values: Seq::new({definitions}nat, |i: int| "
+        "), cells: p.cells, initialized: p.initialized, external: p.external }} }}\n}}\nspec fn invocation_actual_raw_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> AggregateStateV30\n recommends invocation_arguments_{root}_v36(a),\n{{\n AggregateStateV30 {{ pc: 0int, values: Seq::new({definitions}nat, |i: int| "
     );
     for argument in 0..body.control.arguments {
         out.budget.charge_work(1)?;
@@ -591,7 +591,7 @@ fn initial(
     }
     emit!(
         out,
-        "0int), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nopen spec fn invocation_actual_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> ActualInvocationRuntimeV36\n recommends invocation_arguments_{root}_v36(a),\n{{\n ActualInvocationRuntimeV36 {{ frames: byte_root_frame_v30({owner}int), scalar: actual_invocation_ready_{root}_v36(invocation_actual_raw_initial_{root}_v36(a, p)) }}\n}}\nproof fn invocation_initial_relation_{root}_v36(a: Seq<int>, p: AggregateStateV30)\n requires invocation_arguments_{root}_v36(a),\n ensures invocation_related_{root}_v36(invocation_source_initial_{root}_v36(a, p), invocation_actual_initial_{root}_v36(a, p)),\n{{ }}\n"
+        "0int), cells: p.cells, initialized: p.initialized, external: p.external }}\n}}\nspec fn invocation_actual_initial_{root}_v36(a: Seq<int>, p: AggregateStateV30) -> ActualInvocationRuntimeV36\n recommends invocation_arguments_{root}_v36(a),\n{{\n ActualInvocationRuntimeV36 {{ frames: byte_root_frame_v30({owner}int), scalar: actual_invocation_ready_{root}_v36(invocation_actual_raw_initial_{root}_v36(a, p)) }}\n}}\nproof fn invocation_initial_relation_{root}_v36(a: Seq<int>, p: AggregateStateV30)\n requires invocation_arguments_{root}_v36(a),\n ensures invocation_related_{root}_v36(invocation_source_initial_{root}_v36(a, p), invocation_actual_initial_{root}_v36(a, p)),\n{{ }}\n"
     );
     Ok(())
 }
@@ -607,7 +607,7 @@ fn concrete_proof(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
 fn initial_concrete_proof(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
-        "open spec fn invocation_initial_physical_fuel_{root}_v36(a: Seq<int>, p: AggregateStateV30, fuel: nat) -> nat\n{{\n actual_invocation_prefix_{root}_v36().len() + invocation_physical_fuel_{root}_v36(invocation_actual_initial_{root}_v36(a, p).scalar, fuel)\n}}\nproof fn invocation_initial_concrete_trace_{root}_v36(a: Seq<int>, p: AggregateStateV30, fuel: nat)\n requires invocation_arguments_{root}_v36(a),\n ensures cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).events == cfg_trace_v26(|s: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(s), invocation_actual_initial_{root}_v36(a, p).scalar, fuel).events,\n cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).halted == cfg_trace_v26(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), invocation_actual_raw_initial_{root}_v36(a, p), invocation_initial_physical_fuel_{root}_v36(a, p, fuel)).halted,\n invocation_related_{root}_v36(\n cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).state,\n ActualInvocationRuntimeV36 {{ scalar: cfg_trace_v26(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), invocation_actual_raw_initial_{root}_v36(a, p), invocation_initial_physical_fuel_{root}_v36(a, p, fuel)).state,\n frames: cfg_trace_v26(|s: ActualInvocationRuntimeV36| invocation_actual_step_{root}_v36(s), invocation_actual_initial_{root}_v36(a, p), fuel).state.frames }}),\n{{\n let n = invocation_source_initial_{root}_v36(a, p);\n let o = invocation_actual_initial_{root}_v36(a, p);\n let raw = invocation_actual_raw_initial_{root}_v36(a, p);\n invocation_initial_relation_{root}_v36(a, p);\n invocation_prefix_concrete_{root}_v36(raw);\n invocation_original_concrete_trace_{root}_v36(n, o, fuel);\n invocation_physical_trace_split_v36(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), raw, actual_invocation_prefix_{root}_v36().len(), invocation_physical_fuel_{root}_v36(o.scalar, fuel));\n}}\n"
+        "spec fn invocation_initial_physical_fuel_{root}_v36(a: Seq<int>, p: AggregateStateV30, fuel: nat) -> nat\n{{\n actual_invocation_prefix_{root}_v36().len() + invocation_physical_fuel_{root}_v36(invocation_actual_initial_{root}_v36(a, p).scalar, fuel)\n}}\nproof fn invocation_initial_concrete_trace_{root}_v36(a: Seq<int>, p: AggregateStateV30, fuel: nat)\n requires invocation_arguments_{root}_v36(a),\n ensures cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).events == cfg_trace_v26(|s: AggregateStateV30| invocation_physical_boundary_step_{root}_v36(s), invocation_actual_initial_{root}_v36(a, p).scalar, fuel).events,\n cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).halted == cfg_trace_v26(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), invocation_actual_raw_initial_{root}_v36(a, p), invocation_initial_physical_fuel_{root}_v36(a, p, fuel)).halted,\n invocation_related_{root}_v36(\n cfg_trace_v26(|s: OriginalInvocationRuntimeV36| invocation_source_step_{root}_v36(s), invocation_source_initial_{root}_v36(a, p), fuel).state,\n ActualInvocationRuntimeV36 {{ scalar: cfg_trace_v26(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), invocation_actual_raw_initial_{root}_v36(a, p), invocation_initial_physical_fuel_{root}_v36(a, p, fuel)).state,\n frames: cfg_trace_v26(|s: ActualInvocationRuntimeV36| invocation_actual_step_{root}_v36(s), invocation_actual_initial_{root}_v36(a, p), fuel).state.frames }}),\n{{\n let n = invocation_source_initial_{root}_v36(a, p);\n let o = invocation_actual_initial_{root}_v36(a, p);\n let raw = invocation_actual_raw_initial_{root}_v36(a, p);\n invocation_initial_relation_{root}_v36(a, p);\n invocation_prefix_concrete_{root}_v36(raw);\n invocation_original_concrete_trace_{root}_v36(n, o, fuel);\n invocation_physical_trace_split_v36(|s: AggregateStateV30| invocation_physical_step_{root}_v36(s), raw, actual_invocation_prefix_{root}_v36().len(), invocation_physical_fuel_{root}_v36(o.scalar, fuel));\n}}\n"
     );
     Ok(())
 }

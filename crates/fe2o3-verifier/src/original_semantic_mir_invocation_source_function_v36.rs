@@ -184,7 +184,7 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         }
         write!(
             out,
-            "open spec fn invocation_source_abort_site_v50(pc: int) -> bool {{ false"
+            "spec fn invocation_source_abort_site_v50(pc: int) -> bool {{ false"
         )
         .map_err(|_| out.error())?;
         for function in &self.functions {
@@ -213,14 +213,14 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         for (root, (range, owner, entry)) in self.roots.iter().enumerate() {
             out.budget.charge_work(1)?;
             let locals = self.locals;
-            write!(out, "open spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let native = invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument]));\n let entered_memory = if native {{ ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(little_endian), ..external }} }} else {{ external }};\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: entered_memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: native }}, slots: Map::empty(), objects: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n let source_arguments = Seq::new(arguments.len(), |i: int| InvocationSourceValueV42::Carrier(arguments[i]));\n invocation_source_enter_{root}_0_v36(source, source_arguments, little_endian)\n}}\nopen spec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
+            write!(out, "spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let native = invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument]));\n let entered_memory = if native {{ ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(little_endian), ..external }} }} else {{ external }};\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: entered_memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: native }}, slots: Map::empty(), objects: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n let source_arguments = Seq::new(arguments.len(), |i: int| InvocationSourceValueV42::Carrier(arguments[i]));\n invocation_source_enter_{root}_0_v36(source, source_arguments, little_endian)\n}}\nspec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
             for (instance, function) in self.functions[range.clone()].iter().enumerate() {
                 out.budget.charge_work(1)?;
                 if let Some(function) = function {
                     write!(out, " if {} <= source.machine.pc < {} {{ invocation_source_block_{root}_{instance}_v36(source, little_endian) }} else", function.blocks.start, function.blocks.end).map_err(|_| out.error())?;
                 }
             }
-            write!(out, " {{ invocation_source_block_refused_v36(InvocationSourceMicroStateV36 {{ source, next_statement: 0, observations: seq![] }}) }}\n}}\nopen spec fn invocation_source_byte_trace_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat, little_endian: bool) -> Seq<InvocationSourceBlockResultV36>\n decreases fuel\n{{ if fuel == 0 || !source.machine.valid || source.machine.pc < 0 {{ seq![] }} else {{ let next = invocation_source_byte_block_{root}_v36(source, little_endian); seq![next] + invocation_source_byte_trace_{root}_v36(next.source, (fuel - 1) as nat, little_endian) }} }}\n").map_err(|_| out.error())?;
+            write!(out, " {{ invocation_source_block_refused_v36(InvocationSourceMicroStateV36 {{ source, next_statement: 0, observations: seq![] }}) }}\n}}\nspec fn invocation_source_byte_trace_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat, little_endian: bool) -> Seq<InvocationSourceBlockResultV36>\n decreases fuel\n{{ if fuel == 0 || !source.machine.valid || source.machine.pc < 0 {{ seq![] }} else {{ let next = invocation_source_byte_block_{root}_v36(source, little_endian); seq![next] + invocation_source_byte_trace_{root}_v36(next.source, (fuel - 1) as nat, little_endian) }} }}\n").map_err(|_| out.error())?;
         }
         Ok(())
     }
@@ -553,7 +553,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
         let (r, i) = (self.root, self.instance);
         write!(
             out,
-            "open spec fn invocation_source_statement_count_{r}_{i}_v36(pc: int) -> int {{\n"
+            "spec fn invocation_source_statement_count_{r}_{i}_v36(pc: int) -> int {{\n"
         )
         .map_err(|_| out.error())?;
         for (block, row) in self.control.iter().enumerate() {
@@ -568,7 +568,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 .map_err(|_| out.error())?;
             }
         }
-        write!(out, " {{ -1int }}\n}}\nopen spec fn invocation_source_micro_begin_{r}_{i}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceMicroStateV36 {{ InvocationSourceMicroStateV36 {{ source: if invocation_source_active_{r}_{i}_v36(source) && invocation_source_statement_count_{r}_{i}_v36(source.machine.pc) >= 0 {{ source }} else {{ invocation_source_byte_refused_v36(source) }}, next_statement: 0, observations: seq![] }} }}\nopen spec fn invocation_source_micro_step_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, little_endian: bool) -> InvocationSourceMicroStateV36 {{\n if !invocation_source_active_{r}_{i}_v36(cursor.source) || cursor.next_statement < 0 || cursor.next_statement != cursor.observations.len() {{ invocation_source_micro_refused_v36(cursor) }} else {{\n").map_err(|_| out.error())?;
+        write!(out, " {{ -1int }}\n}}\nspec fn invocation_source_micro_begin_{r}_{i}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceMicroStateV36 {{ InvocationSourceMicroStateV36 {{ source: if invocation_source_active_{r}_{i}_v36(source) && invocation_source_statement_count_{r}_{i}_v36(source.machine.pc) >= 0 {{ source }} else {{ invocation_source_byte_refused_v36(source) }}, next_statement: 0, observations: seq![] }} }}\nspec fn invocation_source_micro_step_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, little_endian: bool) -> InvocationSourceMicroStateV36 {{\n if !invocation_source_active_{r}_{i}_v36(cursor.source) || cursor.next_statement < 0 || cursor.next_statement != cursor.observations.len() {{ invocation_source_micro_refused_v36(cursor) }} else {{\n").map_err(|_| out.error())?;
         for (block, row) in self.control.iter().enumerate() {
             out.budget.charge_work(1)?;
             if matches!(row.end, End::Unreachable) {
@@ -589,7 +589,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 write!(out, ";\n invocation_source_micro_record_v36(cursor, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement}))\n }} else").map_err(|_| out.error())?;
             }
         }
-        write!(out, " {{ invocation_source_micro_refused_v36(cursor) }}\n }}\n}}\nopen spec fn invocation_source_micro_finish_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n if !invocation_source_active_{r}_{i}_v36(cursor.source) || cursor.next_statement != invocation_source_statement_count_{r}_{i}_v36(cursor.source.machine.pc) || cursor.next_statement != cursor.observations.len() {{ invocation_source_block_refused_v36(cursor) }} else {{\n").map_err(|_| out.error())?;
+        write!(out, " {{ invocation_source_micro_refused_v36(cursor) }}\n }}\n}}\nspec fn invocation_source_micro_finish_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n if !invocation_source_active_{r}_{i}_v36(cursor.source) || cursor.next_statement != invocation_source_statement_count_{r}_{i}_v36(cursor.source.machine.pc) || cursor.next_statement != cursor.observations.len() {{ invocation_source_block_refused_v36(cursor) }} else {{\n").map_err(|_| out.error())?;
         for (block, row) in self.control.iter().enumerate() {
             out.budget.charge_work(1)?;
             if matches!(row.end, End::Unreachable) {
@@ -672,7 +672,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             }
             write!(out, " }} else").map_err(|_| out.error())?;
         }
-        write!(out, " {{ invocation_source_block_refused_v36(cursor) }}\n }}\n}}\nopen spec fn invocation_source_micro_run_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, fuel: nat, little_endian: bool) -> InvocationSourceMicroStateV36\n decreases fuel\n{{ if fuel == 0 || !cursor.source.machine.valid {{ cursor }} else {{ invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (fuel - 1) as nat, little_endian) }} }}\nopen spec fn invocation_source_block_{r}_{i}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{ let cursor = invocation_source_micro_begin_{r}_{i}_v36(source); let count = invocation_source_statement_count_{r}_{i}_v36(source.machine.pc); if count < 0 {{ invocation_source_block_refused_v36(cursor) }} else {{ invocation_source_micro_finish_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, count as nat, little_endian), little_endian) }} }}\n").map_err(|_| out.error())
+        write!(out, " {{ invocation_source_block_refused_v36(cursor) }}\n }}\n}}\nspec fn invocation_source_micro_run_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, fuel: nat, little_endian: bool) -> InvocationSourceMicroStateV36\n decreases fuel\n{{ if fuel == 0 || !cursor.source.machine.valid {{ cursor }} else {{ invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (fuel - 1) as nat, little_endian) }} }}\nspec fn invocation_source_block_{r}_{i}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{ let cursor = invocation_source_micro_begin_{r}_{i}_v36(source); let count = invocation_source_statement_count_{r}_{i}_v36(source.machine.pc); if count < 0 {{ invocation_source_block_refused_v36(cursor) }} else {{ invocation_source_micro_finish_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, count as nat, little_endian), little_endian) }} }}\n").map_err(|_| out.error())
     }
 }
 
@@ -695,7 +695,7 @@ fn headers() -> usize {
 }
 
 pub(super) const SOURCE_FUNCTION_V36: &str = r#"
-open spec fn invocation_source_external_argument_v36(value: MemoryValueV30) -> bool {
+spec fn invocation_source_external_argument_v36(value: MemoryValueV30) -> bool {
     match value {
         MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
         MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation),
@@ -740,7 +740,7 @@ struct InvocationSourceBlockResultV36 {
     operands: Seq<InvocationSourceOperandObservationV36>,
     returned: Option<InvocationSourceValueV42>,
 }
-open spec fn invocation_source_byte_pc_v36(source: InvocationSourceByteStateV36, pc: int) -> InvocationSourceByteStateV36 {
+spec fn invocation_source_byte_pc_v36(source: InvocationSourceByteStateV36, pc: int) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || source.machine.pc < 0
         || !invocation_source_byte_state_well_formed_v36(source) || pc < 0 {
         invocation_source_byte_refused_v36(source)
@@ -748,18 +748,18 @@ open spec fn invocation_source_byte_pc_v36(source: InvocationSourceByteStateV36,
         values: source.machine.values, memory: source.machine.memory, generations: source.machine.generations,
         frames: source.machine.frames, valid: true }, ..source } }
 }
-open spec fn invocation_source_byte_trap_v40(source: InvocationSourceByteStateV36) -> InvocationSourceByteStateV36 {
+spec fn invocation_source_byte_trap_v40(source: InvocationSourceByteStateV36) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || source.machine.pc < 0
         || !invocation_source_byte_state_well_formed_v36(source) {
         invocation_source_byte_refused_v36(source)
     } else { InvocationSourceByteStateV36 {
         machine: MemoryStateV30 { pc: -2, ..source.machine }, ..source } }
 }
-open spec fn invocation_source_micro_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceMicroStateV36 {
+spec fn invocation_source_micro_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceMicroStateV36 {
     InvocationSourceMicroStateV36 { source: invocation_source_byte_refused_v36(cursor.source),
         next_statement: cursor.next_statement, observations: cursor.observations }
 }
-open spec fn invocation_source_micro_record_v36(cursor: InvocationSourceMicroStateV36,
+spec fn invocation_source_micro_record_v36(cursor: InvocationSourceMicroStateV36,
     after: InvocationSourceByteStateV36, root: int, instance: int, block: int, statement: int,
     event: Option<InvocationSourceByteEventV36>,
 ) -> InvocationSourceMicroStateV36 {
@@ -767,7 +767,7 @@ open spec fn invocation_source_micro_record_v36(cursor: InvocationSourceMicroSta
         observations: cursor.observations.push(InvocationSourceStatementObservationV36 {
             root, instance, block, statement, event, before: cursor.source, after }) }
 }
-open spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceBlockResultV36 {
+spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceBlockResultV36 {
     InvocationSourceBlockResultV36 { source: invocation_source_byte_refused_v36(cursor.source),
         before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }
 }
@@ -856,11 +856,11 @@ pub(super) mod tests {
                     let initial = out
                         .text
                         .split_once(&format!(
-                            "open spec fn invocation_source_byte_initial_{root}_v36"
+                            "spec fn invocation_source_byte_initial_{root}_v36"
                         ))
                         .unwrap()
                         .1
-                        .split("open spec fn ")
+                        .split("spec fn ")
                         .next()
                         .unwrap();
                     assert!(

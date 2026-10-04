@@ -230,16 +230,13 @@ fn emit_program(
         program.emit(out)?;
         for root in 0..2 {
             for instance in 1..=2 {
-                let name =
-                    format!("open spec fn invocation_source_byte_event_{root}_{instance}_v36");
+                let name = format!("spec fn invocation_source_byte_event_{root}_{instance}_v36");
                 let start = out
                     .text
                     .find(&name)
                     .expect("every original helper event table");
                 let rest = &out.text[start..];
-                let end = rest[1..]
-                    .find("open spec fn ")
-                    .map_or(rest.len(), |at| at + 1);
+                let end = rest[1..].find("spec fn ").map_or(rest.len(), |at| at + 1);
                 let table = &rest[..end];
                 assert!(table.contains("InvocationSourceByteEventV36::EnumConstruct("));
                 assert!(table.contains("InvocationSourceByteEventV36::Discriminant("));

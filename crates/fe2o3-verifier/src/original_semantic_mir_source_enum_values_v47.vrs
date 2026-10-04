@@ -12,7 +12,7 @@ struct InvocationSourceEnumV47 {
     fields: Map<int, MemoryValueV30>,
 }
 
-open spec fn invocation_source_enums_name_allocation_v49(
+spec fn invocation_source_enums_name_allocation_v49(
     logical: InvocationSourceLogicalV38, allocation: MemoryAllocationV30,
 ) -> bool {
     exists|local: int, field: int| logical.enums.contains_key(local)
@@ -71,7 +71,7 @@ enum InvocationSourceLogicalEnumEventV47 {
     Reset { local: int },
 }
 
-open spec fn invocation_source_enum_value_typed_v47(
+spec fn invocation_source_enum_value_typed_v47(
     ty: InvocationSourceEnumFieldTypeV47, value: MemoryValueV30,
 ) -> bool {
     match ty {
@@ -82,7 +82,7 @@ open spec fn invocation_source_enum_value_typed_v47(
     }
 }
 
-open spec fn invocation_source_enum_well_formed_v47(value: InvocationSourceEnumV47) -> bool {
+spec fn invocation_source_enum_well_formed_v47(value: InvocationSourceEnumV47) -> bool {
     value.fields.dom().finite()
         && match invocation_source_enum_field_count_v47(value.source_type, value.variant) {
             Some(count) => count >= 0
@@ -97,7 +97,7 @@ open spec fn invocation_source_enum_well_formed_v47(value: InvocationSourceEnumV
         }
 }
 
-open spec fn invocation_source_enum_complete_v47(value: InvocationSourceEnumV47) -> bool {
+spec fn invocation_source_enum_complete_v47(value: InvocationSourceEnumV47) -> bool {
     invocation_source_enum_well_formed_v47(value)
         && match invocation_source_enum_field_count_v47(value.source_type, value.variant) {
             Some(count) => forall|field: int| 0 <= field < count ==> value.fields.contains_key(field),
@@ -105,7 +105,7 @@ open spec fn invocation_source_enum_complete_v47(value: InvocationSourceEnumV47)
         }
 }
 
-open spec fn invocation_source_enum_field_current_v47(
+spec fn invocation_source_enum_field_current_v47(
     source: InvocationSourceByteStateV36, ty: InvocationSourceEnumFieldTypeV47,
     value: MemoryValueV30, little_endian: bool,
 ) -> bool {
@@ -119,14 +119,14 @@ open spec fn invocation_source_enum_field_current_v47(
         }
 }
 
-open spec fn invocation_source_enum_field_copyable_v47(ty: InvocationSourceEnumFieldTypeV47) -> bool {
+spec fn invocation_source_enum_field_copyable_v47(ty: InvocationSourceEnumFieldTypeV47) -> bool {
     match ty {
         InvocationSourceEnumFieldTypeV47::Scalar { .. } => true,
         InvocationSourceEnumFieldTypeV47::Reference { mutable, .. } => !mutable,
     }
 }
 
-open spec fn invocation_source_enum_type_copyable_v47(source_type: int) -> bool {
+spec fn invocation_source_enum_type_copyable_v47(source_type: int) -> bool {
     forall|variant: int, field: int|
         match invocation_source_enum_field_count_v47(source_type, variant) {
             Some(count) => 0 <= field < count ==>
@@ -138,7 +138,7 @@ open spec fn invocation_source_enum_type_copyable_v47(source_type: int) -> bool 
         }
 }
 
-open spec fn invocation_source_enum_local_v47(
+spec fn invocation_source_enum_local_v47(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
 ) -> Option<InvocationSourceEnumV47> {
     if source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
@@ -151,7 +151,7 @@ open spec fn invocation_source_enum_local_v47(
     } else { None }
 }
 
-open spec fn invocation_source_enum_snapshot_current_v50(
+spec fn invocation_source_enum_snapshot_current_v50(
     source: InvocationSourceByteStateV36, value: InvocationSourceEnumV47, little_endian: bool,
 ) -> bool {
     source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
@@ -164,7 +164,7 @@ open spec fn invocation_source_enum_snapshot_current_v50(
             })
 }
 
-open spec fn invocation_source_enum_snapshot_v50(
+spec fn invocation_source_enum_snapshot_v50(
     source: InvocationSourceByteStateV36, local: int, source_type: int, little_endian: bool,
 ) -> Option<InvocationSourceEnumV47> {
     match invocation_source_enum_local_v47(source, local, source_type) {
@@ -175,7 +175,7 @@ open spec fn invocation_source_enum_snapshot_v50(
     }
 }
 
-open spec fn invocation_source_enum_evaluate_v50(
+spec fn invocation_source_enum_evaluate_v50(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
     moved: bool, little_endian: bool,
 ) -> InvocationSourceValueEvaluationV42 {
@@ -234,7 +234,7 @@ proof fn invocation_source_enum_incomplete_payload_cannot_be_an_argument_v50(
         invocation_source_enum_snapshot_v50(source, local, source_type, little_endian).is_none(),
 {}
 
-open spec fn invocation_source_enum_install_v47(
+spec fn invocation_source_enum_install_v47(
     source: InvocationSourceByteStateV36, local: int, value: InvocationSourceEnumV47,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
@@ -250,7 +250,7 @@ open spec fn invocation_source_enum_install_v47(
     }
 }
 
-open spec fn invocation_source_enum_field_remove_v47(
+spec fn invocation_source_enum_field_remove_v47(
     source: InvocationSourceByteStateV36, local: int, source_type: int, variant: int, field: int,
 ) -> InvocationSourceByteStateV36 {
     match invocation_source_enum_local_v47(source, local, source_type) {
@@ -267,7 +267,7 @@ open spec fn invocation_source_enum_field_remove_v47(
     }
 }
 
-open spec fn invocation_source_enum_transfer_v47(
+spec fn invocation_source_enum_transfer_v47(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     source_type: int, moved: bool, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -296,7 +296,7 @@ open spec fn invocation_source_enum_transfer_v47(
     }
 }
 
-open spec fn invocation_source_logical_enum_step_v47(
+spec fn invocation_source_logical_enum_step_v47(
     source: InvocationSourceByteStateV36, event: InvocationSourceLogicalEnumEventV47,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceEnumResultV43 {
@@ -326,7 +326,7 @@ open spec fn invocation_source_logical_enum_step_v47(
     }
 }
 
-open spec fn invocation_source_enum_extract_v47(
+spec fn invocation_source_enum_extract_v47(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     source_type: int, variant: int, field: int, moved: bool, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -349,7 +349,7 @@ open spec fn invocation_source_enum_extract_v47(
     }
 }
 
-open spec fn invocation_source_enum_discriminant_read_v47(
+spec fn invocation_source_enum_discriminant_read_v47(
     source: InvocationSourceByteStateV36, destination: int, input: int, source_type: int, bits: int,
 ) -> InvocationSourceByteStateV36 {
     match invocation_source_enum_local_v47(source, input, source_type) {
@@ -366,7 +366,7 @@ open spec fn invocation_source_enum_discriminant_read_v47(
     }
 }
 
-open spec fn invocation_source_enum_payload_recipe_v47(
+spec fn invocation_source_enum_payload_recipe_v47(
     ty: InvocationSourceEnumFieldTypeV47, field: InvocationSourceEnumPayloadV43,
 ) -> bool {
     match (ty, field.value) {
@@ -382,7 +382,7 @@ open spec fn invocation_source_enum_payload_recipe_v47(
     }
 }
 
-open spec fn invocation_source_enum_construct_v47(
+spec fn invocation_source_enum_construct_v47(
     source: InvocationSourceByteStateV36, destination: int, source_type: int, variant: int,
     fields: Seq<InvocationSourceEnumPayloadV43>, root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceEnumResultV43 {
@@ -406,7 +406,7 @@ open spec fn invocation_source_enum_construct_v47(
             invocation_source_enum_refused_v43(evaluated.source, evaluated.observations)
         } else {
             let value = InvocationSourceEnumV47 { source_type, variant,
-                fields: Map::new(|field: int| 0 <= field < evaluated.values.len(),
+                fields: Map::new(Set::range(0int, evaluated.values.len() as int),
                     |field: int| evaluated.values[field]) };
             let installed = invocation_source_enum_install_v47(evaluated.source, destination, value);
             if !installed.machine.valid {

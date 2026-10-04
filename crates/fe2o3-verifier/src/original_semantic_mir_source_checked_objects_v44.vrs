@@ -15,7 +15,7 @@ struct InvocationSourceCheckedObjectResultV44 {
     observations: Seq<InvocationSourceEffectObservationV39>,
 }
 
-open spec fn invocation_source_checked_pair_v44(
+spec fn invocation_source_checked_pair_v44(
     left: MemoryValueV30, right: MemoryValueV30,
     operation: int, bits: int, signed: bool,
 ) -> Option<(MemoryValueV30, MemoryValueV30)> {
@@ -40,7 +40,7 @@ open spec fn invocation_source_checked_pair_v44(
     } }
 }
 
-open spec fn invocation_source_checked_object_refused_v44(
+spec fn invocation_source_checked_object_refused_v44(
     source: InvocationSourceByteStateV36,
     observations: Seq<InvocationSourceEffectObservationV39>,
 ) -> InvocationSourceCheckedObjectResultV44 {
@@ -50,7 +50,7 @@ open spec fn invocation_source_checked_object_refused_v44(
             seq![MemoryOperationEffectV30::Refused], source, after) }
 }
 
-open spec fn invocation_source_checked_object_v44(
+spec fn invocation_source_checked_object_v44(
     source: InvocationSourceByteStateV36, event: InvocationSourceCheckedObjectV44,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceCheckedObjectResultV44 {

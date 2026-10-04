@@ -38,7 +38,7 @@ pub(super) fn emit_steps(
             )?;
             emit!(
                 out,
-                "open spec fn original_invocation_block_enabled_{key}_v34(s: OriginalControlStateV31) -> bool {{\n s.pc == {key}int && s.values.len() == {} && s.defined.len() == {}",
+                "spec fn original_invocation_block_enabled_{key}_v34(s: OriginalControlStateV31) -> bool {{\n s.pc == {key}int && s.values.len() == {} && s.defined.len() == {}",
                 model.locals,
                 model.locals
             );
@@ -70,7 +70,7 @@ pub(super) fn emit_steps(
             .ok_or(Resource::Accounting)?;
         emit!(
             out,
-            "open spec fn original_invocation_enabled_{root}_v34(s: OriginalControlStateV31) -> bool {{\n false"
+            "spec fn original_invocation_enabled_{root}_v34(s: OriginalControlStateV31) -> bool {{\n false"
         );
         out.budget.charge_work(bodies.len())?;
         for body in bodies.iter().flatten() {
@@ -88,7 +88,7 @@ pub(super) fn emit_steps(
         }
         emit!(
             out,
-            "\n}}\nopen spec fn original_invocation_step_{root}_v34(s: OriginalControlStateV31) -> CfgStepV26<OriginalControlStateV31, int>\n recommends original_invocation_enabled_{root}_v34(s),\n{{\n"
+            "\n}}\nspec fn original_invocation_step_{root}_v34(s: OriginalControlStateV31) -> CfgStepV26<OriginalControlStateV31, int>\n recommends original_invocation_enabled_{root}_v34(s),\n{{\n"
         );
         out.budget.charge_work(bodies.len())?;
         for body in bodies.iter().flatten() {

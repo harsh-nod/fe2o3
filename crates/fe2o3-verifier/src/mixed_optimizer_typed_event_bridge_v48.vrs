@@ -15,7 +15,7 @@ struct TypedMemoryObservationV48 {
     effect: MemoryOperationEffectV30,
 }
 
-open spec fn typed_observation_erases_pure_v48(
+spec fn typed_observation_erases_pure_v48(
     observation: MemoryOperationObservationV30,
     before: TypedEventStateV48,
     after: TypedEventStateV48,

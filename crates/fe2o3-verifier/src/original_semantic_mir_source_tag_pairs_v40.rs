@@ -665,7 +665,7 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
             }
             emit!(
                 out,
-                "open spec fn invocation_source_target_tag_pair_{source_namespace}_{target_namespace}_v40(source_type: int, physical_layout: int) -> bool {{ false"
+                "spec fn invocation_source_target_tag_pair_{source_namespace}_{target_namespace}_v40(source_type: int, physical_layout: int) -> bool {{ false"
             );
             for pair in &self.pairs {
                 out.budget.charge_work(1)?;

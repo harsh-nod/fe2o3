@@ -82,7 +82,7 @@ impl RelocationExpressionPlanV28<'_> {
                 .ok_or(Resource::Arithmetic)?;
             emit!(
                 out,
-                "open spec fn typed_relocated_expression_{namespace}_{node_index}_v48(base: MemoryStateV30, little_endian: bool) -> Option<Seq<MemoryValueV30>> {{\n if !base.valid || base.values.len() != {definitions} {{ None }} else {{\n"
+                "spec fn typed_relocated_expression_{namespace}_{node_index}_v48(base: MemoryStateV30, little_endian: bool) -> Option<Seq<MemoryValueV30>> {{\n if !base.valid || base.values.len() != {definitions} {{ None }} else {{\n"
             );
             for (ordinal, operand) in self.operands[node.operands.clone()].iter().enumerate() {
                 out.budget.charge_work(3)?;
@@ -126,7 +126,7 @@ impl RelocationExpressionPlanV28<'_> {
         // defined or assert that a counterfactual evaluation actually ran.
         emit!(
             out,
-            "open spec fn typed_relocation_is_moved_{namespace}_v48(definition: int) -> bool {{ false"
+            "spec fn typed_relocation_is_moved_{namespace}_v48(definition: int) -> bool {{ false"
         );
         for result in &self.results {
             out.budget.charge_work(1)?;
@@ -134,7 +134,7 @@ impl RelocationExpressionPlanV28<'_> {
         }
         emit!(
             out,
-            " }}\nopen spec fn typed_relocation_result_{namespace}_v48(definition: int, base: MemoryStateV30, little_endian: bool) -> Option<MemoryValueV30> {{\n"
+            " }}\nspec fn typed_relocation_result_{namespace}_v48(definition: int, base: MemoryStateV30, little_endian: bool) -> Option<MemoryValueV30> {{\n"
         );
         for result in &self.results {
             out.budget.charge_work(3)?;
@@ -149,7 +149,7 @@ impl RelocationExpressionPlanV28<'_> {
         }
         emit!(
             out,
-            " {{ None }}\n}}\nopen spec fn typed_relocation_cut_{namespace}_v48(block: int, before: MemoryStateV30, after: MemoryStateV30, little_endian: bool) -> bool {{\n before.values.len() == {definitions} && after.values.len() == {}",
+            " {{ None }}\n}}\nspec fn typed_relocation_cut_{namespace}_v48(block: int, before: MemoryStateV30, after: MemoryStateV30, little_endian: bool) -> bool {{\n before.values.len() == {definitions} && after.values.len() == {}",
             output.definitions().len()
         );
         for cut in &self.cuts {

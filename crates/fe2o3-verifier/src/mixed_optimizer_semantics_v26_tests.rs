@@ -56,20 +56,20 @@ fn mixed_cfg_graph_uses_independent_actual_definition_environments() {
     let text = source(scalar_case(Constant::U32(0), BinaryOp::Add, false));
     for (side, count) in [("n", 3), ("o", 1)] {
         let block = text
-            .split(&format!("open spec fn cfg_block_{side}_0("))
+            .split(&format!("spec fn cfg_block_{side}_0("))
             .nth(1)
             .unwrap();
         assert!(block.starts_with(&format!(
             "{PARAMETERS}) -> CfgStepV26<CfgStateV26, int>\n recommends base.len() == {count},"
         )));
         assert!(text.contains(&format!("proof fn cfg_step_frame_{side}_v26")));
-        assert!(text.contains(&format!("open spec fn cfg_entry_{side}_0_v26")));
+        assert!(text.contains(&format!("spec fn cfg_entry_{side}_0_v26")));
     }
     let output = text
-        .split("open spec fn cfg_block_o_0(")
+        .split("spec fn cfg_block_o_0(")
         .nth(1)
         .unwrap()
-        .split("open spec fn cfg_frame_n_v26")
+        .split("spec fn cfg_frame_n_v26")
         .next()
         .unwrap();
     assert!(output.contains("events: seq![1int, o_final,base[0],]"));
@@ -135,10 +135,10 @@ fn mixed_cfg_graph_installs_backedge_block_arguments_simultaneously() {
 fn mixed_cfg_loop_relation_is_derived_from_uses_without_stale_parameter_premises() {
     let text = source(swapping_loop());
     let entry = text
-        .split("open spec fn cfg_live_0_v26")
+        .split("spec fn cfg_live_0_v26")
         .nth(1)
         .unwrap()
-        .split("open spec fn cfg_live_1_v26")
+        .split("spec fn cfg_live_1_v26")
         .next()
         .unwrap();
     for argument in 0..3 {
@@ -148,10 +148,10 @@ fn mixed_cfg_loop_relation_is_derived_from_uses_without_stale_parameter_premises
         assert!(!entry.contains(&format!("base[{stale}]")));
     }
     let body = text
-        .split("open spec fn cfg_live_1_v26")
+        .split("spec fn cfg_live_1_v26")
         .nth(1)
         .unwrap()
-        .split("open spec fn cfg_live_2_v26")
+        .split("spec fn cfg_live_2_v26")
         .next()
         .unwrap();
     for incoming in [2, 3, 4] {
@@ -465,8 +465,8 @@ fn actual_neutral_integer_outputs_emit_both_semantics_not_a_report_assertion() {
                     continue;
                 }
                 let text = source(scalar_case(neutral.clone(), operator, left));
-                assert!(text.contains("open spec fn block_0_n"));
-                assert!(text.contains("open spec fn block_0_o"));
+                assert!(text.contains("spec fn block_0_n"));
+                assert!(text.contains("spec fn block_0_o"));
                 assert!(text.contains("proof fn block_simulation_0"));
                 assert!(text.contains(
                     "ensures block_0_n(base, initial, op) == block_0_o(base, initial, op)"

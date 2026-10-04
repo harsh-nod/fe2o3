@@ -200,7 +200,7 @@ pub(super) fn generate(
             };
             emit!(
                 out,
-                "open spec fn aggregate_block_{label}_{block}(base: Seq<int>, cells: Seq<int>, initialized: Seq<bool>, initial: int, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregateStateV30, int>\n recommends base.len() == {values}, cells.len() == {}, initialized.len() == {},\n{{\n",
+                "spec fn aggregate_block_{label}_{block}(base: Seq<int>, cells: Seq<int>, initialized: Seq<bool>, initial: int, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregateStateV30, int>\n recommends base.len() == {values}, cells.len() == {}, initialized.len() == {},\n{{\n",
                 memory.slots,
                 memory.slots
             );
@@ -258,7 +258,7 @@ pub(super) fn generate(
         };
         emit!(
             out,
-            "open spec fn aggregate_step_{label}(s: AggregateStateV30, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregateStateV30, int> {{\n if s.values.len() == {values} && s.cells.len() == {} && s.initialized.len() == {} {{\n",
+            "spec fn aggregate_step_{label}(s: AggregateStateV30, op: spec_fn(int, int, Seq<int>, int) -> int) -> CfgStepV26<AggregateStateV30, int> {{\n if s.values.len() == {values} && s.cells.len() == {} && s.initialized.len() == {} {{\n",
             memory.slots,
             memory.slots
         );

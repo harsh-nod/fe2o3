@@ -111,7 +111,7 @@ fn shared_byte_result_definitions_preserve_complete_snapshots_and_refusal() {
         "byte_micro_result_v55",
         "byte_micro_refused_v55",
     ] {
-        assert_eq!(source.matches(&format!("open spec fn {name}(")).count(), 1);
+        assert_eq!(source.matches(&format!("spec fn {name}(")).count(), 1);
     }
     for name in [
         "byte_operation_result_exact_v55",
@@ -177,9 +177,9 @@ fn shared_byte_source_keeps_every_operation_under_the_unchanged_source_cap() {
         let measured = run(floor, LIMIT, LIMIT, emit);
         let text = measured.0.unwrap();
         assert!(text.len() < super::super::super::SOURCE_LIMIT);
-        assert_eq!(text.matches("open spec fn byte_inputs_55_v55(").count(), 1);
+        assert_eq!(text.matches("spec fn byte_inputs_55_v55(").count(), 1);
         assert_eq!(
-            text.matches("open spec fn byte_operation_55_").count(),
+            text.matches("spec fn byte_operation_55_").count(),
             count as usize
         );
         assert_eq!(
@@ -201,7 +201,7 @@ fn shared_byte_source_keeps_every_operation_under_the_unchanged_source_cap() {
             1
         );
         for operation in 0..count {
-            assert!(text.contains(&format!("open spec fn byte_operation_55_{operation}_v30(")));
+            assert!(text.contains(&format!("spec fn byte_operation_55_{operation}_v30(")));
             assert!(text.contains(&format!("function: 0, block: 0, operation: {operation}")));
             assert!(text.contains(&format!(
                 "m.next_operation == {operation} && m.observations.len() == {operation}"

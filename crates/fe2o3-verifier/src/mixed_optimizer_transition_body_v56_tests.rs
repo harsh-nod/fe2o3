@@ -73,7 +73,7 @@ fn emitted_float_transitions_share_complete_bodies_without_losing_output_guards(
                             let source = measured.0.unwrap();
                             let output_text = source.split_once("mod output {").unwrap().1;
                             assert_eq!(
-                                source.matches("open spec fn byte_transition_body_").count(),
+                                source.matches("spec fn byte_transition_body_").count(),
                                 count
                             );
                             assert_eq!(
@@ -83,7 +83,7 @@ fn emitted_float_transitions_share_complete_bodies_without_losing_output_guards(
                                 count - 1
                             );
                             assert_eq!(
-                                output_text.matches("open spec fn byte_operation_").count(),
+                                output_text.matches("spec fn byte_operation_").count(),
                                 count
                             );
                             assert_eq!(
@@ -196,19 +196,16 @@ fn emitted_transitions_cover_memory_checked_index_cast_select_and_trap_models() 
                 let count = inventory.functions()[0].operations.len();
                 let output = source.split_once("mod output {").unwrap().1;
                 assert_eq!(
-                    source.matches("open spec fn byte_transition_body_").count(),
+                    source.matches("spec fn byte_transition_body_").count(),
                     count
                 );
                 assert_eq!(
                     output.matches("use super::byte_transition_body_").count(),
                     count
                 );
-                assert_eq!(
-                    output.matches("open spec fn byte_operation_").count(),
-                    count
-                );
-                assert!(output.contains("open spec fn byte_micro_step_1_v30"));
-                assert!(output.contains("open spec fn byte_block_step_1_v30"));
+                assert_eq!(output.matches("spec fn byte_operation_").count(), count);
+                assert!(output.contains("spec fn byte_micro_step_1_v30"));
+                assert!(output.contains("spec fn byte_block_step_1_v30"));
             }
         });
     }
@@ -313,8 +310,7 @@ fn emitted_transition_descriptors_do_not_share_changed_effects_operands_or_index
                             .contains(&format!(" as byte_transition_body_1_{operation}_v56;"))
                     );
                     assert!(
-                        output_text
-                            .contains(&format!("open spec fn byte_operation_1_{operation}_v30"))
+                        output_text.contains(&format!("spec fn byte_operation_1_{operation}_v30"))
                     );
                 }
             });
@@ -576,7 +572,7 @@ fn emitted_tagged_select_transitions_compare_the_complete_type() {
                         let start = out.text.len();
                         emitted.emit_output_reusing_bodies_v56(&after, 1, out)?;
                         assert!(!out.text[start..].contains("use super::byte_transition_body_"));
-                        assert!(out.text[start..].contains("open spec fn byte_operation_1_0_v30"));
+                        assert!(out.text[start..].contains("spec fn byte_operation_1_0_v30"));
                         Ok(())
                     })
                     .0

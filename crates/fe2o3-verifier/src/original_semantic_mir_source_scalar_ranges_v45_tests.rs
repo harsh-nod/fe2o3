@@ -76,12 +76,12 @@ fn range_transform(
 }
 
 fn emitted_function<'a>(text: &'a str, name: &str) -> &'a str {
-    let marker = format!("open spec fn {name}(");
+    let marker = format!("spec fn {name}(");
     assert_eq!(text.matches(&marker).count(), 1);
     text.split_once(&marker)
         .unwrap()
         .1
-        .split("open spec fn ")
+        .split("spec fn ")
         .next()
         .unwrap()
 }

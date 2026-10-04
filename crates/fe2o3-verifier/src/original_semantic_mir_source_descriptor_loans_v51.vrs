@@ -25,7 +25,7 @@ enum InvocationSourceDescriptorEventV51 {
     Transfer { destination: int, input: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
 }
 
-open spec fn invocation_source_descriptor_reference_shape_v51(
+spec fn invocation_source_descriptor_reference_shape_v51(
     reference: InvocationSourceDescriptorReferenceV51, count: int,
 ) -> bool {
     0 <= reference.loan.origin < count && reference.loan.version >= 0
@@ -36,7 +36,7 @@ open spec fn invocation_source_descriptor_reference_shape_v51(
         && ordinary_memory_width_v30(reference.width)
 }
 
-open spec fn invocation_source_descriptor_carrier_v51(
+spec fn invocation_source_descriptor_carrier_v51(
     source: InvocationSourceByteStateV36, value: MemoryValueV30,
     metadata_bits: int, width: int,
 ) -> bool {
@@ -51,7 +51,7 @@ open spec fn invocation_source_descriptor_carrier_v51(
         }
 }
 
-open spec fn invocation_source_descriptor_reference_current_v51(
+spec fn invocation_source_descriptor_reference_current_v51(
     source: InvocationSourceByteStateV36, local: int,
     recipe: InvocationSourceDescriptorRecipeV51,
 ) -> bool {
@@ -76,7 +76,7 @@ open spec fn invocation_source_descriptor_reference_current_v51(
                     && source.machine.frames.active[i] == reference.loan.frame })
 }
 
-open spec fn invocation_source_descriptor_install_v51(
+spec fn invocation_source_descriptor_install_v51(
     source: InvocationSourceByteStateV36, destination: int, value: MemoryValueV30,
     reference: InvocationSourceDescriptorReferenceV51,
 ) -> InvocationSourceByteStateV36 {
@@ -86,7 +86,7 @@ open spec fn invocation_source_descriptor_install_v51(
         ..changed.logical }, ..changed }
 }
 
-open spec fn invocation_source_descriptor_step_v51(
+spec fn invocation_source_descriptor_step_v51(
     source: InvocationSourceByteStateV36, event: InvocationSourceDescriptorEventV51,
 ) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) {
@@ -146,7 +146,7 @@ open spec fn invocation_source_descriptor_step_v51(
     } }
 }
 
-open spec fn invocation_source_descriptor_length_v51(
+spec fn invocation_source_descriptor_length_v51(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
 ) -> InvocationSourceByteStateV36 {

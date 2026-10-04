@@ -32,7 +32,7 @@ proof fn pointer_niche_missing_complete_cell_does_not_reconstruct_fragments_v39(
 )
     requires byte_raw_tag_initialized_v39(object, offset, width),
         !object.relocations.contains_key(offset), 0 <= index < width,
-        matches!(object.bytes[offset + index], MemoryByteV37::PointerFragment { .. }),
+        match object.bytes[offset + index] { MemoryByteV37::PointerFragment { .. } => true, _ => false },
     ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
 {}
 
@@ -41,7 +41,7 @@ proof fn pointer_niche_incorrect_cell_width_or_endian_is_not_a_reference_v39(
 )
     requires byte_raw_tag_initialized_v39(object, offset, width),
         object.relocations.contains_key(offset), 0 <= index < width,
-        matches!(object.bytes[offset + index], MemoryByteV37::PointerFragment { .. }),
+        match object.bytes[offset + index] { MemoryByteV37::PointerFragment { .. } => true, _ => false },
         object.relocations[offset].width != width
             || object.relocations[offset].little_endian != little_endian,
     ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
@@ -53,7 +53,7 @@ proof fn pointer_niche_mixed_write_fragments_cannot_reconstruct_a_reference_v39(
 )
     requires byte_raw_tag_initialized_v39(object, offset, width),
         object.relocations.contains_key(offset), 0 <= fragment < width, 0 <= mismatch < width,
-        matches!(object.bytes[offset + fragment], MemoryByteV37::PointerFragment { .. }),
+        match object.bytes[offset + fragment] { MemoryByteV37::PointerFragment { .. } => true, _ => false },
         object.relocations[offset].width == width,
         object.bytes[offset + mismatch]
             != byte_relocation_fragment_v37(object.relocations[offset], mismatch),
@@ -73,7 +73,8 @@ proof fn pointer_niche_nonzero_octets_are_not_nominal_references_v39(
 )
     requires byte_raw_tag_initialized_v39(object, offset, width),
         byte_object_relocations_well_formed_v37(object), 0 <= index < width,
-        forall|i: int| 0 <= i < width ==> matches!(object.bytes[offset + i], MemoryByteV37::Octet(_)),
+        forall|i: int| #![trigger object.bytes[offset + i]] 0 <= i < width ==>
+            match object.bytes[offset + i] { MemoryByteV37::Octet(_) => true, _ => false },
         object.bytes[offset + index] != MemoryByteV37::Octet(0),
     ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
 {

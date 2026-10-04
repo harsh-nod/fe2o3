@@ -238,13 +238,13 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     allocations.check(out)?;
     emit!(
         out,
-        "open spec fn forwarding_slot_count_v46() -> int {{ {} }}\nopen spec fn forwarding_definition_count_v46() -> int {{ {} }}\n",
+        "spec fn forwarding_slot_count_v46() -> int {{ {} }}\nspec fn forwarding_definition_count_v46() -> int {{ {} }}\n",
         plan.slots.len(),
         input.definitions().len()
     );
     emit!(
         out,
-        "open spec fn forwarding_slot_definition_v46(slot: int) -> int {{\n"
+        "spec fn forwarding_slot_definition_v46(slot: int) -> int {{\n"
     );
     for (slot, row) in plan.slots.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -252,7 +252,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     }
     emit!(
         out,
-        " {{ -1 }}\n}}\nopen spec fn forwarding_selected_definition_v46(definition: int) -> bool {{ false"
+        " {{ -1 }}\n}}\nspec fn forwarding_selected_definition_v46(definition: int) -> bool {{ false"
     );
     for row in &plan.slots {
         out.budget.charge_work(1)?;
@@ -260,7 +260,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     }
     emit!(
         out,
-        " }}\nopen spec fn forwarding_slot_site_v46(slot: int) -> MemoryPrivateSiteV30 {{\n"
+        " }}\nspec fn forwarding_slot_site_v46(slot: int) -> MemoryPrivateSiteV30 {{\n"
     );
     for (slot, row) in plan.slots.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -275,11 +275,11 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     );
     emit!(
         out,
-        "open spec fn forwarding_selected_allocation_v46(allocation: MemoryAllocationV30) -> bool {{ match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (exists|slot: int| 0 <= slot < forwarding_slot_count_v46() && forwarding_slot_site_v46(slot) == (MemoryPrivateSiteV30 {{ owner, invocation, site }})), MemoryAllocationV30::External {{ .. }} => false }} }}\n"
+        "spec fn forwarding_selected_allocation_v46(allocation: MemoryAllocationV30) -> bool {{ match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (exists|slot: int| 0 <= slot < forwarding_slot_count_v46() && forwarding_slot_site_v46(slot) == (MemoryPrivateSiteV30 {{ owner, invocation, site }})), MemoryAllocationV30::External {{ .. }} => false }} }}\n"
     );
     emit!(
         out,
-        "open spec fn forwarding_selected_object_shape_v46(allocation: MemoryAllocationV30, object: MemoryBytesV30) -> bool {{\n match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (false"
+        "spec fn forwarding_selected_object_shape_v46(allocation: MemoryAllocationV30, object: MemoryBytesV30) -> bool {{\n match allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, generation }} => 0 <= generation && (false"
     );
     for (slot, row) in plan.slots.iter().enumerate() {
         out.budget.charge_work(2)?;
@@ -296,11 +296,11 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     }
     emit!(
         out,
-        ") && (forall|i: int| 0 <= i < object.bytes.len() ==> matches!(object.bytes[i], MemoryByteV37::Octet(_))) && object.relocations.dom().is_empty(), _ => false }}\n}}\n"
+        ") && (forall|i: int| #![trigger object.bytes[i]] 0 <= i < object.bytes.len() ==> match object.bytes[i] {{ MemoryByteV37::Octet(_) => true, _ => false }}) && object.relocations.dom().is_empty(), _ => false }}\n}}\n"
     );
     emit!(
         out,
-        "open spec fn forwarding_removed_read_v46(observation: MemoryOperationObservationV30) -> bool {{ false"
+        "spec fn forwarding_removed_read_v46(observation: MemoryOperationObservationV30) -> bool {{ false"
     );
     for (ordinal, &replacement) in plan.replacements.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -339,7 +339,7 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
     ] {
         emit!(
             out,
-            "open spec fn forwarding_{label}_fact_v46(coordinate: int, state: MemoryStateV30, little_endian: bool) -> bool {{ !state.valid || (\n"
+            "spec fn forwarding_{label}_fact_v46(coordinate: int, state: MemoryStateV30, little_endian: bool) -> bool {{ !state.valid || (\n"
         );
         for (coordinate, &store) in rows.iter().enumerate() {
             out.budget.charge_work(1)?;
@@ -447,7 +447,7 @@ fn emit_function_laws(
     let row = &input.functions()[function];
     emit!(
         out,
-        "open spec fn forwarding_function_pc_{function}_v46(pc: int) -> bool {{ pc == -1 || pc == -2"
+        "spec fn forwarding_function_pc_{function}_v46(pc: int) -> bool {{ pc == -1 || pc == -2"
     );
     for block in row.blocks.clone() {
         out.budget.charge_work(1)?;
@@ -455,12 +455,12 @@ fn emit_function_laws(
     }
     emit!(
         out,
-        " }}\nopen spec fn forwarding_related_{function}_v46(n: MemoryStateV30, o: MemoryStateV30, little_endian: bool) -> bool {{ forwarding_states_related_v46(n, o) && (n.valid ==> forwarding_function_pc_{function}_v46(n.pc) && (n.pc >= 0 ==> forwarding_entry_fact_v46(n.pc, n, little_endian))) }}\n"
+        " }}\nspec fn forwarding_related_{function}_v46(n: MemoryStateV30, o: MemoryStateV30, little_endian: bool) -> bool {{ forwarding_states_related_v46(n, o) && (n.valid ==> forwarding_function_pc_{function}_v46(n.pc) && (n.pc >= 0 ==> forwarding_entry_fact_v46(n.pc, n, little_endian))) }}\n"
     );
     for (label, namespace) in [("input", input_namespace), ("output", output_namespace)] {
         emit!(
             out,
-            "open spec fn forwarding_step_{label}_{function}_v46(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, ForwardingBlockEventV46> {{\n if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state: forwarding_terminal_state_v46(state), events: seq![], halted: true }} }} else {{\n let result = byte_block_step_{namespace}_v30(state, little_endian);\n CfgStepV26 {{ state: forwarding_terminal_state_v46(result.state), events: seq![forwarding_block_event_v46(result)], halted: !result.state.valid || result.state.pc < 0 }}\n }}\n}}\n"
+            "spec fn forwarding_step_{label}_{function}_v46(state: MemoryStateV30, little_endian: bool) -> CfgStepV26<MemoryStateV30, ForwardingBlockEventV46> {{\n if !state.valid || state.pc < 0 {{ CfgStepV26 {{ state: forwarding_terminal_state_v46(state), events: seq![], halted: true }} }} else {{\n let result = byte_block_step_{namespace}_v30(state, little_endian);\n CfgStepV26 {{ state: forwarding_terminal_state_v46(result.state), events: seq![forwarding_block_event_v46(result)], halted: !result.state.valid || result.state.pc < 0 }}\n }}\n}}\n"
         );
     }
     emit!(
@@ -499,7 +499,7 @@ fn emit_initial(
     }
     emit!(
         out,
-        "open spec fn forwarding_native_inputs_{function}_v46(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, frames: MemoryFrameRuntimeV30) -> bool {{\n arguments.len() == {} && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && byte_frame_runtime_well_formed_v30(frames)\n && forwarding_heap_separate_v46(external)\n && (forall|allocation: MemoryAllocationV30| external.live.contains_key(allocation) ==> matches!(allocation, MemoryAllocationV30::External {{ .. }}))\n && (forall|i: int| 0 <= i < arguments.len() ==> forwarding_value_separate_v46(arguments[i]))",
+        "spec fn forwarding_native_inputs_{function}_v46(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, frames: MemoryFrameRuntimeV30) -> bool {{\n arguments.len() == {} && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && byte_frame_runtime_well_formed_v30(frames)\n && forwarding_heap_separate_v46(external)\n && (forall|allocation: MemoryAllocationV30| external.live.contains_key(allocation) ==> matches!(allocation, MemoryAllocationV30::External {{ .. }}))\n && (forall|i: int| 0 <= i < arguments.len() ==> forwarding_value_separate_v46(arguments[i]))",
         row.function.signature.parameters.len()
     );
     for (argument, ty) in row.function.signature.parameters.iter().enumerate() {
@@ -510,7 +510,7 @@ fn emit_initial(
     }
     emit!(
         out,
-        "\n}}\nopen spec fn forwarding_initial_{function}_v46(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, frames: MemoryFrameRuntimeV30, little_endian: bool) -> MemoryStateV30 {{\n let admitted = forwarding_native_inputs_{function}_v46(arguments, external, frames);\n let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)",
+        "\n}}\nspec fn forwarding_initial_{function}_v46(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, frames: MemoryFrameRuntimeV30, little_endian: bool) -> MemoryStateV30 {{\n let admitted = forwarding_native_inputs_{function}_v46(arguments, external, frames);\n let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)",
         input.definitions().len()
     );
     let mut arguments = 0usize;

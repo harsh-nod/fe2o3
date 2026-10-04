@@ -208,7 +208,7 @@ impl<'a, 'owner> TargetByteViewContractsV38<'a, 'owner> {
         self.check_owner(self.inventory.owner(), out)?;
         emit!(
             out,
-            "open spec fn byte_target_view_contracts_{namespace}_v38(little_endian: bool) -> MemoryViewContractsV38 {{\n MemoryViewContractsV38 {{ owner: {namespace}, rows: Map::empty()"
+            "spec fn byte_target_view_contracts_{namespace}_v38(little_endian: bool) -> MemoryViewContractsV38 {{\n MemoryViewContractsV38 {{ owner: {namespace}, rows: Map::empty()"
         );
         let rows = &self.inventory.owner().module().storage_layouts;
         for (id, row) in rows.iter().enumerate() {
@@ -288,7 +288,7 @@ impl<'a, 'owner> TargetByteViewContractsV38<'a, 'owner> {
         }
         emit!(
             out,
-            "\n }}\n}}\nopen spec fn byte_target_view_contracts_match_{namespace}_v38(memory: ByteMemoryV30, little_endian: bool) -> bool {{\n memory.view_contracts == byte_target_view_contracts_{namespace}_v38(little_endian)\n}}\n"
+            "\n }}\n}}\nspec fn byte_target_view_contracts_match_{namespace}_v38(memory: ByteMemoryV30, little_endian: bool) -> bool {{\n memory.view_contracts == byte_target_view_contracts_{namespace}_v38(little_endian)\n}}\n"
         );
         Ok(())
     }

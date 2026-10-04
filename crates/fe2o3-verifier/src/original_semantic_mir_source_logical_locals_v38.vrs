@@ -19,13 +19,13 @@ struct InvocationSourceLogicalV38 {
     enums: Map<int, InvocationSourceEnumV47>,
 }
 
-open spec fn invocation_source_logical_initial_v38(count: nat) -> InvocationSourceLogicalV38 {
+spec fn invocation_source_logical_initial_v38(count: nat) -> InvocationSourceLogicalV38 {
     InvocationSourceLogicalV38 { versions: Seq::new(count, |i: int| 0int),
         witnesses: Map::empty(), references: Map::empty(), descriptor_references: Map::empty(),
         aggregates: Map::empty(), enums: Map::empty() }
 }
 
-open spec fn invocation_source_logical_well_formed_v38(
+spec fn invocation_source_logical_well_formed_v38(
     logical: InvocationSourceLogicalV38, count: int,
 ) -> bool {
     logical.versions.len() == count
@@ -59,7 +59,7 @@ open spec fn invocation_source_logical_well_formed_v38(
                 && logical.references[i].borrow_statement >= 0)
 }
 
-open spec fn invocation_source_logical_write_v38(
+spec fn invocation_source_logical_write_v38(
     logical: InvocationSourceLogicalV38, local: int,
 ) -> InvocationSourceLogicalV38 {
     InvocationSourceLogicalV38 {
@@ -72,26 +72,26 @@ open spec fn invocation_source_logical_write_v38(
     }
 }
 
-open spec fn invocation_source_logical_clear_v38(
+spec fn invocation_source_logical_clear_v38(
     logical: InvocationSourceLogicalV38, begin: int, end: int,
 ) -> InvocationSourceLogicalV38 {
     InvocationSourceLogicalV38 {
         versions: Seq::new(logical.versions.len(), |i: int|
             if begin <= i < end { logical.versions[i] + 1 } else { logical.versions[i] }),
-        witnesses: Map::new(|i: int| logical.witnesses.contains_key(i) && !(begin <= i < end),
+        witnesses: Map::new(logical.witnesses.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.witnesses[i]),
-        references: Map::new(|i: int| logical.references.contains_key(i) && !(begin <= i < end),
+        references: Map::new(logical.references.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.references[i]),
-        descriptor_references: Map::new(|i: int| logical.descriptor_references.contains_key(i) && !(begin <= i < end),
+        descriptor_references: Map::new(logical.descriptor_references.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.descriptor_references[i]),
-        aggregates: Map::new(|i: int| logical.aggregates.contains_key(i) && !(begin <= i < end),
+        aggregates: Map::new(logical.aggregates.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.aggregates[i]),
-        enums: Map::new(|i: int| logical.enums.contains_key(i) && !(begin <= i < end),
+        enums: Map::new(logical.enums.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.enums[i]),
     }
 }
 
-open spec fn invocation_source_witness_current_v38(
+spec fn invocation_source_witness_current_v38(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
 ) -> bool {
     source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
@@ -107,7 +107,7 @@ open spec fn invocation_source_witness_current_v38(
         }
 }
 
-open spec fn invocation_source_reference_current_v38(
+spec fn invocation_source_reference_current_v38(
     source: InvocationSourceByteStateV36, local: int, source_type: int,
 ) -> bool {
     source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
@@ -121,7 +121,7 @@ open spec fn invocation_source_reference_current_v38(
                     && source.machine.frames.active[i] == reference.frame })
 }
 
-open spec fn invocation_source_issue_witness_v38(
+spec fn invocation_source_issue_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, source_type: int, bits: int,
 ) -> InvocationSourceByteStateV36 {
     match source.machine.frames.execution {
@@ -142,7 +142,7 @@ open spec fn invocation_source_issue_witness_v38(
     }
 }
 
-open spec fn invocation_source_borrow_witness_v38(
+spec fn invocation_source_borrow_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, origin: int,
     source_type: int, origin_generation: int, instance: int, block: int, statement: int,
 ) -> InvocationSourceByteStateV36 {
@@ -169,7 +169,7 @@ struct InvocationSourceWitnessParentV43 {
     statement: int,
 }
 
-open spec fn invocation_source_reborrow_witness_v43(
+spec fn invocation_source_reborrow_witness_v43(
     source: InvocationSourceByteStateV36, destination: int, origin: int,
     source_type: int, origin_generation: int, instance: int, block: int, statement: int,
     parent: Option<InvocationSourceWitnessParentV43>,
@@ -201,7 +201,7 @@ open spec fn invocation_source_reborrow_witness_v43(
     }
 }
 
-open spec fn invocation_source_read_witness_v38(
+spec fn invocation_source_read_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, reference: int, source_type: int,
     origin: int, generation: int, instance: int, block: int, statement: int, moved: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -261,7 +261,7 @@ proof fn source_witness_reborrow_rejects_wrong_original_parent_site_v43(
         source_type, generation, instance, block, statement, Some(parent)).machine.valid,
 {}
 
-open spec fn invocation_source_convert_witness_v38(
+spec fn invocation_source_convert_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     input_type: int, output_type: int, moved: bool,
 ) -> InvocationSourceByteStateV36 {
@@ -279,7 +279,7 @@ open spec fn invocation_source_convert_witness_v38(
     }
 }
 
-open spec fn invocation_source_transfer_witness_v40(
+spec fn invocation_source_transfer_witness_v40(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     source_type: int, reference: bool, moved: bool,
 ) -> InvocationSourceByteStateV36 {

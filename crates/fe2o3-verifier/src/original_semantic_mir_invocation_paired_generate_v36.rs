@@ -36,7 +36,7 @@ fn control(
 ) -> Result<()> {
     emit!(
         out,
-        "open spec fn invocation_byte_cut_{root}_v36(pc: int) -> bool {{ false"
+        "spec fn invocation_byte_cut_{root}_v36(pc: int) -> bool {{ false"
     );
     for (block, cut) in row.cuts.iter().enumerate() {
         out.budget.charge_work(1)?;
@@ -46,18 +46,18 @@ fn control(
     }
     emit!(
         out,
-        " }}\nopen spec fn invocation_byte_follow_{root}_v36(target: MemoryStateV30, fuel: nat) -> InvocationActualBoundaryV36\n decreases fuel\n{{\n if !target.valid || target.pc < 0 || invocation_byte_cut_{root}_v36(target.pc) {{ invocation_actual_boundary_empty_v36(target) }}\n else if fuel == 0 || target.pc < {} || {} <= target.pc {{ invocation_actual_boundary_empty_v36(MemoryStateV30 {{ valid: false, ..target }}) }}\n else {{ let head = byte_block_step_{root}_v30(target, invocation_runtime_little_endian_v36());\n let tail = invocation_byte_follow_{root}_v36(head.state, (fuel - 1) as nat);\n invocation_actual_boundary_join_v36(target.pc, head, tail) }}\n}}\nopen spec fn invocation_byte_boundary_{root}_v36(target: MemoryStateV30) -> InvocationActualBoundaryV36 {{\n if target.pc < 0 {{ invocation_actual_boundary_empty_v36(target) }}\n else if !target.valid || !invocation_byte_cut_{root}_v36(target.pc) {{ invocation_actual_boundary_empty_v36(MemoryStateV30 {{ valid: false, ..target }}) }}\n else {{ let head = byte_block_step_{root}_v30(target, invocation_runtime_little_endian_v36());\n let tail = invocation_byte_follow_{root}_v36(head.state, {}nat);\n invocation_actual_boundary_join_v36(target.pc, head, tail) }}\n}}\n",
+        " }}\nspec fn invocation_byte_follow_{root}_v36(target: MemoryStateV30, fuel: nat) -> InvocationActualBoundaryV36\n decreases fuel\n{{\n if !target.valid || target.pc < 0 || invocation_byte_cut_{root}_v36(target.pc) {{ invocation_actual_boundary_empty_v36(target) }}\n else if fuel == 0 || target.pc < {} || {} <= target.pc {{ invocation_actual_boundary_empty_v36(MemoryStateV30 {{ valid: false, ..target }}) }}\n else {{ let head = byte_block_step_{root}_v30(target, invocation_runtime_little_endian_v36());\n let tail = invocation_byte_follow_{root}_v36(head.state, (fuel - 1) as nat);\n invocation_actual_boundary_join_v36(target.pc, head, tail) }}\n}}\nspec fn invocation_byte_boundary_{root}_v36(target: MemoryStateV30) -> InvocationActualBoundaryV36 {{\n if target.pc < 0 {{ invocation_actual_boundary_empty_v36(target) }}\n else if !target.valid || !invocation_byte_cut_{root}_v36(target.pc) {{ invocation_actual_boundary_empty_v36(MemoryStateV30 {{ valid: false, ..target }}) }}\n else {{ let head = byte_block_step_{root}_v30(target, invocation_runtime_little_endian_v36());\n let tail = invocation_byte_follow_{root}_v36(head.state, {}nat);\n invocation_actual_boundary_join_v36(target.pc, head, tail) }}\n}}\n",
         row.blocks.start,
         row.blocks.end,
         row.blocks.len()
     );
     emit!(
         out,
-        "open spec fn invocation_paired_source_step_{root}_v36(source: InvocationSourceByteStateV36) -> CfgStepV26<InvocationSourceByteStateV36, InvocationSourceEffectObservationV39> {{\n if source.machine.pc < 0 {{ CfgStepV26 {{ state: source, events: seq![], halted: true }} }} else {{\n let next = invocation_source_block_runtime_{root}_v36(source);\n CfgStepV26 {{ state: next.source, events: invocation_source_observations_v39(next, invocation_runtime_little_endian_v36()), halted: next.source.machine.pc < 0 }} }}\n}}\nopen spec fn invocation_paired_actual_step_{root}_v36(target: MemoryStateV30) -> CfgStepV26<MemoryStateV30, MemoryOperationObservationV30> {{\n let next = invocation_byte_boundary_{root}_v36(target);\n CfgStepV26 {{ state: next.state, events: invocation_actual_observations_v39(next.observations), halted: next.state.pc < 0 }}\n}}\n"
+        "spec fn invocation_paired_source_step_{root}_v36(source: InvocationSourceByteStateV36) -> CfgStepV26<InvocationSourceByteStateV36, InvocationSourceEffectObservationV39> {{\n if source.machine.pc < 0 {{ CfgStepV26 {{ state: source, events: seq![], halted: true }} }} else {{\n let next = invocation_source_block_runtime_{root}_v36(source);\n CfgStepV26 {{ state: next.source, events: invocation_source_observations_v39(next, invocation_runtime_little_endian_v36()), halted: next.source.machine.pc < 0 }} }}\n}}\nspec fn invocation_paired_actual_step_{root}_v36(target: MemoryStateV30) -> CfgStepV26<MemoryStateV30, MemoryOperationObservationV30> {{\n let next = invocation_byte_boundary_{root}_v36(target);\n CfgStepV26 {{ state: next.state, events: invocation_actual_observations_v39(next.observations), halted: next.state.pc < 0 }}\n}}\n"
     );
     emit!(
         out,
-        "open spec fn invocation_paired_observations_related_{root}_v39(source: Seq<InvocationSourceEffectObservationV39>, target: Seq<MemoryOperationObservationV30>) -> bool {{\n source.len() == target.len() && (forall|i: int| 0 <= i < source.len() ==> invocation_source_byte_map_valid_{root}_v36(source[i].before, target[i].before) && invocation_source_byte_map_valid_{root}_v36(source[i].after, target[i].after) && invocation_observed_effect_related_v39(source[i], target[i], invocation_source_byte_map_{root}_v36(source[i].before, target[i].before), invocation_source_byte_map_{root}_v36(source[i].after, target[i].after)))\n}}\n"
+        "spec fn invocation_paired_observations_related_{root}_v39(source: Seq<InvocationSourceEffectObservationV39>, target: Seq<MemoryOperationObservationV30>) -> bool {{\n source.len() == target.len() && (forall|i: int| 0 <= i < source.len() ==> invocation_source_byte_map_valid_{root}_v36(source[i].before, target[i].before) && invocation_source_byte_map_valid_{root}_v36(source[i].after, target[i].after) && invocation_observed_effect_related_v39(source[i], target[i], invocation_source_byte_map_{root}_v36(source[i].before, target[i].before), invocation_source_byte_map_{root}_v36(source[i].after, target[i].after)))\n}}\n"
     );
     emit!(
         out,
@@ -397,7 +397,7 @@ fn related(
 ) -> Result<()> {
     emit!(
         out,
-        "open spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n && invocation_source_byte_storage_related_{root}_v36(source, target)\n && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ (source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0) || (source.machine.pc == -2 && target.pc == -2) }} else\n",
+        "spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n && invocation_source_byte_storage_related_{root}_v36(source, target)\n && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ (source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0) || (source.machine.pc == -2 && target.pc == -2) }} else\n",
         model.locals,
         model.definitions
     );
@@ -442,7 +442,7 @@ fn observed(
 ) -> Result<()> {
     emit!(
         out,
-        "open spec fn invocation_paired_control_values_{root}_v36(before: InvocationSourceByteStateV36, source_result: InvocationSourceBlockResultV36, target_result: InvocationActualBoundaryV36) -> bool {{\n let source = source_result.source; let target = target_result.state;\n let map = invocation_source_byte_map_{root}_v36(source, target);\n target.values.len() == {} && (\n",
+        "spec fn invocation_paired_control_values_{root}_v36(before: InvocationSourceByteStateV36, source_result: InvocationSourceBlockResultV36, target_result: InvocationActualBoundaryV36) -> bool {{\n let source = source_result.source; let target = target_result.state;\n let map = invocation_source_byte_map_{root}_v36(source, target);\n target.values.len() == {} && (\n",
         model.definitions
     );
     for cut in row.cuts.iter().flatten() {
@@ -516,7 +516,7 @@ fn initial(
         .ok_or_else(mismatch)?;
     emit!(
         out,
-        "open spec fn invocation_paired_arguments_{root}_v36(arguments: Seq<MemoryValueV30>) -> bool {{ arguments.len() == {}",
+        "spec fn invocation_paired_arguments_{root}_v36(arguments: Seq<MemoryValueV30>) -> bool {{ arguments.len() == {}",
         entry.arguments.len()
     );
     let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
@@ -539,7 +539,7 @@ fn initial(
     }
     emit!(
         out,
-        " }}\nopen spec fn invocation_paired_native_inputs_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> bool {{\n invocation_runtime_execution_{root}_v37(execution) && invocation_paired_arguments_{root}_v36(arguments) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments)\n}}\nproof fn invocation_paired_source_ready_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid,\n{{ }}\nopen spec fn invocation_paired_raw_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> MemoryStateV30 {{\n let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)",
+        " }}\nspec fn invocation_paired_native_inputs_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> bool {{\n invocation_runtime_execution_{root}_v37(execution) && invocation_paired_arguments_{root}_v36(arguments) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments)\n}}\nproof fn invocation_paired_source_ready_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid,\n{{ }}\nspec fn invocation_paired_raw_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> MemoryStateV30 {{\n let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)",
         model.definitions
     );
     for parameter in &row.parameters {
@@ -553,7 +553,7 @@ fn initial(
     }
     emit!(
         out,
-        ";\n let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);\n let memory = if admitted {{ ByteMemoryV30 {{ view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external }} }} else {{ external }};\n MemoryStateV30 {{ pc: {}, values, memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({}, execution), valid: admitted }}\n}}\nopen spec fn invocation_paired_ready_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationActualBoundaryV36 {{ invocation_byte_follow_{root}_v36(invocation_paired_raw_initial_{root}_v36(arguments, external, execution), {}nat) }}\nproof fn invocation_paired_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_paired_related_{root}_v36(invocation_source_initial_runtime_{root}_v36(arguments, external, execution), invocation_paired_ready_{root}_v36(arguments, external, execution).state),\n invocation_actual_observations_v39(invocation_paired_ready_{root}_v36(arguments, external, execution).observations).len() == 0,\n{{ invocation_paired_source_ready_{root}_v38(arguments, external, execution); }}\n",
+        ";\n let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);\n let memory = if admitted {{ ByteMemoryV30 {{ view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external }} }} else {{ external }};\n MemoryStateV30 {{ pc: {}, values, memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({}, execution), valid: admitted }}\n}}\nspec fn invocation_paired_ready_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationActualBoundaryV36 {{ invocation_byte_follow_{root}_v36(invocation_paired_raw_initial_{root}_v36(arguments, external, execution), {}nat) }}\nproof fn invocation_paired_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_paired_related_{root}_v36(invocation_source_initial_runtime_{root}_v36(arguments, external, execution), invocation_paired_ready_{root}_v36(arguments, external, execution).state),\n invocation_actual_observations_v39(invocation_paired_ready_{root}_v36(arguments, external, execution).observations).len() == 0,\n{{ invocation_paired_source_ready_{root}_v38(arguments, external, execution); }}\n",
         row.blocks.start,
         row.owner,
         row.blocks.len()
@@ -564,7 +564,7 @@ fn initial(
 fn proofs(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
-        r#"open spec fn invocation_paired_source_defined_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat) -> bool
+        r#"spec fn invocation_paired_source_defined_{root}_v36(source: InvocationSourceByteStateV36, fuel: nat) -> bool
  decreases fuel
 {{ source.machine.valid && (fuel == 0 || source.machine.pc < 0 || invocation_paired_source_defined_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, (fuel - 1) as nat)) }}
 proof fn invocation_paired_step_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30)
@@ -604,10 +604,10 @@ struct InvocationActualBoundaryV36 {
     returned: Seq<MemoryValueV30>,
     blocks: Seq<int>,
 }
-open spec fn invocation_actual_boundary_empty_v36(state: MemoryStateV30) -> InvocationActualBoundaryV36 {
+spec fn invocation_actual_boundary_empty_v36(state: MemoryStateV30) -> InvocationActualBoundaryV36 {
     InvocationActualBoundaryV36 { state, observations: seq![], returned: seq![], blocks: seq![] }
 }
-open spec fn invocation_actual_boundary_join_v36(block: int, head: MemoryBlockResultV30,
+spec fn invocation_actual_boundary_join_v36(block: int, head: MemoryBlockResultV30,
     tail: InvocationActualBoundaryV36,
 ) -> InvocationActualBoundaryV36 {
     InvocationActualBoundaryV36 { state: tail.state,

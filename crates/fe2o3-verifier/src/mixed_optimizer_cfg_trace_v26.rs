@@ -18,7 +18,7 @@ struct CfgTraceV26<S, E> {
     steps: nat,
 }
 
-open spec fn cfg_trace_v26<S, E>(
+spec fn cfg_trace_v26<S, E>(
     step: spec_fn(S) -> CfgStepV26<S, E>,
     state: S,
     fuel: nat,
@@ -48,7 +48,7 @@ open spec fn cfg_trace_v26<S, E>(
     }
 }
 
-open spec fn cfg_step_simulates_v26<N, O, E>(
+spec fn cfg_step_simulates_v26<N, O, E>(
     step_n: spec_fn(N) -> CfgStepV26<N, E>,
     step_o: spec_fn(O) -> CfgStepV26<O, E>,
     related: spec_fn(N, O) -> bool,

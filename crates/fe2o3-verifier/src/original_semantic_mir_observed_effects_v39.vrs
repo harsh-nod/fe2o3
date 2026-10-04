@@ -6,7 +6,7 @@ struct InvocationSourceEffectObservationV39 {
     effect: MemoryOperationEffectV30,
 }
 
-open spec fn invocation_project_effect_v39(effect: MemoryOperationEffectV30)
+spec fn invocation_project_effect_v39(effect: MemoryOperationEffectV30)
     -> Option<MemoryOperationEffectV30>
 {
     match effect {
@@ -44,7 +44,7 @@ open spec fn invocation_project_effect_v39(effect: MemoryOperationEffectV30)
     }
 }
 
-open spec fn invocation_actual_observations_v39(observations: Seq<MemoryOperationObservationV30>)
+spec fn invocation_actual_observations_v39(observations: Seq<MemoryOperationObservationV30>)
     -> Seq<MemoryOperationObservationV30>
     decreases observations.len(),
 {
@@ -62,7 +62,7 @@ open spec fn invocation_actual_observations_v39(observations: Seq<MemoryOperatio
     }
 }
 
-open spec fn invocation_source_observe_effects_v39(
+spec fn invocation_source_observe_effects_v39(
     effects: Seq<MemoryOperationEffectV30>, before: InvocationSourceByteStateV36,
     after: InvocationSourceByteStateV36,
 ) -> Seq<InvocationSourceEffectObservationV39> {
@@ -70,7 +70,7 @@ open spec fn invocation_source_observe_effects_v39(
         before, after, effect: effects[i] })
 }
 
-open spec fn invocation_source_statement_observations_v39(
+spec fn invocation_source_statement_observations_v39(
     observation: InvocationSourceStatementObservationV36, little_endian: bool,
 ) -> Seq<InvocationSourceEffectObservationV39> {
     if !observation.before.machine.valid || !observation.after.machine.valid {
@@ -166,7 +166,7 @@ open spec fn invocation_source_statement_observations_v39(
     } }
 }
 
-open spec fn invocation_source_statements_observations_v39(
+spec fn invocation_source_statements_observations_v39(
     observations: Seq<InvocationSourceStatementObservationV36>, little_endian: bool,
 ) -> Seq<InvocationSourceEffectObservationV39>
     decreases observations.len(),
@@ -177,7 +177,7 @@ open spec fn invocation_source_statements_observations_v39(
     }
 }
 
-open spec fn invocation_source_operands_observations_v39(
+spec fn invocation_source_operands_observations_v39(
     observations: Seq<InvocationSourceOperandObservationV36>, little_endian: bool,
 ) -> Seq<InvocationSourceEffectObservationV39>
     decreases observations.len(),
@@ -205,7 +205,7 @@ open spec fn invocation_source_operands_observations_v39(
     }
 }
 
-open spec fn invocation_source_observations_v39(result: InvocationSourceBlockResultV36,
+spec fn invocation_source_observations_v39(result: InvocationSourceBlockResultV36,
     little_endian: bool,
 ) -> Seq<InvocationSourceEffectObservationV39> {
     invocation_source_statements_observations_v39(result.observations, little_endian)
@@ -213,7 +213,7 @@ open spec fn invocation_source_observations_v39(result: InvocationSourceBlockRes
         + invocation_source_trap_observations_v40(result)
 }
 
-open spec fn invocation_source_trap_observations_v40(result: InvocationSourceBlockResultV36)
+spec fn invocation_source_trap_observations_v40(result: InvocationSourceBlockResultV36)
     -> Seq<InvocationSourceEffectObservationV39>
 {
     if result.source.machine.pc != -2 { seq![] } else {
@@ -235,7 +235,7 @@ open spec fn invocation_source_trap_observations_v40(result: InvocationSourceBlo
 
 // Compare exactly the selected window, including padding initialization and
 // partial fragments. Only fully contained cells appear in the copied map.
-open spec fn invocation_copy_windows_related_v39(
+spec fn invocation_copy_windows_related_v39(
     source: ByteMemoryV30, target: ByteMemoryV30,
     original: MemoryPointerV30, actual: MemoryPointerV30, width: int,
     map: InvocationByteMapV36,
@@ -260,7 +260,7 @@ open spec fn invocation_copy_windows_related_v39(
     })
 }
 
-open spec fn invocation_observed_effect_related_v39(
+spec fn invocation_observed_effect_related_v39(
     source: InvocationSourceEffectObservationV39, target: MemoryOperationObservationV30,
     before_map: InvocationByteMapV36, after_map: InvocationByteMapV36,
 ) -> bool {
