@@ -26,6 +26,7 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
+pub mod pidfd;
 mod protected_rustc;
 mod sealed_memfd;
 

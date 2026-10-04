@@ -907,10 +907,19 @@ mod tests {
         let allowed = allowed_application_syscalls();
         for required in [
             libc::SYS_sendto,
+            libc::SYS_sendmsg,
             libc::SYS_recvmsg,
             libc::SYS_getsockopt,
             libc::SYS_getsockname,
             libc::SYS_getpeername,
+            libc::SYS_poll,
+            libc::SYS_ioctl,
+            libc::SYS_getrandom,
+            libc::SYS_openat,
+            libc::SYS_read,
+            libc::SYS_fstat,
+            libc::SYS_fstatfs,
+            libc::SYS_fcntl,
         ] {
             assert!(
                 allowed.contains(&required),
@@ -925,6 +934,10 @@ mod tests {
             libc::SYS_listen,
             libc::SYS_accept,
             libc::SYS_accept4,
+            libc::SYS_pidfd_open,
+            libc::SYS_pidfd_send_signal,
+            libc::SYS_waitid,
+            libc::SYS_shutdown,
         ] {
             assert!(!allowed.contains(&forbidden), "syscall {forbidden} escaped");
         }

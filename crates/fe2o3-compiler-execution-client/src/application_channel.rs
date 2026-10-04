@@ -13,6 +13,8 @@ use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientProce
 pub enum ApplicationProofChannelErrorV1 {
     Io(rustix::io::Errno),
     Invalid(&'static str),
+    Process(fe2o3_process_identity::pidfd::PidfdObservationErrorV1),
+    Timeout,
 }
 
 impl From<rustix::io::Errno> for ApplicationProofChannelErrorV1 {
@@ -26,11 +28,32 @@ impl fmt::Display for ApplicationProofChannelErrorV1 {
         match self {
             Self::Io(error) => write!(f, "application proof channel: {error}"),
             Self::Invalid(reason) => write!(f, "invalid application proof channel: {reason}"),
+            Self::Process(error) => write!(f, "application root process: {error}"),
+            Self::Timeout => f.write_str("application registration deadline expired"),
         }
     }
 }
 
-impl std::error::Error for ApplicationProofChannelErrorV1 {}
+impl std::error::Error for ApplicationProofChannelErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Process(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<fe2o3_process_identity::pidfd::PidfdObservationErrorV1>
+    for ApplicationProofChannelErrorV1
+{
+    fn from(error: fe2o3_process_identity::pidfd::PidfdObservationErrorV1) -> Self {
+        Self::Process(error)
+    }
+}
+
+mod registration;
+pub use registration::RegisteredApplicationProofEndpointV1;
 
 type Result<T> = std::result::Result<T, ApplicationProofChannelErrorV1>;
 

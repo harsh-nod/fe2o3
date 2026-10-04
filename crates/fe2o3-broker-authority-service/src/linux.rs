@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
@@ -18,36 +18,6 @@ pub use client_session::RetainedCompilerClientSessionV1;
 
 const DIRECTORY_PERMISSIONS: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
-const MAX_PIDFD_FDINFO_BYTES: u64 = 4096;
-const MAX_PROC_STAT_BYTES: u64 = 4096;
-const PIDFD_INFO_PID_V0: u64 = 1 << 0;
-const PIDFS_IOCTL_MAGIC: u32 = 0xff;
-const PIDFD_GET_INFO_NUMBER: u32 = 11;
-
-// Linux UAPI pidfd_info version 0 is exactly 64 bytes. Keeping a local layout also keeps the
-// ioctl opcode at the v0 size if a later libc exposes a larger structure version.
-#[repr(C)]
-struct PidfdInfoV0 {
-    mask: u64,
-    cgroupid: u64,
-    pid: u32,
-    tgid: u32,
-    ppid: u32,
-    ruid: u32,
-    rgid: u32,
-    euid: u32,
-    egid: u32,
-    suid: u32,
-    sgid: u32,
-    fsuid: u32,
-    fsgid: u32,
-    exit_code: i32,
-}
-
-const _: () = assert!(std::mem::size_of::<PidfdInfoV0>() == 64);
-const PIDFD_GET_INFO_V0: libc::Ioctl =
-    libc::_IOWR::<PidfdInfoV0>(PIDFS_IOCTL_MAGIC, PIDFD_GET_INFO_NUMBER);
-
 /// Stable classification for a failed protected-service admission or revalidation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -216,17 +186,7 @@ pub struct ExpectedClientProcessIdentityV1 {
     gid: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PidfdIdentitySourceV1 {
-    KernelIoctl,
-    ProcfsFdinfo,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PidfdTargetObservationV1 {
-    pid: u32,
-    source: PidfdIdentitySourceV1,
-}
+use fe2o3_process_identity::pidfd::{PidfdIdentitySourceV1, PidfdTargetObservationV1};
 
 /// Move-only, opaque evidence retaining one supervisor-supplied client pidfd.
 ///
@@ -1028,340 +988,76 @@ fn require_close_on_exec(
     Ok(())
 }
 
-fn require_process_pidfd_mode(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let flags = rustix::fs::fcntl_getfl(pidfd).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect client pidfd file status flags",
-            io::Error::from(error),
-        )
-    })?;
-    // Linux v6.12 UAPI defines PIDFD_THREAD as exactly O_EXCL. This contract rejects only that
-    // identified process-vs-thread selector and does not require unrelated flag bits to be zero.
-    if flags.contains(rustix::fs::OFlags::EXCL) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientPidfdThread,
-            "client pidfd has Linux PIDFD_THREAD (O_EXCL) semantics",
-        ));
+impl From<fe2o3_process_identity::pidfd::PidfdObservationErrorV1>
+    for ProtectedServiceAdmissionErrorV1
+{
+    fn from(error: fe2o3_process_identity::pidfd::PidfdObservationErrorV1) -> Self {
+        use fe2o3_process_identity::pidfd::PidfdObservationErrorKindV1 as Kind;
+        let (kind, message, source) = error.into_parts();
+        let kind = match kind {
+            Kind::ExpectedPid => AdmissionErrorKindV1::ExpectedClientPid,
+            Kind::InspectStartTime => AdmissionErrorKindV1::InspectClientStartTime,
+            Kind::CloseOnExec => AdmissionErrorKindV1::ClientPidfdCloseOnExec,
+            Kind::Thread => AdmissionErrorKindV1::ClientPidfdThread,
+            Kind::TargetMismatch => AdmissionErrorKindV1::ClientPidfdTargetMismatch,
+            Kind::IdentityChanged => AdmissionErrorKindV1::ClientPidfdIdentityChanged,
+            Kind::StartTimeChanged => AdmissionErrorKindV1::ClientStartTimeChanged,
+            Kind::AlreadyDead => AdmissionErrorKindV1::ClientAlreadyDead,
+            _ => AdmissionErrorKindV1::InspectClientPidfd,
+        };
+        Self {
+            kind,
+            message,
+            source,
+        }
     }
-    Ok(())
+}
+
+fn require_process_pidfd_mode(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+    fe2o3_process_identity::pidfd::require_process_pidfd_mode(pidfd).map_err(Into::into)
 }
 
 fn inspect_pidfd_target(
     pidfd: &OwnedFd,
 ) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
-    // SAFETY: PidfdInfoV0 contains only integer fields, so all-zero is a valid request. The ioctl
-    // reads the request mask and initializes fields indicated by the returned mask.
-    let mut info = unsafe { MaybeUninit::<PidfdInfoV0>::zeroed().assume_init() };
-    info.mask = PIDFD_INFO_PID_V0;
-    // SAFETY: `info` is writable for the exact 64-byte v0 type encoded by PIDFD_GET_INFO_V0 and the
-    // descriptor remains borrowed for the call.
-    let result = unsafe { libc::ioctl(pidfd.as_raw_fd(), PIDFD_GET_INFO_V0, &mut info) };
-    if result == 0 {
-        if info.mask & PIDFD_INFO_PID_V0 == 0 || info.pid == 0 || info.tgid != info.pid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "PIDFD_GET_INFO omitted a usable process-leader target PID",
-            ));
-        }
-        return Ok(PidfdTargetObservationV1 {
-            pid: info.pid,
-            source: PidfdIdentitySourceV1::KernelIoctl,
-        });
-    }
-
-    dispatch_pidfd_get_info_error(pidfd, io::Error::last_os_error())
-}
-
-fn dispatch_pidfd_get_info_error(
-    pidfd: &OwnedFd,
-    error: io::Error,
-) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
-    match error.raw_os_error() {
-        // Linux v6.12 checks for a nonzero pidfd ioctl argument before its command switch, so the
-        // pointer-bearing v0 info request returns EINVAL. Linux v6.13 dispatches PIDFD_GET_INFO
-        // before that check. Neither errno proves descriptor type: only strict kernel procfs
-        // inspection below can make this fallback succeed.
-        Some(libc::ENOTTY) | Some(libc::EINVAL) => inspect_pidfd_target_from_procfs(pidfd),
-        Some(libc::ESRCH) => Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd target exited before identity inspection",
-        )),
-        _ => Err(ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect client pidfd with PIDFD_GET_INFO",
-            error,
-        )),
-    }
-}
-
-fn inspect_pidfd_target_from_procfs(
-    pidfd: &OwnedFd,
-) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
-    let self_entry = open_validated_procfs_self()?;
-    let directory_flags = rustix::fs::OFlags::RDONLY
-        | rustix::fs::OFlags::DIRECTORY
-        | rustix::fs::OFlags::NOFOLLOW
-        | rustix::fs::OFlags::CLOEXEC;
-    let fdinfo: File = rustix::fs::openat(
-        &self_entry,
-        "fdinfo",
-        directory_flags,
-        rustix::fs::Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot open the retained procfs fdinfo directory",
-            io::Error::from(error),
-        )
-    })?;
-    require_procfs(&fdinfo, "retained /proc/self/fdinfo directory")?;
-    let record_flags =
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
-    let mut record: File = rustix::fs::openat(
-        &fdinfo,
-        pidfd.as_raw_fd().to_string(),
-        record_flags,
-        rustix::fs::Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot open the bounded procfs client pidfd identity record",
-            io::Error::from(error),
-        )
-    })?;
-    require_procfs(&record, "client pidfd identity record")?;
-
-    let mut contents = String::new();
-    record
-        .by_ref()
-        .take(MAX_PIDFD_FDINFO_BYTES + 1)
-        .read_to_string(&mut contents)
-        .map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "cannot read the bounded procfs client pidfd identity record",
-                error,
-            )
-        })?;
-    if contents.len() as u64 > MAX_PIDFD_FDINFO_BYTES {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "procfs client pidfd identity record exceeds 4096 bytes",
-        ));
-    }
-
-    let pid = parse_pidfd_fdinfo(&contents)?;
-    Ok(PidfdTargetObservationV1 {
-        pid,
-        source: PidfdIdentitySourceV1::ProcfsFdinfo,
-    })
-}
-
-fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, ProtectedServiceAdmissionErrorV1> {
-    let mut pid_value = None;
-    let mut flags_value = None;
-    for line in contents.lines() {
-        if let Some(field) = line.strip_prefix("Pid:") {
-            let value = field.strip_prefix('\t').ok_or_else(|| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed Pid field",
-                )
-            })?;
-            if pid_value.is_some() {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has duplicate Pid fields",
-                ));
-            }
-            let canonical_positive_or_zero = !value.is_empty()
-                && value.bytes().all(|byte| byte.is_ascii_digit())
-                && (value.len() == 1 || !value.starts_with('0'));
-            if value != "-1" && !canonical_positive_or_zero {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a non-canonical decimal Pid field",
-                ));
-            }
-            pid_value = Some(value.parse::<i64>().map_err(|_| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed Pid field",
-                )
-            })?);
-        }
-        if let Some(field) = line.strip_prefix("flags:") {
-            let value = field.strip_prefix('\t').ok_or_else(|| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed flags field",
-                )
-            })?;
-            if flags_value.is_some() {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has duplicate flags fields",
-                ));
-            }
-            if value.len() < 2
-                || !value.starts_with('0')
-                || !value.bytes().all(|byte| matches!(byte, b'0'..=b'7'))
-            {
-                return Err(ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has a malformed octal flags field",
-                ));
-            }
-            flags_value = Some(u32::from_str_radix(value, 8).map_err(|_| {
-                ProtectedServiceAdmissionErrorV1::new(
-                    AdmissionErrorKindV1::InspectClientPidfd,
-                    "procfs client pidfd identity record has an out-of-range octal flags field",
-                )
-            })?);
-        }
-    }
-    let pid_value = pid_value.ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "descriptor is not a pidfd with a procfs Pid identity field",
-        )
-    })?;
-    let flags_value = flags_value.ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "descriptor has no exact procfs octal flags identity field",
-        )
-    })?;
-    // Linux v6.12 fs/proc/fd.c emits file->f_flags in octal, and pidfd.h defines PIDFD_THREAD as
-    // O_EXCL. Reject only that exact bit so unrelated current or future flags remain admissible.
-    if flags_value & libc::PIDFD_THREAD != 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientPidfdThread,
-            "procfs client pidfd flags contain Linux PIDFD_THREAD (O_EXCL)",
-        ));
-    }
-    if pid_value == -1 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd target was already reaped",
-        ));
-    }
-    let pid = u32::try_from(pid_value).map_err(|_| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "procfs client pidfd identity is not positive in the selected procfs namespace view",
-        )
-    })?;
-    if pid == 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "procfs client pidfd identity is not positive in the selected procfs namespace view",
-        ));
-    }
-    Ok(pid)
-}
-
-fn open_validated_procfs_self() -> Result<File, ProtectedServiceAdmissionErrorV1> {
-    let self_entry = File::open("/proc/self").map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot open /proc/self for pidfd fallback validation",
-            error,
-        )
-    })?;
-    let numeric_entry = File::open(format!("/proc/{}", std::process::id())).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "selected procfs mount has no numeric entry for the service getpid value",
-            error,
-        )
-    })?;
-    require_procfs(&self_entry, "/proc/self")?;
-    require_procfs(&numeric_entry, "numeric /proc self entry")?;
-    let self_stat = rustix::fs::fstat(&self_entry).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect /proc/self",
-            io::Error::from(error),
-        )
-    })?;
-    let numeric_stat = rustix::fs::fstat(&numeric_entry).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "cannot inspect numeric /proc self entry",
-            io::Error::from(error),
-        )
-    })?;
-    if (self_stat.st_dev, self_stat.st_ino) != (numeric_stat.st_dev, numeric_stat.st_ino) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            "/proc/self and /proc/<getpid> do not name the same process in the selected procfs mount",
-        ));
-    }
-    Ok(self_entry)
+    fe2o3_process_identity::pidfd::inspect_pidfd_target(pidfd).map_err(Into::into)
 }
 
 pub(crate) fn require_procfs(
     file: &File,
     label: &'static str,
 ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let filesystem = rustix::fs::fstatfs(file).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            format!("cannot inspect filesystem type for {label}"),
-            io::Error::from(error),
-        )
-    })?;
-    if filesystem.f_type != rustix::fs::PROC_SUPER_MAGIC {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientPidfd,
-            format!("{label} is not backed by procfs"),
-        ));
-    }
-    Ok(())
+    fe2o3_process_identity::pidfd::require_procfs(file, label).map_err(Into::into)
 }
 
 fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
-    parse_process_start_time_ticks(&read_process_stat(pid)?, pid)
+    fe2o3_process_identity::pidfd::inspect_process_start_time_ticks(pid).map_err(Into::into)
 }
 
 fn read_process_stat(pid: u32) -> Result<Vec<u8>, ProtectedServiceAdmissionErrorV1> {
-    // Validate that the selected procfs mount maps the service's numeric getpid consistently
-    // before trusting a numeric client entry. This remains a trusted compatible-procfs
-    // precondition; the check does not prove mount-namespace provenance.
-    let _validated_self = open_validated_procfs_self()?;
-    let mut record = File::open(format!("/proc/{pid}/stat")).map_err(|error| {
-        ProtectedServiceAdmissionErrorV1::io(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "cannot open bounded client procfs stat identity",
-            error,
-        )
-    })?;
-    require_procfs(&record, "client process stat identity")?;
-    let mut contents = Vec::new();
-    record
-        .by_ref()
-        .take(MAX_PROC_STAT_BYTES + 1)
-        .read_to_end(&mut contents)
-        .map_err(|error| {
-            ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "cannot read bounded client procfs stat identity",
-                error,
-            )
-        })?;
-    if contents.is_empty() || contents.len() as u64 > MAX_PROC_STAT_BYTES {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity is empty or exceeds 4096 bytes",
-        ));
+    fe2o3_process_identity::pidfd::read_process_stat(pid).map_err(Into::into)
+}
+
+fn parse_process_start_time_ticks(
+    contents: &[u8],
+    expected_pid: u32,
+) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
+    fe2o3_process_identity::pidfd::parse_process_start_time_ticks(contents, expected_pid)
+        .map_err(Into::into)
+}
+
+fn require_pidfd_not_pollable(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+    // Preserve broker signal handling; sandboxed application callers use the single-shot probe.
+    loop {
+        match fe2o3_process_identity::pidfd::require_pidfd_not_pollable(pidfd) {
+            Err(error)
+                if error
+                    .source()
+                    .and_then(|source| source.downcast_ref::<io::Error>())
+                    .is_some_and(|source| source.kind() == io::ErrorKind::Interrupted) => {}
+            result => return result.map_err(Into::into),
+        }
     }
-    Ok(contents)
 }
 
 /// Returns the current process's exact Linux procfs `starttime` tick field.
@@ -1372,91 +1068,6 @@ fn read_process_stat(pid: u32) -> Result<Vec<u8>, ProtectedServiceAdmissionError
 /// inert process identity data and grants no process or descriptor authority.
 pub fn current_process_start_time_ticks_v1() -> Result<u64, ProtectedServiceAdmissionErrorV1> {
     inspect_process_start_time_ticks(std::process::id())
-}
-
-fn parse_process_start_time_ticks(
-    contents: &[u8],
-    expected_pid: u32,
-) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
-    let close = contents
-        .iter()
-        .rposition(|byte| *byte == b')')
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has no command terminator",
-            )
-        })?;
-    let first_space = contents
-        .iter()
-        .position(|byte| *byte == b' ')
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has no PID terminator",
-            )
-        })?;
-    if contents.get(first_space + 1) != Some(&b'(') || close <= first_space + 1 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a malformed command field",
-        ));
-    }
-    let pid_bytes = &contents[..first_space];
-    if pid_bytes.is_empty()
-        || (pid_bytes.len() > 1 && pid_bytes.starts_with(b"0"))
-        || !pid_bytes.iter().all(u8::is_ascii_digit)
-    {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a noncanonical PID",
-        ));
-    }
-    let recorded_pid = std::str::from_utf8(pid_bytes)
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    if recorded_pid != Some(expected_pid) {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat PID does not match the retained pidfd target",
-        ));
-    }
-    let mut fields = contents
-        .get(close + 1..)
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity ended at its command field",
-            )
-        })?
-        .split(u8::is_ascii_whitespace)
-        .filter(|field| !field.is_empty());
-    let start_time = fields.nth(19).ok_or_else(|| {
-        ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has no start-time field",
-        )
-    })?;
-    if start_time.is_empty()
-        || (start_time.len() > 1 && start_time.starts_with(b"0"))
-        || !start_time.iter().all(u8::is_ascii_digit)
-    {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::InspectClientStartTime,
-            "client procfs stat identity has a noncanonical start time",
-        ));
-    }
-    let start_time = std::str::from_utf8(start_time)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value != 0)
-        .ok_or_else(|| {
-            ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "client procfs stat identity has an invalid start time",
-            )
-        })?;
-    Ok(start_time)
 }
 
 fn require_client_start_time(
@@ -1508,46 +1119,6 @@ fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionEr
         }
     }
     require_pidfd_not_pollable(pidfd)
-}
-
-fn require_pidfd_not_pollable(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-    let mut poll_descriptor = libc::pollfd {
-        fd: pidfd.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    let ready = loop {
-        // SAFETY: `poll_descriptor` is writable for one declared pollfd and timeout zero cannot
-        // block. The retained descriptor remains borrowed for the call.
-        let result = unsafe { libc::poll(&mut poll_descriptor, 1, 0) };
-        if result >= 0 {
-            break result;
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(ProtectedServiceAdmissionErrorV1::io(
-                AdmissionErrorKindV1::InspectClientPidfd,
-                "cannot poll client pidfd for liveness",
-                error,
-            ));
-        }
-    };
-    if ready == 0 {
-        return Ok(());
-    }
-    if poll_descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
-        return Err(ProtectedServiceAdmissionErrorV1::new(
-            AdmissionErrorKindV1::ClientAlreadyDead,
-            "client pidfd reports process exit",
-        ));
-    }
-    Err(ProtectedServiceAdmissionErrorV1::new(
-        AdmissionErrorKindV1::InspectClientPidfd,
-        format!(
-            "client pidfd returned unexpected poll events 0x{:x}",
-            poll_descriptor.revents
-        ),
-    ))
 }
 
 fn validate_root(
@@ -2195,6 +1766,24 @@ mod tests {
     }
 
     #[test]
+    fn shared_pidfd_errors_preserve_broker_kind_and_original_source() {
+        let error = inspect_process_start_time_ticks(u32::MAX).unwrap_err();
+        assert_eq!(error.kind(), AdmissionErrorKindV1::InspectClientStartTime);
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(libc::ENOENT)
+        );
+        let error = parse_process_start_time_ticks(b"malformed", 1).unwrap_err();
+        assert_eq!(error.kind(), AdmissionErrorKindV1::InspectClientStartTime);
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn live_current_process_pidfd_is_admitted() {
         let identity = live_identity(current_process_identity());
         assert_ne!(identity.start_time_ticks, 0);
@@ -2207,64 +1796,6 @@ mod tests {
         assert!(debug.contains("authority: \"none\""));
         assert!(!debug.contains("raw_fd"));
         assert!(!debug.contains("descriptor_identity"));
-    }
-
-    fn proc_stat_fixture(pid: u32, start_time_ticks: &str) -> Vec<u8> {
-        let mut fields = vec!["R"; 19];
-        fields.push(start_time_ticks);
-        format!("{pid} (command with ) delimiters) {}\n", fields.join(" ")).into_bytes()
-    }
-
-    #[test]
-    fn proc_stat_parser_binds_exact_pid_and_start_time() {
-        let pid = std::process::id();
-        let bytes = proc_stat_fixture(pid, "987654321");
-        assert_eq!(
-            parse_process_start_time_ticks(&bytes, pid).unwrap(),
-            987_654_321
-        );
-
-        for wrong_pid in [pid.saturating_add(1), pid.saturating_sub(1)] {
-            if wrong_pid != 0 && wrong_pid != pid {
-                assert_eq!(
-                    parse_process_start_time_ticks(&bytes, wrong_pid)
-                        .unwrap_err()
-                        .kind(),
-                    AdmissionErrorKindV1::InspectClientStartTime
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn proc_stat_parser_rejects_noncanonical_or_missing_start_time() {
-        let pid = std::process::id();
-        for start_time in ["0", "01", "-1", "+1", "x", "18446744073709551616"] {
-            assert_eq!(
-                parse_process_start_time_ticks(&proc_stat_fixture(pid, start_time), pid)
-                    .unwrap_err()
-                    .kind(),
-                AdmissionErrorKindV1::InspectClientStartTime,
-                "start time {start_time}"
-            );
-        }
-        for malformed in [
-            format!("{pid} command R 1 2 3"),
-            format!("{pid} (command) R 1 2 3"),
-            format!("0{pid} (command) {}", vec!["1"; 20].join(" ")),
-            format!(
-                "{} (command) {}",
-                pid.saturating_add(1),
-                vec!["1"; 20].join(" ")
-            ),
-        ] {
-            assert_eq!(
-                parse_process_start_time_ticks(malformed.as_bytes(), pid)
-                    .unwrap_err()
-                    .kind(),
-                AdmissionErrorKindV1::InspectClientStartTime
-            );
-        }
     }
 
     #[test]
@@ -2291,129 +1822,6 @@ mod tests {
     }
 
     #[test]
-    fn injected_legacy_ioctl_errnos_route_to_strict_procfs_fallback() {
-        let pidfd = pidfd_for(std::process::id());
-        for errno in [libc::ENOTTY, libc::EINVAL] {
-            assert_eq!(
-                dispatch_pidfd_get_info_error(&pidfd, io::Error::from_raw_os_error(errno)).unwrap(),
-                PidfdTargetObservationV1 {
-                    pid: std::process::id(),
-                    source: PidfdIdentitySourceV1::ProcfsFdinfo,
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn injected_legacy_ioctl_errnos_reject_an_ordinary_descriptor() {
-        let descriptor: OwnedFd = File::open("/dev/null").unwrap().into();
-        for errno in [libc::ENOTTY, libc::EINVAL] {
-            assert_eq!(
-                dispatch_pidfd_get_info_error(&descriptor, io::Error::from_raw_os_error(errno),)
-                    .unwrap_err()
-                    .kind(),
-                AdmissionErrorKindV1::InspectClientPidfd
-            );
-        }
-    }
-
-    #[test]
-    fn injected_nonfallback_ioctl_errnos_remain_errors() {
-        let pidfd = pidfd_for(std::process::id());
-        for errno in [libc::EACCES, libc::EFAULT, libc::EIO, libc::EPERM] {
-            assert_eq!(
-                dispatch_pidfd_get_info_error(&pidfd, io::Error::from_raw_os_error(errno))
-                    .unwrap_err()
-                    .kind(),
-                AdmissionErrorKindV1::InspectClientPidfd
-            );
-        }
-        assert_eq!(
-            dispatch_pidfd_get_info_error(&pidfd, io::Error::from_raw_os_error(libc::ESRCH))
-                .unwrap_err()
-                .kind(),
-            AdmissionErrorKindV1::ClientAlreadyDead
-        );
-    }
-
-    #[test]
-    fn pidfd_fdinfo_parser_accepts_one_exact_positive_pid() {
-        let base_flags = u32::try_from(libc::O_RDWR | libc::O_CLOEXEC).unwrap();
-        let nonblocking = base_flags | u32::try_from(libc::O_NONBLOCK).unwrap();
-        let future_non_thread = base_flags | (1 << 30);
-        for flags in [base_flags, nonblocking, future_non_thread] {
-            let record = format!("pos:\t0\nflags:\t0{flags:o}\nPid:\t1234\nNSpid:\t1234\n");
-            assert_eq!(parse_pidfd_fdinfo(&record).unwrap(), 1234);
-        }
-    }
-
-    #[test]
-    fn pidfd_fdinfo_parser_rejects_thread_flag() {
-        let flags = u32::try_from(libc::O_RDWR | libc::O_CLOEXEC).unwrap() | libc::PIDFD_THREAD;
-        for flags in [flags, flags | (1 << 30)] {
-            let record = format!("flags:\t0{flags:o}\nPid:\t1234\n");
-            assert_eq!(
-                parse_pidfd_fdinfo(&record).unwrap_err().kind(),
-                AdmissionErrorKindV1::ClientPidfdThread
-            );
-        }
-    }
-
-    #[test]
-    fn pidfd_fdinfo_parser_rejects_missing_duplicate_and_malformed_flags() {
-        for record in [
-            "Pid:\t1\n",
-            "flags:\t02000002\n",
-            "flags:\t02000002\nflags:\t02000002\nPid:\t1\n",
-            "flags:\t02000002\nflags: 02000002\nPid:\t1\n",
-            "flags: 02000002\nPid:\t1\n",
-            "flags:\t\nPid:\t1\n",
-            "flags:\t0\nPid:\t1\n",
-            "flags:\t2000002\nPid:\t1\n",
-            "flags:\t02000008\nPid:\t1\n",
-            "flags:\t02000002 \nPid:\t1\n",
-            "flags:\t077777777777\nPid:\t1\n",
-        ] {
-            assert_eq!(
-                parse_pidfd_fdinfo(record).unwrap_err().kind(),
-                AdmissionErrorKindV1::InspectClientPidfd
-            );
-        }
-    }
-
-    #[test]
-    fn pidfd_fdinfo_parser_rejects_missing_duplicate_and_malformed_pid() {
-        for record in [
-            "flags:\t02000002\n",
-            "flags:\t02000002\nPid:\t1\nPid:\t1\n",
-            "flags:\t02000002\nPid:\t1\nPid: 1\n",
-            "flags:\t02000002\nPid: 1\n",
-            "flags:\t02000002\nPid:\t 1\n",
-            "flags:\t02000002\nPid:\t1 \n",
-            "flags:\t02000002\nPid:\t+1\n",
-            "flags:\t02000002\nPid:\t01\n",
-            "flags:\t02000002\nPid:\t-2\n",
-            "flags:\t02000002\nPid:\t0\n",
-            "flags:\t02000002\nPid:\t4294967296\n",
-        ] {
-            assert_eq!(
-                parse_pidfd_fdinfo(record).unwrap_err().kind(),
-                AdmissionErrorKindV1::InspectClientPidfd
-            );
-        }
-    }
-
-    #[test]
-    fn pidfd_fdinfo_parser_classifies_reaped_target_as_dead() {
-        assert_eq!(
-            parse_pidfd_fdinfo("flags:\t02000002\nPid:\t-1\n")
-                .unwrap_err()
-                .kind(),
-            AdmissionErrorKindV1::ClientAlreadyDead
-        );
-    }
-
-    #[test]
     fn pidfd_thread_runtime_rejection_or_explicit_capability_skip() {
         const ABI_PIN: &str = "Linux v6.12 include/uapi/linux/pidfd.h: PIDFD_THREAD=O_EXCL; fs/proc/fd.c: flags is 0%o file->f_flags";
         assert_eq!(
@@ -2434,12 +1842,6 @@ mod tests {
             }
             Err(error) => panic!("PIDFD_THREAD capability probe failed: {error}; {ABI_PIN}"),
         };
-        let record =
-            fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())).unwrap();
-        assert_eq!(
-            parse_pidfd_fdinfo(&record).unwrap_err().kind(),
-            AdmissionErrorKindV1::ClientPidfdThread
-        );
         let error =
             LiveClientPidfdIdentityV1::admit(pidfd, current_process_identity()).unwrap_err();
         assert_eq!(error.kind(), AdmissionErrorKindV1::ClientPidfdThread);
