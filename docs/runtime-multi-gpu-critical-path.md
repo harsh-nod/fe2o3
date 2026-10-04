@@ -23,6 +23,18 @@ proof execution through an independently admitted unfiltered controller, retaini
 the exact generated source, original compiler subject and execution/result custody.
 Do not weaken preflight, remove Cargo exec observation or import a captured proof.
 
+The original-compiler custody prerequisite is now implemented: the selected
+wrapper captures the child immediately after spawn, transfers from its retained
+pidfd, and keeps that owner through child reaping and managed commit/revocation.
+Compiler completion rejects readiness without original child custody; application
+readiness retains its separate outer lifecycle owner. Regressions cover wrong
+children, changed descriptor flags, missing custody and post-reap validation.
+This does not implement the unfiltered compiler-proof service. That service is
+next: use the existing pre-filter protected Cargo broker, a distinct authenticated
+compiler session, sealed generated source and bounded process output. Keep source
+generation, output validation and receipt construction inside the verifier; do
+not introduce a public proof/output import or reuse the post-publication custodian.
+
 After that, propagate the original committed device-library binding to the exact
 matching host library through a retained, authenticated host projection. The host
 phase currently disables wrappers, and independently deriving host Cargo metadata

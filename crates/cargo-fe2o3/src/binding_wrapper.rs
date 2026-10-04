@@ -15,6 +15,7 @@ use fe2o3_artifact_transaction::{
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
+use fe2o3_compiler_execution_client::RetainedCompilerExecutionChildV1;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_hsaco_finalize::{
     PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
@@ -51,8 +52,9 @@ use crate::build_config::{
 };
 use crate::capability_broker;
 use crate::compiler_execution_boundary::{
-    ParentCompilerExecutionReadinessCustodyV1, PreparedCompilerExecutionBoundaryV1,
-    admit_compiler_execution_receipt_transport, validate_compiler_execution_receipt_carriage,
+    CompilerExecutionBoundaryErrorV1, ParentCompilerExecutionReadinessCustodyV1,
+    PreparedCompilerExecutionBoundaryV1, admit_compiler_execution_receipt_transport,
+    validate_compiler_execution_receipt_carriage,
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -694,19 +696,26 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             }
         };
         let compiler_execution_readiness = match compiler_execution_boundary {
-            Some(boundary) => match boundary.finish(child.id()) {
-                Ok(custody) => Some(custody),
-                Err(error) => {
-                    let stage = error.stage();
-                    let primary = error.to_string();
-                    let cleanup = terminate_spawned_rustc(&mut child);
-                    return Err(BindingWrapperError::CompilerExecutionBoundary {
-                        stage,
-                        primary,
-                        cleanup,
-                    });
-                }
-            },
+            Some(boundary) => {
+                let cleanup_failure =
+                    |child: &mut Child, error: CompilerExecutionBoundaryErrorV1| {
+                        BindingWrapperError::CompilerExecutionBoundary {
+                            stage: error.stage(),
+                            primary: error.to_string(),
+                            cleanup: terminate_spawned_rustc(child),
+                        }
+                    };
+                let retained_child = RetainedCompilerExecutionChildV1::capture(&child)
+                    .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)
+                    .map_err(|error| cleanup_failure(&mut child, error))?;
+                let mut custody = boundary
+                    .finish(&retained_child)
+                    .map_err(|error| cleanup_failure(&mut child, error))?;
+                custody
+                    .retain_original_compiler_child(retained_child)
+                    .map_err(|error| cleanup_failure(&mut child, error))?;
+                Some(custody)
+            }
             None => None,
         };
         let status = child.wait().map_err(|error| {
@@ -2129,51 +2138,30 @@ fn complete_managed_attempt(
     compiler_execution_readiness: Option<ParentCompilerExecutionReadinessCustodyV1>,
 ) -> Result<(), BindingWrapperError> {
     let mut revocation = ManagedAttemptRevocationGuard::arm(&managed);
-    let completion = match (
-        parent_rustc_invocation_custody,
-        compiler_execution_readiness,
-    ) {
-        (Some(invocation), Some(readiness)) => invocation.retain_through(|invocation| {
-            readiness.retain_through(|readiness| {
-                invocation.revalidate().map_err(|error| {
-                    CompletionFailure::Uncommitted(format!(
-                        "parent protected rustc invocation custody failed before managed completion: {error}"
-                    ))
-                })?;
-                readiness.revalidate().map_err(|error| {
-                    CompletionFailure::Uncommitted(format!(
-                        "parent compiler-execution readiness custody failed before managed completion: {error}"
-                    ))
-                })?;
-                debug_assert!(!invocation.grants_compiler_authority());
-                debug_assert!(!readiness.grants_compiler_authority());
-                complete_managed_attempt_inner(
-                    managed,
-                    Some(invocation),
-                    Some(readiness),
-                )
-            })
-        }),
-        (Some(invocation), None) => invocation.retain_through(|invocation| {
+    // Borrow the original owners so failure revocation also runs before they are released.
+    let completion = (|| {
+        if let Some(invocation) = &parent_rustc_invocation_custody {
             invocation.revalidate().map_err(|error| {
                 CompletionFailure::Uncommitted(format!(
                     "parent protected rustc invocation custody failed before managed completion: {error}"
                 ))
             })?;
             debug_assert!(!invocation.grants_compiler_authority());
-            complete_managed_attempt_inner(managed, Some(invocation), None)
-        }),
-        (None, Some(readiness)) => readiness.retain_through(|readiness| {
+        }
+        if let Some(readiness) = &compiler_execution_readiness {
             readiness.revalidate().map_err(|error| {
                 CompletionFailure::Uncommitted(format!(
                     "parent compiler-execution readiness custody failed before managed completion: {error}"
                 ))
             })?;
             debug_assert!(!readiness.grants_compiler_authority());
-            complete_managed_attempt_inner(managed, None, Some(readiness))
-        }),
-        (None, None) => complete_managed_attempt_inner(managed, None, None),
-    };
+        }
+        complete_managed_attempt_inner(
+            managed,
+            parent_rustc_invocation_custody.as_ref(),
+            compiler_execution_readiness.as_ref(),
+        )
+    })();
 
     match completion {
         Ok(()) => {

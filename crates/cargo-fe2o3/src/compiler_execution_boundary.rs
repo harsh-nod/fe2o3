@@ -93,7 +93,7 @@ impl PreparedCompilerExecutionBoundaryV1 {
 
     pub(crate) fn finish(
         self,
-        child_pid: u32,
+        child: &RetainedCompilerExecutionChildV1,
     ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
         let Self {
             profile,
@@ -104,7 +104,7 @@ impl PreparedCompilerExecutionBoundaryV1 {
             .checked_add(COMPILER_EXECUTION_BOUNDARY_TIMEOUT)
             .ok_or(CompilerExecutionBoundaryErrorV1::DeadlineOverflow)?;
         let launch = child_channel
-            .finish_until(child_pid, deadline)
+            .finish_until_with_retained_child(child, deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
         let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
             profile.profile().supervisor_uid(),
@@ -120,7 +120,12 @@ impl PreparedCompilerExecutionBoundaryV1 {
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorReadiness)?;
 
         ParentCompilerExecutionReadinessCustodyV1::admit(
-            profile, policy, supervisor, child_pid, manifest, readiness,
+            profile,
+            policy,
+            supervisor,
+            child.child_pid(),
+            manifest,
+            readiness,
         )
     }
 
@@ -251,7 +256,7 @@ impl ApplicationReadinessV1 {
 
 impl ParentApplicationSupervisorReadinessCustodyV1 {
     pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
-        self.compiler.revalidate()?;
+        self.compiler.revalidate_evidence()?;
         if !self.readiness.is_canonical()
             || self.binding.compiler_handoff().launch_manifest() != &self.compiler.manifest
             || self.readiness.application().compiler_readiness() != &self.compiler.readiness
@@ -276,7 +281,8 @@ enum ChildPolicyExposureV1 {
 
 /// Move-only parent custody proving that one exact selected child reached a ready issuer.
 ///
-/// The value contains public, inert evidence and sealed public trust configuration only. It grants
+/// The value retains original compiler child custody, public inert evidence, and sealed public
+/// trust configuration. Application child custody is retained by its outer lifecycle owner. It grants
 /// no compiler, signing, linking, publication, loading, launch, or execution authority.
 pub(crate) struct ParentCompilerExecutionReadinessCustodyV1 {
     profile: CompilerExecutionClientProfileCapabilityV1,
@@ -285,6 +291,7 @@ pub(crate) struct ParentCompilerExecutionReadinessCustodyV1 {
     child_pid: u32,
     manifest: CompilerExecutionServiceLaunchManifestV1,
     readiness: CompilerExecutionServiceReadyV1,
+    compiler_child: Option<RetainedCompilerExecutionChildV1>,
 }
 
 impl ParentCompilerExecutionReadinessCustodyV1 {
@@ -303,12 +310,46 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
             child_pid,
             manifest,
             readiness,
+            compiler_child: None,
         };
-        custody.revalidate()?;
+        custody.revalidate_evidence()?;
         Ok(custody)
     }
 
+    pub(crate) fn retain_original_compiler_child(
+        &mut self,
+        child: RetainedCompilerExecutionChildV1,
+    ) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        if self.compiler_child.is_some() {
+            return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                "original compiler child custody is already retained".to_owned(),
+            ));
+        }
+        self.compiler_child = Some(child);
+        self.revalidate()
+    }
+
     pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        if self.compiler_child.is_none() {
+            return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                "compiler readiness has no retained original child".to_owned(),
+            ));
+        }
+        self.revalidate_evidence()
+    }
+
+    fn revalidate_evidence(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        if let Some(child) = &self.compiler_child {
+            if child.child_pid() != self.child_pid {
+                return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                    "retained original compiler child differs from readiness custody".to_owned(),
+                ));
+            }
+            // Managed completion runs after reaping; retain history, not a new live-PID lookup.
+            child
+                .validate_custody()
+                .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        }
         self.profile
             .revalidate()
             .map_err(CompilerExecutionBoundaryErrorV1::Profile)?;
@@ -378,10 +419,6 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
             ));
         }
         Ok(())
-    }
-
-    pub(crate) fn retain_through<T>(self, operation: impl FnOnce(&Self) -> T) -> T {
-        operation(&self)
     }
 
     pub(crate) const fn profile_identity(&self) -> CompilerExecutionClientProfileIdentityV1 {
@@ -650,9 +687,103 @@ pub(crate) mod tests {
     #[test]
     fn exact_readiness_is_retained_and_revalidated_without_authority() {
         let custody = admit(client_profile(7, 1_234), 8_765, 1_000).unwrap();
-        custody.revalidate().unwrap();
+        custody.revalidate_evidence().unwrap();
+        assert!(matches!(
+            custody.revalidate(),
+            Err(CompilerExecutionBoundaryErrorV1::Evidence(_))
+        ));
         assert!(!custody.grants_compiler_authority());
         assert_ne!(custody.profile_identity().as_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn compiler_readiness_retains_original_child_after_reaping() {
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let captured = RetainedCompilerExecutionChildV1::capture(&child);
+        assert!(child.wait().unwrap().success());
+        let mut custody = admit(client_profile(7, 1_234), child.id(), 1_000).unwrap();
+        custody
+            .retain_original_compiler_child(captured.unwrap())
+            .unwrap();
+        custody.revalidate().unwrap();
+        assert_eq!(
+            custody.compiler_child.as_ref().unwrap().child_pid(),
+            child.id()
+        );
+        assert!(!custody.grants_compiler_authority());
+    }
+
+    #[test]
+    fn compiler_readiness_rejects_another_original_child() {
+        let mut original = Command::new("/bin/true").spawn().unwrap();
+        let mut other = Command::new("/bin/true").spawn().unwrap();
+        let captured = RetainedCompilerExecutionChildV1::capture(&other);
+        assert!(original.wait().unwrap().success());
+        assert!(other.wait().unwrap().success());
+        let mut custody = admit(client_profile(7, 1_234), original.id(), 1_000).unwrap();
+        assert!(
+            custody
+                .retain_original_compiler_child(captured.unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            custody.compiler_child.as_ref().unwrap().child_pid(),
+            other.id()
+        );
+        assert!(custody.revalidate().is_err());
+    }
+
+    #[test]
+    fn compiler_readiness_rechecks_original_descriptor_after_reaping() {
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let captured = RetainedCompilerExecutionChildV1::capture(&child);
+        assert!(child.wait().unwrap().success());
+        let mut custody = admit(client_profile(7, 1_234), child.id(), 1_000).unwrap();
+        custody
+            .retain_original_compiler_child(captured.unwrap())
+            .unwrap();
+        let descriptor = custody.compiler_child.as_ref().unwrap().test_child_pidfd();
+        let original = rustix::io::fcntl_getfd(descriptor).unwrap();
+        rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::empty()).unwrap();
+        let result = custody.revalidate();
+        rustix::io::fcntl_setfd(descriptor, original).unwrap();
+        assert!(matches!(
+            result,
+            Err(CompilerExecutionBoundaryErrorV1::ChildChannel(
+                CompilerExecutionChildChannelErrorV1::MissingCloseOnExec
+            ))
+        ));
+        custody.revalidate().unwrap();
+    }
+
+    #[test]
+    fn compiler_boundary_rejects_changed_original_descriptor_before_supervisor_transfer() {
+        if run_in_isolated_boundary_test_process(
+            "compiler_execution_boundary::tests::compiler_boundary_rejects_changed_original_descriptor_before_supervisor_transfer",
+        ) {
+            return;
+        }
+        let source_profile = client_profile(7, 1_234);
+        let mut command = Command::new("/bin/sleep");
+        command.arg("2");
+        let prepared =
+            PreparedCompilerExecutionBoundaryV1::prepare(&source_profile, &mut command).unwrap();
+        let mut child = command.spawn().unwrap();
+        let retained = RetainedCompilerExecutionChildV1::capture(&child).unwrap();
+        let descriptor = retained.test_child_pidfd();
+        let original = rustix::io::fcntl_getfd(descriptor).unwrap();
+        rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::empty()).unwrap();
+        let result = prepared.finish(&retained);
+        rustix::io::fcntl_setfd(descriptor, original).unwrap();
+        let _ = child.kill();
+        child.wait().unwrap();
+        retained.validate_custody().unwrap();
+        assert!(matches!(
+            result,
+            Err(CompilerExecutionBoundaryErrorV1::ChildChannel(
+                CompilerExecutionChildChannelErrorV1::MissingCloseOnExec
+            ))
+        ));
     }
 
     #[test]
@@ -710,14 +841,19 @@ pub(crate) mod tests {
             child_channel,
         } = prepared;
         let mut child = command.spawn().unwrap();
+        let retained_child = RetainedCompilerExecutionChildV1::capture(&child).unwrap();
         let child_pid = child.id();
         let launch = child_channel
-            .finish(child_pid, Duration::from_secs(5))
+            .finish_until_with_retained_child(
+                &retained_child,
+                Instant::now() + Duration::from_secs(5),
+            )
             .unwrap();
         assert_eq!(launch.client().pid(), child_pid);
         assert_eq!(launch.submitter().pid(), std::process::id());
         drop(launch);
         assert!(child.wait().unwrap().success());
+        retained_child.validate_custody().unwrap();
         profile.revalidate().unwrap();
         policy.revalidate().unwrap();
     }

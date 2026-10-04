@@ -76,11 +76,6 @@ impl ParentRustcInvocationCustody {
         self.invocation.descriptor()
     }
 
-    /// Runs one operation while the exact selected parent custody remains live.
-    pub(crate) fn retain_through<T>(self, operation: impl FnOnce(&Self) -> T) -> T {
-        operation(&self)
-    }
-
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
         false
     }
