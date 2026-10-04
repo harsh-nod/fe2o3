@@ -117,32 +117,20 @@ string(REPLACE "\\" "\\\\" FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED
 string(REPLACE "\"" "\\\"" FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED
   "${FE2O3_GFX942_DEVICE_LIB_DIR_ESCAPED}")
 
-# Unlike the legacy gfx942 discovery path, gfx950 is enabled only for the exact
-# reviewed ROCm 7.2.1 provider closure. A different installation stays disabled
-# instead of silently defining a new production provider identity.
+# An explicit whole-profile choice keeps the legacy default unchanged.
+set(FE2O3_GFX950_DEVICE_LIB_PROFILE "rocm-7.2.1" CACHE STRING
+  "Reviewed gfx950 provider profile: rocm-7.2.1 or rocm-7.2.4")
+set_property(CACHE FE2O3_GFX950_DEVICE_LIB_PROFILE PROPERTY STRINGS
+  rocm-7.2.1 rocm-7.2.4)
+include(cmake/Gfx950ProviderProfile.cmake)
+fe2o3_gfx950_provider_profile("${FE2O3_GFX950_DEVICE_LIB_PROFILE}")
+if(FE2O3_GFX950_DEVICE_LIB_PROFILE STREQUAL "rocm-7.2.4" AND
+   NOT LLVM_PACKAGE_VERSION STREQUAL "22.0.0git")
+  message(FATAL_ERROR "reviewed gfx950 ROCm 7.2.4 profile requires LLVM 22.0.0git")
+endif()
 set(FE2O3_GFX950_DEVICE_LIB_DIR
-  "/opt/rocm-7.2.1/lib/llvm/lib/clang/22/lib/amdgcn/bitcode" CACHE PATH
+  "${FE2O3_GFX950_DEFAULT_DEVICE_LIB_DIR}" CACHE PATH
   "Canonical directory containing the reviewed ROCm gfx950 device libraries")
-set(FE2O3_GFX950_DEVICE_LIB_FILES
-  ocml.bc
-  ockl.bc
-  oclc_daz_opt_off.bc
-  oclc_unsafe_math_off.bc
-  oclc_finite_only_off.bc
-  oclc_correctly_rounded_sqrt_on.bc
-  oclc_wavefrontsize64_on.bc
-  oclc_isa_version_950.bc
-  oclc_abi_version_600.bc)
-set(FE2O3_GFX950_DEVICE_LIB_SHA256
-  2e3451857fcf47b931c5c5a29e9c42a6ddc3099c8359079441a9a06a217ead7e
-  8320aec59c4dc87cb28fdb374a44a55088a6258b59dffae4a85e8eacec8be456
-  3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa
-  a500bc03fd046bcd7806938ea323758e5c9ba8d56cfd767cef71612b3bd87d37
-  e1d1fddf85577b078d02a07212f670324e1e157d1b6608a8c765ad3c171a7b29
-  3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa
-  9560b0d120b9e7c6b28a56a87eeed4ae155b60dec54152700ff9f60b69de1259
-  9ea1498966ac0b4d0a54677501a847cb1ee932768e78576613d42985bf394d34
-  79d3d09404f5df01c484dc15cc64583c7c1803234463eee6505226f0186a71b1)
 set(FE2O3_GFX950_DEVICE_LIBS_ENABLED 1)
 file(REAL_PATH "${FE2O3_GFX950_DEVICE_LIB_DIR}"
   FE2O3_GFX950_DEVICE_LIB_REAL_DIR)
@@ -171,13 +159,15 @@ foreach(FE2O3_GFX950_FILE_INDEX RANGE ${FE2O3_GFX950_FILE_LAST})
 endforeach()
 if(FE2O3_GFX950_DEVICE_LIBS_ENABLED)
   message(STATUS
-    "reviewed gfx950 ROCm 7.2.1 OCML provider enabled from ${FE2O3_GFX950_DEVICE_LIB_DIR}")
+    "reviewed gfx950 ${FE2O3_GFX950_DEVICE_LIB_PROFILE} OCML provider enabled from ${FE2O3_GFX950_DEVICE_LIB_DIR}")
 else()
   message(STATUS
-    "gfx950 OCML provider disabled: canonical reviewed ROCm 7.2.1 closure is absent")
+    "gfx950 OCML provider disabled: canonical reviewed ${FE2O3_GFX950_DEVICE_LIB_PROFILE} closure is absent")
 endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-gfx950-ocml-provider.txt"
   "enabled=${FE2O3_GFX950_DEVICE_LIBS_ENABLED}\n"
+  "profile=${FE2O3_GFX950_DEVICE_LIB_PROFILE}\n"
+  "manifest=${FE2O3_GFX950_PROFILE_MANIFEST_SHA256}\n"
   "directory=${FE2O3_GFX950_DEVICE_LIB_DIR}\n")
 foreach(FE2O3_GFX950_FILE_INDEX RANGE ${FE2O3_GFX950_FILE_LAST})
   list(GET FE2O3_GFX950_DEVICE_LIB_FILES ${FE2O3_GFX950_FILE_INDEX}
@@ -186,6 +176,8 @@ foreach(FE2O3_GFX950_FILE_INDEX RANGE ${FE2O3_GFX950_FILE_LAST})
     FE2O3_GFX950_EXPECTED_SHA256)
   file(APPEND "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-gfx950-ocml-provider.txt"
     "${FE2O3_GFX950_FILE}=${FE2O3_GFX950_EXPECTED_SHA256}\n")
+  set(FE2O3_GFX950_DIGEST_${FE2O3_GFX950_FILE_INDEX}
+    "${FE2O3_GFX950_EXPECTED_SHA256}")
 endforeach()
 string(REPLACE "\\" "\\\\" FE2O3_GFX950_DEVICE_LIB_DIR_ESCAPED
   "${FE2O3_GFX950_DEVICE_LIB_DIR}")
@@ -232,6 +224,8 @@ set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
   "|unsafe_math_off=${FE2O3_GFX942_UNSAFE_MATH_SHA256}"
   "|finite_only_off=${FE2O3_GFX942_FINITE_ONLY_SHA256}"
   "|gfx950_device_libs=${FE2O3_GFX950_DEVICE_LIBS_ENABLED}"
+  "|gfx950_device_lib_profile=${FE2O3_GFX950_DEVICE_LIB_PROFILE}"
+  "|gfx950_profile_manifest=${FE2O3_GFX950_PROFILE_MANIFEST_SHA256}"
   "|gfx950_device_lib_dir=${FE2O3_GFX950_DEVICE_LIB_DIR}")
 foreach(FE2O3_GFX950_FILE_INDEX RANGE ${FE2O3_GFX950_FILE_LAST})
   list(GET FE2O3_GFX950_DEVICE_LIB_FILES ${FE2O3_GFX950_FILE_INDEX}
@@ -244,7 +238,8 @@ endforeach()
 string(APPEND FE2O3_WORKER_MEASUREMENT_PREIMAGE
   "|cxx=20|target_flags=-fno-exceptions,-fno-rtti")
 foreach(FE2O3_WORKER_SOURCE IN ITEMS
-    CMakeLists.txt include/WorkerProtocol.h include/WorkerPipeline.h
+    CMakeLists.txt cmake/Gfx950ProviderProfile.cmake
+    include/WorkerProtocol.h include/WorkerPipeline.h
     include/WorkerDeviceLibraryPolicy.h include/WorkerBuildConfig.h.in
     include/WorkerLldPolicy.h include/WorkerMachineEffect.h
     src/WorkerProtocol.cpp src/WorkerPipeline.cpp
@@ -306,6 +301,10 @@ target_link_libraries(fe2o3-llvm-link-worker PRIVATE fe2o3_worker_pipeline
 
 include(CTest)
 if(BUILD_TESTING)
+  add_test(NAME fe2o3-worker-gfx950-profile-tests
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Gfx950ProviderProfileTests.cmake")
+  set_tests_properties(fe2o3-worker-gfx950-profile-tests PROPERTIES TIMEOUT 120)
   add_executable(fe2o3-worker-codec-tests tests/CodecTests.cpp)
   target_compile_definitions(fe2o3-worker-codec-tests PRIVATE
     FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"

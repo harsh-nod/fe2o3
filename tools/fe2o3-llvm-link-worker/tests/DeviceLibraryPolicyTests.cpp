@@ -117,6 +117,18 @@ void requireFailure(Expected<std::vector<Input>> Result, StringRef Message) {
   }
 }
 
+std::array<uint8_t, 32> digest(StringRef Hex) {
+  require(Hex.size() == 64, "test digest length is invalid");
+  std::array<uint8_t, 32> Result{};
+  for (size_t I = 0; I < Result.size(); ++I) {
+    unsigned Byte = 0;
+    require(!Hex.substr(2 * I, 2).getAsInteger(16, Byte),
+            "test digest is invalid");
+    Result[I] = static_cast<uint8_t>(Byte);
+  }
+  return Result;
+}
+
 void checkConfiguredGfx950Provider() {
   auto Policy = measuredGfx950DeviceLibraryPolicy();
   if (!Policy) {
@@ -136,6 +148,34 @@ void checkConfiguredGfx950Provider() {
     require((*Loaded)[I].Digest == Policy->Files[I].Digest,
             "configured gfx950 provider changed a reviewed digest");
   }
+  for (size_t I = 0; I < Policy->Files.size(); ++I) {
+    Gfx950DeviceLibraryPolicy Changed = *Policy;
+    Changed.Files[I].Digest[0] ^= 1;
+    requireFailure(loadGfx950DeviceLibraries({"__ocml_exp_f32"}, Changed),
+                   "digest is not reviewed");
+  }
+  auto Rocm721 = digest(
+      "2e3451857fcf47b931c5c5a29e9c42a6ddc3099c8359079441a9a06a217ead7e");
+  auto Rocm724 = digest(
+      "cfe97fe9ee29379f522e5f20ae55aae1cdb96eb41d6aa250ea11c4941c54e019");
+  require(Policy->Files[0].Digest == Rocm721 || Policy->Files[0].Digest == Rocm724,
+          "configured profile is neither reviewed whole closure");
+  Gfx950DeviceLibraryPolicy Mixed = *Policy;
+  Mixed.Files[0].Digest = Policy->Files[0].Digest == Rocm721 ? Rocm724 : Rocm721;
+  requireFailure(loadGfx950DeviceLibraries({"__ocml_exp_f32"}, Mixed),
+                 "digest is not reviewed");
+  Gfx950DeviceLibraryPolicy WrongOrder = *Policy;
+  std::swap(WrongOrder.Files[0], WrongOrder.Files[1]);
+  requireFailure(loadGfx950DeviceLibraries({"__ocml_exp_f32"}, WrongOrder),
+                 "noncanonical");
+  Gfx950DeviceLibraryPolicy Missing = *Policy;
+  Missing.Files.pop_back();
+  requireFailure(loadGfx950DeviceLibraries({"__ocml_exp_f32"}, Missing),
+                 "wrong file set");
+  Gfx950DeviceLibraryPolicy WrongBound = *Policy;
+  WrongBound.Files[0].MaxBytes = MaxDeviceLibraryFileBytes + 1;
+  requireFailure(loadGfx950DeviceLibraries({"__ocml_exp_f32"}, WrongBound),
+                 "file bound is invalid");
 }
 
 } // namespace
