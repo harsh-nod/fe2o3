@@ -9,6 +9,8 @@ use fe2o3_runtime_protocol::CompilerExecutionExternalAnchorServiceIdentityV1;
 use rustix::fs::OFlags;
 use rustix::net::{AddressFamily, SocketType};
 
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod application_observation;
 mod client_session;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod observer_channel;

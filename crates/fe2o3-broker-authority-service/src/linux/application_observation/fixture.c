@@ -1,0 +1,160 @@
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* Private qualification fixture: parent 187, app control 183, handoff 180..182. */
+static long kernel_call(long number, long a, long b, long c, long d, long e, long f) {
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    register long r9 __asm__("r9") = f;
+    long result;
+    __asm__ volatile("syscall" : "=a"(result)
+        : "a"(number), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory");
+    return result;
+}
+
+#define call3(number, a, b, c) kernel_call(number, (long)(a), (long)(b), (long)(c), 0, 0, 0)
+#define read(fd, bytes, size) call3(SYS_read, fd, bytes, size)
+#define write(fd, bytes, size) call3(SYS_write, fd, bytes, size)
+#define close(fd) call3(SYS_close, fd, 0, 0)
+#define fcntl(fd, command, arg) call3(SYS_fcntl, fd, command, arg)
+#define dup3(source, target, flags) call3(SYS_dup3, source, target, flags)
+#define open(path, flags) call3(SYS_open, path, flags, 0)
+#define fork() call3(SYS_fork, 0, 0, 0)
+#define getppid() call3(SYS_getppid, 0, 0, 0)
+#define prctl(option, value) call3(SYS_prctl, option, value, 0)
+#define sendmsg(fd, message, flags) call3(SYS_sendmsg, fd, message, flags)
+#define waitpid(pid, status, options) call3(SYS_wait4, pid, status, options)
+#define fexecve(fd, argv, env) kernel_call(SYS_execveat, fd, (long)"", (long)argv, (long)env, AT_EMPTY_PATH, 0)
+
+static void terminate(int status) __attribute__((noreturn));
+static void terminate(int status) {
+    call3(SYS_exit_group, status, 0, 0);
+    __builtin_unreachable();
+}
+#define _exit(status) terminate(status)
+
+static void check(int ok) { if (!ok) _exit(111); }
+
+static void transfer(int fd, void *buffer, size_t size, int writing) {
+    unsigned char *bytes = buffer;
+    while (size) {
+        ssize_t count = writing ? write(fd, bytes, size) : read(fd, bytes, size);
+        if (count == -EINTR) continue;
+        check(count > 0);
+        bytes += count;
+        size -= (size_t)count;
+    }
+}
+
+static void ready(void) {
+    char byte = 'r';
+    transfer(183, &byte, 1, 1);
+}
+
+static int parent(void) {
+    pid_t child = fork();
+    check(child >= 0);
+    if (!child) {
+        check(prctl(PR_SET_PDEATHSIG, SIGKILL) == 0 && getppid() > 1);
+        close(187);
+        char *argv[] = {"observed-application", NULL};
+        char *env[] = {NULL};
+        fexecve(188, argv, env);
+        _exit(112);
+    }
+    int pidfd = (int)call3(SYS_pidfd_open, child, 0, 0);
+    check(pidfd >= 0);
+    uint32_t pid = (uint32_t)child;
+    struct iovec iov = {&pid, sizeof(pid)};
+    union { struct cmsghdr align; unsigned char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
+    struct msghdr message = {0};
+    message.msg_iov = &iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.bytes;
+    message.msg_controllen = sizeof(control.bytes);
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(pidfd));
+    *(int *)CMSG_DATA(header) = pidfd;
+    check(sendmsg(187, &message, MSG_NOSIGNAL) == sizeof(pid));
+    close(pidfd);
+    for (int fd = 180; fd <= 189; fd++) if (fd != 187) close(fd);
+    char release;
+    transfer(187, &release, 1, 0);
+    check(release == 'q');
+    close(187);
+    int status = 0;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited == -EINTR);
+    check(waited == child);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 113;
+}
+
+int fixture_main(int argc, char **argv) {
+    if (argc == 2 && argv[1][0] == 'p') return parent();
+    for (int fd = 180; fd <= 182; fd++) check(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0);
+    for (int fd = 184; fd <= 186; fd++) check(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0);
+    check(fcntl(188, F_SETFD, FD_CLOEXEC) == 0);
+    ready();
+    for (;;) {
+        char command;
+        transfer(183, &command, 1, 0);
+        switch (command) {
+        case 'a': {
+            uint32_t length;
+            unsigned char ack[512];
+            transfer(183, &length, sizeof(length), 0);
+            check(length && length <= sizeof(ack));
+            transfer(183, ack, length, 0);
+            transfer(182, ack, length, 1);
+            close(182);
+            int replacement = open("/dev/null", O_WRONLY | O_CLOEXEC);
+            check(replacement >= 0);
+            if (replacement != 182) { check(dup3(replacement, 182, O_CLOEXEC) == 182); close(replacement); }
+            break;
+        }
+        case 'e': check(dup3(184, 180, O_CLOEXEC) == 180); break;
+        case 'd': check(dup3(185, 181, O_CLOEXEC) == 181); break;
+        case 'k': check(dup3(186, 182, O_CLOEXEC) == 182); break;
+        case 'f': check(fcntl(180, F_SETFD, 0) == 0); break;
+        case 'g': check(fcntl(181, F_SETFD, 0) == 0); break;
+        case 'h': check(fcntl(182, F_SETFD, 0) == 0); break;
+        case 'b': check(fcntl(182, F_SETFL, fcntl(182, F_GETFL, 0) & ~O_NONBLOCK) == 0); break;
+        case 'j': check(fcntl(180, F_SETFL, fcntl(180, F_GETFL, 0) | O_APPEND) == 0); break;
+        case 'w':
+        case 'p': {
+            int flags = command == 'w' ? O_RDWR : O_PATH;
+            int replacement = open("/proc/self/fd/180", flags | O_CLOEXEC);
+            check(replacement >= 0 && dup3(replacement, 180, O_CLOEXEC) == 180);
+            close(replacement);
+            break;
+        }
+        case 'r': {
+            for (int fd = 180; fd <= 188; fd++) {
+                if (fd != 187) check(fcntl(fd, F_SETFD, 0) == 0);
+            }
+            char *next_argv[] = {"observed-application", NULL};
+            char *next_env[] = {NULL};
+            fexecve(189, next_argv, next_env);
+            return 115;
+        }
+        case 'x': return 0;
+        default: return 114;
+        }
+        ready();
+    }
+}
+
+__asm__(".text\n.global _start\n_start:\n"
+        "mov (%rsp), %edi\nlea 8(%rsp), %rsi\ncall fixture_main\n"
+        "mov %eax, %edi\nmov $231, %eax\nsyscall\nud2\n");

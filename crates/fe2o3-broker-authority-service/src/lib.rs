@@ -196,6 +196,11 @@ pub use durable_session_consume::{
     recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use linux::application_observation::{
+    RetainedWorkerV3ApplicationObservationV1, WorkerV3ApplicationDescriptorNumbersV1,
+    WorkerV3ApplicationObservationErrorV1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use linux::observer_channel::{
     CompilerExecutionObserverErrorV1, PreparedRootCompilerExecutionObserverV1,
     PreparedRootCompilerObserverRegistryV1, ProtectedCompilerExecutionObserverV1,
