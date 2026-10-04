@@ -1,6 +1,6 @@
 {
-  "head": "beae1c6f60a36dfe843cd0346bf486f8c2e4ce11",
-  "tree": "4d90f02ec6db7fb6bb9431a4a429a14cb0910774",
+  "head": "33aedfb0471cead4f033ece7639af63736c97c45",
+  "tree": "9c69459f02ae7adeb159f826bb122ed5c8153ca8",
   "package": "fe2o3-pliron",
   "expected_total": 2470,
   "required_normal_leaves": [
@@ -57,7 +57,7 @@
     },
     {
       "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_guarded_v87_tests.rs",
-      "sha256": "644b260e8e46aebf020dbc2680c4f1d4f16ae7f16e6d726d3929036d4108d964"
+      "sha256": "5d088562c145f9f44b1e737a937c4fc0da1d56a59396ec0b81044f2a9201cc99"
     },
     {
       "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_pending_generic_v18_tests.rs",
@@ -65,7 +65,7 @@
     },
     {
       "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_pending_v18.rs",
-      "sha256": "ded3261ee6043aaf32027387ce983c96860880b06c2a7cbd0a949a9b29854d1c"
+      "sha256": "6a51e04b82c3222e034f9ae158a02fe5e0c215279616ad7b630e14968b6785bb"
     },
     {
       "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_pending_v18_tests.rs",
