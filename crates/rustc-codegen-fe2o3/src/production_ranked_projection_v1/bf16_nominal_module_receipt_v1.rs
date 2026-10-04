@@ -554,3 +554,325 @@ pub(super) fn refuse_module_observation_conversion_fixture_v1(
 ) -> Result<(), E> {
     module_observation::consume_and_observe(roster, [0, 1, 2, 3])
 }
+
+/// Full nominal validation stays attached to the intact materialized owner.
+/// The authenticated roster contains the SAME original projection phase and
+/// drops last. This is not a legacy Connected or ordinary pipeline attachment.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16AttachedRankedV1 {
+    owner: fe2o3_lower_mir_kernel::ProductionPrivateBf16AttachedRankedOwnerV1,
+    verification: AuthenticatedRankedVerificationRosterV1,
+}
+
+impl PrivateBf16ModuleVerifiedReceiptV1 {
+    #[allow(dead_code)]
+    pub(crate) fn into_private_bf16_attached_ranked_v1(
+        mut self,
+    ) -> Result<PrivateBf16AttachedRankedV1, E> {
+        self.verification.phase.require_clean_v1()?;
+        // The account is declared first so later consumed source/result locals
+        // always die before it, including callback failure and postflight error.
+        let mut verification = self.verification;
+        let receipt = self.receipt;
+        let owner = verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget.charge_work(1).map_err(resource)?;
+            // The original Stage A wrapper credit is kept; the lowerer prepays
+            // its new fixed owner. Together those actual credits conservatively
+            // cover this moved wrapper. No old header/buffer credit is guessed.
+            let available = sum(
+                std::mem::size_of::<PrivateBf16ModuleVerifiedReceiptV1>(),
+                fe2o3_lower_mir_kernel::ProductionPrivateBf16AttachedRankedOwnerV1::
+                    retained_storage_v1(),
+            )?;
+            if std::mem::size_of::<PrivateBf16AttachedRankedV1>() > available {
+                return Err(resource(Resource::Accounting));
+            }
+            receipt
+                .into_private_bf16_attached_ranked_owner_with_budget_v1(budget)
+                .map_err(E::Custody)
+        })?;
+        verification.phase.require_clean_v1()?;
+        Ok(PrivateBf16AttachedRankedV1 {
+            owner,
+            verification,
+        })
+    }
+}
+
+impl PrivateBf16AttachedRankedV1 {
+    /// Later consumers can replay full nominal translation without destroying
+    /// the only intact source owner or creating a substitute resource account.
+    #[allow(dead_code)]
+    pub(crate) fn revalidate_private_bf16_attached_ranked_v1(
+        &mut self,
+        semantic_sha256: &[u8; 32],
+        root: SemanticFunctionIdV1,
+        requested_return: [u8; 4],
+    ) -> Result<(), E> {
+        self.verification.phase.require_clean_v1()?;
+        let owner = &self.owner;
+        let result = self.verification.phase.with_budget(|budget| {
+            owner
+                .verify_private_bf16_attached_ranked_with_budget_v1(
+                    semantic_sha256,
+                    root,
+                    requested_return,
+                    budget,
+                )
+                .map_err(E::Custody)
+        });
+        self.verification.phase.require_clean_v1()?;
+        result
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn root_count(&self) -> usize {
+        self.owner.root_count()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Negative controls supply an actual legacy RawEmpty receipt and its actual
+/// account. No test helper can manufacture a nominal source or success report.
+#[cfg(test)]
+pub(super) fn refuse_legacy_private_attachment_fixture_v1(
+    receipt: ProductionMaterializedRankedModuleReceiptV1,
+    verification: AuthenticatedRankedVerificationRosterV1,
+) -> Result<(), E> {
+    let pair = PrivateBf16ModuleVerifiedReceiptV1 {
+        receipt,
+        verification,
+    };
+    match pair.into_private_bf16_attached_ranked_v1() {
+        Err(error) => Err(error),
+        Ok(owner) => {
+            drop(owner);
+            panic!("negative legacy fixture unexpectedly gained nominal custody");
+        }
+    }
+}
+
+#[cfg(test)]
+mod attached_observation {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as WorkIdentity;
+
+    // These snapshots never leave the single live phase loan that paid them.
+    struct AccountSnapshot {
+        account: WorkIdentity,
+        storage: usize,
+        work: usize,
+    }
+    struct ValidatedObservation {
+        work: usize,
+        storage: usize,
+        module_retained: usize,
+        attachment_retained: usize,
+        peak: usize,
+    }
+    const OBSERVATION_STORAGE: usize =
+        std::mem::size_of::<AccountSnapshot>() + std::mem::size_of::<ValidatedObservation>();
+
+    impl ValidatedObservation {
+        fn emit(self, requested: [u8; 4]) {
+            eprintln!(
+                "fe2o3-bf16-private-intact-attachment-v1 completed=true roots=1 accesses=3 permutation={} work={} storage={} observation_storage={} module_storage={} attachment_storage={} peak={} same_account=true source_join=true fresh_full_validation=true fresh_full_replay=true intact_owner=true cleanup_pending=true normal_admission=false legacy_connected=false",
+                if requested == [0, 1, 2, 3] {
+                    "identity"
+                } else {
+                    "swap01"
+                },
+                self.work,
+                self.storage,
+                OBSERVATION_STORAGE,
+                self.module_retained,
+                self.attachment_retained,
+                self.peak,
+            );
+        }
+    }
+
+    fn require_account(before: &AccountSnapshot, budget: &mut Budget<'_>) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        budget.charge_work(3).map_err(resource)?;
+        if budget.work_ledger_identity_v1() != before.account
+            || budget.storage() != before.storage
+            || budget.work() <= before.work
+        {
+            return Err(resource(Resource::Accounting));
+        }
+        Ok(())
+    }
+
+    impl ProductionRankedSemanticProgramV1 {
+        /// Initial checks return no paid record across the consuming boundary.
+        /// The actual owner and original phase, not detached observations,
+        /// preserve source/account custody through the shipping conversion.
+        pub(crate) fn observe_private_nominal_attached_for_test_v1(
+            self,
+            requested: [u8; 4],
+        ) -> Result<(), E> {
+            let mut roster = self.into_verified_roster_receipt()?;
+            roster.phase.require_clean_v1()?;
+            let materialized = &roster.materialized;
+            let roots = &roster.source_order_roots;
+            roster.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(32 + 32 + 4 + 8).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata(
+                        "module observer requires one actual root",
+                    ));
+                };
+                let emission =
+                    materialized
+                        .bf16_call_instance_emission_v1()
+                        .ok_or(E::RosterMetadata(
+                            "module observer has no actual nominal emission",
+                        ))?;
+                if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3])
+                    || !std::ptr::eq(emission.owner(), materialized)
+                    || emission.root() != root.semantic_root
+                    || emission.return_permutation() != requested
+                    || root.access_sources.len() != 3
+                    || !root.executable_effect_sources.is_empty()
+                    || root.ranked_ir.is_empty()
+                {
+                    return Err(E::RosterMetadata(
+                        "module observer actual source/maps/Return differ",
+                    ));
+                }
+                Ok(())
+            })?;
+            consume_and_observe(roster, requested)
+        }
+    }
+
+    pub(super) fn consume_and_observe(
+        roster: ProductionRankedSemanticProjectionRosterReceiptV1,
+        requested: [u8; 4],
+    ) -> Result<(), E> {
+        // Both consuming transitions run with no paid caller-local observer.
+        let module = roster.into_private_bf16_module_verified_receipt_v1()?;
+        consume_module_and_observe(module, requested)
+    }
+
+    pub(super) fn consume_module_and_observe(
+        module: PrivateBf16ModuleVerifiedReceiptV1,
+        requested: [u8; 4],
+    ) -> Result<(), E> {
+        let mut paired = module.into_private_bf16_attached_ranked_v1()?;
+        paired.verification.phase.require_clean_v1()?;
+        let owner = &paired.owner;
+        let roots = &paired.verification.roots;
+        let observation = paired.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget
+                .reserve_storage(OBSERVATION_STORAGE)
+                .map_err(resource)?;
+            let before = AccountSnapshot {
+                account: budget.work_ledger_identity_v1(),
+                storage: budget.storage(),
+                work: budget.work(),
+            };
+            let module_retained = sum(
+                std::mem::size_of::<PrivateBf16ModuleVerifiedReceiptV1>(),
+                sum(
+                    row_bytes::<LoweringRoot>(1)?,
+                    sum(
+                        row_bytes::<AuthenticatedRankedVerificationRootV1>(1)?,
+                        row_bytes::<ProductionRankedAccessSourceV1>(3)?,
+                    )?,
+                )?,
+            )?;
+            let attachment_retained = fe2o3_lower_mir_kernel::
+                ProductionPrivateBf16AttachedRankedOwnerV1::retained_storage_v1();
+            budget.charge_work(32 + 4).map_err(resource)?;
+            let [root] = roots.as_ref() else {
+                return Err(E::RosterMetadata("module owning pair changed root count"));
+            };
+            if owner.root_count() != 1 {
+                return Err(E::RosterMetadata(
+                    "module owning pair changed authenticated identity",
+                ));
+            }
+            // Fresh full replay of actual intact owner/maps on its stored
+            // original Work identity; exact new-vs-retained report equality.
+            // Actual authenticated root/requested Return are not self-joins.
+            owner
+                .verify_private_bf16_attached_retained_source_with_budget_v1(
+                    root.semantic_root,
+                    requested,
+                    budget,
+                )
+                .map_err(E::Custody)?;
+            require_account(&before, budget)?;
+            drop(before);
+            Ok(ValidatedObservation {
+                work: budget.work(),
+                storage: budget.storage(),
+                module_retained,
+                attachment_retained,
+                peak: budget.peak_storage(),
+            })
+        })?;
+        // Paid output dies before refund; phase postflight already completed.
+        observation.emit(requested);
+        paired.verification.phase.require_clean_v1()?;
+        paired.verification.phase.with_budget(|budget| {
+            budget.check_prior_denials_v1().map_err(resource)?;
+            budget
+                .release_storage(OBSERVATION_STORAGE)
+                .map_err(resource)
+        })?;
+        drop(paired);
+        Ok(())
+    }
+
+    #[test]
+    fn attached_observation_rejects_other_account_and_changed_retained_balance() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        let mut original_work = Work::new(100);
+        let mut original = Budget::new(&mut original_work, 1000);
+        original.reserve_storage(117).unwrap();
+        let before = AccountSnapshot {
+            account: original.work_ledger_identity_v1(),
+            storage: 117,
+            work: original.work(),
+        };
+        assert!(require_account(&before, &mut original).is_ok());
+        original.release_storage(1).unwrap();
+        assert!(matches!(
+            require_account(&before, &mut original),
+            Err(E::ConditionalResource(Resource::Accounting))
+        ));
+        let mut other_work = Work::new(100);
+        let mut other = Budget::new(&mut other_work, 1000);
+        other.reserve_storage(117).unwrap();
+        assert!(matches!(
+            require_account(&before, &mut other),
+            Err(E::ConditionalResource(Resource::Accounting))
+        ));
+        assert_eq!(original.storage(), 116);
+        assert_eq!(other.storage(), 117);
+    }
+}
+
+#[cfg(test)]
+pub(super) fn refuse_attached_observation_conversion_fixture_v1(
+    receipt: ProductionMaterializedRankedModuleReceiptV1,
+    verification: AuthenticatedRankedVerificationRosterV1,
+) -> Result<(), E> {
+    // Negative fixture has only a real legacy receipt and its retained phase.
+    // It cannot manufacture nominal source or a successful attached report.
+    let module = PrivateBf16ModuleVerifiedReceiptV1 {
+        receipt,
+        verification,
+    };
+    attached_observation::consume_module_and_observe(module, [0, 1, 2, 3])
+}

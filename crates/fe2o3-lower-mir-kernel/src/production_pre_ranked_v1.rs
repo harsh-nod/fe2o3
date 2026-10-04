@@ -8,6 +8,8 @@ include!("production_local_helper_deletion_v1.rs");
 
 #[path = "production_bf16_ranked_module_receipt_v1.rs"]
 mod bf16_ranked_module_receipt_v1;
+#[doc(hidden)]
+pub use bf16_ranked_module_receipt_v1::ProductionPrivateBf16AttachedRankedOwnerV1;
 
 /// Construction failure before ranked checking starts.
 #[derive(Debug)]

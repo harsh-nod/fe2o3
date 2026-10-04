@@ -1606,3 +1606,420 @@ fn no_carry_module_revalidation_keeps_legacy_receipt_closed() {
     drop(receipt);
     drop(verification);
 }
+
+#[test]
+fn private_nominal_attachment_rejects_actual_legacy_receipt_on_original_phase() {
+    let roster = neutral_ranked_program_v1()
+        .into_verified_roster_receipt()
+        .unwrap();
+    let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+    verification
+        .phase
+        .with_budget(|budget| {
+            let ledger = budget.work_ledger_identity_v1();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            assert!(matches!(
+            receipt.into_private_bf16_attached_ranked_owner_with_budget_v1(budget),
+            Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                LocalHelperSourceConsumerUnavailable {
+                    consumer: "private nominal module receipt",
+                })
+        ));
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                (
+                    before.0.checked_add(1).unwrap(),
+                    before.1,
+                    before.2,
+                    before.3,
+                    before.4
+                )
+            );
+            Ok(())
+        })
+        .unwrap();
+    drop(verification);
+}
+
+#[test]
+fn private_nominal_attached_pair_legacy_refusal_keeps_phase_until_final_drop() {
+    use retained_phase_v1::observation::{self, Event};
+    let (before, observed) = observation::observe(|| {
+        let roster = neutral_ranked_program_v1()
+            .into_verified_roster_receipt()
+            .unwrap();
+        let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+        let before = verification
+            .phase
+            .with_budget(|budget| {
+                Ok((
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ))
+            })
+            .unwrap();
+        assert!(matches!(
+            bf16_nominal_module_receipt_v1::refuse_legacy_private_attachment_fixture_v1(
+                receipt, verification,
+            ),
+            Err(ProductionRankedVerificationErrorV1::Custody(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                    LocalHelperSourceConsumerUnavailable {
+                        consumer: "private nominal module receipt",
+                    }
+            ))
+        ));
+        before
+    });
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseRetained(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+            .count(),
+        1
+    );
+    let Some(Event::PhaseDropped {
+        before: last,
+        after,
+        poisoned: false,
+    }) = observed.events.last()
+    else {
+        panic!("original phase was not the final clean drop");
+    };
+    // require_clean, actual phase loan, wrapper-layout check, exact policy gate.
+    assert_eq!(last.work, before.0.checked_add(4).unwrap());
+    assert_eq!(
+        (
+            last.storage,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        ),
+        (before.1, before.2, before.3, before.4)
+    );
+    assert_eq!(after.storage, 0);
+    assert_eq!(
+        (
+            after.work,
+            after.peak_storage,
+            after.failed_work,
+            after.failed_storage
+        ),
+        (
+            last.work,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        )
+    );
+}
+
+#[test]
+fn private_nominal_attached_pair_preserves_original_denial_before_entry() {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use retained_phase_v1::observation::{self, Event};
+    for storage in [false, true] {
+        let (before, observed) = observation::observe(|| {
+            let roster = neutral_ranked_program_v1()
+                .into_verified_roster_receipt()
+                .unwrap();
+            let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+            let before = verification
+                .phase
+                .with_budget(|budget| {
+                    if storage {
+                        assert!(budget.reserve_storage(usize::MAX).is_err());
+                    } else {
+                        assert!(budget.charge_work(usize::MAX).is_err());
+                    }
+                    Ok((
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage(),
+                    ))
+                })
+                .unwrap();
+            let result =
+                bf16_nominal_module_receipt_v1::refuse_legacy_private_attachment_fixture_v1(
+                    receipt,
+                    verification,
+                );
+            if storage {
+                assert!(matches!(
+                    result,
+                    Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                        Resource::Storage(_)
+                    ))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                        Resource::Work(_)
+                    ))
+                ));
+            }
+            before
+        });
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseRetained(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+                .count(),
+            1
+        );
+        let Some(Event::PhaseDropped {
+            before: last,
+            after,
+            poisoned: false,
+        }) = observed.events.last()
+        else {
+            panic!("original phase was not the final clean drop");
+        };
+        assert_eq!(
+            (
+                last.work,
+                last.storage,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            ),
+            before
+        );
+        assert_eq!(after.storage, 0);
+        assert_eq!(
+            (
+                after.work,
+                after.peak_storage,
+                after.failed_work,
+                after.failed_storage
+            ),
+            (
+                last.work,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            )
+        );
+    }
+}
+
+#[test]
+fn attached_observer_failed_consuming_conversion_creates_no_paid_output() {
+    use retained_phase_v1::observation::{self, Event};
+    let (before, observed) = observation::observe(|| {
+        let roster = neutral_ranked_program_v1()
+            .into_verified_roster_receipt()
+            .unwrap();
+        let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+        let before = verification
+            .phase
+            .with_budget(|budget| {
+                Ok((
+                    budget.work(),
+                    budget.storage(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                ))
+            })
+            .unwrap();
+        assert!(matches!(
+            bf16_nominal_module_receipt_v1::refuse_attached_observation_conversion_fixture_v1(
+                receipt, verification,
+            ),
+            Err(ProductionRankedVerificationErrorV1::Custody(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::
+                    LocalHelperSourceConsumerUnavailable {
+                        consumer: "private nominal module receipt",
+                    }
+            ))
+        ));
+        before
+    });
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseRetained(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+            .count(),
+        1
+    );
+    let Some(Event::PhaseDropped {
+        before: last,
+        after,
+        poisoned: false,
+    }) = observed.events.last()
+    else {
+        panic!("original phase was not the final clean drop");
+    };
+    // require_clean, actual phase loan, wrapper-layout check, exact policy gate.
+    assert_eq!(last.work, before.0.checked_add(4).unwrap());
+    assert_eq!(
+        (
+            last.storage,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        ),
+        (before.1, before.2, before.3, before.4)
+    );
+    assert_eq!(after.storage, 0);
+    assert_eq!(
+        (
+            after.work,
+            after.peak_storage,
+            after.failed_work,
+            after.failed_storage
+        ),
+        (
+            last.work,
+            last.peak_storage,
+            last.failed_work,
+            last.failed_storage
+        )
+    );
+}
+
+#[test]
+fn attached_observer_failed_consumption_preserves_original_denial() {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    use retained_phase_v1::observation::{self, Event};
+    for storage in [false, true] {
+        let (before, observed) =
+            observation::observe(|| {
+                let roster = neutral_ranked_program_v1()
+                    .into_verified_roster_receipt()
+                    .unwrap();
+                let (receipt, mut verification) = roster.into_module_verified_receipt().unwrap();
+                let before = verification
+                    .phase
+                    .with_budget(|budget| {
+                        if storage {
+                            assert!(budget.reserve_storage(usize::MAX).is_err());
+                        } else {
+                            assert!(budget.charge_work(usize::MAX).is_err());
+                        }
+                        Ok((
+                            budget.work(),
+                            budget.storage(),
+                            budget.peak_storage(),
+                            budget.failed_work(),
+                            budget.failed_storage(),
+                        ))
+                    })
+                    .unwrap();
+                let result = bf16_nominal_module_receipt_v1::
+                refuse_attached_observation_conversion_fixture_v1(receipt, verification);
+                if storage {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                            Resource::Storage(_)
+                        ))
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionRankedVerificationErrorV1::ConditionalResource(
+                            Resource::Work(_)
+                        ))
+                    ));
+                }
+                before
+            });
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseRetained(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            observed
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseDropped { .. }))
+                .count(),
+            1
+        );
+        let Some(Event::PhaseDropped {
+            before: last,
+            after,
+            poisoned: false,
+        }) = observed.events.last()
+        else {
+            panic!("original phase was not the final clean drop");
+        };
+        assert_eq!(
+            (
+                last.work,
+                last.storage,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            ),
+            before
+        );
+        assert_eq!(after.storage, 0);
+        assert_eq!(
+            (
+                after.work,
+                after.peak_storage,
+                after.failed_work,
+                after.failed_storage
+            ),
+            (
+                last.work,
+                last.peak_storage,
+                last.failed_work,
+                last.failed_storage
+            )
+        );
+    }
+}

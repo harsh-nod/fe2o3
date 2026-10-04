@@ -550,6 +550,7 @@ fn actual_generated_source() {
 }
 
 struct OwningBody<'a> {
+    attached: bool,
     module: bool,
     roster: bool,
     config: &'a Config,
@@ -571,7 +572,27 @@ impl Callbacks for OwningBody<'_> {
             crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         ) {
             Ok(transaction) => {
-                let (result, phase) = if self.module {
+                let (result, phase) = if self.attached {
+                    transaction.observe_bf16_owned_attached_for_test_v1(
+                        owning_requested_permutation(self.config.session)
+                            .expect("selected Identity/Swap01"),
+                        |source, emission, budget| {
+                            use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                            budget.charge_work(256)?;
+                            if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                                || super::lower_hex_v1(source.source().sha256())
+                                    != self.record.spec.source.sha256
+                                || Some(emission.return_permutation())
+                                    != owning_requested_permutation(self.config.session)
+                            {
+                                return Err(E::Unavailable(
+                                    "actual owning source/requested Return differs",
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                } else if self.module {
                     transaction.observe_bf16_owned_module_for_test_v1(
                         owning_requested_permutation(self.config.session)
                             .expect("selected Identity/Swap01"),
@@ -688,6 +709,7 @@ fn actual_generated_owning_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        attached: false,
         module: false,
         roster: false,
         config: &config,
@@ -821,6 +843,7 @@ fn actual_generated_roster_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        attached: false,
         module: false,
         roster: true,
         config: &config,
@@ -923,6 +946,7 @@ fn actual_generated_module_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        attached: false,
         module: true,
         roster: false,
         config: &config,
@@ -1002,5 +1026,114 @@ fn actual_generated_module_source() {
     assert!(
         success && final_deadline,
         "private module roster source refused; saved evidence is not qualification"
+    );
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 private intact-owner continuation; root owns preparation and process supervision"]
+fn actual_generated_attached_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        attached: true,
+        module: false,
+        roster: false,
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // No CPU sidecar, source publication, target emission or legacy Connected
+    // attachment is attempted. Stage B remains a private intact-owner path.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let success = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-owning-source-observation-v5",
+        "session":config.session, "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        // Completion requires actual Stage A and B conversion, fresh full
+        // intact-owner replay, final pair drop and materialization postflight.
+        "owning_entry_completed":body.completed, "lowerer_validation_completed":body.completed,
+        "roster_conversion_completed":body.completed,
+        "module_roster_conversion_completed":body.completed,
+        "module_structural_revalidation_completed":body.completed,
+        "private_attachment_completed":body.completed,
+        "intact_owner_replay_completed":body.completed,
+        "intact_owner_pair_dropped":body.completed,
+        "legacy_connected":false,
+        "authenticated_module_roster_created":body.completed,
+        "phase":body.phase,
+        "failure":body.failure, "accepted":success, "parent_acceptance_required":true,
+        "normal_qualified":false, "lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    });
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private intact attachment observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_OWNING_SOURCE_V5 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        success && final_deadline,
+        "private intact attachment source refused; saved evidence is not qualification"
     );
 }

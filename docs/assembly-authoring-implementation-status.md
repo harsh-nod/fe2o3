@@ -11,6 +11,34 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Intact private BF16 lowerer attachment — 2026-10-04
+
+The private BF16 module receipt now remains inside an intact attached owner
+together with a freshly validated nominal translation report and its original
+projection account. Attachment and later replay check the actual retained
+source, root, ranked maps and requested Return permutation. The owner cannot
+be split into detached source/report tokens, and paid observer state is created
+only after successful consuming transitions.
+
+This is a private continuation checkpoint, not the ordinary compilation path.
+The legacy connected owner, formal/geometry admission, LLVM emission and GPU
+execution remain disabled for this path. A subsequent diagnostic must inspect
+the unchanged formal engine's actual reasons before a production formal
+consumer can be implemented; incomplete call effects are not waived.
+
+The exact source passed 3,928 compiler library tests (227 ignored), 73 extractor
+tests and two API tests in both debug and release, plus 2,063 lowerer tests in
+each mode and 36 parent controls. A fresh release build and thirteen-process
+campaign passed 36 positive and 32 negative CPU requests. Four separate fresh
+Identity/swapped-input pairs covered owning entry, first roster, module receipt
+and intact attachment. The attachment pair revalidated its retained source and
+report on the same account, emitted its paid observation before cleanup and
+dropped the owning pair before outer postflight. These are logical reservations,
+not a whole-process allocator or RSS bound.
+
+No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Genuine private BF16 module receipt and failure-path lifetime repair — 2026-10-04
 
 The actual private BF16 program can now be consumed into a module receipt and
