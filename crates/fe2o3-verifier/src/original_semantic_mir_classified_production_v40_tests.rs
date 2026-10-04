@@ -3,6 +3,9 @@ use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
+#[path = "original_semantic_mir_length_boundaries_v68_tests.rs"]
+mod length_boundary_tests;
+
 fn run_classified_production_v40(
     work: usize,
     storage: usize,

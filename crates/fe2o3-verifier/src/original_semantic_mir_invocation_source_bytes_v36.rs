@@ -1703,7 +1703,7 @@ struct InvocationSourceObjectV40 {
 // currentness is still checked independently at each address use.
 spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
-        && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
+        && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len() as int)
         && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
             !source.objects.contains_key(local)
                 && match source.machine.values[local] {

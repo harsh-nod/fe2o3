@@ -1,0 +1,21 @@
+proof fn source_sequence_length_integer_embedding_is_lossless_v68(values: Seq<MemoryValueV30>)
+    ensures
+        0 <= values.len() as int,
+        (values.len() as int) as nat == values.len(),
+{}
+
+proof fn descriptor_shape_rejects_negative_origins_at_any_sequence_length_v68(
+    reference: InvocationSourceDescriptorReferenceV51, values: Seq<MemoryValueV30>,
+)
+    requires reference.loan.origin < 0,
+    ensures !invocation_source_descriptor_reference_shape_v51(reference, values.len() as int),
+{}
+
+proof fn logical_shape_rejects_negative_descriptor_origins_at_any_sequence_length_v68(
+    logical: InvocationSourceLogicalV38, local: int, count: nat,
+)
+    requires
+        logical.descriptor_references.contains_key(local),
+        logical.descriptor_references[local].loan.origin < 0,
+    ensures !invocation_source_logical_well_formed_v38(logical, count as int),
+{}

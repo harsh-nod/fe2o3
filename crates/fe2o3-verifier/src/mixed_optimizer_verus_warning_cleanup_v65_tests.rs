@@ -54,6 +54,15 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
             expected = expected.replacen(tautology, "", 1);
             removed += 1;
         }
+        if marker == "spec fn invocation_source_byte_state_well_formed_v36(" {
+            let old = "invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())";
+            assert_eq!(expected.matches(old).count(), 1);
+            expected = expected.replacen(
+                old,
+                "invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len() as int)",
+                1,
+            );
+        }
         assert_eq!(
             warning_tokens_v65(warning_definition_v65(source, marker)),
             expected

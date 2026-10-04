@@ -8,7 +8,7 @@ spec fn invocation_source_descriptor_snapshot_current_v53(
     recipe: InvocationSourceDescriptorRecipeV51,
 ) -> bool {
     source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
-        && invocation_source_descriptor_reference_shape_v51(snapshot.reference, source.machine.values.len())
+        && invocation_source_descriptor_reference_shape_v51(snapshot.reference, source.machine.values.len() as int)
         && ({ let reference = snapshot.reference;
             reference.loan.origin == recipe.origin
                 && reference.loan.source_type == recipe.source_type
