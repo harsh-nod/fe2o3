@@ -27,8 +27,17 @@ use std::{
     mem::{align_of, size_of},
 };
 
+#[path = "mixed_optimizer_predicated_typed_source_request_v90.rs"]
+mod predicated_typed_source_v90;
 #[path = "mixed_optimizer_typed_source_request_v50.rs"]
 mod typed_source_v50;
+pub use predicated_typed_source_v90::{
+    ExecutedPredicatedTypedSourceTailV90, InertPredicatedTypedSourceReceiptV90,
+    PredicatedTypedSourceTailSubjectV90, PreparedPredicatedTypedSourceTailExecutionV90,
+    PreparedPredicatedTypedSourceTailV90, check_inert_predicated_typed_source_receipt_v90,
+    prepare_predicated_typed_source_tail_v90,
+    prepare_predicated_typed_source_tail_with_references_v90,
+};
 pub use typed_source_v50::{
     ExecutedTypedSourceTailV50, InertTypedSourceReceiptV53, PreparedTypedSourceTailExecutionV50,
     PreparedTypedSourceTailV50, SourceScalarReferenceInputV69, TypedSourceTailSubjectV50,
