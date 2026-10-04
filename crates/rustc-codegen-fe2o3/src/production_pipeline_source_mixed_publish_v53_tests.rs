@@ -67,7 +67,14 @@ fn typed_capsule_association_is_not_an_integer_or_nominal_v5_substitution() {
     ] {
         assert!(!source.contains(forbidden));
     }
-    assert!(MODULE_WRAPPER.contains("VerifiedCanonicalKernelIrModuleV18"));
+    assert!(
+        MODULE_WRAPPER.contains("use super::mixed_descriptor_family::mixed_descriptor_family;")
+    );
+    assert!(MODULE_WRAPPER.contains("mixed_descriptor_family!("));
+    let module_family = include_str!("kernel_ir_codegen_mixed_descriptor_family.rs");
+    assert!(module_family.contains("VerifiedCanonicalKernelIrModuleV18 as Owner"));
+    assert!(module_family.contains("owner: &Owner"));
+    assert!(module_family.contains("shared::VerifiedTextGraphV53::V18(owner)"));
     assert!(MODULE_WRAPPER.contains(DESCRIPTOR_SECTION));
 }
 

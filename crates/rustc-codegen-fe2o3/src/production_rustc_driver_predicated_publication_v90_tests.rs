@@ -241,6 +241,14 @@ fn observe(
         thread_operands,
         extraction_refused: false,
     };
+    // Only the complete actual-source parent retains these bounded model
+    // bytes. Resource replays stay quiet and no executed proof is asserted.
+    if std::env::args().any(|argument| argument == CHILD) {
+        println!(
+            "TYPED_SOURCE_MODEL_V93 {}",
+            serde_json::json!({"statement": report.statement, "source": typed})
+        );
+    }
     let worker = candidate.worker(budget)?;
     assert_eq!(worker.root_count(budget)?, 2);
     assert_eq!(worker.descriptor(budget)?.kernel_count(), 2);
