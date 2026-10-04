@@ -6,16 +6,13 @@ use super::super::{
     WorkerV3HsacoPublicationErrorV1, WorkerV3VerificationRequestPreparationErrorV1,
     prepare_request,
 };
-use super::WorkerV3ConditionalFillAssociationErrorV1;
+use super::{InertWorkerV3ConditionalFillSubjectV1, WorkerV3ConditionalFillAssociationErrorV1};
 use crate::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1, WorkerV3CompilerCurrentRecordAuditErrorV1,
     WorkerV3HostLineageIdentityV1,
 };
-use fe2o3_kernel_analysis::{Gfx942FillAnalysisErrorV1, check_gfx942_fill_analysis_v1};
-use fe2o3_verifier::{
-    ConditionalFillProgramErrorV1, OwnedConditionalFillRefinementExecutionV1,
-    check_conditional_fill_program_v1,
-};
+use fe2o3_kernel_analysis::Gfx942FillAnalysisErrorV1;
+use fe2o3_verifier::{ConditionalFillProgramErrorV1, OwnedConditionalFillRefinementExecutionV1};
 use std::{error::Error, fmt, marker::PhantomData};
 
 /// Retains one current publication, executed refinement and fresh compiler-service audit.
@@ -57,6 +54,7 @@ pub struct PendingWorkerV3ConditionalFillArtifactV1<K> {
     finalizer: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     refinement: OwnedConditionalFillRefinementExecutionV1,
+    subject: InertWorkerV3ConditionalFillSubjectV1,
     _marker: PhantomData<fn() -> K>,
 }
 
@@ -101,7 +99,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
         let current = admission
             .acquire_retained_currentness_token()
             .map_err(E::CurrentPublication)?;
-        let (finalizer, compiler_execution) = {
+        let (finalizer, compiler_execution, subject) = {
             let request =
                 prepare_request::<K>(&admission, &current).map_err(|error| match error {
                     WorkerV3VerificationRequestPreparationErrorV1::Marker(field) => {
@@ -111,17 +109,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
                         E::UnsupportedGeneratedProfile
                     }
                 })?;
-            let program =
-                check_conditional_fill_program_v1(refinement.inputs(), refinement.lineage())
-                    .map_err(E::Program)?;
-            let machine = check_gfx942_fill_analysis_v1(
-                refinement.analysis_execution(),
-                program.function_symbol(),
-            )
-            .map_err(E::Machine)?;
-            let _association = request
-                .check_conditional_fill_analysis_v1(&program, &machine)
-                .map_err(E::Association)?;
+            let subject = InertWorkerV3ConditionalFillSubjectV1::check(&request, &refinement)?;
             let finalizer = request
                 .independently_revalidate_finalizer_derivation()
                 .map_err(E::Finalizer)?;
@@ -146,7 +134,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
                     request.compiler_execution_receipt_carriage(),
                 )
                 .map_err(E::CompilerExecution)?;
-            (finalizer, compiler_execution)
+            (finalizer, compiler_execution, subject)
         };
         Ok(Self {
             admission,
@@ -154,6 +142,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
             finalizer,
             compiler_execution,
             refinement,
+            subject,
             _marker: PhantomData,
         })
     }
@@ -187,6 +176,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> PendingWorkerV3ConditionalFillArti
     }
     pub const fn refinement(&self) -> &OwnedConditionalFillRefinementExecutionV1 {
         &self.refinement
+    }
+    /// Borrows matching data only; the original proof/publication owners remain here.
+    pub const fn subject(&self) -> &InertWorkerV3ConditionalFillSubjectV1 {
+        &self.subject
     }
     pub const fn authenticates_protected_compiler_origin(&self) -> bool {
         false

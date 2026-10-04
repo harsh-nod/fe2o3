@@ -52,7 +52,8 @@ pub use conditional_fill::{
 };
 #[cfg(target_os = "linux")]
 pub use conditional_fill::{
-    PendingWorkerV3ConditionalFillArtifactV1, WorkerV3ConditionalFillPendingErrorV1,
+    InertWorkerV3ConditionalFillSubjectV1, PendingWorkerV3ConditionalFillArtifactV1,
+    WorkerV3ConditionalFillPendingErrorV1,
 };
 
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.

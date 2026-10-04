@@ -10,7 +10,7 @@ use fe2o3_external_anchor_protocol::{
 use fe2o3_host::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1, PendingWorkerV3ConditionalFillArtifactV1,
     WorkerV3CompilerCurrentRecordAuditErrorV1, WorkerV3ConditionalFillAssociationErrorV1,
-    WorkerV3ConditionalFillPendingErrorV1,
+    WorkerV3ConditionalFillPendingErrorV1, WorkerV3VerificationChallengeIdentityV1,
 };
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectLimitsV1, AuthenticatedPhysicalMachineEffectWorkerV1,
@@ -43,6 +43,7 @@ impl WorkerV3AuditorV1<AuditOnlyFillMarker> for RefinementAuditor {
     type Evidence = (
         OwnedConditionalFillRefinementExecutionV1,
         CompilerExecutionReceiptCarriageV1,
+        WorkerV3VerificationChallengeIdentityV1,
     );
 
     fn audit(
@@ -104,6 +105,7 @@ impl WorkerV3AuditorV1<AuditOnlyFillMarker> for RefinementAuditor {
         Ok((
             refinement,
             request.compiler_execution_receipt_carriage().clone(),
+            request.challenge_identity(),
         ))
     }
 }
@@ -164,12 +166,11 @@ fn run_case(case: Case) {
         .unwrap(),
         change_payload: matches!(case, Case::Payload),
     };
-    let (refinement, carriage) =
-        audit_recovered_worker_v3_verification_v1::<AuditOnlyFillMarker, _>(
-            &admission,
-            &mut proof_auditor,
-        )
-        .unwrap();
+    let (refinement, carriage, host_challenge) = audit_recovered_worker_v3_verification_v1::<
+        AuditOnlyFillMarker,
+        _,
+    >(&admission, &mut proof_auditor)
+    .unwrap();
     drop(proof_auditor);
     let source_pointer = refinement.generated_source().as_ptr();
     let analysis_pointer = refinement
@@ -177,6 +178,18 @@ fn run_case(case: Case) {
         .canonical_receipt_bytes()
         .as_ptr();
     let proof_binding = refinement.binding();
+    let mut expected_subject = b"FE2O3/WORKER-V3-CONDITIONAL-FILL-SUBJECT/V1\0".to_vec();
+    expected_subject.extend_from_slice(expected_lineage.as_bytes());
+    expected_subject.extend_from_slice(host_challenge.as_bytes());
+    expected_subject.push(refinement.boundary() as u8);
+    for bytes in [
+        refinement.obligation_preimage(),
+        refinement.signed_receipt_wire(),
+    ] {
+        expected_subject.extend_from_slice(&Sha256::digest(bytes));
+        expected_subject.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    }
+    expected_subject.extend_from_slice(refinement.receipt_verifying_key());
     capture(case, "proof.rs", refinement.generated_source());
     capture(case, "obligation.bin", refinement.obligation_preimage());
     capture(case, "proof.receipt", refinement.signed_receipt_wire());
@@ -279,6 +292,15 @@ fn run_case(case: Case) {
             ));
         } else {
             let pending = result.unwrap();
+            assert_eq!(pending.subject().canonical_bytes(), expected_subject);
+            assert_eq!(
+                pending.subject().identity(),
+                fe2o3_hsaco_finalize::ContentIdentityV1::calculate(&expected_subject)
+            );
+            assert_eq!(pending.subject(), &pending.subject().clone());
+            assert!(!pending.subject().grants_load_authority());
+            assert!(!pending.subject().grants_launch_authority());
+            capture(case, "subject.bin", pending.subject().canonical_bytes());
             assert_eq!(pending.lineage_identity(), expected_lineage);
             assert_eq!(
                 pending.refinement().generated_source().as_ptr(),
@@ -329,10 +351,12 @@ fn run_case(case: Case) {
             fs::rename(&root, &moved).unwrap();
             fs::create_dir(&root).unwrap();
             let stale = pending.revalidate_currentness();
+            assert_eq!(pending.subject().canonical_bytes(), expected_subject);
             fs::remove_dir(&root).unwrap();
             fs::rename(&moved, &root).unwrap();
             assert!(stale.is_err());
             pending.revalidate_currentness().unwrap();
+            assert_eq!(pending.subject().canonical_bytes(), expected_subject);
         }
         let (_foreign_directory, recovered) = recovered_host_fixture();
         let foreign = admit_recovered_worker_v3_descriptor_v1(

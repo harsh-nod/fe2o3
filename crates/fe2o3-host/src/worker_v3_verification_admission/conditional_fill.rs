@@ -17,6 +17,10 @@ mod pending;
 pub use pending::{
     PendingWorkerV3ConditionalFillArtifactV1, WorkerV3ConditionalFillPendingErrorV1,
 };
+#[cfg(target_os = "linux")]
+mod subject;
+#[cfg(target_os = "linux")]
+pub use subject::InertWorkerV3ConditionalFillSubjectV1;
 
 /// Borrows the request and both checked owners for the duration of its publication audit.
 ///
