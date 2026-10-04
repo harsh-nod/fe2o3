@@ -466,7 +466,7 @@ impl PointerByteOperationV30 {
                 // pointer/value computation or its already-invalid state.
                 emit!(
                     out,
-                    " let {} = {valid} && match {values}[{predicate}] {{ MemoryValueV30::Scalar(0) => true, MemoryValueV30::Scalar(1) => match ({values}[{pointer}], {values}[{value}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(v)) => byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_aligned_v30({memory}, p, {bytes}, {alignment}) && 0 <= v < ",
+                    " let {} = {valid} && match {values}[{predicate}] {{ MemoryValueV30::Scalar(predicate) => if predicate == 0 {{ true }} else if predicate == 1 {{ match ({values}[{pointer}], {values}[{value}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(v)) => byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_aligned_v30({memory}, p, {bytes}, {alignment}) && 0 <= v < ",
                     after.valid
                 );
                 if boolean {
@@ -474,7 +474,7 @@ impl PointerByteOperationV30 {
                 } else {
                     emit!(out, "memory_value_modulus_v30({bytes})");
                 }
-                emit!(out, ", _ => false }}, _ => false }};\n");
+                emit!(out, ", _ => false }} }} else {{ false }}, _ => false }};\n");
                 emit!(
                     out,
                     " let {} = if {} && {values}[{predicate}] == MemoryValueV30::Scalar(1) {{ match ({values}[{pointer}], {values}[{value}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(v)) => byte_store_v30({memory}, p, {bytes}, v, {endian}), _ => {memory} }} }} else {{ {memory} }};\n let {} = {values};\n",

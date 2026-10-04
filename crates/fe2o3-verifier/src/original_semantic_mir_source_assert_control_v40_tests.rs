@@ -170,6 +170,8 @@ fn original_mir_assert_executes_both_polarities_and_failure_only_ordered_moves()
                 let start = out.text.len();
                 assertion.emit(function.root, function.instance, 0, out)?;
                 let text = &out.text[start..];
+                assert!(text.contains("if !assertion_condition.source.machine.valid || !(assertion_condition.value == MemoryValueV30::Scalar(0) || assertion_condition.value == MemoryValueV30::Scalar(1))"));
+                assert!(!text.contains("matches!(assertion_condition.value"));
                 assert_eq!(
                     text.matches(
                         "let assertion_condition = invocation_source_operand_evaluate_v36"

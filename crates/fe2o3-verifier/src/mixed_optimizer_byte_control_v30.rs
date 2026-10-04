@@ -222,7 +222,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
             let selector = uses[0].definition;
             emit!(
                 out,
-                " let control_valid = match done.values[{selector}] {{ MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1) => true, _ => false }};\n if done.values[{selector}] == MemoryValueV30::Scalar(1) "
+                " let control_valid = match done.values[{selector}] {{ MemoryValueV30::Scalar(selector) => selector == 0 || selector == 1, _ => false }};\n if done.values[{selector}] == MemoryValueV30::Scalar(1) "
             );
             emit_edge(model, row.edges.start, out)?;
             emit!(out, " else ");

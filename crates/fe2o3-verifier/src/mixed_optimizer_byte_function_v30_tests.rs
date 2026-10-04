@@ -374,7 +374,8 @@ fn byte_function_edges_read_immutable_preedge_values_in_operand_order() {
         .0
         .unwrap();
         assert!(text.contains("let values = preedge.update(3, preedge[4]).update(4, preedge[3])"));
-        assert!(text.contains("MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1)"));
+        assert!(text.contains("let control_valid = match done.values[2] { MemoryValueV30::Scalar(selector) => selector == 0 || selector == 1, _ => false };"));
+        assert!(!text.contains("MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1)"));
         assert!(text.contains(
             "m.next_operation == -1 && (m.state.pc == 1 || (false)) && m.observations.len() == 0"
         ));
