@@ -857,6 +857,10 @@ run_cpu_tests() {
   done
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
+  # Unit-test builds expose dev-dependencies to production modules.
+  run_step cargo-fe2o3-production-bins env FE2O3_HIP_SYS_DISABLE=1 \
+    cargo build --locked --no-default-features -p cargo-fe2o3 \
+      --bin cargo-fe2o3 --bin fe2o3-rustc-wrapper
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3
   run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
