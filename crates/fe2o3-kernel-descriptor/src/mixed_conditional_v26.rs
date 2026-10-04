@@ -40,7 +40,7 @@ impl<E: std::error::Error + 'static> std::error::Error for MixedContractErrorV26
 type Format<T> = Result<T, &'static str>;
 type ResultV26<T, E> = Result<T, MixedContractErrorV26<E>>;
 
-trait Wire: Sized {
+pub(super) trait Wire: Sized {
     const BYTES: usize;
     fn read(r: &mut Reader<'_>) -> Format<Self>;
     fn write(&self, w: &mut Output<'_>);
@@ -109,6 +109,7 @@ macro_rules! wire_struct {
         }
     };
 }
+pub(super) use wire_struct;
 
 wire_struct! {
     /// One kernel root; identities are claims until matched by an owning consumer.

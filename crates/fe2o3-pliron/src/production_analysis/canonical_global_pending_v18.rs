@@ -26,6 +26,9 @@ pub struct PendingCanonicalGlobalAccessesV18<'s, 'g> {
     refund_denied: &'s Cell<bool>,
 }
 
+#[path = "canonical_global_predicate_v86.rs"]
+mod predicate_v86;
+
 impl<'s, 'g> PendingCanonicalGlobalAccessesV18<'s, 'g> {
     // The mixed scope has completed both whole-owner replay and the exact
     // native global census. This factory is inaccessible outside that scope's
