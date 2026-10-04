@@ -58,7 +58,7 @@ pub(super) const RETAINED_METADATA_STORAGE: usize = {
 };
 
 #[cfg(test)]
-static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+pub(super) static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 const RUST_VERIFY_FD: RawFd = 180;
 const Z3_FD: RawFd = 181;
