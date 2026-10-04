@@ -202,12 +202,13 @@ pub use linux::application_observation::{
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use linux::observer_channel::{
-    CompilerExecutionObserverErrorV1, PreparedRootCompilerExecutionObserverV1,
+    CompilerExecutionObserverErrorV1, ObservedApplicationRegistrationV1,
+    PendingApplicationObservationGateV1, PreparedRootCompilerExecutionObserverV1,
     PreparedRootCompilerObserverRegistryV1, ProtectedCompilerExecutionObserverV1,
-    RegisteredCompilerObserverV1, RootCompilerExecutionObserverProgressV1,
+    RegisteredApplicationObserverV1, RegisteredCompilerObserverV1,
+    RootCompilerExecutionObserverProgressV1,
     RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1,
     SupervisorCompilerObserverRegistryV1,
-    PendingApplicationObservationGateV1,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{

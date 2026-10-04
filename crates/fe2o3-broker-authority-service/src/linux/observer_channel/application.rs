@@ -394,7 +394,7 @@ impl PendingApplicationObservationGateV1 {
         Ok(value)
     }
 
-    fn revalidate(&self) -> Result<()> {
+    pub(super) fn revalidate(&self) -> Result<()> {
         self.root.validate_liveness()?;
         let flags = rustix::fs::fcntl_getfl(&self.reader)?;
         if rustix::io::fcntl_getfd(&self.reader)? != rustix::io::FdFlags::CLOEXEC

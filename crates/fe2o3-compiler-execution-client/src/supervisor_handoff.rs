@@ -19,7 +19,7 @@ use rustix::fs::OFlags;
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
     SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketAddrAny, SocketAddrUnix,
-    SocketFlags, SocketType, connect, recv, recvmsg, sendmsg, socket_with,
+    SocketFlags, SocketType, connect, recvmsg, sendmsg, socket_with,
 };
 
 use crate::{CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1};
@@ -130,7 +130,10 @@ impl PendingCompilerExecutionSupervisorV1 {
         {
             return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
         }
-        let bytes = receive_readiness(&self.control, deadline)?;
+        let bytes = receive_readiness::<COMPILER_EXECUTION_SERVICE_READY_BYTES_V1>(
+            &self.control,
+            deadline,
+        )?;
         let readiness = CompilerExecutionServiceReadyV1::decode(&bytes)
             .map_err(CompilerExecutionHandoffErrorV1::ReadinessProtocol)?;
         if !readiness.matches_launch(
@@ -502,13 +505,13 @@ fn send_handoff(
     }
 }
 
-fn receive_readiness(
+fn receive_readiness<const BYTES: usize>(
     control: &OwnedFd,
     deadline: Instant,
-) -> Result<[u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1], CompilerExecutionHandoffErrorV1> {
+) -> Result<[u8; BYTES], CompilerExecutionHandoffErrorV1> {
     loop {
         wait_readable(control, deadline)?;
-        let mut bytes = [0_u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1];
+        let mut bytes = [0_u8; BYTES];
         let received = {
             let mut vectors = [IoSliceMut::new(&mut bytes)];
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
@@ -555,12 +558,40 @@ fn require_control_eof(
     control: &OwnedFd,
     deadline: Instant,
 ) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    // Empty seqpackets are messages, not EOF. Credentials distinguish even an empty
+    // queued packet from shutdown; no further message is valid after readiness.
+    rustix::net::sockopt::set_socket_passcred(control, true).map_err(io::Error::from)?;
     loop {
         wait_readable(control, deadline)?;
         let mut trailing = [0_u8; 1];
-        match recv(control, &mut trailing, RecvFlags::DONTWAIT) {
-            Ok((0, _)) => return Ok(()),
-            Ok(_) => return Err(CompilerExecutionHandoffErrorV1::TrailingReadiness),
+        let mut vectors = [IoSliceMut::new(&mut trailing)];
+        let mut space =
+            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(1))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        match recvmsg(
+            control,
+            &mut vectors,
+            &mut ancillary,
+            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+        ) {
+            Ok(received) => {
+                let mut has_ancillary = false;
+                for message in ancillary.drain() {
+                    has_ancillary = true;
+                    if let RecvAncillaryMessage::ScmRights(rights) = message {
+                        rights.for_each(drop);
+                    }
+                }
+                if received.bytes != 0
+                    || has_ancillary
+                    || received
+                        .flags
+                        .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                {
+                    return Err(CompilerExecutionHandoffErrorV1::TrailingReadiness);
+                }
+                return require_deadline(deadline);
+            }
             Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
             Err(error) => return Err(CompilerExecutionHandoffErrorV1::Io(error.into())),
         }

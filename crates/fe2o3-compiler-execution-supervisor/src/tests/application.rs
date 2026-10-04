@@ -135,6 +135,198 @@ fn application_handoff_admits_parent_and_child_then_detects_child_exit() {
 }
 
 #[test]
+fn atomic_dispatch_accepts_only_exact_profile_pairs_and_cannot_skip_bad_packets() {
+    use crate::handoff::AcceptedHandoffV1;
+    let image = Fixture::new("application-dispatch");
+    let Some(supervisor) = bound_supervisor(&image) else {
+        return;
+    };
+    let fixture = application_fixture(&supervisor, &image);
+    let rights = fixture.rights.each_ref().map(AsFd::as_fd);
+    for application in [false, true] {
+        for count in 0..=4 {
+            let (sender, receiver) = seqpacket_pair();
+            let payload: &[u8] = if application {
+                fixture.binding.canonical_bytes()
+            } else {
+                fixture.binding.compiler_handoff().canonical_bytes()
+            };
+            send(&sender, payload, &rights[..count]);
+            // A valid packet behind an invalid packet must never rescue the admission.
+            send(&sender, fixture.binding.canonical_bytes(), &rights);
+            let result = supervisor
+                .accept_profile_until::<false>(receiver, Instant::now() + Duration::from_secs(1));
+            match (application, count) {
+                (true, 4) => {
+                    let AcceptedHandoffV1::Application(accepted) = result.unwrap() else {
+                        panic!("downgraded application")
+                    };
+                    assert_eq!(accepted.binding(), &fixture.binding);
+                    // The ordinary test fixture has no root registry. Application preparation
+                    // must not inherit the compiler-only test bypass.
+                    assert!(
+                        supervisor
+                            .prepare_application_launch(
+                                *accepted,
+                                Instant::now() + Duration::from_secs(1)
+                            )
+                            .is_err()
+                    );
+                }
+                (false, 2) => assert!(matches!(result.unwrap(), AcceptedHandoffV1::Compiler(_))),
+                _ => assert!(matches!(
+                    result,
+                    Err(ProtectedIssuerSessionErrorV1::Handoff(
+                        ProtectedIssuerHandoffErrorV1::MalformedTransfer
+                    ))
+                )),
+            }
+        }
+    }
+}
+
+#[test]
+fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures() {
+    use fe2o3_broker_authority_service::RegisteredApplicationObserverV1;
+    let image = Fixture::with_code("application-publication", &launched_probe_code(true));
+    let Some(supervisor) = bound_supervisor(&image) else {
+        return;
+    };
+    for scenario in [
+        "positive",
+        "wrong",
+        "short",
+        "trailing",
+        "missing_eof",
+        "timeout",
+        "original_deadline",
+        "closed_control",
+        "root_endpoint_closed",
+        "issuer_exit",
+        "cancel",
+    ] {
+        // This is a publication/custody fixture, not authenticated root registration or deployment.
+        let app = application_fixture(&supervisor, &image);
+        let (sender, receiver) = seqpacket_pair();
+        send(
+            &sender,
+            app.binding.compiler_handoff().canonical_bytes(),
+            &app.rights[..2].iter().map(AsFd::as_fd).collect::<Vec<_>>(),
+        );
+        let accepted = supervisor
+            .accept_handoff_inner::<false>(receiver, Duration::from_secs(1))
+            .unwrap();
+        let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
+        let writer = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+        let launched = supervisor
+            .launch_inner::<false>(prepared, Duration::from_secs(2))
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+        read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
+        let readiness = CompilerExecutionServiceReadyV1::new(
+            launched.pid(),
+            app.binding.compiler_handoff().launch_manifest(),
+            supervisor.policy(),
+        )
+        .unwrap();
+        rustix::io::write(&writer, readiness.canonical_bytes()).unwrap();
+        drop(writer);
+        let ready = launched.await_readiness(Duration::from_secs(1)).unwrap();
+        let (registration, root_peer, gate_writer, record) =
+            RegisteredApplicationObserverV1::local_fixture_for_test(app.binding.clone()).unwrap();
+        let deadline = if scenario == "original_deadline" {
+            Instant::now()
+        } else {
+            Instant::now() + Duration::from_secs(1)
+        };
+        let ready = ready.with_application_for_test(registration, deadline);
+        let mut bytes = record.to_vec();
+        match scenario {
+            "wrong" => bytes[8] ^= 1,
+            "short" => {
+                bytes.pop();
+            }
+            "trailing" => bytes.push(0),
+            _ => {}
+        }
+        if !matches!(scenario, "timeout" | "cancel") {
+            rustix::io::write(&gate_writer, &bytes).unwrap();
+        }
+        let gate_writer = if matches!(scenario, "timeout" | "missing_eof" | "cancel") {
+            Some(gate_writer)
+        } else {
+            drop(gate_writer);
+            None
+        };
+        let root_peer = if scenario == "root_endpoint_closed" {
+            drop(root_peer);
+            None
+        } else {
+            Some(root_peer)
+        };
+        let sender = if scenario == "closed_control" {
+            drop(sender);
+            None
+        } else {
+            Some(sender)
+        };
+        if scenario == "issuer_exit" {
+            rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
+            let stop = Instant::now() + Duration::from_secs(1);
+            while ready.revalidate().is_ok() {
+                assert!(Instant::now() < stop);
+                std::thread::yield_now();
+            }
+        }
+        if scenario == "cancel" {
+            ready.cancel().unwrap();
+        } else {
+            let result = ready.publish_readiness(Duration::from_millis(50));
+            if scenario == "positive" {
+                let serving = result.unwrap();
+                let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
+                let (count, _) =
+                    recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT).unwrap();
+                assert_eq!(count, bytes.len());
+                let record = WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).unwrap();
+                assert!(record.matches_binding(&app.binding, supervisor.policy()));
+                assert_eq!(record.compiler_readiness(), &readiness);
+                serving.cancel().unwrap();
+            } else {
+                assert!(result.is_err(), "accepted {scenario}");
+            }
+        }
+        if let Some(sender) = sender {
+            let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
+            assert_eq!(
+                recv(&sender, &mut bytes, RecvFlags::DONTWAIT).unwrap().0,
+                0,
+                "unexpected publication for {scenario}"
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            // WNOWAIT leaves reaping to the exact process owner, including its deferred reaper.
+            match rustix::process::waitid(
+                rustix::process::WaitId::Pid(pid),
+                rustix::process::WaitIdOptions::EXITED
+                    | rustix::process::WaitIdOptions::NOHANG
+                    | rustix::process::WaitIdOptions::NOWAIT,
+            ) {
+                Err(rustix::io::Errno::CHILD) => break,
+                Ok(_) => {
+                    assert!(Instant::now() < deadline, "unreaped {scenario}");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("{scenario}: {error}"),
+            }
+        }
+        assert_reaped(pid);
+        drop((gate_writer, root_peer));
+    }
+}
+
+#[test]
 fn application_handoff_rejects_wrong_count_swapped_and_aliased_roles() {
     let image = Fixture::new("application-roles");
     let Some(supervisor) = bound_supervisor(&image) else {

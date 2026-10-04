@@ -1,6 +1,12 @@
 //! Pidfd-owned launch and readiness lifecycle for the protected issuer.
 
 use core::ffi::{c_char, c_int, c_long, c_void};
+use fe2o3_broker_authority_service::{
+    ObservedApplicationRegistrationV1, RegisteredApplicationObserverV1,
+};
+use fe2o3_runtime_protocol::{
+    WorkerV3ApplicationSupervisorReadyErrorV1, WorkerV3ApplicationSupervisorReadyV1,
+};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -266,6 +272,10 @@ pub enum ProtectedIssuerLaunchErrorV1 {
     ReadinessTrailingBytes,
     /// The canonical readiness record failed strict decoding.
     ReadinessProtocol(CompilerExecutionServiceReadyErrorV1),
+    /// The original application observation gate failed.
+    ApplicationObservation(fe2o3_broker_authority_service::CompilerExecutionObserverErrorV1),
+    /// The dedicated application readiness record disagreed with the retained registration.
+    ApplicationReadiness(WorkerV3ApplicationSupervisorReadyErrorV1),
     /// Readiness names another PID, launch manifest, or issuer policy.
     ReadinessMismatch,
     /// The bounded deferred-reaping table has no free process slot.
@@ -317,6 +327,12 @@ impl fmt::Display for ProtectedIssuerLaunchErrorV1 {
             Self::ReadinessProtocol(error) => {
                 write!(formatter, "protected issuer readiness is invalid: {error}")
             }
+            Self::ApplicationObservation(error) => {
+                write!(formatter, "application observation failed: {error}")
+            }
+            Self::ApplicationReadiness(error) => {
+                write!(formatter, "application readiness failed: {error}")
+            }
             Self::ReadinessMismatch => formatter.write_str(
                 "protected issuer readiness names another PID, launch manifest, or policy",
             ),
@@ -340,6 +356,8 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
             Self::Supervisor(error) => Some(error),
             Self::Preparation(error) => Some(error),
             Self::ReadinessProtocol(error) => Some(error),
+            Self::ApplicationObservation(error) => Some(error),
+            Self::ApplicationReadiness(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             Self::InvalidTimeout
             | Self::ProcessProfile(_)
@@ -375,6 +393,8 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
 /// require_as_fd::<LaunchedProtectedIssuerV1>();
 /// ```
 pub struct LaunchedProtectedIssuerV1 {
+    application: Option<RegisteredApplicationObserverV1>,
+    application_deadline: Option<Instant>,
     process: ProtectedIssuerChildV1,
     control: OwnedFd,
     stdout_reader: OwnedFd,
@@ -411,6 +431,9 @@ impl LaunchedProtectedIssuerV1 {
         timeout: Duration,
     ) -> Result<ReadyProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
         let deadline = bounded_deadline(timeout)?;
+        let deadline = self
+            .application_deadline
+            .map_or(deadline, |d| d.min(deadline));
         let readiness = await_readiness_record(
             &self.readiness_reader,
             &self.process,
@@ -424,6 +447,8 @@ impl LaunchedProtectedIssuerV1 {
                 .exited_error("exited immediately after readiness"));
         }
         let Self {
+            application,
+            application_deadline,
             process,
             control,
             stdout_reader,
@@ -434,6 +459,8 @@ impl LaunchedProtectedIssuerV1 {
         } = self;
         drop(readiness_reader);
         Ok(ReadyProtectedIssuerV1 {
+            application,
+            application_deadline,
             process,
             control,
             _stdout_reader: stdout_reader,
@@ -474,6 +501,8 @@ impl LaunchedProtectedIssuerV1 {
 /// require_as_fd::<ReadyProtectedIssuerV1>();
 /// ```
 pub struct ReadyProtectedIssuerV1 {
+    application: Option<RegisteredApplicationObserverV1>,
+    application_deadline: Option<Instant>,
     process: ProtectedIssuerChildV1,
     control: OwnedFd,
     _stdout_reader: OwnedFd,
@@ -495,6 +524,22 @@ impl fmt::Debug for ReadyProtectedIssuerV1 {
 }
 
 impl ReadyProtectedIssuerV1 {
+    #[cfg(test)]
+    pub(crate) fn with_application_for_test(
+        mut self,
+        registration: RegisteredApplicationObserverV1,
+        deadline: Instant,
+    ) -> Self {
+        assert_eq!(
+            registration.binding().compiler_handoff().launch_manifest(),
+            &self.launch_manifest
+        );
+        assert!(self.application.is_none());
+        self.application = Some(registration);
+        self.application_deadline = Some(deadline);
+        self
+    }
+
     /// Returns the exact pidfd-bound issuer PID.
     pub fn pid(&self) -> u32 {
         self.process.pid_u32()
@@ -519,17 +564,49 @@ impl ReadyProtectedIssuerV1 {
         Ok(())
     }
 
-    /// Publishes the admitted readiness record to Cargo and enters serving custody.
+    /// Publishes readiness and enters serving custody. Application sessions must first consume
+    /// their original observation gate and publish the distinct application record.
     pub fn publish_readiness(
-        self,
+        mut self,
         timeout: Duration,
     ) -> Result<ServingProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
         let deadline = bounded_deadline(timeout)?;
+        let deadline = self
+            .application_deadline
+            .map_or(deadline, |d| d.min(deadline));
         self.revalidate()?;
+        // No registry mutex is held while waiting. Keep the issuer and original root owners
+        // live throughout the join and every nonblocking publication attempt.
+        let observed = self
+            .application
+            .take()
+            .map(|application| {
+                application
+                    .await_observation(deadline)
+                    .map_err(ProtectedIssuerLaunchErrorV1::ApplicationObservation)
+            })
+            .transpose()?;
+        self.revalidate()?;
+        let application_ready = observed
+            .as_ref()
+            .map(|observed| {
+                WorkerV3ApplicationSupervisorReadyV1::new(
+                    observed.binding(),
+                    self.readiness.clone(),
+                )
+                .map_err(ProtectedIssuerLaunchErrorV1::ApplicationReadiness)
+            })
+            .transpose()?;
+        let bytes: &[u8] = application_ready
+            .as_ref()
+            .map_or(self.readiness.canonical_bytes().as_slice(), |r| {
+                r.canonical_bytes().as_slice()
+            });
         publish_control_readiness(
             &self.control,
-            self.readiness.canonical_bytes(),
+            bytes,
             &self.process,
+            observed.as_ref(),
             deadline,
         )?;
         let Self {
@@ -540,6 +617,8 @@ impl ReadyProtectedIssuerV1 {
             readiness,
             launch_manifest,
             policy,
+            application: _,
+            application_deadline: _,
         } = self;
         drop(control);
         Ok(ServingProtectedIssuerV1 {
@@ -739,6 +818,8 @@ impl ProtectedIssuerSupervisorV1 {
         timeout: Duration,
     ) -> Result<LaunchedProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
         let deadline = bounded_deadline(timeout)?;
+        let application_deadline = prepared.route.application_deadline();
+        let deadline = application_deadline.map_or(deadline, |d| d.min(deadline));
         self.revalidate()
             .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?;
         prepared
@@ -896,29 +977,46 @@ impl ProtectedIssuerSupervisorV1 {
                 if !process.is_live()? {
                     return Err(process.exited_error("exited immediately after launcher exec"));
                 }
-                if ENFORCE_PROFILE || !cfg!(test) {
-                    let registered = prepared.registration.as_ref().ok_or(
-                        ProtectedIssuerLaunchErrorV1::InvalidProcessState(
-                            "missing root observer registration",
-                        ),
-                    )?;
-                    self.observer_registry(deadline)
-                        .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?
-                        .bind_issuer(
+                if ENFORCE_PROFILE || !cfg!(test) || application_deadline.is_some() {
+                    use crate::launch::PreparedRouteV1;
+                    let mut registry = self
+                        .observer_registry(deadline)
+                        .map_err(ProtectedIssuerLaunchErrorV1::Supervisor)?;
+                    let original_pidfd = process
+                        .pidfd
+                        .as_ref()
+                        .expect("live child retains pidfd")
+                        .as_fd();
+                    match &prepared.route {
+                        PreparedRouteV1::Compiler {
+                            registration: Some(registered),
+                            ..
+                        } => registry.bind_issuer(
                             registered,
                             pid.as_raw_pid() as u32,
-                            process
-                                .pidfd
-                                .as_ref()
-                                .expect("live child retains pidfd")
-                                .as_fd(),
+                            original_pidfd,
                             deadline,
-                        )
-                        .map_err(|error| {
-                            ProtectedIssuerLaunchErrorV1::Supervisor(
-                                crate::authority::observer_error(error),
-                            )
-                        })?;
+                        ),
+                        PreparedRouteV1::Application { registration, .. } => registry
+                            .bind_application_issuer(
+                                registration,
+                                pid.as_raw_pid() as u32,
+                                original_pidfd,
+                                deadline,
+                            ),
+                        PreparedRouteV1::Compiler {
+                            registration: None, ..
+                        } => {
+                            return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                                "missing root observer registration",
+                            ));
+                        }
+                    }
+                    .map_err(|error| {
+                        ProtectedIssuerLaunchErrorV1::Supervisor(crate::authority::observer_error(
+                            error,
+                        ))
+                    })?;
                     if Instant::now() >= deadline {
                         return Err(ProtectedIssuerLaunchErrorV1::Timeout(
                             "root observer binding",
@@ -936,15 +1034,18 @@ impl ProtectedIssuerSupervisorV1 {
             }
 
             let PreparedProtectedIssuerLaunchV1 {
-                accepted,
+                route,
                 stdout_reader,
                 stderr_reader,
                 readiness_reader,
                 ..
             } = prepared;
+            let (control, application) = route.into_serving_inputs();
             Ok(LaunchedProtectedIssuerV1 {
+                application,
+                application_deadline,
                 process,
-                control: accepted.into_control(),
+                control,
                 stdout_reader,
                 stderr_reader,
                 readiness_reader,
@@ -1441,9 +1542,23 @@ fn publish_control_readiness(
     control: &OwnedFd,
     bytes: &[u8],
     process: &ProtectedIssuerChildV1,
+    observed: Option<&ObservedApplicationRegistrationV1>,
     deadline: Instant,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     loop {
+        if Instant::now() >= deadline {
+            return Err(ProtectedIssuerLaunchErrorV1::Timeout(
+                "Cargo readiness publication",
+            ));
+        }
+        if !process.is_live()? {
+            return Err(process.exited_error("exited before Cargo readiness publication"));
+        }
+        if let Some(observed) = observed {
+            observed
+                .revalidate()
+                .map_err(ProtectedIssuerLaunchErrorV1::ApplicationObservation)?;
+        }
         match rustix::net::send(control, bytes, SendFlags::DONTWAIT | SendFlags::NOSIGNAL) {
             Ok(count) if count == bytes.len() => return Ok(()),
             Ok(_) => {

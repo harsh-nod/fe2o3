@@ -13,15 +13,19 @@ fn key(hex: &str) -> [u8; 32] {
     std::array::from_fn(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
 }
 
-fn fixture() -> WorkerV3ApplicationRegistrationBindingV1 {
-    let policy = CompilerExecutionIssuerPolicyV1::new(
+fn policy() -> CompilerExecutionIssuerPolicyV1 {
+    CompilerExecutionIssuerPolicyV1::new(
         1,
         CompilerExecutionIssuerMeasurementV1::new([1; 32], 123).unwrap(),
         CompilerExecutionIssuerMeasurementV1::new([2; 32], 456).unwrap(),
         key("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
         key("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"),
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn fixture() -> WorkerV3ApplicationRegistrationBindingV1 {
+    let policy = policy();
     let handoff = CompilerExecutionSupervisorHandoffV1::new(
         CompilerExecutionClientProcessIdentityV1::new(100, 1000, 1001).unwrap(),
         CompilerExecutionServiceLaunchManifestV1::new(
@@ -56,6 +60,164 @@ fn occurrence(slots: &[u16], spawn: u8) -> WorkerV3ApplicationOccurrenceV1 {
             .collect::<Vec<_>>(),
     )
     .unwrap()
+}
+
+fn ready_fixture() -> WorkerV3ApplicationSupervisorReadyV1 {
+    let binding = fixture();
+    WorkerV3ApplicationSupervisorReadyV1::new(
+        &binding,
+        fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyV1::new(
+            300,
+            binding.compiler_handoff().launch_manifest(),
+            &policy(),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn reseal_ready(bytes: &mut [u8]) {
+    let mut hash = Sha256::new();
+    hash.update(b"FE2O3/WORKER-V3/APPLICATION-SUPERVISOR-READY/V1\0");
+    hash.update(176u64.to_le_bytes());
+    hash.update(&bytes[..176]);
+    bytes[176..].copy_from_slice(&hash.finalize());
+}
+
+#[test]
+fn application_readiness_round_trip_and_distinct_compiler_profile() {
+    use fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyV1;
+    let ready = ready_fixture();
+    let bytes = ready.canonical_bytes();
+    assert_eq!(bytes.len(), 208);
+    assert_eq!(
+        &bytes[..24],
+        b"F3ARDY1\0\x01\0\0\0\xd0\0\0\0\0\0\0\0\0\0\0\0"
+    );
+    assert_eq!(&bytes[24..56], fixture().identity().as_bytes());
+    assert_eq!(
+        &bytes[56..176],
+        ready.compiler_readiness().canonical_bytes()
+    );
+    assert_eq!(
+        WorkerV3ApplicationSupervisorReadyV1::decode(bytes).unwrap(),
+        ready
+    );
+    assert!(ready.matches_binding(&fixture(), &policy()));
+    assert!(CompilerExecutionServiceReadyV1::decode(bytes).is_err());
+    assert!(
+        WorkerV3ApplicationSupervisorReadyV1::decode(ready.compiler_readiness().canonical_bytes())
+            .is_err()
+    );
+}
+
+#[test]
+fn application_readiness_rejects_every_byte_corruption_and_noncanonical_frame() {
+    let ready = ready_fixture();
+    for offset in 0..208 {
+        let mut bytes = *ready.canonical_bytes();
+        bytes[offset] ^= 1;
+        assert!(
+            WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).is_err(),
+            "offset {offset}"
+        );
+    }
+    for length in 0..210 {
+        if length == 208 {
+            continue;
+        }
+        let mut bytes = ready.canonical_bytes().to_vec();
+        bytes.resize(length, 0);
+        assert!(WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).is_err());
+    }
+    for offset in [0, 8, 10, 11, 12, 16, 23, 56, 64, 66, 68, 76, 175] {
+        let mut bytes = *ready.canonical_bytes();
+        bytes[offset] ^= 1;
+        reseal_ready(&mut bytes);
+        assert!(
+            WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).is_err(),
+            "resealed offset {offset}"
+        );
+    }
+    let mut bytes = *ready.canonical_bytes();
+    bytes[24..56].fill(0);
+    reseal_ready(&mut bytes);
+    assert!(WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).is_err());
+}
+
+#[test]
+fn application_readiness_requires_exact_registration_launch_and_policy() {
+    use fe2o3_compiler_execution_protocol::CompilerExecutionServiceReadyV1;
+    let binding = fixture();
+    let ready = ready_fixture();
+    let mut bytes = *ready.canonical_bytes();
+    bytes[24] ^= 1;
+    reseal_ready(&mut bytes);
+    assert!(
+        !WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
+            .unwrap()
+            .matches_binding(&binding, &policy())
+    );
+    let mut other = binding.canonical_bytes().to_vec();
+    // A different canonical challenge changes only the full application registration.
+    let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+        binding.compiler_handoff().clone(),
+        binding.occurrence().clone(),
+        binding.descriptors(),
+        binding.expectation(),
+        WorkerV3ApplicationHandoffChallengeV1::from_bytes([99; 32]).unwrap(),
+    )
+    .unwrap();
+    other.copy_from_slice(changed.canonical_bytes());
+    assert!(!ready.matches_binding(
+        &WorkerV3ApplicationRegistrationBindingV1::decode(&other).unwrap(),
+        &policy()
+    ));
+    for policy_version in [1, 2] {
+        let policy = CompilerExecutionIssuerPolicyV1::new(
+            policy_version,
+            policy().executable(),
+            policy().runtime(),
+            *policy().verifying_key(),
+            *policy().external_anchor_verifying_key(),
+        )
+        .unwrap();
+        let launch = CompilerExecutionServiceLaunchManifestV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(
+                if policy_version == 1 { 201 } else { 200 },
+                1000,
+                1001,
+            )
+            .unwrap(),
+            binding
+                .compiler_handoff()
+                .launch_manifest()
+                .external_anchor_service(),
+            &policy,
+        );
+        let compiler = CompilerExecutionServiceReadyV1::new(300, &launch, &policy).unwrap();
+        assert!(WorkerV3ApplicationSupervisorReadyV1::new(&binding, compiler.clone()).is_err());
+        let mut bytes = *ready.canonical_bytes();
+        bytes[56..176].copy_from_slice(compiler.canonical_bytes());
+        reseal_ready(&mut bytes);
+        assert!(
+            !WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
+                .unwrap()
+                .matches_binding(&binding, &policy)
+        );
+    }
+    // PID is inert in this codec; authenticating the actual issuer remains the supervisor's job.
+    let different_pid = CompilerExecutionServiceReadyV1::new(
+        301,
+        binding.compiler_handoff().launch_manifest(),
+        &policy(),
+    )
+    .unwrap();
+    assert!(
+        WorkerV3ApplicationSupervisorReadyV1::new(&binding, different_pid)
+            .unwrap()
+            .matches_binding(&binding, &policy())
+    );
 }
 
 // Independent resealing permits semantic mutations to pass the outer integrity gate.

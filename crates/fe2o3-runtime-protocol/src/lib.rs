@@ -25,12 +25,13 @@ pub use application_handoff_v3::{
     WorkerV3LoadEnvelopeIdentityV1,
 };
 pub use application_registration_v1::{
-    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
+    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1,
+    WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
     WorkerV3ApplicationRegistrationDescriptorsV1, WorkerV3ApplicationRegistrationErrorV1,
-    WorkerV3ApplicationRegistrationIdentityV1,
-    WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1, WorkerV3ApplicationRegistrationInputsV1,
+    WorkerV3ApplicationRegistrationIdentityV1, WorkerV3ApplicationRegistrationInputsV1,
     WorkerV3ApplicationSessionKindV1, WorkerV3ApplicationSessionMessageV1,
-    WorkerV3ApplicationSessionTranscriptV1,
+    WorkerV3ApplicationSessionTranscriptV1, WorkerV3ApplicationSupervisorReadyErrorV1,
+    WorkerV3ApplicationSupervisorReadyV1,
 };
 pub use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,

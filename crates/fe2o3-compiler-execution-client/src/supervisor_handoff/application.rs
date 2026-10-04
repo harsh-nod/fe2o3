@@ -5,12 +5,16 @@ use crate::{
     ApplicationProofChannelErrorV1, ApplicationProofTransferPeerV1,
     RetainedApplicationServiceLaunchV1,
 };
-use fe2o3_runtime_protocol::WorkerV3ApplicationRegistrationBindingV1;
+use fe2o3_runtime_protocol::{
+    WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
+    WorkerV3ApplicationSupervisorReadyErrorV1, WorkerV3ApplicationSupervisorReadyV1,
+};
 
 #[derive(Debug)]
 pub enum ApplicationSupervisorHandoffErrorV1 {
     Handoff(CompilerExecutionHandoffErrorV1),
     ProofChannel(ApplicationProofChannelErrorV1),
+    Readiness(WorkerV3ApplicationSupervisorReadyErrorV1),
     BindingMismatch,
 }
 
@@ -19,6 +23,7 @@ impl fmt::Display for ApplicationSupervisorHandoffErrorV1 {
         match self {
             Self::Handoff(error) => write!(f, "application handoff: {error}"),
             Self::ProofChannel(error) => write!(f, "application handoff: {error}"),
+            Self::Readiness(error) => write!(f, "application handoff: {error}"),
             Self::BindingMismatch => {
                 f.write_str("application binding differs from original launch custody")
             }
@@ -31,6 +36,7 @@ impl Error for ApplicationSupervisorHandoffErrorV1 {
         match self {
             Self::Handoff(error) => Some(error),
             Self::ProofChannel(error) => Some(error),
+            Self::Readiness(error) => Some(error),
             Self::BindingMismatch => None,
         }
     }
@@ -64,6 +70,8 @@ impl From<CompilerExecutionHandoffErrorV1> for ApplicationSupervisorHandoffError
 pub struct PendingApplicationSupervisorV1 {
     control: OwnedFd,
     binding: WorkerV3ApplicationRegistrationBindingV1,
+    expected: CompilerExecutionSupervisorCredentialsV1,
+    deadline: Instant,
 }
 
 impl fmt::Debug for PendingApplicationSupervisorV1 {
@@ -80,13 +88,47 @@ impl PendingApplicationSupervisorV1 {
     pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
         &self.binding
     }
+
+    /// Requires the dedicated root-observation/issuer-readiness join and terminal EOF.
+    /// This does not acknowledge application ACK, proof custody, or GPU authority.
+    /// A later caller deadline cannot extend the original transfer deadline.
+    pub fn await_readiness_until(
+        self,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<WorkerV3ApplicationSupervisorReadyV1, ApplicationSupervisorHandoffErrorV1> {
+        let deadline = deadline.min(self.deadline);
+        validate_boundary_deadline(deadline)?;
+        let launch = self.binding.compiler_handoff().launch_manifest();
+        if profile.supervisor_uid() != self.expected.uid()
+            || profile.supervisor_gid() != self.expected.gid()
+            || !launch.matches_policy(profile.policy())
+            || !launch.matches_external_anchor_service(profile.external_anchor_service())
+        {
+            return Err(ApplicationSupervisorHandoffErrorV1::BindingMismatch);
+        }
+        validate_control(&self.control, self.expected)?;
+        let bytes = receive_readiness::<WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1>(
+            &self.control,
+            deadline,
+        )?;
+        let readiness = WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
+            .map_err(ApplicationSupervisorHandoffErrorV1::Readiness)?;
+        if !readiness.matches_binding(&self.binding, profile.policy()) {
+            return Err(ApplicationSupervisorHandoffErrorV1::BindingMismatch);
+        }
+        require_control_eof(&self.control, deadline)?;
+        validate_control(&self.control, self.expected)?;
+        require_deadline(deadline)?;
+        Ok(readiness)
+    }
 }
 
 impl RetainedApplicationServiceLaunchV1 {
     /// Transfers exactly compiler peer, original app pidfd, proof peer, original Cargo pidfd.
     ///
     /// The embedded compiler handoff is independently reconstructed and compared before send.
-    /// Root registration and application readiness are separate, not yet supplied by this API.
+    /// The returned owner admits only the dedicated application readiness profile.
     pub fn transfer_to_supervisor_until(
         self,
         proof: ApplicationProofTransferPeerV1,
@@ -191,7 +233,12 @@ fn transfer(
         }
     }
     require_deadline(deadline)?;
-    Ok(PendingApplicationSupervisorV1 { control, binding })
+    Ok(PendingApplicationSupervisorV1 {
+        control,
+        binding,
+        expected,
+        deadline,
+    })
 }
 
 #[cfg(test)]

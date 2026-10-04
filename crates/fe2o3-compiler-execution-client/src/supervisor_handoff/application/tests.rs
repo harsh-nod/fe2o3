@@ -135,6 +135,146 @@ fn expected() -> CompilerExecutionSupervisorCredentialsV1 {
 }
 
 #[test]
+fn application_readiness_requires_exact_packet_binding_and_real_eof() {
+    // The real supervisor profile cannot use root credentials, including in this local fixture.
+    if expected().uid() == 0 || expected().gid() == 0 {
+        return;
+    }
+    let _lock = RESERVED_CHILD_FD_LOCK.lock().unwrap();
+    let fixture = fixture();
+    let binding = fixture.binding;
+    let compiler = CompilerExecutionServiceReadyV1::new(
+        123,
+        binding.compiler_handoff().launch_manifest(),
+        &policy(),
+    )
+    .unwrap();
+    let ready = WorkerV3ApplicationSupervisorReadyV1::new(&binding, compiler.clone()).unwrap();
+    let profile = CompilerExecutionClientProfileV1::new(
+        expected().uid(),
+        expected().gid(),
+        anchor(),
+        policy(),
+    )
+    .unwrap();
+    for scenario in [
+        "positive",
+        "ordinary",
+        "short",
+        "extended",
+        "rights",
+        "second",
+        "empty_open",
+        "empty_closed",
+        "empty_rights",
+        "no_eof",
+        "binding",
+        "expired",
+        "original_deadline",
+    ] {
+        let (control, sender) = pair();
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let pending = PendingApplicationSupervisorV1 {
+            control,
+            binding: binding.clone(),
+            expected: expected(),
+            deadline: if scenario == "original_deadline" {
+                Instant::now()
+            } else {
+                deadline
+            },
+        };
+        let mut payload = ready.canonical_bytes().to_vec();
+        match scenario {
+            "ordinary" => payload = compiler.canonical_bytes().to_vec(),
+            "short" => {
+                payload.pop();
+            }
+            "extended" => payload.push(0),
+            "binding" => {
+                let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+                    binding.compiler_handoff().clone(),
+                    binding.occurrence().clone(),
+                    binding.descriptors(),
+                    binding.expectation(),
+                    WorkerV3ApplicationHandoffChallengeV1::from_bytes([88; 32]).unwrap(),
+                )
+                .unwrap();
+                payload = WorkerV3ApplicationSupervisorReadyV1::new(&changed, compiler.clone())
+                    .unwrap()
+                    .canonical_bytes()
+                    .to_vec();
+            }
+            _ => {}
+        }
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        let rights = [sender.as_fd()];
+        if scenario == "rights" {
+            assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
+        }
+        sendmsg(
+            &sender,
+            &[IoSlice::new(&payload)],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )
+        .unwrap();
+        if matches!(
+            scenario,
+            "second" | "empty_open" | "empty_closed" | "empty_rights"
+        ) {
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+            let mut ancillary = SendAncillaryBuffer::new(&mut space);
+            if scenario == "empty_rights" {
+                assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
+            }
+            let trailing: &[u8] = if scenario == "second" { &payload } else { &[] };
+            sendmsg(
+                &sender,
+                &[IoSlice::new(trailing)],
+                &mut ancillary,
+                SendFlags::NOSIGNAL,
+            )
+            .unwrap();
+        }
+        let retained_sender = if matches!(scenario, "no_eof" | "empty_open") {
+            Some(sender)
+        } else {
+            drop(sender);
+            None
+        };
+        let result = pending.await_readiness_until(
+            &profile,
+            if scenario == "expired" {
+                Instant::now()
+            } else {
+                deadline
+            },
+        );
+        if scenario == "positive" {
+            assert_eq!(result.unwrap(), ready);
+        } else {
+            assert!(result.is_err(), "accepted {scenario}");
+        }
+        drop(retained_sender);
+    }
+    // The shared ordinary receiver must also reject the dedicated application's larger packet.
+    let (control, sender) = pair();
+    rustix::net::send(&sender, ready.canonical_bytes(), SendFlags::NOSIGNAL).unwrap();
+    drop(sender);
+    let ordinary = PendingCompilerExecutionSupervisorV1 {
+        control,
+        handoff: binding.compiler_handoff().clone(),
+    };
+    assert!(
+        ordinary
+            .await_readiness_until(&profile, Instant::now() + Duration::from_secs(1))
+            .is_err()
+    );
+}
+
+#[test]
 fn application_transfer_sends_exact_binding_and_four_original_rights_without_reopening() {
     let _lock = RESERVED_CHILD_FD_LOCK.lock().unwrap();
     let Fixture {

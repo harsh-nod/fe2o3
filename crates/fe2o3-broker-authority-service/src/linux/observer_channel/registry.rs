@@ -843,10 +843,7 @@ impl SupervisorCompilerObserverRegistryV1 {
         original_proof_peer: BorrowedFd<'_>,
         original_parent_pidfd: BorrowedFd<'_>,
         deadline: Instant,
-    ) -> Result<(
-        RegisteredCompilerObserverV1,
-        PendingApplicationObservationGateV1,
-    )> {
+    ) -> Result<RegisteredApplicationObserverV1> {
         let launch = binding.compiler_handoff().launch_manifest();
         validate_launch(
             launch,
@@ -888,7 +885,11 @@ impl SupervisorCompilerObserverRegistryV1 {
             registered.revalidate()?;
             self.validate_continuity()?;
             require_deadline(deadline)?;
-            Ok((registered, gate))
+            Ok(RegisteredApplicationObserverV1 {
+                compiler: registered,
+                binding: binding.clone(),
+                gate,
+            })
         })();
         if result.is_err() {
             self.poison();
@@ -976,6 +977,23 @@ impl SupervisorCompilerObserverRegistryV1 {
         Ok(())
     }
 
+    /// Binds an application issuer without discarding its required observation gate.
+    pub fn bind_application_issuer(
+        &mut self,
+        registered: &RegisteredApplicationObserverV1,
+        issuer_pid: u32,
+        original_issuer_pidfd: BorrowedFd<'_>,
+        deadline: Instant,
+    ) -> Result<()> {
+        registered.revalidate()?;
+        self.bind_issuer(
+            &registered.compiler,
+            issuer_pid,
+            original_issuer_pidfd,
+            deadline,
+        )
+    }
+
     fn exchange(
         &mut self,
         kind: RegistryKind,
@@ -1057,6 +1075,117 @@ pub struct RegisteredCompilerObserverV1 {
     id: [u8; 32],
     launch: CompilerExecutionServiceLaunchManifestV1,
     registry: ObjectIdentityV1,
+}
+
+/// Inseparable application registration and original root-observation gate.
+///
+/// This owner cannot be downgraded to compiler-only registration. Its inert binding is not
+/// proof authority; observation must complete before application readiness is published.
+///
+/// ```compile_fail
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<fe2o3_broker_authority_service::RegisteredApplicationObserverV1>();
+/// ```
+/// ```compile_fail
+/// fn downgrade(value: fe2o3_broker_authority_service::RegisteredApplicationObserverV1)
+///     -> fe2o3_broker_authority_service::RegisteredCompilerObserverV1 { value.into() }
+/// ```
+pub struct RegisteredApplicationObserverV1 {
+    compiler: RegisteredCompilerObserverV1,
+    binding: WorkerV3ApplicationRegistrationBindingV1,
+    gate: PendingApplicationObservationGateV1,
+}
+
+impl RegisteredApplicationObserverV1 {
+    /// Local-process fixture for downstream gate/custody tests, not authenticated registration.
+    /// Returns the retained observer counterpart, gate writer, and exact expected record.
+    #[cfg(feature = "test-support")]
+    pub fn local_fixture_for_test(
+        binding: WorkerV3ApplicationRegistrationBindingV1,
+    ) -> Result<(Self, OwnedFd, OwnedFd, [u8; 72])> {
+        let (peer, counterpart) = observer_pair()?;
+        let endpoint = Endpoint::admit(peer)?;
+        let root = current_identity()?;
+        let (reader, writer) = rustix::pipe::pipe_with(
+            rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+        )?;
+        let session = [71; 32];
+        let gate = PendingApplicationObservationGateV1::admit(
+            reader,
+            root.try_clone()?,
+            *binding.identity().as_bytes(),
+            session,
+        )?;
+        let mut record = [0; 72];
+        record[..8].copy_from_slice(b"F3AOBS1\0");
+        record[8..40].copy_from_slice(binding.identity().as_bytes());
+        record[40..].copy_from_slice(&session);
+        let compiler = RegisteredCompilerObserverV1 {
+            registry: endpoint.identity,
+            endpoint,
+            root,
+            id: [72; 32],
+            launch: binding.compiler_handoff().launch_manifest().clone(),
+        };
+        Ok((
+            Self {
+                compiler,
+                binding,
+                gate,
+            },
+            counterpart,
+            writer,
+            record,
+        ))
+    }
+
+    /// Returns descriptive data only.
+    pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        &self.binding
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        self.compiler.revalidate()?;
+        self.gate.revalidate()
+    }
+
+    /// Duplicates only the two fixed issuer observer inputs, never the gate or proof peer.
+    pub fn try_clone_for_launch(&self) -> Result<[OwnedFd; 2]> {
+        self.revalidate()?;
+        let transfers = self.compiler.try_clone_for_launch()?;
+        self.revalidate()?;
+        Ok(transfers)
+    }
+
+    /// Consumes the original gate outside the supervisor registry mutex.
+    pub fn await_observation(self, deadline: Instant) -> Result<ObservedApplicationRegistrationV1> {
+        self.revalidate()?;
+        self.gate.await_observation(deadline)?;
+        self.compiler.revalidate()?;
+        require_deadline(deadline)?;
+        Ok(ObservedApplicationRegistrationV1 {
+            compiler: self.compiler,
+            binding: self.binding,
+        })
+    }
+}
+
+/// Original registration retained after its observation gate, not proof or GPU authority.
+pub struct ObservedApplicationRegistrationV1 {
+    compiler: RegisteredCompilerObserverV1,
+    binding: WorkerV3ApplicationRegistrationBindingV1,
+}
+
+impl ObservedApplicationRegistrationV1 {
+    /// Returns the exact descriptive application binding.
+    pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        &self.binding
+    }
+
+    /// Rechecks the original root and registration endpoint before readiness publication.
+    pub fn revalidate(&self) -> Result<()> {
+        self.compiler.revalidate()
+    }
 }
 
 impl RegisteredCompilerObserverV1 {

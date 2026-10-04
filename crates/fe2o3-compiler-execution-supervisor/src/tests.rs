@@ -1142,6 +1142,7 @@ fn fixture_handoff_materializes_exact_sealed_twelve_source_launch() {
         return;
     };
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let expected_manifest = accepted.manifest().clone();
     let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
 
     assert_eq!(prepared.static_manifest().descriptors().len(), 12);
@@ -1150,7 +1151,7 @@ fn fixture_handoff_materializes_exact_sealed_twelve_source_launch() {
         std::process::id() as i32
     );
     assert_ne!(prepared.static_manifest().parent_start_time(), 0);
-    assert_eq!(prepared.service_manifest(), prepared.accepted.manifest());
+    assert_eq!(prepared.service_manifest(), &expected_manifest);
     assert_eq!(
         prepared
             .static_manifest()

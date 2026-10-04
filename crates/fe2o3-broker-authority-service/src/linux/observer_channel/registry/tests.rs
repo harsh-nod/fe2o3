@@ -670,7 +670,7 @@ fn application_registry_wire_helper() {
         false,
     )
     .unwrap();
-    let (registered, gate) = registry
+    let registered = registry
         .register_application(
             &binding,
             compiler.as_fd(),
@@ -680,12 +680,11 @@ fn application_registry_wire_helper() {
             Instant::now() + TIMEOUT,
         )
         .unwrap();
-    assert!(registered.matches_launch(binding.compiler_handoff().launch_manifest()));
+    assert_eq!(registered.binding(), &binding);
     assert!(matches!(
-        gate.await_observation(Instant::now() + Duration::from_millis(20)),
+        registered.await_observation(Instant::now() + Duration::from_millis(20)),
         Err(CompilerExecutionObserverErrorV1::Timeout)
     ));
-    drop(registered);
 }
 
 /// Actual root/supervisor/issuer process hierarchy and observed compiler publication, with

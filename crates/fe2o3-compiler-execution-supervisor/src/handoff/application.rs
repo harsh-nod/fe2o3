@@ -91,6 +91,38 @@ impl fmt::Debug for AcceptedApplicationHandoffV1 {
 }
 
 impl AcceptedApplicationHandoffV1 {
+    pub(crate) fn compiler(&self) -> &AcceptedCompilerExecutionHandoffV1 {
+        &self.compiler
+    }
+
+    pub(crate) fn register(
+        &self,
+        supervisor: &ProtectedIssuerSupervisorV1,
+        deadline: Instant,
+    ) -> Result<
+        fe2o3_broker_authority_service::RegisteredApplicationObserverV1,
+        crate::ProtectedIssuerLaunchPreparationErrorV1,
+    > {
+        use crate::ProtectedIssuerLaunchPreparationErrorV1 as E;
+        self.revalidate(supervisor).map_err(E::ApplicationHandoff)?;
+        supervisor
+            .observer_registry(deadline)
+            .map_err(E::Supervisor)?
+            .register_application(
+                &self.binding,
+                self.compiler.service_peer.as_fd(),
+                self.compiler.client_pidfd.as_fd(),
+                self.proof_peer.as_fd(),
+                self.parent_pidfd.as_fd(),
+                deadline,
+            )
+            .map_err(|error| E::Supervisor(crate::authority::observer_error(error)))
+    }
+
+    pub(crate) fn into_control(self) -> OwnedFd {
+        self.compiler.into_control()
+    }
+
     /// Returns descriptive binding data, not root observation or application readiness.
     pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
         &self.binding
@@ -146,8 +178,7 @@ impl AcceptedApplicationHandoffV1 {
 impl ProtectedIssuerSupervisorV1 {
     /// Admits only the exact four-right application profile on a dedicated control connection.
     ///
-    /// Production session dispatch is deliberately separate until root application readiness
-    /// can be enforced. Calling the compiler-only receiver on this packet fails closed.
+    /// Calling the compiler-only receiver on this packet fails closed.
     pub fn accept_application_handoff(
         &self,
         control: OwnedFd,
@@ -179,6 +210,23 @@ impl ProtectedIssuerSupervisorV1 {
             receive(&control, deadline)?;
         let binding = WorkerV3ApplicationRegistrationBindingV1::decode(&payload)
             .map_err(ProtectedApplicationHandoffErrorV1::Binding)?;
+        self.admit_received_application::<REQUIRE_DISTINCT_UID>(
+            control,
+            binding,
+            [service_peer, client_pidfd, proof_peer, parent_pidfd],
+            control_snapshot,
+            deadline,
+        )
+    }
+
+    pub(super) fn admit_received_application<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        binding: WorkerV3ApplicationRegistrationBindingV1,
+        [service_peer, client_pidfd, proof_peer, parent_pidfd]: [OwnedFd; 4],
+        control_snapshot: DescriptorSnapshotV1,
+        deadline: Instant,
+    ) -> Result<AcceptedApplicationHandoffV1, ProtectedApplicationHandoffErrorV1> {
         let compiler = self.admit_received_handoff::<REQUIRE_DISTINCT_UID>(
             control,
             binding.compiler_handoff().clone(),
@@ -279,39 +327,8 @@ fn receive(
     ),
     ProtectedIssuerHandoffErrorV1,
 > {
-    loop {
-        wait_readable(control, deadline)?;
-        let mut payload = [0; WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1];
-        let mut vectors = [IoSliceMut::new(&mut payload)];
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(5))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-        let received = match recvmsg(
-            control,
-            &mut vectors,
-            &mut ancillary,
-            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-        ) {
-            Ok(received) => received,
-            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
-            Err(error) => return Err(ProtectedIssuerHandoffErrorV1::Io(error.into())),
-        };
-        let mut rights = Vec::with_capacity(5);
-        let mut invalid_ancillary = false;
-        for message in ancillary.drain() {
-            match message {
-                RecvAncillaryMessage::ScmRights(received) => rights.extend(received),
-                _ => invalid_ancillary = true,
-            }
-        }
-        if received.bytes != payload.len()
-            || received
-                .flags
-                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-            || invalid_ancillary
-            || rights.len() != 4
-        {
-            return Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer);
-        }
-        return Ok((payload, rights.try_into().expect("exact four rights")));
+    match receive_profile(control, deadline)? {
+        ReceivedHandoffV1::Application(payload, rights) => Ok((*payload, rights)),
+        ReceivedHandoffV1::Compiler(..) => Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer),
     }
 }

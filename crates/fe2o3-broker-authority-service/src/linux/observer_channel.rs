@@ -35,8 +35,9 @@ pub(crate) use issuer::RemoteCompilerExecutionOccurrenceGuardV1;
 #[cfg(test)]
 pub(crate) use issuer::tests;
 pub use registry::{
-    PreparedRootCompilerObserverRegistryV1, RegisteredCompilerObserverV1,
-    RootCompilerObserverRegistryV1, SupervisorCompilerObserverRegistryV1,
+    ObservedApplicationRegistrationV1, PreparedRootCompilerObserverRegistryV1,
+    RegisteredApplicationObserverV1, RegisteredCompilerObserverV1, RootCompilerObserverRegistryV1,
+    SupervisorCompilerObserverRegistryV1,
 };
 pub use root::{
     PreparedRootCompilerExecutionObserverV1, RootCompilerExecutionObserverProgressV1,
