@@ -1,0 +1,32 @@
+
+// Exact value-shape predicates shared by all per-definition relation checks.
+open spec fn byte_scalar_type_v57(value: MemoryValueV30, modulus: int) -> bool {
+    match value {
+        MemoryValueV30::Scalar(v) => 0 <= v < modulus,
+        _ => false,
+    }
+}
+
+open spec fn byte_vector_type_v57(value: MemoryValueV30, lanes: int, lane_bytes: int) -> bool {
+    match value {
+        MemoryValueV30::Vector(v) => v.len() == lanes
+            && (forall|lane: int| 0 <= lane < v.len() ==>
+                0 <= v[lane] < memory_value_modulus_v30(lane_bytes)),
+        _ => false,
+    }
+}
+
+open spec fn byte_pointer_value_type_v57(value: MemoryValueV30, space: int, width: int) -> bool {
+    match value {
+        MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p, space, width),
+        _ => false,
+    }
+}
+
+open spec fn byte_slice_type_v57(value: MemoryValueV30, space: int, width: int) -> bool {
+    match value {
+        MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30(width)
+            && byte_pointer_type_v30(slice.pointer, space, width),
+        _ => false,
+    }
+}

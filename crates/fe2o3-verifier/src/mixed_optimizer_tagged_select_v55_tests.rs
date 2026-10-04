@@ -138,9 +138,7 @@ fn tagged_select_only_validates_the_selected_runtime_value_without_dereferencing
             let step = &text[begin..end];
             assert!(step.contains("s.values[0] == MemoryValueV30::Scalar(0int) || s.values[0] == MemoryValueV30::Scalar(1int)"));
             assert!(step.contains("if !tagged_select_inputs_ok { MemoryValueV30::Undefined }"));
-            assert!(step.contains(
-                "match tagged_select_value { MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p,"
-            ));
+            assert!(step.contains("byte_pointer_value_type_v57(tagged_select_value,"));
             assert!(!step.contains("match s.values[1]"));
             assert!(!step.contains("match s.values[2]"));
             assert!(!step.contains("byte_range_live"));
