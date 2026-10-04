@@ -19,9 +19,12 @@ enum Phase {
     Verified,
 }
 
-/// No detached lowering/session or paid reservation is returned from this slot.
+/// Owns the actual session until either outer-owner drop or the private move.
+/// Accepted credits remain on the same account across that move.
 pub(super) struct Pending {
     phase: Phase,
+    // Lexical original account only; never source or admission authority.
+    ledger: Option<Ledger>,
     ordinals: Vec<(ProjectedSemanticAccessSiteV1, u32)>,
     accesses: Vec<ProductionRankedAccessSourceV1>,
     unmapped_private_reads: usize,
@@ -35,6 +38,7 @@ impl Pending {
     pub(super) const fn new() -> Self {
         Self {
             phase: Phase::Fresh,
+            ledger: None,
             ordinals: Vec::new(),
             accesses: Vec::new(),
             unmapped_private_reads: 0,
@@ -42,6 +46,64 @@ impl Pending {
             tensors: Vec::new(),
             lowering: Vec::new(),
         }
+    }
+}
+
+// Plain moved implementation data, not a source/postflight/launch receipt.
+// The private outer owner must complete every enclosing source and account
+// postflight before invoking this move, using its own original emitted object.
+pub(super) type VerifiedParts = (
+    ProductionRankedKernelLoweringInputV1,
+    Vec<ProductionRankedAccessSourceV1>,
+);
+
+fn transfer_frame() -> Result<usize> {
+    // Additive selected storage for input/callee and result/return frames.
+    // No heap/session reconstruction, new allocator allowance, or refund.
+    add(
+        mul(size_of::<Pending>(), 2)?,
+        mul(size_of::<Result<VerifiedParts>>(), 2)?,
+    )
+}
+
+impl Pending {
+    pub(super) fn into_verified_parts(
+        mut self,
+        emitted: &emission::Emitted,
+        resources: &mut PreparationResourcesV1<'_, '_>,
+    ) -> Result<VerifiedParts> {
+        let ledger = self.ledger.ok_or_else(|| resource(Resource::Accounting))?;
+        check(resources, ledger)?;
+        resources.work(64)?;
+        if self.phase != Phase::Verified
+            || self.lowering.len() != 1
+            || self.lowering.capacity() != 1
+            || !emitted.complete
+            || !emitted.blocks.is_empty()
+            || add(self.accesses.len(), self.unmapped_private_reads)? != emitted.sources.len()
+        {
+            return Err(Error::Incomplete(
+                "nominal consuming handoff lacks its single verified original payload",
+            ));
+        }
+        let frame = transfer_frame()?;
+        resources.work(frame)?;
+        resources.reserve_storage(frame)?;
+        check_transformed(
+            self.lowering
+                .first()
+                .expect("checked actual lowering")
+                .kernel(),
+            emitted,
+            &self,
+            resources,
+        )?;
+        check(resources, ledger)?;
+        // No public admission is enabled here. Ownership moves exactly once;
+        // dropping residual Pending data does not refund any live payload credit.
+        let lowering = self.lowering.pop().expect("checked actual lowering");
+        let accesses = std::mem::take(&mut self.accesses);
+        Ok((lowering, accesses))
     }
 }
 
@@ -97,9 +159,14 @@ fn pay(
     snapshot: Snapshot,
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<()> {
-    if !resources.is_metered() || resources.has_denial() || pending.phase != Phase::Fresh {
+    if !resources.is_metered()
+        || resources.has_denial()
+        || pending.phase != Phase::Fresh
+        || pending.ledger.is_some()
+    {
         return Err(resource(Resource::Accounting));
     }
+    pending.ledger = resources.original_ledger_v1();
     pending.phase = Phase::Entered; // All refusals are terminal; never retry.
     // These are selected prepayments, not measurements or complete heap costs.
     resources.work(add(analysis.max_work(), snapshot.max_work())?)?;
@@ -132,6 +199,9 @@ fn validate_payload(
             "nominal verifier lacks one complete original stream",
         ));
     }
+    emitted
+        .controls
+        .validate(&emitted.blocks, &emitted.base, resources)?;
     resources.reserve(&mut pending.operation_counts, emitted.blocks.len())?;
     resources.reserve(&mut pending.tensors, emitted.tensors.len())?;
     let mut tensor_cursor = 0usize;
@@ -201,8 +271,21 @@ fn validate_payload(
         }
         match block.terminator() {
             ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. } => {
-                argument(*lhs)?;
-                argument(*rhs)?;
+                // Only a separately source-certified checked-view comparison
+                // may use dedicated length slots. Ordinary operands keep slot0.
+                resources.work(MAX_BLOCKS * 8)?;
+                if let Some(site) = emitted.controls.site_at_ranked(block_index) {
+                    if block.terminator()
+                        != &checked_control::expected_terminator(site, &emitted.base)?
+                    {
+                        return Err(Error::Incomplete(
+                            "nominal verifier checked-view branch differs",
+                        ));
+                    }
+                } else {
+                    argument(*lhs)?;
+                    argument(*rhs)?;
+                }
             }
             ProductionRankedTerminatorV1::AnalysisSplit {
                 control_dependencies,
@@ -238,7 +321,7 @@ fn check_transformed(
     resources: &mut PreparationResourcesV1<'_, '_>,
 ) -> Result<()> {
     resources.work(32)?;
-    if kernel.argument_count() != 1
+    if kernel.argument_count() != emitted.controls.argument_count()
         || kernel.blocks().len() != pending.operation_counts.len()
         || emitted.tensors.len() != pending.tensors.len()
     {
@@ -246,6 +329,9 @@ fn check_transformed(
             "nominal constructor changed the retained coordinate domain",
         ));
     }
+    emitted
+        .controls
+        .validate(kernel.blocks(), &emitted.base, resources)?;
     for (block, expected) in kernel.blocks().iter().zip(&pending.operation_counts) {
         resources.work(8)?;
         if block.operations().len() != *expected {
@@ -408,7 +494,8 @@ fn compile_payload(
     // Vec crosses the existing consuming constructor. Its checked transforms
     // perform their original position-preserving replay; no alternate engine.
     let blocks = std::mem::take(&mut emitted.blocks);
-    let kernel = ProductionRankedKernelV1::new(name, 1, blocks).map_err(Error::Recipe)?;
+    let kernel = ProductionRankedKernelV1::new(name, emitted.controls.argument_count(), blocks)
+        .map_err(Error::Recipe)?;
     check_transformed(&kernel, emitted, pending, resources)?;
     let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
         .map_err(Error::Construction)?;
@@ -450,6 +537,7 @@ impl<'a, 'g> ActualRootBlockStreamV1<'a, 'g> {
         snapshot: Snapshot,
     ) -> Result<Verified<'a>> {
         let Self {
+            flow,
             prefix,
             emitted,
             consumer,
@@ -470,6 +558,7 @@ impl<'a, 'g> ActualRootBlockStreamV1<'a, 'g> {
                     "nominal verifier cannot drop reference-effect obligations",
                 ));
             }
+            emitted.controls.rejoin(flow, resources)?;
             pay(consumer, analysis, snapshot, resources)?;
             validate_payload(emitted, consumer, resources)
         })?;

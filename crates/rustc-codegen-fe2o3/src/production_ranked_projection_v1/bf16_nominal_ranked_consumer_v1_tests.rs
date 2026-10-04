@@ -137,17 +137,32 @@ fn nominal_compile_invented_uniform_control_is_refused() {
         },
     );
     let mut pending = Pending::new();
-    let mut work = Work::new(10000);
-    let mut budget = Budget::new(&mut work, 10000);
+    // No operations: entry, complete closed control census, then block.
+    let required = 64usize
+        .checked_add(fixture_control_validation_work())
+        .unwrap()
+        .checked_add(32)
+        .unwrap();
+    assert_eq!(required, 25312);
+    let mut work = Work::new(required);
+    let mut budget = Budget::new(&mut work, size_of::<usize>());
     let mut owned = 0;
-    assert!(
-        validate_payload(
-            &out,
-            &mut pending,
-            &mut PreparationResourcesV1::new(&mut budget, &mut owned)
-        )
-        .is_err()
+    let result = validate_payload(
+        &out,
+        &mut pending,
+        &mut PreparationResourcesV1::new(&mut budget, &mut owned),
     );
+    assert!(matches!(result, Err(Error::Incomplete(reason))
+        if reason == "nominal verifier would invent uniform control"));
+    assert_eq!(budget.work(), required);
+    assert_eq!(budget.failed_work(), None);
+    assert_eq!(budget.failed_storage(), None);
+    assert_eq!(budget.storage(), owned);
+    assert_eq!(owned, size_of::<usize>());
+    drop(pending);
+    drop(out);
+    budget.release_storage(owned).unwrap();
+    assert_eq!(budget.storage(), 0);
 }
 fn engine(index: u64, a: Analysis) -> (Phase, Result<()>, bool) {
     let s = Snapshot::production_hard_ceiling();
@@ -226,25 +241,141 @@ fn nominal_compile_zero_analysis_has_actual_typed_resource_refusal() {
     assert!(consumed);
     assert_eq!(phase, Phase::Compiling);
 }
+// The one-block/four-operation fixture retains no checked-view sites, but
+// validating that absence still prepays the complete closed namespace scans.
+// Vec growth relocates zero existing rows and retains exactly one usize.
+fn fixture_control_validation_work() -> usize {
+    let namespace = 64usize
+        .checked_add(
+            MAX_BLOCKS
+                .checked_mul(MAX_BLOCKS)
+                .unwrap()
+                .checked_mul(24)
+                .unwrap(),
+        )
+        .unwrap();
+    let rows = 64usize
+        .checked_add(MAX_BLOCKS.checked_mul(16).unwrap())
+        .unwrap();
+    namespace.checked_add(rows).unwrap()
+}
+fn fixture_payload_validation_work() -> usize {
+    // Entry, namespace, block, four operations, and two access operands.
+    [64, fixture_control_validation_work(), 32, 4 * 32, 2 * 4]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .unwrap()
+}
+fn fixture_transformed_validation_work() -> usize {
+    // Entry, same closed namespace, and one operation-count comparison.
+    [32, fixture_control_validation_work(), 8]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .unwrap()
+}
+
+#[test]
+fn nominal_compile_payload_fixture_exact_and_one_short_preserve_original_account() {
+    let required = fixture_payload_validation_work();
+    assert_eq!(required, 25448);
+    for (available, succeeds) in [(required, true), (required - 1, false)] {
+        let out = fixture(0);
+        let mut pending = Pending::new();
+        let mut work = Work::new(11 + available);
+        let mut budget = Budget::new(&mut work, 7 + size_of::<usize>());
+        budget.charge_work(11).unwrap();
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        let result = validate_payload(
+            &out,
+            &mut pending,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        if succeeds {
+            result.unwrap();
+            assert_eq!(budget.work(), 11 + required);
+            assert_eq!(budget.failed_work(), None);
+        } else {
+            assert!(matches!(result,
+                Err(Error::CanonicalAssertions(
+                    crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))
+                )) if error.actual() == 11 + required && error.limit() == 11 + available
+            ));
+            assert_eq!(budget.work(), 11 + required - 8);
+            assert_eq!(budget.failed_work(), Some(11 + required));
+            assert!(budget.check_prior_denials_v1().is_err());
+        }
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(pending.operation_counts, [4]);
+        assert_eq!(owned, size_of::<usize>());
+        assert_eq!(budget.storage(), 7 + owned);
+        assert_eq!(budget.failed_storage(), None);
+        drop(pending);
+        drop(out);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 7);
+        assert_eq!(budget.failed_work(), (!succeeds).then_some(11 + required));
+    }
+}
+
 #[test]
 fn nominal_compile_transformed_coordinate_census_is_not_reported_boolean_authority() {
-    let out = fixture(0);
-    let mut pending = Pending::new();
-    let mut work = Work::new(10000);
-    let mut budget = Budget::new(&mut work, 10000);
-    let mut owned = 0;
-    let mut meter = PreparationResourcesV1::new(&mut budget, &mut owned);
-    validate_payload(&out, &mut pending, &mut meter).unwrap();
-    let kernel = ProductionRankedKernelV1::new(
-        "control",
-        1,
-        vec![ProductionRankedBlockV1::new(
-            vec![],
-            ProductionRankedTerminatorV1::Return,
-        )],
-    )
-    .unwrap();
-    assert!(check_transformed(&kernel, &out, &pending, &mut meter).is_err());
+    let required = fixture_payload_validation_work()
+        .checked_add(fixture_transformed_validation_work())
+        .unwrap();
+    assert_eq!(required, 50704);
+    for (available, reaches_coordinate_check) in [(required, true), (required - 1, false)] {
+        let out = fixture(0);
+        let mut pending = Pending::new();
+        let mut work = Work::new(available);
+        let mut budget = Budget::new(&mut work, size_of::<usize>());
+        let ledger = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        let kernel = ProductionRankedKernelV1::new(
+            "control",
+            1,
+            vec![ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let result = {
+            let mut meter = PreparationResourcesV1::new(&mut budget, &mut owned);
+            validate_payload(&out, &mut pending, &mut meter).unwrap();
+            check_transformed(&kernel, &out, &pending, &mut meter)
+        };
+        if reaches_coordinate_check {
+            // A work denial must never satisfy this semantic-refusal control.
+            assert!(matches!(result, Err(Error::Incomplete(reason))
+                if reason == "nominal constructor changed an operation coordinate"));
+            assert_eq!(budget.work(), required);
+            assert_eq!(budget.failed_work(), None);
+        } else {
+            assert!(matches!(result,
+                Err(Error::CanonicalAssertions(
+                    crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))
+                )) if error.actual() == required && error.limit() == available
+            ));
+            assert_eq!(budget.work(), required - 8);
+            assert_eq!(budget.failed_work(), Some(required));
+            assert!(budget.check_prior_denials_v1().is_err());
+        }
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), owned);
+        assert_eq!(owned, size_of::<usize>());
+        assert_eq!(budget.failed_storage(), None);
+        drop(kernel);
+        drop(pending);
+        drop(out);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 0);
+        assert_eq!(
+            budget.failed_work(),
+            (!reaches_coordinate_check).then_some(required)
+        );
+    }
 }
 #[test]
 fn nominal_compile_selected_genuine_two_case_profile_fits_existing_source_work_ceiling() {
@@ -656,6 +787,319 @@ fn nominal_map_some_private_row_is_retained_and_ordinal_overflow_is_unchanged() 
     ));
     assert_eq!(pending.accesses, vec![row]);
     drop(pending);
+    budget.release_storage(owned).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+// This terminal move is private implementation plumbing only. Synthetic
+// source rows below exercise ownership; they grant no frontend/source authority.
+fn handoff_fixture_work() -> usize {
+    [
+        Analysis::production_hard_ceiling().max_work(),
+        Snapshot::production_hard_ceiling().max_work(),
+        fixture_payload_validation_work(),
+        1,  // retained emitted source push
+        32, // compile_payload entry
+        fixture_transformed_validation_work(),
+        fixture_transformed_validation_work(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+    .unwrap()
+}
+fn handoff_fixture_storage() -> usize {
+    [
+        Analysis::production_hard_ceiling().max_peak_storage(),
+        size_of::<usize>(),
+        size_of::<ProjectedAccessSourceV1>(),
+        size_of::<ProductionRankedAccessSourceV1>(),
+        size_of::<ProductionRankedKernelLoweringInputV1>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+    .unwrap()
+}
+fn handoff_work() -> usize {
+    [
+        64,
+        transfer_frame().unwrap(),
+        fixture_transformed_validation_work(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+    .unwrap()
+}
+fn prepare_handoff_fixture(
+    budget: &mut Budget<'_>,
+    owned: &mut usize,
+) -> (Pending, emission::Emitted) {
+    let mut pending = Pending::new();
+    let mut emitted = fixture(0);
+    let a = Analysis::production_hard_ceiling();
+    let s = Snapshot::production_hard_ceiling();
+    let mut meter = PreparationResourcesV1::new(budget, owned);
+    pay(&mut pending, a, s, &mut meter).unwrap();
+    validate_payload(&emitted, &mut pending, &mut meter).unwrap();
+    meter
+        .push(
+            &mut emitted.sources,
+            ProjectedAccessSourceV1 {
+                block: 0,
+                operation: 3,
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                    block: 0,
+                    statement: None,
+                }),
+                output_extent: None,
+            },
+        )
+        .unwrap();
+    meter.reserve(&mut pending.accesses, 1).unwrap();
+    pending
+        .accesses
+        .push(ProductionRankedAccessSourceV1::new(0, None, 0, 0, 3));
+    compile_payload(
+        "nominal_handoff_control",
+        &mut emitted,
+        &mut pending,
+        a,
+        s,
+        &mut meter,
+    )
+    .unwrap();
+    (pending, emitted)
+}
+
+#[test]
+fn nominal_handoff_moves_actual_session_and_map_with_exact_original_credits() {
+    let prefix = handoff_fixture_work();
+    let required = prefix.checked_add(handoff_work()).unwrap();
+    let storage = handoff_fixture_storage()
+        .checked_add(transfer_frame().unwrap())
+        .unwrap();
+    let mut work = Work::new(11 + required);
+    let mut budget = Budget::new(&mut work, 7 + storage);
+    budget.charge_work(11).unwrap();
+    budget.reserve_storage(7).unwrap();
+    let identity = budget.work_ledger_identity_v1();
+    let mut owned = 0;
+    let (pending, emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+    assert_eq!(budget.work(), 11 + prefix);
+    assert_eq!(owned, handoff_fixture_storage());
+    let blocks = pending.lowering[0].kernel().blocks().as_ptr();
+    let accesses = pending.accesses.as_ptr();
+    let parts = pending
+        .into_verified_parts(
+            &emitted,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        )
+        .unwrap();
+    assert_eq!(parts.0.kernel().blocks().as_ptr(), blocks);
+    assert_eq!(parts.1.as_ptr(), accesses);
+    assert_eq!(
+        parts.1,
+        [ProductionRankedAccessSourceV1::new(0, None, 0, 0, 3)]
+    );
+    assert!(parts.0.all_mandatory_reports_are_clean());
+    assert_eq!(budget.work(), 11 + required);
+    assert_eq!(owned, storage);
+    assert_eq!(budget.storage(), 7 + storage);
+    assert_eq!(budget.peak_storage(), 7 + storage);
+    assert_eq!(budget.failed_work(), None);
+    assert_eq!(budget.failed_storage(), None);
+    assert!(budget.work_ledger_identity_v1() == identity);
+    drop(parts);
+    drop(emitted);
+    budget.release_storage(owned).unwrap();
+    assert_eq!(budget.storage(), 7);
+}
+
+#[test]
+fn nominal_handoff_exact_and_one_short_work_and_storage_preserve_denials() {
+    let prefix = handoff_fixture_work();
+    let required = prefix.checked_add(handoff_work()).unwrap();
+    let base = handoff_fixture_storage();
+    let storage = base.checked_add(transfer_frame().unwrap()).unwrap();
+    for (work_limit, storage_limit, work_short) in [
+        (required - 1, storage, true),
+        (required, storage - 1, false),
+    ] {
+        let mut work = Work::new(11 + work_limit);
+        let mut budget = Budget::new(&mut work, 7 + storage_limit);
+        budget.charge_work(11).unwrap();
+        budget.reserve_storage(7).unwrap();
+        let identity = budget.work_ledger_identity_v1();
+        let mut owned = 0;
+        let (pending, emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+        let result = pending.into_verified_parts(
+            &emitted,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        if work_short {
+            assert!(matches!(result, Err(Error::CanonicalAssertions(
+                crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))
+            )) if error.actual() == 11 + required && error.limit() == 11 + work_limit));
+            assert_eq!(budget.work(), 11 + required - 8);
+            assert_eq!(budget.failed_work(), Some(11 + required));
+            assert_eq!(budget.failed_storage(), None);
+            assert_eq!(owned, storage);
+        } else {
+            assert!(matches!(result, Err(Error::CanonicalAssertions(
+                crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Storage(error))
+            )) if error.actual() == 7 + storage && error.limit() == 7 + storage_limit));
+            assert_eq!(budget.work(), 11 + prefix + 64 + transfer_frame().unwrap());
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), Some(7 + storage));
+            assert_eq!(owned, base);
+        }
+        assert_eq!(budget.storage(), 7 + owned);
+        assert!(budget.check_prior_denials_v1().is_err());
+        assert!(budget.work_ledger_identity_v1() == identity);
+        drop(emitted);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 7);
+        assert!(budget.check_prior_denials_v1().is_err());
+    }
+}
+
+#[test]
+fn nominal_handoff_refuses_nonverified_or_changed_payload_on_original_account() {
+    for mutation in 0..8 {
+        let mut work = Work::new(handoff_fixture_work() + handoff_work());
+        let mut budget = Budget::new(
+            &mut work,
+            handoff_fixture_storage() + transfer_frame().unwrap(),
+        );
+        let mut owned = 0;
+        let (mut pending, mut emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+        match mutation {
+            0 => pending.phase = Phase::Fresh,
+            1 => pending.phase = Phase::Entered,
+            2 => pending.phase = Phase::Compiling,
+            3 => {
+                pending.lowering.clear();
+            }
+            4 => emitted.complete = false,
+            5 => {
+                emitted.blocks.push(ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Return,
+                ));
+            }
+            6 => pending.unmapped_private_reads = 1,
+            7 => pending.operation_counts[0] += 1,
+            _ => unreachable!(),
+        }
+        let result = pending.into_verified_parts(
+            &emitted,
+            &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+        );
+        assert!(
+            matches!(result, Err(Error::Incomplete(_))),
+            "mutation {mutation}"
+        );
+        assert_eq!(budget.failed_work(), None);
+        assert_eq!(budget.failed_storage(), None);
+        assert_eq!(budget.storage(), owned);
+        drop(emitted);
+        budget.release_storage(owned).unwrap();
+    }
+}
+
+#[test]
+fn nominal_handoff_refuses_foreign_unmetered_and_denied_accounts_without_refund() {
+    for mode in 0..4 {
+        let required = handoff_fixture_work() + handoff_work();
+        let storage = handoff_fixture_storage() + transfer_frame().unwrap();
+        let mut work = Work::new(required);
+        let mut budget = Budget::new(&mut work, storage);
+        let mut owned = 0;
+        let (pending, emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+        let before_work = budget.work();
+        let before_owned = owned;
+        let mut other_work = Work::new(required);
+        let mut other = Budget::new(&mut other_work, storage);
+        let mut other_owned = 0;
+        let result = match mode {
+            0 => pending.into_verified_parts(
+                &emitted,
+                &mut PreparationResourcesV1::new(&mut other, &mut other_owned),
+            ),
+            1 => pending.into_verified_parts(&emitted, &mut PreparationResourcesV1::unmetered()),
+            2 => {
+                assert!(budget.charge_work(required + 1).is_err());
+                pending.into_verified_parts(
+                    &emitted,
+                    &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+                )
+            }
+            3 => {
+                assert!(budget.reserve_storage(storage + 1).is_err());
+                pending.into_verified_parts(
+                    &emitted,
+                    &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+                )
+            }
+            _ => unreachable!(),
+        };
+        assert!(matches!(result, Err(Error::CanonicalAssertions(
+            crate::production_ranked_projection_v1::canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+        ))));
+        assert_eq!(budget.work(), before_work);
+        assert_eq!(owned, before_owned);
+        assert_eq!(budget.storage(), owned);
+        assert_eq!(other.work(), 0);
+        assert_eq!(other.storage(), 0);
+        assert_eq!(other_owned, 0);
+        assert_eq!(
+            budget.failed_work(),
+            (mode == 2).then_some(before_work + required + 1)
+        );
+        assert_eq!(
+            budget.failed_storage(),
+            (mode == 3).then_some(before_owned + storage + 1)
+        );
+        drop(emitted);
+        budget.release_storage(owned).unwrap();
+        assert_eq!(budget.storage(), 0);
+        assert_eq!(budget.check_prior_denials_v1().is_err(), mode >= 2);
+    }
+}
+
+#[test]
+fn nominal_handoff_refuses_a_second_actual_session_in_the_one_slot_owner() {
+    let mut work = Work::new(2 * handoff_fixture_work() + handoff_work() + 1);
+    let mut budget = Budget::new(
+        &mut work,
+        2 * handoff_fixture_storage()
+            + 2 * size_of::<ProductionRankedKernelLoweringInputV1>()
+            + transfer_frame().unwrap(),
+    );
+    let mut owned = 0;
+    let (mut pending, emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+    let (mut extra, extra_emitted) = prepare_handoff_fixture(&mut budget, &mut owned);
+    PreparationResourcesV1::new(&mut budget, &mut owned)
+        .reserve(&mut pending.lowering, 1)
+        .unwrap();
+    pending.lowering.push(extra.lowering.pop().unwrap());
+    assert_eq!(pending.lowering.len(), 2);
+    let before = owned;
+    let result = pending.into_verified_parts(
+        &emitted,
+        &mut PreparationResourcesV1::new(&mut budget, &mut owned),
+    );
+    assert!(matches!(result, Err(Error::Incomplete(reason))
+        if reason == "nominal consuming handoff lacks its single verified original payload"));
+    assert_eq!(owned, before);
+    assert_eq!(budget.storage(), owned);
+    assert_eq!(budget.failed_work(), None);
+    assert_eq!(budget.failed_storage(), None);
+    drop(extra);
+    drop(extra_emitted);
+    drop(emitted);
     budget.release_storage(owned).unwrap();
     assert_eq!(budget.storage(), 0);
 }

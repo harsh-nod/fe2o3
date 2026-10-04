@@ -97,13 +97,24 @@ impl State {
             .as_mut()
             .unwrap()
     }
+    #[track_caller]
     fn check(&mut self, ok: bool) {
         if !ok {
             self.poisoned = true;
         }
+        // Fixed diagnostic state only. Preserve the original predicate and
+        // poison; the caller location identifies the failed schedule check.
+        let route = self
+            .active
+            .and_then(|slot| self.routes.get(slot))
+            .and_then(Option::as_ref);
         assert!(
             ok && !self.poisoned,
-            "rich peak diagnostic schedule/custody mismatch"
+            "rich peak diagnostic schedule/custody mismatch: next={} active={:?} current={:?} count={:?}",
+            self.next,
+            self.active,
+            route.and_then(|r| r.current),
+            route.map(|r| r.count),
         );
     }
     fn identity(&mut self, budget: &Budget<'_>) {
@@ -396,6 +407,14 @@ pub(in crate::production_ranked_projection_v1) fn finish(
             "storage",
         ][r.slot];
         let end = Account::take(budget);
+        if status != expected {
+            // Failure-only telemetry: do not replace a real preparation
+            // refusal with the recorder's generic schedule assertion.
+            eprintln!(
+                "fe2o3-rich-peak-unexpected-outcome-v1 slot={} expected={} actual={} result={:?}",
+                r.slot, expected, status, result,
+            );
+        }
         s.check(status == expected && end.storage == r.start.storage && end.follows(r.start));
         let complete = r.stages.iter().filter(|x| x.complete).count();
         s.check(match r.slot {
@@ -455,7 +474,7 @@ pub(in crate::production_ranked_projection_v1) fn close_group() {
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     fn reset() {
         STATE.with(|s| *s.borrow_mut() = State::empty());
     }
@@ -630,12 +649,10 @@ mod tests {
         let b = Budget::new(&mut w, 1000);
         // Synthetic closed-group boundary; no source/capability authority.
         STATE.with(|s| s.borrow_mut().next = 7);
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                let _guard = begin_probe(&b);
-            }))
-            .is_err()
-        );
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            let _guard = begin_probe(&b);
+        }))
+        .is_err());
         assert!(STATE.with(|s| s.borrow().poisoned));
         assert!(catch_unwind(AssertUnwindSafe(close_group)).is_err());
         reset();
@@ -707,6 +724,39 @@ mod tests {
         drop(g);
         reset();
     }
+
+    #[test]
+    fn unexpected_route_result_keeps_typed_error_and_poisoned_stage_diagnostic() {
+        reset();
+        let mut w = Work::new(1000);
+        let b = Budget::new(&mut w, 1000);
+        let guard = begin_original(&b);
+        begin_stage(0, &b);
+        let result = Err(Error::Unavailable("rich-peak diagnostic sentinel"));
+        let panic = catch_unwind(AssertUnwindSafe(|| finish(&b, &result))).unwrap_err();
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&'static str>().copied())
+            .expect("assertion diagnostic");
+        assert!(message.contains("next=0 active=Some(0) current=Some(0) count=Some(1)"));
+        assert!(matches!(
+            result,
+            Err(Error::Unavailable("rich-peak diagnostic sentinel"))
+        ));
+        STATE.with(|s| {
+            let s = s.borrow();
+            assert!(s.poisoned);
+            assert_eq!(s.next, 0);
+            assert_eq!(s.active, Some(0));
+            assert_eq!(s.route().current, Some(0));
+            assert!(!s.route().stages[0].complete);
+        });
+        drop(guard);
+        assert!(!active());
+        reset();
+    }
+
     #[test]
     fn route_overlap_refuses_and_poison_is_retained() {
         reset();

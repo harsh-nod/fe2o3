@@ -15,7 +15,6 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_mir_model::semantic_mir_v1::{SemanticBasicBlockV1, SemanticStatementV1};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 type Q<T> = std::result::Result<T, QueryError>;
-const HEADERS: usize = 64 * 1024;
 const MAX_ROWS: usize = 32;
 fn checked_add(a: usize, b: usize) -> Result<usize> {
     a.checked_add(b)
@@ -24,6 +23,39 @@ fn checked_add(a: usize, b: usize) -> Result<usize> {
 fn checked_mul(a: usize, b: usize) -> Result<usize> {
     a.checked_mul(b)
         .ok_or_else(|| resource(Resource::Arithmetic))
+}
+// Selected observer-frame prepayment, not a larger canonical phase cap.
+// Keep the existing four-owner/four-oracle/eight-index-array multiplicities.
+// Pending owns its larger checked-view Controls inline through BlockStream.
+fn header_bytes_for(
+    pending: usize,
+    rows: usize,
+    observation: usize,
+    indices: usize,
+) -> Result<usize> {
+    let mut bytes = 4096usize;
+    for (size, count) in [(pending, 4), (rows, 4), (observation, 4), (indices, 8)] {
+        bytes = checked_add(bytes, checked_mul(size, count)?)?;
+    }
+    Ok(bytes)
+}
+fn header_bytes() -> Result<usize> {
+    header_bytes_for(
+        size_of::<PendingActualRootPrefixIndicesV1>(),
+        size_of::<[ExpectedRow; MAX_ROWS]>(),
+        size_of::<Observation>(),
+        size_of::<[usize; MAX_ROWS]>(),
+    )
+}
+fn prepay_headers(budget: &mut Budget<'_>) -> Q<usize> {
+    budget.check_prior_denials_v1()?;
+    let bytes = header_bytes().map_err(projection)?;
+    let work = checked_mul(4, bytes).map_err(projection)?;
+    budget.charge_work(work)?;
+    budget.reserve_storage(bytes)?;
+    // The existing lexical owner retains these credits through all callbacks
+    // and releases only after Pending has dropped; no paid object escapes.
+    Ok(bytes)
 }
 fn projection(e: Error) -> QueryError {
     match e {
@@ -623,7 +655,7 @@ fn inspect(
         Ok(())
     })?;
     context.with_resources(|resources|{
-        resources.work(HEADERS)?;
+        resources.work(header_bytes()?)?;
         let mut result=Observation{source_blocks:count,ranked_blocks:view.blocks().len(),sites:0,
             private_reads:0,private_writes:0,guarded:0,tensors:0,reads:0};
         for (i,block) in function.blocks().iter().enumerate(){
@@ -709,21 +741,159 @@ fn inspect(
                 "branch"=>assert_eq!(view.blocks()[block].terminator(),&ProductionRankedTerminatorV1::Branch{target:bases[targets[0]].unwrap()as u32}),
                 "return"=>assert_eq!(view.blocks()[block].terminator(),&ProductionRankedTerminatorV1::Return),
                 "trap"=>assert_eq!(view.blocks()[block].terminator(),&ProductionRankedTerminatorV1::Trap),
-                "split"|"multi"=>for n in 0..row.count-1{
+                "split"|"multi"=>if !checked_switch_oracle(view,semantic.types(),semantic.callables(),i,block,&bases,resources)? { for n in 0..row.count-1{
                     resources.work(128)?;
                     let second=if n+2==row.count{bases[targets[n+1]].unwrap()}else{block+n+1};
                     if n>0{assert!(view.blocks()[block+n].operations().is_empty())}
                     assert_eq!(view.blocks()[block+n].terminator(),&ProductionRankedTerminatorV1::AnalysisSplit{
                         control_dependencies:Vec::new(),first_block:bases[targets[n]].unwrap()as u32,second_block:second as u32});
-                },
+                }},
                 _=>panic!("reachable genuine absent source"),
             }
             eprintln!("fe2o3-nominal-block-stream-row-v1 phase=callback source_block={} ranked_base={} items={} successors={:?}",i,bases[i].unwrap(),view.rows()[i].items.len(),targets);
         }
         assert_eq!(access_cursor,view.access_sources().len());assert_eq!(tensor_cursor,view.tensor_sites().len());
+        assert_eq!(view.flow.checked_views().iter().flatten().count(),2);
         result.sites=access_cursor;Ok(result)
     })
 }
+// Independent source/discriminant oracle. It never calls the production query,
+// namespace mapper or comparison builder. Genuine input identity is unchanged.
+fn checked_switch_oracle(
+    view: &ActualRootBlockStreamV1<'_, '_>,
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    source: usize,
+    ranked: usize,
+    bases: &[Option<usize>; MAX_ROWS],
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<bool> {
+    resources.work(1024)?;
+    let Some(fact) = view.flow.checked_views()[source] else {
+        return Ok(false);
+    };
+    let function = view.function();
+    let mut provider = None;
+    for predecessor in function.blocks() {
+        resources.work(64)?;
+        let SemanticTerminatorKindV1::Call(call) = predecessor.terminator().kind() else {
+            continue;
+        };
+        if !call
+            .destination()
+            .is_some_and(|d| d.edge().target().index() as usize == source)
+        {
+            continue;
+        }
+        if let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                    result,
+                    view,
+                    error,
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        {
+            assert!(provider.replace((call, *result, *view, *error)).is_none());
+        }
+    }
+    let (call, result_type, view_type, error_type) =
+        provider.expect("original checked-view constructor");
+    let SemanticTypeShapeV1::Enum { variants, .. } = types[result_type.index() as usize].shape()
+    else {
+        panic!("original Result enum")
+    };
+    resources.work(checked_mul(variants.len(), 32)?)?;
+    let mut ok = None;
+    let mut err = None;
+    for variant in variants {
+        if variant.fields().fields() == [view_type] {
+            assert!(ok.replace(variant.discriminant()).is_none())
+        }
+        if variant.fields().fields() == [error_type] {
+            assert!(err.replace(variant.discriminant()).is_none())
+        }
+    }
+    let SemanticTerminatorKindV1::SwitchInt { targets, .. } =
+        function.blocks()[source].terminator().kind()
+    else {
+        panic!("actual source switch")
+    };
+    let edge = |discriminant| {
+        targets
+            .values()
+            .iter()
+            .find(|t| t.value() == discriminant)
+            .map_or(targets.otherwise().target(), |t| t.edge().target())
+            .index() as usize
+    };
+    resources.work(checked_mul(targets.values().len(), 16)?)?;
+    let success = edge(ok.expect("Ok discriminant"));
+    let failure = edge(err.expect("Err discriminant"));
+    assert_ne!(success, failure);
+    assert_eq!((fact.success(), fact.failure()), (success, failure));
+    let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = &call.arguments()[0]
+    else {
+        panic!("actual original slice input")
+    };
+    assert!(place.projections().is_empty());
+    let local = place.local().index();
+    let SemanticLocalRoleV1::Argument(argument) = function.locals()[local as usize].role() else {
+        panic!("actual original input argument")
+    };
+    assert_eq!(
+        (fact.source_local(), fact.source_argument()),
+        (local, argument)
+    );
+    assert_eq!(fact.required(), 256);
+    let ProductionRankedTerminatorV1::IndexLessThan {
+        lhs,
+        rhs,
+        true_block,
+        false_block,
+    } = view.blocks()[ranked].terminator()
+    else {
+        panic!("actual checked length comparison")
+    };
+    let ProductionRankedValueV1::Argument(slot) = lhs else {
+        panic!("dedicated original input length")
+    };
+    assert_ne!(*slot, 0);
+    // The exact genuine profile has two distinct entry slice arguments. Source
+    // order, not parameter numeric ID or the helper Return permutation, orders
+    // their new slots. No slot aliases the original extent argument zero.
+    let prior = view.flow.checked_views()[..source].iter().flatten().count();
+    assert_eq!(*slot, prior as u32 + 1);
+    for previous in view.flow.checked_views()[..source].iter().flatten() {
+        assert_ne!(previous.source_argument(), argument);
+        assert_ne!(previous.parameter(), fact.parameter());
+    }
+    assert_eq!(
+        (*true_block, *false_block),
+        (
+            bases[failure].unwrap() as u32,
+            bases[success].unwrap() as u32
+        )
+    );
+    let ProductionRankedValueV1::Local(bound) = rhs else {
+        panic!("actual prefix bound")
+    };
+    let mut count = 0;
+    for operation in view.entry_operations() {
+        resources.work(8)?;
+        if let ProductionRankedOperationV1::IndexConstant { result, value } = operation {
+            if result == bound {
+                assert_eq!(*value, 256);
+                count += 1
+            }
+        }
+    }
+    assert_eq!(count, 1);
+    Ok(true)
+}
+
 fn assert_source(
     view: &ActualRootBlockStreamV1<'_, '_>,
     i: usize,
@@ -756,9 +926,7 @@ pub(crate) fn observe_actual_root_block_stream_for_test_v1(
         let before = budget.storage();
         let work = budget.work();
         let peak = budget.peak_storage();
-        budget.charge_work(4 * HEADERS)?;
-        budget.reserve_storage(HEADERS)?;
-        let mut owned = HEADERS;
+        let mut owned = prepay_headers(budget)?;
         let mut pending = PendingActualRootPrefixIndicesV1::new();
         let mut rows = [ExpectedRow::empty("unused"); MAX_ROWS];
         let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -882,13 +1050,96 @@ fn genuine_block_stream_oracle_rejects_changed_target_not_only_counts() {
 }
 #[test]
 fn genuine_block_stream_fixed_headers_cover_rows_owner_and_oracle_stack() {
-    assert!(
-        HEADERS
-            >= 4 * size_of::<PendingActualRootPrefixIndicesV1>()
-                + 4 * size_of::<[ExpectedRow; MAX_ROWS]>()
-                + 4 * size_of::<Observation>()
-                + 8 * size_of::<[usize; MAX_ROWS]>()
-                + 4096
+    let bytes = header_bytes().unwrap();
+    assert_eq!(
+        bytes,
+        4 * size_of::<PendingActualRootPrefixIndicesV1>()
+            + 4 * size_of::<[ExpectedRow; MAX_ROWS]>()
+            + 4 * size_of::<Observation>()
+            + 8 * size_of::<[usize; MAX_ROWS]>()
+            + 4096
     );
+    assert!(bytes < crate::production_canonical_phase_policy_v1::STORAGE_LIMIT);
     assert!(scan_work(usize::MAX).is_err());
+    for values in [
+        [usize::MAX, 0, 0, 0],
+        [0, usize::MAX, 0, 0],
+        [0, 0, usize::MAX, 0],
+        [0, 0, 0, usize::MAX],
+        [usize::MAX / 4, 0, 0, 0],
+    ] {
+        assert!(header_bytes_for(values[0], values[1], values[2], values[3]).is_err());
+    }
+}
+
+#[test]
+fn genuine_block_stream_header_prepayment_exact_and_one_short_preserve_owner_floor() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let bytes = header_bytes().unwrap();
+    let work = checked_mul(4, bytes).unwrap();
+    for (work_limit, storage_limit, succeeds) in [
+        (11 + work, 7 + bytes, true),
+        (11 + work - 1, 7 + bytes, false),
+        (11 + work, 7 + bytes - 1, false),
+    ] {
+        let mut work_budget = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work_budget, storage_limit);
+        budget.charge_work(11).unwrap();
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = prepay_headers(&mut budget);
+        if succeeds {
+            let owned = result.unwrap();
+            assert_eq!(owned, bytes);
+            assert_eq!(budget.work(), 11 + work);
+            assert_eq!(budget.storage(), 7 + bytes);
+            assert_eq!(budget.peak_storage(), 7 + bytes);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), None);
+            // The same ordering used by the observer: no owner is constructed
+            // before accepted prepayment, and accepted credits outlive it.
+            let pending = PendingActualRootPrefixIndicesV1::new();
+            drop(pending);
+            budget.release_storage(owned).unwrap();
+        } else if work_limit < 11 + work {
+            assert!(
+                matches!(result, Err(QueryError::Resource(Resource::Work(error)))
+                if error.actual() == 11 + work && error.limit() == work_limit)
+            );
+            assert_eq!(budget.work(), 11);
+            assert_eq!(budget.failed_work(), Some(11 + work));
+            assert_eq!(budget.failed_storage(), None);
+            assert_eq!(budget.peak_storage(), 7);
+            assert!(budget.check_prior_denials_v1().is_err());
+        } else {
+            assert!(
+                matches!(result, Err(QueryError::Resource(Resource::Storage(error)))
+                if error.actual() == 7 + bytes && error.limit() == storage_limit)
+            );
+            assert_eq!(budget.work(), 11 + work);
+            assert_eq!(budget.failed_work(), None);
+            assert_eq!(budget.failed_storage(), Some(7 + bytes));
+            assert_eq!(budget.peak_storage(), 7);
+            assert!(budget.check_prior_denials_v1().is_err());
+        }
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), 7);
+    }
+}
+
+#[test]
+fn genuine_block_stream_header_prepayment_preserves_prior_denial_without_new_charge() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let mut work = Work::new(1);
+    let mut budget = Budget::new(&mut work, 7 + header_bytes().unwrap());
+    budget.reserve_storage(7).unwrap();
+    assert!(budget.charge_work(2).is_err());
+    assert!(matches!(prepay_headers(&mut budget),
+        Err(QueryError::Resource(Resource::Work(error)))
+        if error.actual() == 2 && error.limit() == 1));
+    assert_eq!(budget.work(), 0);
+    assert_eq!(budget.failed_work(), Some(2));
+    assert_eq!(budget.storage(), 7);
+    assert_eq!(budget.peak_storage(), 7);
+    assert_eq!(budget.failed_storage(), None);
 }

@@ -221,6 +221,13 @@ impl<'i, 'g, O> CanonicalKirSparseV1<'i, 'g, O> {
     pub fn belongs_to(&self, inventory: &CanonicalKirInventoryV1<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
+    /// Exact retained header/backing of this original sparse report.
+    /// The caller must already retain it on the same cumulative budget; this
+    /// charged observation neither reserves storage nor transfers ownership.
+    pub fn retained_storage_v1(&self, budget: &mut Budget<'_>) -> Result<usize> {
+        budget.charge_work(1)?;
+        Ok(self.retained)
+    }
     pub fn values(&self) -> &[Value] {
         &self.values
     }

@@ -9,6 +9,8 @@ use crate::production_ranked_projection_v1::root_checked_reference_use_preparati
 use crate::production_ranked_projection_v1::root_local_contracts_v1::{
     BorrowedLocalContractsV1, SourceLocalContractPartsV1,
 };
+#[path = "bf16_nominal_checked_control_v1.rs"]
+mod checked_control;
 #[path = "bf16_nominal_ranked_consumer_v1.rs"]
 mod consumer;
 #[path = "bf16_nominal_block_stream_emit_v1.rs"]
@@ -737,6 +739,10 @@ fn populate(
     {
         return Err(resource(Resource::Accounting));
     }
+    stream
+        .emitted
+        .controls
+        .prepare(flow, parts.prefix, resources)?;
     emission::emit(
         &stream.rows,
         &parts.prefix.entry_operations,

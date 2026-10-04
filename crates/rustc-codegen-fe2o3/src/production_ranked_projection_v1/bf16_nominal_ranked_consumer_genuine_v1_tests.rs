@@ -144,7 +144,8 @@ fn classify(case: Case, result: Result<consumer::Verified<'_>>) -> Result<Checke
     match (case, result) {
         (Case::Positive, Ok(verified)) => {
             let lowering = verified.lowering();
-            if !lowering.all_mandatory_reports_are_clean()
+            if lowering.kernel().argument_count() != 3
+                || !lowering.all_mandatory_reports_are_clean()
                 || lowering.grants_artifact_or_launch_authority()
                 || lowering.grants_compiler_refinement_authority()
                 || verified.tensor_count() == 0
@@ -215,9 +216,7 @@ pub(super) fn observe(
             let before = budget.storage();
             let work = budget.work();
             let peak = budget.peak_storage();
-            budget.charge_work(4 * HEADERS)?;
-            budget.reserve_storage(HEADERS)?;
-            let mut owned = HEADERS;
+            let mut owned = prepay_headers(budget)?;
             // Exact same physical owner pattern as the original genuine stream.
             // It outlives all richer/source/facts borrows and their postflights.
             let mut pending = PendingActualRootPrefixIndicesV1::new();
