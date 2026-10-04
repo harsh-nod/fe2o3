@@ -273,6 +273,169 @@ fn local_stage_body_sharing_defines_new_or_displaced_occurrences() {
 }
 
 #[test]
+fn parent_stage_sharing_preserves_changed_bodies_and_transitive_reuse() {
+    with_inventory(&scalar_reuse_module_v55(false, 16), |input, physical, a| {
+        with_inventory(
+            &scalar_reuse_module_v55(true, 16),
+            |output, next_physical, b| {
+                let allocations = NoAllocations(input.owner());
+                let next_allocations = NoAllocations(output.owner());
+                let context = ByteContext::native(FormalIndexWidth::Bits64);
+                let emit = |out: &mut Writer<'_, '_>| {
+                    let mut first =
+                        EmittedByteFunctionsV55::new(input, physical, &allocations, context, out)?;
+                    let mut second = EmittedByteFunctionsV55::new(
+                        output,
+                        next_physical,
+                        &next_allocations,
+                        context,
+                        out,
+                    )?;
+                    for function in 0..2 {
+                        let before = ByteFunctionV30::derive(
+                            input,
+                            physical,
+                            Function(function),
+                            context,
+                            &allocations,
+                            out,
+                        )?;
+                        first.emit(&before, 50 + function as usize, out)?;
+                    }
+                    emit!(out, "mod prefix_stage {{\n use super::*;\n");
+                    for function in 0..2 {
+                        let after = ByteFunctionV30::derive(
+                            output,
+                            next_physical,
+                            Function(function),
+                            context,
+                            &next_allocations,
+                            out,
+                        )?;
+                        second.emit_after_parent_predecessor_v95(
+                            &after,
+                            60 + function as usize,
+                            &first,
+                            out,
+                        )?;
+                    }
+                    emit!(out, "mod final_stage {{\n use super::*;\n");
+                    for function in 0..2 {
+                        let after = ByteFunctionV30::derive(
+                            output,
+                            next_physical,
+                            Function(function),
+                            context,
+                            &next_allocations,
+                            out,
+                        )?;
+                        second.emit_output_reusing_bodies_v56(&after, function as usize, out)?;
+                    }
+                    emit!(out, "}}\n}}\n");
+                    Ok(())
+                };
+                let measured = run(a + b, LIMIT, LIMIT, emit);
+                let source = measured.0.unwrap();
+                assert_eq!(source.matches("use super::byte_scalar_body_").count(), 62);
+                assert_eq!(source.matches("spec fn byte_scalar_body_").count(), 34);
+                assert_eq!(source.matches("spec fn byte_operation_").count(), 96);
+                for function in 0..2 {
+                    let operation = function * 16 + 8;
+                    let namespace = 60 + function;
+                    assert!(source.contains(&format!(
+                        "spec fn byte_scalar_body_{namespace}_{operation}_v55("
+                    )));
+                    assert!(
+                        !source
+                            .contains(&format!("as byte_scalar_body_{namespace}_{operation}_v55;"))
+                    );
+                    for namespace in [50 + function, namespace, function] {
+                        assert!(source.contains(&format!(
+                            "s.pc != {function} || !byte_inputs_{namespace}_v55(s, little_endian)"
+                        )));
+                    }
+                }
+                let exact = run(a + b, measured.1, measured.2, emit);
+                assert_eq!(exact.0.unwrap(), source);
+                assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+                assert!(matches!(
+                    run(a + b, measured.1 - 1, measured.2, emit).0,
+                    Err(Error::Resource(Resource::Work(_)))
+                ));
+                assert!(matches!(
+                    run(a + b, measured.1, measured.2 - 1, emit).0,
+                    Err(Error::Resource(Resource::Storage(_)))
+                ));
+            },
+        );
+    });
+}
+
+#[test]
+fn parent_stage_sharing_retains_new_occurrences_and_complete_value_census() {
+    with_inventory(&scalar_reuse_module_v55(false, 2), |input, physical, a| {
+        with_inventory(
+            &scalar_reuse_module_v55(false, 3),
+            |output, next_physical, b| {
+                run(a + b, LIMIT, LIMIT, |out| {
+                    let allocations = NoAllocations(input.owner());
+                    let next_allocations = NoAllocations(output.owner());
+                    let context = ByteContext::native(FormalIndexWidth::Bits64);
+                    let mut first =
+                        EmittedByteFunctionsV55::new(input, physical, &allocations, context, out)?;
+                    let mut second = EmittedByteFunctionsV55::new(
+                        output,
+                        next_physical,
+                        &next_allocations,
+                        context,
+                        out,
+                    )?;
+                    for function in 0..2 {
+                        let before = ByteFunctionV30::derive(
+                            input,
+                            physical,
+                            Function(function),
+                            context,
+                            &allocations,
+                            out,
+                        )?;
+                        first.emit(&before, 50 + function as usize, out)?;
+                    }
+                    emit!(out, "mod prefix_stage {{\n use super::*;\n");
+                    for function in 0..2 {
+                        let after = ByteFunctionV30::derive(
+                            output,
+                            next_physical,
+                            Function(function),
+                            context,
+                            &next_allocations,
+                            out,
+                        )?;
+                        second.emit_after_parent_predecessor_v95(
+                            &after,
+                            60 + function as usize,
+                            &first,
+                            out,
+                        )?;
+                    }
+                    emit!(out, "}}\n");
+                    assert!(!out.text.contains("use super::byte_scalar_body_"));
+                    for operation in 0..6 {
+                        let namespace = 60 + operation / 3;
+                        assert!(out.text.contains(&format!(
+                            "spec fn byte_scalar_body_{namespace}_{operation}_v55("
+                        )));
+                    }
+                    Ok(())
+                })
+                .0
+                .unwrap();
+            },
+        );
+    });
+}
+
+#[test]
 fn emitted_scalar_bodies_keep_output_predicates_and_exact_changed_operations() {
     let count = 16;
     with_inventory(
@@ -745,6 +908,19 @@ fn emitted_byte_functions_refuse_substituted_or_mutated_allocation_recipes() {
                     .matches("MemoryOperationEffectV30::Allocate")
                     .count(),
                 2
+            );
+            emit!(out, "mod allocation_stage {{\n use super::*;\n");
+            let mut parent_next =
+                EmittedByteFunctionsV55::new(inventory, physical, &wrapper, context, out)?;
+            parent_next.emit_after_parent_predecessor_v95(&matching, 57, &emitted, out)?;
+            emit!(out, "}}\n");
+            assert!(out.text.contains("spec fn byte_transition_body_57_0_v56("));
+            assert!(!out.text.contains("as byte_transition_body_57_0_v56;"));
+            assert_eq!(
+                out.text
+                    .matches("MemoryOperationEffectV30::Allocate")
+                    .count(),
+                3
             );
             for change in 0..4 {
                 let mut wrong = original;

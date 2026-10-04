@@ -694,7 +694,16 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     .checked_add(function)
                     .ok_or(Resource::Arithmetic)?;
                 match emitted_prefix.as_mut() {
-                    Some(index) => index.emit(&after, prefix_namespace, out),
+                    Some(index) => match emitted_original {
+                        Some(original) if association.input == association.output => index
+                            .emit_after_parent_predecessor_v95(
+                                &after,
+                                prefix_namespace,
+                                original,
+                                out,
+                            ),
+                        _ => index.emit(&after, prefix_namespace, out),
+                    },
                     None => after.emit(prefix_namespace, out),
                 }
                 .map_err(|error| {

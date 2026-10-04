@@ -29,6 +29,7 @@ fn emitted_mismatch() -> Error {
 enum BodyReuseScope {
     Parent,
     LocalPredecessor,
+    ParentPredecessor,
 }
 
 impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owner, R> {
@@ -53,6 +54,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 + 2 * size_of::<TransitionBodyV56<'a>>()
                 + size_of::<Option<TransitionBodyV56<'a>>>()
                 + size_of::<Result<Option<TransitionBodyV56<'a>>>>()
+                + size_of::<Option<(&Self, BodyReuseScope)>>()
                 + size_of::<([&(); 12], [usize; 6], [Result<()>; 2], BodyReuseScope)>(),
         )?;
         let mut namespaces = vector(inventory.functions().len(), out)?;
@@ -151,14 +153,34 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         predecessor: &EmittedByteFunctionsV55<'_, '_, S>,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
-        self.emit_recorded(model, namespace, Some(predecessor), out)
+        self.emit_recorded(
+            model,
+            namespace,
+            Some((predecessor, BodyReuseScope::LocalPredecessor)),
+            out,
+        )
+    }
+
+    pub(in super::super) fn emit_after_parent_predecessor_v95<S: ByteAllocationResolverV30>(
+        &mut self,
+        model: &ByteFunctionV30<'a, 'owner, R>,
+        namespace: usize,
+        predecessor: &EmittedByteFunctionsV55<'_, '_, S>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.emit_recorded(
+            model,
+            namespace,
+            Some((predecessor, BodyReuseScope::ParentPredecessor)),
+            out,
+        )
     }
 
     fn emit_recorded<S: ByteAllocationResolverV30>(
         &mut self,
         model: &ByteFunctionV30<'a, 'owner, R>,
         namespace: usize,
-        predecessor: Option<&EmittedByteFunctionsV55<'_, '_, S>>,
+        predecessor: Option<(&EmittedByteFunctionsV55<'_, '_, S>, BodyReuseScope)>,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
         let result = (|| {
@@ -172,12 +194,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 return Err(emitted_mismatch());
             }
             match predecessor {
-                Some(previous) => previous.emit_reusing_bodies(
-                    model,
-                    namespace,
-                    BodyReuseScope::LocalPredecessor,
-                    out,
-                )?,
+                Some((previous, scope)) => {
+                    previous.emit_reusing_bodies(model, namespace, scope, out)?
+                }
                 None => model.emit_with_bodies_v56(namespace, ByteBodiesV56::Define, out)?,
             }
             let row = &self.inventory.functions()[function];
@@ -240,8 +259,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 .flatten()
                 .ok_or_else(emitted_mismatch)?;
             let local = matches!(scope, BodyReuseScope::LocalPredecessor);
+            let predecessor = !matches!(scope, BodyReuseScope::Parent);
             if original.coordinate != current.coordinate
-                || (!local
+                || (!predecessor
                     && (original.operations != current.operations
                         || original.blocks != current.blocks))
                 || (local && source == namespace)
@@ -273,7 +293,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                     || block_index(self.inventory, left.coordinate.block)?
                         != block_index(model.inventory, right.coordinate.block)?
                 {
-                    if local {
+                    if predecessor {
                         reuse.push(false);
                         continue;
                     }
@@ -294,9 +314,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 } else {
                     false
                 };
-                // Local-stage allocation transport is independently derived;
+                // Predecessor allocation transport is independently derived;
                 // leave its body distinct rather than reuse an origin label.
-                let shared = shared && !(local && matches!(plan, ByteOperationV30::Alloca(_)));
+                let shared =
+                    shared && !(predecessor && matches!(plan, ByteOperationV30::Alloca(_)));
                 if shared && let ByteOperationV30::Alloca(alloca) = plan {
                     let site = alloca.allocation_site();
                     if self.sites[operation] != Some(site)
@@ -322,7 +343,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             }
             model.emit_with_bodies_v56(
                 namespace,
-                if local {
+                if predecessor {
                     ByteBodiesV56::DefineOrReuse(&reuse)
                 } else {
                     ByteBodiesV56::Reuse(&reuse)
