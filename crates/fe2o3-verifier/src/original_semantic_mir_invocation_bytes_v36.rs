@@ -394,7 +394,7 @@ spec fn invocation_frame_end_witness_v36(
         InvocationByteLifetimeV36 { source: invocation_source_refused_v36(source), map }
     } else {
         let frame = source.frames.active.last();
-        let allowed = (forall|i: int| 0 <= i < retained.len() ==>
+        let allowed = (forall|i: int| #![trigger retained[i]] 0 <= i < retained.len() ==>
             0 <= retained[i] < source.values.len()
             && forall|allocation: MemoryAllocationV30| byte_allocation_in_frame_v30(allocation, frame) ==>
                 !invocation_value_names_allocation_v36(source.values[retained[i]], allocation))
@@ -505,6 +505,29 @@ mod tests {
         }
 }"#;
         assert_eq!(normalized, original);
+    }
+
+    #[test]
+    fn original_mir_frame_end_trigger_preserves_complete_escape_check() {
+        let frame = INVOCATION_BYTES_V36
+            .split_once("spec fn invocation_frame_end_witness_v36(")
+            .unwrap()
+            .1;
+        let allowed = frame
+            .split_once("let allowed = ")
+            .unwrap()
+            .1
+            .split_once(";\n        if !allowed")
+            .unwrap()
+            .0;
+        let trigger = "#![trigger retained[i]] ";
+        assert_eq!(INVOCATION_BYTES_V36.matches(trigger).count(), 1);
+        let original = r#"(forall|i: int| 0 <= i < retained.len() ==>
+            0 <= retained[i] < source.values.len()
+            && forall|allocation: MemoryAllocationV30| byte_allocation_in_frame_v30(allocation, frame) ==>
+                !invocation_value_names_allocation_v36(source.values[retained[i]], allocation))
+            && !invocation_source_memory_escapes_frame_v37(source.memory, frame)"#;
+        assert_eq!(allowed.replace(trigger, ""), original);
     }
 
     #[test]
