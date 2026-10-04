@@ -41,12 +41,14 @@ fn write_fixture(
             disjoint_slice,
             element,
             raw_index,
+            index_space,
         } = *operation
         {
             *operation = SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
                 disjoint_slice,
                 element,
                 raw_index,
+                index_space,
             };
         }
         let (descriptor, witness, element, raw) = match *operation {
