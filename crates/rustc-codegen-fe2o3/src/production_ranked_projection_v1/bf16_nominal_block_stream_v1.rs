@@ -44,6 +44,30 @@ pub(super) struct BlockStream {
     consumer: consumer::Pending,
 }
 impl BlockStream {
+    // Private owned move only. The caller must have completed its original
+    // source/account postflights and must retain all accepted credits.
+    pub(super) fn into_verified_parts(
+        self,
+        resources: &mut PreparationResourcesV1<'_, '_>,
+    ) -> Result<(
+        ProductionRankedKernelLoweringInputV1,
+        Vec<ProductionRankedAccessSourceV1>,
+    )> {
+        let ledger = self.ledger.ok_or_else(|| resource(Resource::Accounting))?;
+        check(resources, ledger)?;
+        resources.work(64)?;
+        if !self.started
+            || !self.complete
+            || !self.guard_scratch.is_empty()
+            || self.operation_scratch.is_some()
+        {
+            return Err(Error::Incomplete("nominal owned stream has not completed"));
+        }
+        // No reconstruction or refund: the real consumer checks and moves its
+        // own lowering and access Vec; all other stream data dies afterwards.
+        self.consumer.into_verified_parts(&self.emitted, resources)
+    }
+
     pub(super) const fn empty() -> Self {
         Self {
             rows: Vec::new(),

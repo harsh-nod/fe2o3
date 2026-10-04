@@ -19,6 +19,7 @@ pub(super) use bf16_nominal_capability_consumer_v1::with_nominal_capability_cons
 #[allow(dead_code)]
 #[path = "bf16_nominal_recipe_resources_v1.rs"]
 mod bf16_nominal_recipe_resources_v1;
+pub(super) use bf16_nominal_recipe_resources_v1::consume_actual_nominal_root_v1;
 #[allow(unused_imports)]
 pub(super) use bf16_nominal_recipe_resources_v1::with_nominal_recipe_resources_v1;
 

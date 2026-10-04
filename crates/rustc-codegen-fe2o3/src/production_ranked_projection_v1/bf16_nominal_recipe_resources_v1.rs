@@ -29,6 +29,7 @@ pub(in crate::production_ranked_projection_v1) use initial_graph_v1::{
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use root_prefix_indices_v1::{
     ActualRootGuardedAccessesV1, ActualRootPrefixIndicesV1, PendingActualRootPrefixIndicesV1,
+    consume_actual_nominal_root_v1,
 };
 
 #[derive(Clone, Copy)]

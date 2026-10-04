@@ -4007,6 +4007,27 @@ where
 }
 
 impl MaterializedNeutralProductionCompilation {
+    /// Closed private continuation, not selected by verify_general_kernel_checks.
+    /// Lowerer nominal tensor/effect translation must be implemented separately.
+    #[allow(dead_code)]
+    fn verify_private_nominal_kernel_checks_v1(
+        self,
+    ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
+        let Self {
+            materialized,
+            ranked_roots,
+            bindings,
+        } = self;
+        let ranked =
+            crate::production_ranked_projection_v1::project_private_nominal_materialized_v1(
+                materialized,
+                &ranked_roots,
+                &bindings.reference_effect_bindings,
+            )
+            .map_err(ProductionPipelineError::RankedProjection)?;
+        Ok(RankedVerifiedProductionCompilation { ranked, bindings })
+    }
+
     fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
@@ -4762,23 +4783,24 @@ impl ActualRetainedRankedInputsV1<'_> {
         self.bindings
     }
 }
-/// The sole constructor is called after the actual prepared SSA/launch become
-/// the retained owner inside the genuine richer-consumer callback. HRTB prevents
-/// this view or its borrows from escaping as R. Credits stay in the outer phase.
-#[cfg(test)]
-fn with_actual_retained_ranked_inputs_for_test_v1<R, F>(
+/// Shared private loan of the caller's actual retained owner/inputs/bindings.
+/// HRTB prevents the view or its borrows from escaping. Accepted frame credits
+/// remain in the caller's original account; this factory never refunds them.
+pub(crate) fn with_actual_retained_ranked_inputs_v1<R, E, F>(
     owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     inputs: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
     bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     owned_frame: &mut usize,
     inspect: F,
-) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>
+) -> Result<R, E>
 where
+    E: From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>,
     F: for<'a> FnOnce(
         ActualRetainedRankedInputsV1<'a>,
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-    ) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>,
+        &mut usize,
+    ) -> Result<R, E>,
 {
     use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
     let mut frame = 4096usize;
@@ -4787,7 +4809,7 @@ where
         std::mem::size_of::<F>()
             .checked_mul(2)
             .ok_or(Resource::Arithmetic)?,
-        std::mem::size_of::<Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>>()
+        std::mem::size_of::<Result<R, E>>()
             .checked_mul(2)
             .ok_or(Resource::Arithmetic)?,
     ] {
@@ -4804,6 +4826,34 @@ where
             bindings,
         },
         budget,
+        owned_frame,
+    )
+}
+
+/// Genuine observers reuse the same factory and its original error type.
+/// Their callback shape remains unchanged; no replacement source loan exists.
+#[cfg(test)]
+fn with_actual_retained_ranked_inputs_for_test_v1<R, F>(
+    owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    owned_frame: &mut usize,
+    inspect: F,
+) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>
+where
+    F: for<'a> FnOnce(
+        ActualRetainedRankedInputsV1<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>,
+{
+    with_actual_retained_ranked_inputs_v1(
+        owner,
+        inputs,
+        bindings,
+        budget,
+        owned_frame,
+        move |actual, budget, _| inspect(actual, budget),
     )
 }
 

@@ -50,6 +50,31 @@ impl<'s> RankedProjectionSourceV1<'s> {
         })
     }
 
+    // Private owning continuation only. The ordinary constructor above keeps
+    // its BF16 refusal until exact lowerer attachment support is implemented.
+    pub(super) fn from_materialized_nominal_private(
+        owner: &'s ProductionPreRankedKirOwnerV1,
+    ) -> Result<Self, Error> {
+        if owner.helper_source_policy_v1()
+            != fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::Bf16Nominal
+        {
+            return Err(Error::Unsupported(
+                "private nominal continuation requires its actual profile",
+            ));
+        }
+        let minimum_storage = owner
+            .unit_local_source_storage_floor_v1()
+            .map_err(Error::StructuralValidation)?;
+        Ok(Self {
+            owner,
+            semantic_ssa: owner.semantic_ssa(),
+            source_launch: owner.source_launch(),
+            executable: owner.executable(),
+            origins: owner.assert_origins(),
+            minimum_storage,
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn from_legacy(owner: &'s ProductionPreRankedKirOwnerV1) -> Result<Self, Error> {
         if owner.helper_source_policy_v1()
