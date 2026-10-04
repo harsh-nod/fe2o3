@@ -56,6 +56,15 @@ but test-key responses, not a genuine deployed compiler/issuer campaign.
 A separate owned-process permission witness confirms that the current distinct-UID,
 empty-cap issuer profile lacks remote inspection permission. A narrowly scoped,
 authenticated observer handoff is the next production acquisition prerequisite.
+That handoff must cover the complete occurrence operation, not just process
+snapshots or an artifact-directory descriptor: the issuer also lacks access to
+the user's protected publication directories and lock files. Reuse the existing
+Production-slot reconstruction and currentness checks on the root side, retaining
+the original observation, publication lease and current token. The issuer needs
+an authenticated private-channel lease bound to its exact session and fresh
+challenge. Keep the root-held token through signing and ledger commit; failure
+handling must contain the exact issuer before releasing that token. This is the
+next implementation boundary, not implemented or qualified behavior.
 
 ## Reuse What Works
 

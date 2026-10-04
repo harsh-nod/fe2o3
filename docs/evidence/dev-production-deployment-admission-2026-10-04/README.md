@@ -128,6 +128,13 @@ capability sets; there is no delegated observer path. Simply adding a systemd
 capability would conflict with that enforced profile. Keep the signing issuer
 unprivileged and give it only authenticated, occurrence-bound observations from
 a narrowly scoped root-coordinator-owned authority.
+The delegation must cover the complete occurrence operation: an artifact-directory
+descriptor alone does not permit the distinct-UID issuer to open the user's
+mode-0700 publication directories and mode-0600 lock files. Reuse the existing
+Production-slot reconstruction and currentness checks under root-side custody;
+retain the original current token through signing and ledger commit, and contain
+the exact issuer before releasing that token on failure. The required authenticated
+private-channel lease and client-identity factoring are not implemented here.
 
 A local Linux permission witness used only two owned processes in a disposable
 private namespace: a UID 1000 target and a UID 61001 observer with empty capability
