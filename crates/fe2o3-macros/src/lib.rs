@@ -1,6 +1,8 @@
 #![feature(proc_macro_tracked_env)]
 
 mod control_flow_v1;
+#[cfg(test)]
+mod host_exclusion_v1_tests;
 mod kernel_context_entry_v1;
 #[cfg(test)]
 mod zero_argument_typed_v1_tests;

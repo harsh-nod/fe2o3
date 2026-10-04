@@ -280,12 +280,14 @@ fn general_policy3_private_budget_failure_restores_transferred_input_floor() {
         matches!(
             result,
             Err(AdmissionError::Source(
-                crate::ProductionSemanticKirErrorV1::MirPlironTranslation(
-                    crate::ProductionMirPlironTranslationErrorV1::ResourceLimit
+                crate::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error)
                 )
-            ))
+            )) if error.actual() == 13 && error.limit() == 11
         ),
         "expected the exact caller-budget refusal during source attachment: {result:?}"
     );
+    assert_eq!(budget.failed_work(), Some(13));
+    assert!(budget.work() <= 11);
     assert_eq!(budget.storage(), floor);
 }

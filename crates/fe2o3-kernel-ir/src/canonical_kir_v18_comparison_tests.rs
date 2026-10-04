@@ -568,7 +568,7 @@ fn v18_comparison_real_facade_unwinds_restore_floor_and_prior_history() {
             budget.peak_storage(),
             floor + independent_headers() + if stage == 1 { 0 } else { 28 }
         );
-        assert!(budget.work() >= PRIOR + 1);
+        assert!(budget.work() > PRIOR);
         assert_eq!(
             budget.work_budget_v1().failed_work(),
             Some(PRIOR + LIMIT + 33)

@@ -105,6 +105,27 @@ fn slice_exposure_rejects_direction_permission_and_same_width_type_mutations() {
         AccessModeAttr::ReadWrite,
     )
     .into();
+    let private_read_only = SliceType::get(
+        &ctx,
+        word,
+        AddressSpaceAttr::Private,
+        AccessModeAttr::ReadOnly,
+    )
+    .into();
+    let private_write_only = SliceType::get(
+        &ctx,
+        word,
+        AddressSpaceAttr::Private,
+        AccessModeAttr::WriteOnly,
+    )
+    .into();
+    let write_only = SliceType::get(
+        &ctx,
+        word,
+        AddressSpaceAttr::Generic,
+        AccessModeAttr::WriteOnly,
+    )
+    .into();
     assert!(verify_op(&cast(&mut ctx, private, generic), &ctx).is_ok());
     for (from, to) in [
         (generic, private),
@@ -112,6 +133,10 @@ fn slice_exposure_rejects_direction_permission_and_same_width_type_mutations() {
         (private, private),
         (private, read_only),
         (private, wrong_word),
+        (private_write_only, generic),
+        (private_write_only, read_only),
+        (private_read_only, generic),
+        (private_read_only, write_only),
         (word, generic),
         (private, word),
     ] {

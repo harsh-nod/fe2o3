@@ -7,8 +7,13 @@ struct Probe {
     released: Cell<usize>,
 }
 struct ProbedMeter<'a> {
-    inner: &'a mut dyn Meter,
+    inner: &'a mut dyn NativeHelperMeter,
     probe: &'a Probe,
+}
+impl NativeHelperMeter for ProbedMeter<'_> {
+    fn check_call(&mut self, query: NativeHelperCallQuery<'_>) -> Result<bool, Error> {
+        self.inner.check_call(query)
+    }
 }
 impl Meter for ProbedMeter<'_> {
     fn work(&mut self, n: usize) -> Result<(), Error> {
@@ -55,7 +60,7 @@ fn every_native_query_checks_live_custody_before_work() {
                     probe: &probe,
                 };
                 with_native_helper_values(
-                    owner.semantic_ssa.source_semantic(),
+                    &owner.semantic_ssa,
                     module,
                     &owner.correspondence,
                     SemanticFunctionIdV1::from_index(0),
@@ -130,7 +135,7 @@ fn native_original_panic_survives_identity_and_storage_query_errors() {
             let released = Cell::new(0);
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = with_native_helper_values(
-                    owner.semantic_ssa.source_semantic(),
+                    &owner.semantic_ssa,
                     module,
                     &owner.correspondence,
                     SemanticFunctionIdV1::from_index(0),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -62,6 +63,52 @@ def metadata(packages: list[dict]) -> dict:
 
 
 class WorkspaceDependencyPolicyTests(unittest.TestCase):
+    def assert_compiler_closure_owner(self, candidate: dict) -> None:
+        owners = [layer["name"] for layer in candidate["layers"]
+                  if "fe2o3-compiler-closure-capability" in layer["packages"]]
+        self.assertEqual(["canonical-contracts"], owners)
+
+    def test_checked_in_compiler_closure_capability_is_canonical_contract(self) -> None:
+        self.assert_compiler_closure_owner(
+            json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8")))
+
+    def test_rejects_removed_compiler_closure_capability_classification(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        name = "fe2o3-compiler-closure-capability"
+        canonical = next(layer for layer in reviewed["layers"]
+                         if layer["name"] == "canonical-contracts")
+        canonical["packages"].remove(name)
+        with self.assertRaises(AssertionError):
+            self.assert_compiler_closure_owner(reviewed)
+        violations, _ = CHECKER.check_policy(metadata([package(name, f"crates/{name}")]), reviewed)
+        self.assertEqual([f"unclassified workspace member: {name} (crates/{name}/Cargo.toml)"],
+                         violations)
+
+    def test_rejects_every_noncanonical_compiler_closure_capability_class(self) -> None:
+        baseline = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        name = "fe2o3-compiler-closure-capability"
+        alternatives = [layer["name"] for layer in baseline["layers"]
+                        if layer["name"] != "canonical-contracts"]
+        self.assertTrue(alternatives)
+        for alternative in alternatives:
+            with self.subTest(layer=alternative):
+                reviewed = copy.deepcopy(baseline)
+                for layer in reviewed["layers"]:
+                    if layer["name"] == "canonical-contracts":
+                        layer["packages"].remove(name)
+                    elif layer["name"] == alternative:
+                        layer["packages"].append(name)
+                with self.assertRaises(AssertionError):
+                    self.assert_compiler_closure_owner(reviewed)
+
+    def test_rejects_duplicate_compiler_closure_capability_ownership(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        next(layer for layer in reviewed["layers"]
+             if layer["name"] == "host-runtime")["packages"].append(
+                 "fe2o3-compiler-closure-capability")
+        with self.assertRaisesRegex(CHECKER.PolicyConfigurationError, "assigned to both"):
+            CHECKER.check_policy(metadata([]), reviewed)
+
     def test_allows_dependencies_toward_contracts(self) -> None:
         packages = [
             package("contract", "crates/contract"),

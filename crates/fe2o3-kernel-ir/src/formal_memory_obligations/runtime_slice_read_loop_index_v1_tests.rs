@@ -688,7 +688,7 @@ fn bridged_reads_preserve_slice_strictness_and_dynamic_true_edge_refusals() {
                     rhs: ValueId(6),
                 }
             }
-            3 | 4 | 5 => {
+            3..=5 => {
                 let Some(Terminator::ConditionalBranch {
                     then_target,
                     else_target,

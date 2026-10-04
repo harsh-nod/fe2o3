@@ -273,8 +273,8 @@ impl ProductionPreRankedKirOwnerV1 {
         {
             return Err(E::SourceRows);
         }
-        let validation = validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
-            Some(semantic),
+        let validation = validate_mir_pliron_recipe_translation_with_allowance_resources_v1(
+            Some(&self.semantic_ssa),
             module,
             &self.correspondence,
             kernel.id.as_str(),
@@ -283,8 +283,9 @@ impl ProductionPreRankedKirOwnerV1 {
             candidate.executable_effect_sources(),
             self.limits.max_operations,
             budget,
+            None,
         )
-        .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+        .map_err(native_helper_value_expansion_v1::NativeTranslationErrorV1::into_semantic)?;
         Ok(ProductionConditionalSourceTranslationV1 {
             source: self,
             pending,

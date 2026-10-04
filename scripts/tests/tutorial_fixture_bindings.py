@@ -7,6 +7,7 @@ import copy
 import hashlib
 import importlib.util
 import itertools
+import runpy
 from pathlib import Path
 import tomllib
 import unittest
@@ -536,7 +537,7 @@ class AttentionCfgSelectionTests(unittest.TestCase):
             ("local! { #[kernel] fn fake() {} }", "nested fixture kernel"),
             ("crate::local!();", "unsupported fixture item"),
             ('include!("body.rs");', "unsupported fixture item"),
-            ("#[derive(Clone)] struct Value;", "selection attribute"),
+            ("#[derive(Custom)] struct Value;", "builtin derive"),
             ("#[macro_export] macro_rules! other {}", "selection attribute"),
             ("#[unknown] macro_rules! other {}", "selection attribute"),
             ("#[cfg(unknown)] macro_rules! other {}", "cfg predicate"),
@@ -829,7 +830,7 @@ class RowSourceBindingTests(unittest.TestCase):
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
         self.assertEqual(report["knownKernelIdentityCount"], 61)
-        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertFalse(report["inventoryComplete"])
         self.assertIsNone(report["requiredPairCount"])
@@ -951,6 +952,23 @@ class RowSourceBindingTests(unittest.TestCase):
             item["contractSha256"] = self.parent.source_item_contract_sha256(self.lesson_id, tab)
             with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
                 self.parent.validate_source_item(ROOT, self.lesson_id, tab, {})
+
+
+def load_tests(loader, tests, pattern):
+    child = runpy.run_path(
+        str(Path(__file__).with_name("_tutorial_current_entry_binding_tests.py")),
+        init_globals={"FixtureBindingTests": FixtureBindingTests, "ROOT": ROOT},
+    )["CurrentEntryBindingTests"]
+    tests.addTests(child(name) for name in child.__dict__ if name.startswith("test_"))
+    derived = runpy.run_path(
+        str(Path(__file__).with_name("_tutorial_builtin_derive_binding_tests.py")),
+        init_globals={"LiteralIncludeSelectionTests": LiteralIncludeSelectionTests,
+                      "FixtureBindingTests": FixtureBindingTests, "ROOT": ROOT},
+    )
+    for name in ("BuiltinDeriveSelectionTests", "MoeCurrentBindingTests"):
+        child = derived[name]
+        tests.addTests(child(method) for method in child.__dict__ if method.startswith("test_"))
+    return tests
 
 
 if __name__ == "__main__":

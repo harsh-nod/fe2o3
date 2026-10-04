@@ -10,6 +10,7 @@
     {
       "id": "02-production-drivers",
       "tests": [
+        "bf16_generated_source_admission_api_v1",
         "bf16_source_promotion_api_v1",
         "production_device_math_sqrt_v1",
         "production_extraction_driver_v1",

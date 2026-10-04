@@ -184,8 +184,9 @@ fn storage_v18_refuses_cross_table_rights_space_and_noncanonical_descriptors() {
     let b = pointer(&context, key(2), 0, Space::Private, Access::ReadWrite);
     let ro = pointer(&context, key(1), 0, Space::Private, Access::ReadOnly);
     let constant = pointer(&context, key(1), 0, Space::Constant, Access::ReadWrite);
-    let values = arguments(&mut context, vec![a, b, ro, constant]);
-    for index in [1, 2, 3] {
+    let other_row = pointer(&context, key(1), 1, Space::Private, Access::ReadWrite);
+    let values = arguments(&mut context, vec![a, b, ro, constant, other_row]);
+    for index in [1, 2, 3, 4] {
         let mut d = descriptor(StorageKindAttrV18::CopyObject);
         d.read = memory(Space::Private);
         d.write = memory(if index == 3 {
@@ -227,6 +228,28 @@ fn storage_v18_refuses_cross_table_rights_space_and_noncanonical_descriptors() {
             .verify(&context)
             .is_err()
     );
+}
+
+#[test]
+fn storage_v18_refuses_malformed_operand_and_result_counts() {
+    let mut context = context();
+    let storage = pointer(&context, key(1), 0, Space::Private, Access::ReadWrite);
+    let values = arguments(&mut context, vec![storage]);
+    for (operands, results) in [
+        (vec![], vec![storage]),
+        (vec![values[0], values[0]], vec![storage]),
+        (vec![values[0]], vec![]),
+        (vec![values[0]], vec![storage, storage]),
+    ] {
+        let operation = StorageOpV18::new(
+            &mut context,
+            descriptor(StorageKindAttrV18::ProjectField),
+            operands,
+            results,
+        );
+        assert!(operation.verify(&context).is_err());
+        assert!(operation.has_side_effects(&context));
+    }
 }
 
 #[test]

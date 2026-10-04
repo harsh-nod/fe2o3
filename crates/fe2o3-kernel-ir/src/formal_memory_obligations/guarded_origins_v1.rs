@@ -422,6 +422,65 @@ mod structural_resource_tests {
     use super::*;
 
     #[test]
+    fn legacy_scc_matches_independent_small_graph_reachability() {
+        let values = [
+            ValueId(10),
+            ValueId(20),
+            ValueId(30),
+            ValueId(100),
+            ValueId(200),
+        ];
+        // Exhaust all edge subsets for three parameters and two external seeds.
+        // The oracle uses transitive closure, independently of the SCC engine.
+        for encoded in 0u32..(1 << 15) {
+            let masks: [u32; 3] = std::array::from_fn(|i| (encoded >> (5 * i)) & 31);
+            let inputs: BTreeMap<_, _> = (0..3)
+                .map(|i| {
+                    (
+                        values[i],
+                        values
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(j, value)| (masks[i] & (1 << j) != 0).then_some(*value))
+                            .collect(),
+                    )
+                })
+                .collect();
+            let mut reachable: [[bool; 3]; 3] = std::array::from_fn(|i| {
+                std::array::from_fn(|j| i == j || masks[i] & (1 << j) != 0)
+            });
+            for via in 0..3 {
+                for from in 0..3 {
+                    for to in 0..3 {
+                        reachable[from][to] |= reachable[from][via] && reachable[via][to];
+                    }
+                }
+            }
+            let seeds: [u32; 3] = std::array::from_fn(|i| {
+                (0..3)
+                    .filter(|&j| reachable[i][j])
+                    .fold(0, |all, j| all | (masks[j] & 24))
+            });
+            let expected: BTreeMap<_, _> = (0..3)
+                .map(|i| {
+                    let invalid = (0..3).any(|j| reachable[i][j] && seeds[j] == 0);
+                    let origin = if invalid {
+                        None
+                    } else {
+                        match seeds[i] {
+                            8 => Some(values[3]),
+                            16 => Some(values[4]),
+                            _ => None,
+                        }
+                    };
+                    (values[i], origin)
+                })
+                .collect();
+            assert_eq!(legacy(&inputs), expected, "edge subsets {masks:?}");
+        }
+    }
+
+    #[test]
     fn every_structural_resource_variant_preserves_its_exact_diagnostic() {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(13);
         work.charge_work(11).unwrap();

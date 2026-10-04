@@ -1797,6 +1797,24 @@ fn pack_arguments<'allocation>(
                 pointer_width,
                 ..
             } => {
+                let AbiKind::Slice {
+                    element_alignment, ..
+                } = plan.fields[argument_index].kind()
+                else {
+                    return Err(GeneratedArgumentPackError::KindMismatch {
+                        argument_index,
+                        expected: "slice",
+                        provided: "non-slice",
+                    });
+                };
+                // Even an empty Rust slice requires a non-null, type-aligned pointer.
+                // Nonempty slices remain placeholders until the retained KFD fixup.
+                let address = if length == 0 {
+                    u64::from(element_alignment)
+                } else {
+                    0
+                };
+                let pointer = encode_width(address, pointer_width);
                 let pointer_component = exact_component(
                     plan,
                     argument_index,
@@ -1806,7 +1824,7 @@ fn pack_arguments<'allocation>(
                     &mut bytes,
                     plan.kernarg_size,
                     pointer_component,
-                    &[0_u8; 8][..usize::try_from(pointer_width.bytes()).expect("width is bounded")],
+                    &pointer[..usize::try_from(pointer_width.bytes()).expect("width is bounded")],
                 )?;
 
                 let encoded_length = encode_width(length, pointer_width);
@@ -3766,6 +3784,7 @@ mod tests {
     }
 
     include!("generated_argument_plan_output_length_tests.rs");
+    include!("generated_argument_plan_empty_slice_v1_tests.rs");
 
     #[test]
     fn reordered_inputs_are_deterministic_and_padding_never_leaks() {

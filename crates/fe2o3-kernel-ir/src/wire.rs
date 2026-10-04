@@ -906,11 +906,11 @@ fn decode_module_impl_v1(
         kernels,
         required_capabilities,
     };
-    if version != KERNEL_IR_VERSION_V18 {
-        if let Some(budget) = budget.as_mut() {
-            charge_legacy_function_role_work_v1(&module, budget.work_budget())
-                .map_err(KernelIrDecodeError::WorkLimit)?;
-        }
+    if version != KERNEL_IR_VERSION_V18
+        && let Some(budget) = budget.as_mut()
+    {
+        charge_legacy_function_role_work_v1(&module, budget.work_budget())
+            .map_err(KernelIrDecodeError::WorkLimit)?;
     }
     let allocation_scratch = if let Some(budget @ DecodeBudgetV12::Resources(_)) = budget.as_mut() {
         let extent = count_module_with_work_v1(&module, version, budget.work_budget(), false)?;

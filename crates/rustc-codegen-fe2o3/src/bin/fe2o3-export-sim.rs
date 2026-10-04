@@ -14,6 +14,8 @@ const OUTPUT_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const OUTPUT_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
 const DIAGNOSTIC_KIR_ENV_V16: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V16";
 const DIAGNOSTIC_KIR_ENV_V17: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V17";
+#[path = "shared/cargo_target_selection_v1.rs"]
+mod cargo_target_selection_v1;
 #[path = "fe2o3-export-sim/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
 
@@ -84,6 +86,7 @@ struct Options {
     format: ExportFormat,
     diagnostic_ordered_origin: Option<PathBuf>,
     cargo_args: Vec<OsString>,
+    selected_target: Option<cargo_target_selection_v1::Selection>,
 }
 
 fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
@@ -96,6 +99,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
     let mut diagnostic_kir_v17 = false;
     let mut diagnostic_ordered_origin = None;
     let mut cargo_args = Vec::new();
+    let mut bin_name = None;
+    let mut bin_source = None;
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
         if argument == "--" {
@@ -123,6 +128,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             | "--target"
             | "--target-dir"
             | "--bundle-version"
+            | "--bin-name"
+            | "--bin-source"
             | "--diagnostic-ordered-origin-v1" => args
                 .next()
                 .ok_or_else(|| format!("{argument} requires a value"))?,
@@ -130,6 +137,23 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             _ => return Err(format!("unknown option {argument:?}\n{}", usage())),
         };
         match argument {
+            "--bin-name" => {
+                if bin_name
+                    .replace(
+                        value
+                            .into_string()
+                            .map_err(|_| "--bin-name must be UTF-8")?,
+                    )
+                    .is_some()
+                {
+                    return Err("--bin-name may be specified only once".into());
+                }
+            }
+            "--bin-source" => {
+                if bin_source.replace(PathBuf::from(value)).is_some() {
+                    return Err("--bin-source may be specified only once".into());
+                }
+            }
             "--crate" => {
                 let value = value
                     .into_string()
@@ -250,6 +274,18 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         &output,
     )?;
     reject_cargo_override_args(&cargo_args)?;
+    let selected_target = match (bin_name, bin_source) {
+        (None, None) => None,
+        (Some(name), Some(source)) => {
+            reject_bin_target_overrides(&cargo_args)?;
+            Some(cargo_target_selection_v1::Selection::bin(
+                name,
+                absolute_path(current_dir, source),
+                &crate_name,
+            )?)
+        }
+        _ => return Err("--bin-name and --bin-source must be supplied together".into()),
+    };
     Ok(Options {
         crate_name,
         output,
@@ -258,6 +294,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         format,
         diagnostic_ordered_origin,
         cargo_args,
+        selected_target,
     })
 }
 
@@ -301,6 +338,38 @@ fn reject_cargo_override_args(args: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
+fn reject_bin_target_overrides(args: &[OsString]) -> Result<(), String> {
+    for argument in args {
+        let Some(argument) = argument.to_str() else {
+            continue;
+        };
+        if [
+            "--lib",
+            "--bin",
+            "--bins",
+            "--test",
+            "--tests",
+            "--bench",
+            "--benches",
+            "--example",
+            "--examples",
+            "--all-targets",
+        ]
+        .iter()
+        .any(|option| {
+            argument == *option
+                || argument
+                    .strip_prefix(option)
+                    .is_some_and(|tail| tail.starts_with('='))
+        }) {
+            return Err(format!(
+                "Cargo argument {argument:?} conflicts with the exact bin target"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn run(args: Vec<OsString>) -> Result<(), String> {
     reject_conflicting_environment()?;
     let current_dir = env::current_dir()
@@ -328,6 +397,10 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     let loader_path = env::join_paths([wrapper_dir, rustc_lib.as_path()])
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let selected_target = options
+        .selected_target
+        .map(|selected| selected.with_primary_package(&cargo, &options.cargo_args))
+        .transpose()?;
     let output_env = options.format.output_env();
     let mut command = Command::new(cargo);
     command
@@ -365,6 +438,11 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env_remove(DIAGNOSTIC_KIR_ENV_V17)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
+    if let Some(selected) = &selected_target {
+        command
+            .args(["--bin", selected.name()])
+            .env(cargo_target_selection_v1::ENV, selected.encode()?);
+    }
     if let Some(origin) = options.diagnostic_ordered_origin.as_deref() {
         command.env(ordered_origin_v1::OUTPUT_ENV, origin);
     }
@@ -439,7 +517,7 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 15] {
+const fn conflicting_extraction_environment() -> [&'static str; 16] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
@@ -450,6 +528,7 @@ const fn conflicting_extraction_environment() -> [&'static str; 15] {
         DIAGNOSTIC_KIR_ENV_V16,
         DIAGNOSTIC_KIR_ENV_V17,
         ordered_origin_v1::OUTPUT_ENV,
+        cargo_target_selection_v1::ENV,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -481,13 +560,14 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted.\n       fe2o3-export-sim --diagnostic-kir-v17 --crate <rustc-crate-name> --output <program.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V17 is raw pre-ranked CPU/debug input for the closed one-to-sixteen-step ordered u32 program. V16, V17 and --bundle-version are mutually exclusive; raw diagnostics carry no source authentication, production resume or proof/artifact/load/launch authority. No production fallback is attempted.\nOptional --diagnostic-ordered-origin-v1 <fresh.json> is accepted only with --diagnostic-kir-v17 and emits a separate bounded, inert region-origin report; no source authentication, fine-step ancestry or physical-register lifetime authority is granted."
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted.\n       fe2o3-export-sim --diagnostic-kir-v17 --crate <rustc-crate-name> --output <program.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V17 is raw pre-ranked CPU/debug input for the closed one-to-sixteen-step ordered u32 program. V16, V17 and --bundle-version are mutually exclusive; raw diagnostics carry no source authentication, production resume or proof/artifact/load/launch authority. No production fallback is attempted.\nOptional --bin-name <explicit Cargo target> --bin-source <exact target root> selects one bin and binds its original rustc kind/source path; Cargo target selectors after -- then conflict. This is an extraction selector, not source or execution authority. Without these options existing Cargo/lib selection is unchanged.\nOptional --diagnostic-ordered-origin-v1 <fresh.json> is accepted only with --diagnostic-kir-v17 and emits a separate bounded, inert region-origin report; no source authentication, fine-step ancestry or physical-register lifetime authority is granted."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     include!("fe2o3-export-sim/ordered_program_v17_tests.rs");
+    include!("fe2o3-export-sim/bin_target_v1_tests.rs");
 
     fn diagnostic_args() -> Vec<OsString> {
         [

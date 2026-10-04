@@ -124,6 +124,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-process-identity
   fe2o3-profiler-protocol
   fe2o3-proof-contracts
+  fe2o3-protected-service-profile
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-service-host
@@ -144,6 +145,15 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-verifier
   reserved-fe2o3-symbols
 )
+readonly HOST_REFERENCE_EXAMPLES=(
+  rmsnorm_residual_v1
+  qwen3_gqa_prefill_v1
+  qwen3_paged_gqa_decode_v1
+  qwen3_swiglu_v1
+  qwen3_logits_compact_v1
+  qwen3_rope_kv_v1
+  qwen3_linear_reference_v1
+)
 
 usage() {
   cat <<'EOF'
@@ -151,7 +161,8 @@ Usage: scripts/ci-local.sh <command>
 
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
-  generic-core    Run generic validation except codegen integration shards
+  generic-core [group]  Run all core validation or policy, cpu, auxiliary, or cpu-<group>
+                         CPU groups: foundation, analysis, lowering, pliron, finalize, integration
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -162,6 +173,7 @@ Commands:
   format          Check Rust formatting
   check           Check every workspace target, including example binaries
   test            Run unit tests that do not link or load the HIP runtime
+  host-reference  Validate standalone host-only numerical reference models
   workspace-test  Run every workspace test target; may require ROCm libraries
   rustc-codegen-test  Run backend library and integration tests without dylib replacement
   backend         Build the rustc codegen backend dylib
@@ -248,18 +260,19 @@ run_step() {
 validate_private_directory() {
   local label="$1"
   local directory="$2"
-  local canonical mode owner
+  local canonical mode owner current_owner
 
   [[ "${directory}" == /* && -d "${directory}" && ! -L "${directory}" ]] || {
     printf '%s must be an absolute non-symlink directory: %s\n' \
       "${label}" "${directory}" >&2
     return 2
   }
-  canonical="$(realpath --canonicalize-existing -- "${directory}")"
-  mode="$(stat -c '%a' -- "${directory}")"
-  owner="$(stat -c '%u' -- "${directory}")"
+  canonical="$(realpath --canonicalize-existing -- "${directory}")" || return $?
+  mode="$(stat -c '%a' -- "${directory}")" || return $?
+  owner="$(stat -c '%u' -- "${directory}")" || return $?
+  current_owner="$(id -u)" || return $?
   if [[ "${canonical}" != "${directory}" ]] ||
-    ((8#${mode} & 8#077)) || [[ "${owner}" != "$(id -u)" ]]; then
+    ((8#${mode} & 8#077)) || [[ "${owner}" != "${current_owner}" ]]; then
     printf '%s must be canonical, owner-held, and private: %s\n' \
       "${label}" "${directory}" >&2
     return 2
@@ -267,29 +280,44 @@ validate_private_directory() {
 }
 
 resolve_cargo_target_directory() {
-  local target_directory canonical
+  local target_directory canonical mode="${1-existing}"
+  case "${mode}" in
+    existing | create-private) ;;
+    *) printf 'unknown Cargo target preparation mode: %s\n' "${mode}" >&2; return 2 ;;
+  esac
   target_directory="$(
     cargo metadata --locked --no-deps --format-version 1 |
       python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
-  )"
+  )" || return $?
   if [[ "${target_directory}" != /* ]] ||
     [[ "${target_directory}" == *$'\n'* ]]; then
     printf 'Cargo reported an invalid target directory: %q\n' \
       "${target_directory}" >&2
     return 2
   fi
+  # Cold package lanes have no preceding build to create this metadata-bound root.
+  if [[ "${mode}" == create-private && ! -e "${target_directory}" &&
+    ! -L "${target_directory}" ]]; then
+    canonical="$(realpath --canonicalize-missing -- "${target_directory}")" || return $?
+    [[ "${canonical}" == "${target_directory}" ]] || {
+      printf 'new Cargo target directory must be canonical: %s\n' \
+        "${target_directory}" >&2
+      return 2
+    }
+    mkdir -p -m 700 -- "${target_directory}" || return $?
+  fi
   [[ -d "${target_directory}" && ! -L "${target_directory}" ]] || {
     printf 'Cargo target directory is not a real directory: %s\n' \
       "${target_directory}" >&2
     return 2
   }
-  canonical="$(realpath --canonicalize-existing -- "${target_directory}")"
+  canonical="$(realpath --canonicalize-existing -- "${target_directory}")" || return $?
   if [[ "${canonical}" != "${target_directory}" ]]; then
     printf 'Cargo target directory must already be canonical: %s\n' \
       "${target_directory}" >&2
     return 2
   fi
-  validate_private_directory 'Cargo target directory' "${canonical}"
+  validate_private_directory 'Cargo target directory' "${canonical}" || return $?
   printf '%s\n' "${canonical}"
 }
 
@@ -390,6 +418,7 @@ prepare_private_tmp_root() {
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
   local driver_profile="$2"
+  local target_mode="${3-existing}"
   local metadata_receipt receipt built_binary built_sha256
   local -a driver_identity feature_args=()
 
@@ -403,7 +432,7 @@ prepare_cargo_fe2o3_driver() {
   esac
   CARGO_FE2O3_DRIVER_PROFILE=
 
-  CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory)"
+  CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory "${target_mode}")"
   prepare_private_tmp_root
   metadata_receipt="$(mktemp -- "${TMPDIR}/cargo-fe2o3-metadata.XXXXXX.json")"
   cargo metadata --locked --no-deps --format-version 1 >"${metadata_receipt}"
@@ -494,7 +523,7 @@ ensure_production_cargo_fe2o3_driver() {
       validate_cargo_fe2o3_driver
       ;;
     "")
-      prepare_cargo_fe2o3_driver "${step_prefix}" production
+      prepare_cargo_fe2o3_driver "${step_prefix}" production "${2-existing}"
       ;;
     *)
       printf 'CPU tests cannot reuse %s cargo-fe2o3 driver as production\n' \
@@ -680,17 +709,131 @@ run_runtime_release_tests() {
       --features hardware-qualification --lib -- --test-threads=1
 }
 
+run_host_reference_tests() {
+  local example manifest
+  local target="${DEFAULT_CARGO_TARGET_ROOT}/host-reference"
+  for example in "${HOST_REFERENCE_EXAMPLES[@]}"; do
+    manifest="examples/${example}/Cargo.toml"
+    run_step "host-reference-${example}-format" \
+      cargo fmt --manifest-path "${manifest}" -- --check
+    run_step "host-reference-${example}-clippy" \
+      cargo clippy --locked --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- -D warnings
+    run_step "host-reference-${example}-test" \
+      cargo test --locked --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- --test-threads=1
+    run_step "host-reference-${example}-release" \
+      cargo test --locked --release --manifest-path "${manifest}" --target-dir "${target}" \
+        --all-targets --all-features -- --test-threads=1
+    run_step "host-reference-${example}-doc" \
+      env RUSTDOCFLAGS="-D warnings" \
+        cargo doc --locked --manifest-path "${manifest}" --target-dir "${target}" --no-deps
+  done
+}
+
+run_workspace_dependency_bootstrap() {
+  # Offline closure checks include optional workspace packages that the selected
+  # test binary need not build. Each isolated lane must fetch their locked input.
+  run_step "$1-workspace-dependencies" \
+    cargo fetch --locked --manifest-path "${REPO_ROOT}/Cargo.toml"
+}
+
+# Keep one package roster. Unlisted ordinary CPU packages enter foundation;
+# isolate the existing expensive suites without selecting individual tests.
+load_cpu_package_group() {
+  if (($# != 2)); then
+    printf 'CPU package group requires a group and destination\n' >&2
+    return 2
+  fi
+  local requested="$1" package group
+  # shellcheck disable=SC2178  # The destination is a caller-owned array nameref.
+  local -n selected="$2"
+  local -A seen=()
+  case "${requested}" in
+    foundation | analysis | lowering | pliron | finalize) ;;
+    *) printf 'unknown CPU package group: %s\n' "${requested}" >&2; return 2 ;;
+  esac
+  selected=()
+  for package in "${CPU_TEST_PACKAGES[@]}"; do
+    if [[ -z "${package}" ]]; then
+      printf 'empty CPU package in the required roster\n' >&2
+      return 2
+    fi
+    if [[ -n "${seen[${package}]+selected}" ]]; then
+      printf 'duplicate CPU package: %s\n' "${package}" >&2
+      return 2
+    fi
+    seen["${package}"]=1
+    case "${package}" in
+      fe2o3-kernel-analysis | fe2o3-kernel-ir | fe2o3-mir-model | fe2o3-verifier)
+        group=analysis ;;
+      fe2o3-lower-mir-kernel) group=lowering ;;
+      fe2o3-pliron | fe2o3-pliron-conformance) group=pliron ;;
+      fe2o3-hsaco-finalize) group=finalize ;;
+      *) group=foundation ;;
+    esac
+    [[ "${group}" != "${requested}" ]] || selected+=("${package}")
+  done
+  if ((${#selected[@]} == 0)); then
+    printf 'empty CPU package group: %s\n' "${requested}" >&2
+    return 2
+  fi
+}
+
+run_pliron_default_api_tests() {
+  run_step fe2o3-pliron-default-api-ui \
+    cargo test --locked -p fe2o3-pliron --no-default-features \
+      --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+}
+
+run_cpu_package_group() {
+  if (($# != 1)); then
+    printf 'CPU package tests require exactly one group\n' >&2
+    return 2
+  fi
+  local group="$1" package
+  local -a packages cargo_args=(test --locked)
+  load_cpu_package_group "${group}" packages
+  run_workspace_dependency_bootstrap "cpu-${group}"
+  # Each isolated lane must resolve tracked standalone locks before offline fixtures.
+  run_standalone_lockfiles
+  ensure_production_cargo_fe2o3_driver "cpu-${group}" create-private
+  for package in "${packages[@]}"; do
+    cargo_args+=(-p "${package}")
+  done
+  if [[ "${group}" == pliron ]]; then
+    run_pliron_default_api_tests
+  fi
+  run_step "cpu-${group}-tests" \
+    env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+}
+
 run_cpu_tests() {
+  if (($# > 1)); then
+    printf 'CPU tests accept at most one mode\n' >&2
+    return 2
+  fi
+  local mode="${1-all}" package_step=cpu-tests
+  case "${mode}" in
+    all) ;;
+    integration) package_step=cpu-integration-tests ;;
+    *) printf 'unknown CPU test mode: %s\n' "${mode}" >&2; return 2 ;;
+  esac
+  run_workspace_dependency_bootstrap cpu
+  run_standalone_lockfiles
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
   local -a raw_cpu_examples wrapper_cpu_examples wrapper_managed_packages
   local -a loader_environment_removals
   local -A selected_cpu_examples=()
   local package
+  run_host_reference_tests
   ensure_production_cargo_fe2o3_driver cpu-tests
-  for package in "${CPU_TEST_PACKAGES[@]}"; do
-    cargo_args+=(-p "${package}")
-  done
+  if [[ "${mode}" == all ]]; then
+    for package in "${CPU_TEST_PACKAGES[@]}"; do
+      cargo_args+=(-p "${package}")
+    done
+  fi
   load_example_packages cpu-test-raw raw_cpu_examples "${CARGO_FE2O3_BINARY}"
   load_example_packages cpu-test-wrapper-managed wrapper_cpu_examples \
     "${CARGO_FE2O3_BINARY}"
@@ -720,11 +863,14 @@ run_cpu_tests() {
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
       --test worker_v3_load_envelope_vertical --test worker_v3_load_envelope_v2 -- --test-threads=1
-  run_step fe2o3-pliron-default-api-ui \
-    cargo test --locked -p fe2o3-pliron --no-default-features \
-      --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+  if [[ "${mode}" == all ]]; then
+    run_pliron_default_api_tests
+  fi
   run_artifact_transaction_tests
-  run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  # Empty dynamic raw examples must never become workspace-wide Cargo.
+  if [[ "${mode}" == all ]] || ((${#raw_cpu_examples[@]} > 0)); then
+    run_step "${package_step}" env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  fi
   run_runtime_release_tests
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
@@ -763,6 +909,7 @@ run_cpu_tests() {
 }
 
 run_auxiliary_tests() {
+  run_workspace_dependency_bootstrap auxiliary
   # The default core is a DeviceCopy-only contract crate. Deprecated HIP/HSA
   # compatibility is qualified separately and never enters default resolution.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
@@ -964,12 +1111,20 @@ load_rustc_codegen_shard_targets() {
 }
 
 run_rustc_codegen_lib_tests() {
+  # Offline build-std tests resolve the selected toolchain's complete sysroot
+  # lockfile, which is not part of the ordinary workspace dependency closure.
+  run_step rustc-codegen-sysroot-dependencies \
+    bash "${SCRIPT_DIR}/fetch-rustc-sysroot.sh"
   # Do not combine this with integration targets: Cargo can emit a test rlib
   # and an unversioned backend dylib with different Rust symbol hashes.
   # Keep the aggregate rustc-private harness bounded like the isolated targets;
   # full debuginfo can exceed the executable identity measurement limit.
   run_step rustc-codegen-lib-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+    env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+  run_step rustc-codegen-extractor-bin-tests \
+    env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --bin fe2o3-rustc-extract
+  run_step rustc-codegen-exporter-bin-tests \
+    env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --bin fe2o3-export-sim
 }
 
 run_rustc_codegen_target() {
@@ -1073,10 +1228,10 @@ run_workspace_tests() {
 }
 
 run_backend_build() {
-  run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
+  run_step backend-check-tests python3 -B scripts/tests/check-rustc-codegen-backend.py
+  run_step backend-build python3 -B scripts/check-rustc-codegen-backend.py
   run_step backend-all-features-build \
-    env CARGO_PROFILE_DEV_DEBUG=1 \
-      cargo build --locked -p rustc-codegen-fe2o3 --all-features
+    python3 -B scripts/check-rustc-codegen-backend.py --all-features
 }
 
 run_verus() {
@@ -1094,6 +1249,9 @@ run_verus() {
   run_step mir-pliron-per-compilation-verus \
     env VERUS="${default_verus}" \
       "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
+  run_step qwen3-rope-kv-verus \
+    env VERUS="${default_verus}" \
+      sh "${REPO_ROOT}/examples/qwen3_rope_kv_v1/run-verus.sh"
 }
 
 run_authority_launcher_tests() {
@@ -1233,6 +1391,35 @@ run_parity_matrix_checks() {
 }
 
 run_generic_core() {
+  if (($# > 1)); then
+    printf 'generic-core accepts at most one group\n' >&2
+    return 2
+  fi
+  local group="${1-all}"
+  case "${group}" in
+    all | policy) ;;
+    cpu)
+      run_cpu_tests
+      return
+      ;;
+    cpu-foundation | cpu-analysis | cpu-lowering | cpu-pliron | cpu-finalize)
+      run_cpu_package_group "${group#cpu-}"
+      return
+      ;;
+    cpu-integration)
+      run_cpu_tests integration
+      return
+      ;;
+    auxiliary)
+      run_rustc_codegen_lib_tests
+      run_auxiliary_tests
+      return
+      ;;
+    *)
+      printf 'unknown generic-core group: %s\n' "${group}" >&2
+      return 2
+      ;;
+  esac
   run_workspace_dependency_policy
   run_standalone_lockfiles
   run_runtime_pure_rust_policy
@@ -1269,9 +1456,14 @@ run_generic_core() {
     cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
       f32-run-v3
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
-  run_cpu_tests
-  run_rustc_codegen_lib_tests
-  run_auxiliary_tests
+  run_step generic-core-group-tests \
+    python3 -I -B scripts/tests/generic-core-groups.py
+  run_step generic-cpu-group-tests \
+    python3 -I -B scripts/tests/generic-cpu-groups.py
+  if [[ "${group}" == all ]]; then
+    run_generic_core cpu
+    run_generic_core auxiliary
+  fi
 }
 
 run_generic() {
@@ -1360,6 +1552,16 @@ run_rocm_compile() {
       cargo test --locked -p rustc-codegen-fe2o3 \
         --test production_ranked_bounds_driver_v1 \
         ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle -- \
+        --ignored --exact
+  run_step rocm-production-explicit-bin-source-dependencies \
+    env "${loader_environment_removals[@]}" \
+      cargo fetch --locked --manifest-path \
+        crates/rustc-codegen-fe2o3/tests/fixtures/production-explicit-bin-device/Cargo.toml
+  run_step rocm-production-explicit-bin-source-sim \
+    env "${loader_environment_removals[@]}" CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_library -- \
         --ignored --exact
   run_step rocm-production-simulation-bundle-gfx950 \
     env "${loader_environment_removals[@]}" \
@@ -1595,7 +1797,7 @@ main() {
 
   case "${1:-}" in
     generic) run_generic ;;
-    generic-core) run_generic_core ;;
+    generic-core) run_generic_core "${@:2}" ;;
     workspace-policy) run_workspace_dependency_policy ;;
     hygiene-delta)
       if (($# != 3)); then
@@ -1618,6 +1820,7 @@ main() {
     format) run_format ;;
     check) run_check ;;
     test) run_tests ;;
+    host-reference) run_host_reference_tests ;;
     workspace-test) run_workspace_tests ;;
     rustc-codegen-test) run_rustc_codegen_tests ;;
     backend) run_backend_build ;;

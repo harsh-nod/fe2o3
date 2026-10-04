@@ -595,11 +595,12 @@ fn storage_wire_enum_construction_uses_new_literal_tags_and_exact_primitive_work
         assert_eq!(work.work(), short_prefix);
         assert_eq!(work.failed_work(), Some(literal.len()));
         let mut work = CanonicalKernelIrWorkBudgetV1::new(literal.len());
-        let mut reader = Reader::new(&literal, Some(DecodeBudgetV12::Work(&mut work)));
-        reader.version = 18;
-        assert_eq!(decode_operation_kind(&mut reader).unwrap(), kind);
-        assert!(reader.is_finished());
-        drop(reader);
+        {
+            let mut reader = Reader::new(&literal, Some(DecodeBudgetV12::Work(&mut work)));
+            reader.version = 18;
+            assert_eq!(decode_operation_kind(&mut reader).unwrap(), kind);
+            assert!(reader.is_finished());
+        }
         assert_eq!(work.work(), literal.len());
         for version in [1, 12, 15, 16, 17] {
             let mut old = Writer::new(version, None);

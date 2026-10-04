@@ -145,7 +145,7 @@ fn actual_preowner_singleton_helpers_join_all_six_inline_values_to_exact_source_
         let (result, storage, _, _, _) = run(1_000_000, 16 * 1024 * 1024, |meter, _| {
             join(&owner, helper(module), &owner.correspondence, meter)?;
             with_native_helper_values(
-                owner.semantic_ssa.source_semantic(),
+                &owner.semantic_ssa,
                 module,
                 &owner.correspondence,
                 SemanticFunctionIdV1::from_index(0),
@@ -278,7 +278,7 @@ fn native_inline_helper_cache_exact_cumulative_work_and_storage_refuse_one_short
     let (location, operation) = call(entry);
     let probe = |meter: &mut TestMeter<'_, '_>, _: &Cell<bool>| {
         with_native_helper_values(
-            owner.semantic_ssa.source_semantic(),
+            &owner.semantic_ssa,
             module,
             &owner.correspondence,
             SemanticFunctionIdV1::from_index(0),

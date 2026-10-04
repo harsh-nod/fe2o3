@@ -154,13 +154,13 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         lessons = curriculum["lessons"]
         self.assertEqual(len(lessons), 56)
         self.assertEqual(Counter(lesson["role"] for lesson in lessons), {"executable": 46, "conceptual": 10})
-        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 307)
+        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 314)
         self.assertEqual(
             [lesson["lessonId"] for lesson in lessons if any(v["kind"] == "mixed" for v in lesson["variants"])],
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "38ea77abf8da882a0570d784aaf6a9d55f0b0359e18295f9afd3602571202ce4")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "845f4bf921ebaca8bd523e6bf9ec348b908e7f749b44f7241b29511a69919661")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -285,8 +285,10 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         gaps = {}
         self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
         self.assertEqual(gaps, {
+            "cpu-semantic-simulation": ["examples/workgroup_sync_v1/src/kernel_mixed_tile_u32.rs"],
             "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
         })
+        self.curriculum_lesson("cpu-semantic-simulation")["sourceBindingGap"] = None
         tab = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
         tab.update(sourceItem=None, sourceItemStatus="pending")
         with self.assertRaisesRegex(SystemExit, "sourceBindingGap.*production-ranked-bounds-device"):
@@ -457,8 +459,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         identities = report["kernelInventory"]
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 123)
-            self.assertEqual(counts["pendingVariantCount"], 121)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 27)
+            self.assertEqual(counts["pendingVariantCount"], 101)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 5)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -470,14 +472,14 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
         self.assertEqual(len(report["fixtureSelections"]), 50)
         self.assertEqual(len(report["sourceDriverCases"]), 14)
-        self.assertEqual(len(report["displayObservations"]), 54)
+        self.assertEqual(len(report["displayObservations"]), 58)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
-                             for row in report["displayObservations"]), 52)
+                             for row in report["displayObservations"]), 56)
         self.assertTrue(all(row["lexicalKernelNames"] is None
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertEqual(report["variantBindingStatus"], "partial")
-        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
@@ -638,33 +640,53 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "e9368a4811197310217d959573c69e5cd04c649fb5e5dfe24e9b069db0ac712b")
+                         "40dd8565482c3cf80e9cefde05c7cdd96f87a5c7535c4a8b90175cd5c527d295")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 75, "required-negative": 3, "conceptual": 26, "helper": 18})
+                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 19})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 29, "source-driver-contract": 14, "fixture-source-contract": 35,
-                          "not-applicable": 44})
+                         {"pending": 6, "source-driver-contract": 14, "fixture-source-contract": 63,
+                          "not-applicable": 45})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
                  for row in inventory["kernels"] for variant in row["variants"]
                  if variant["status"] == "source-bound"]
         self.assertEqual(bound, [
             ("fixture:gfx942-fill-simulation:fill", "simt"),
+            ("fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1", "simt"),
+            ("fixture:gfx942-scalar-gemm:scalar_gemm_v1", "simt"),
+            ("fixture:gfx942-typed-vecadd-source:vecadd", "simt"),
+            ("fixture:gfx942-wave64-collectives:wave64_collectives_v1", "simt"),
+            ("fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1", "simt"),
+            ("fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate", "simt"),
+            ("fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate", "simt"),
+            ("fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention", "simt"),
+            ("fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention", "simt"),
+            ("fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention", "simt"),
+            ("fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention", "simt"),
+            ("fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention", "simt"),
+            ("fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual", "simt"),
+            ("fixture:gfx950-four-branch-residual:gfx950_four_branch_residual", "simt"),
+            ("fixture:gfx950-kda-decode-baseline:gfx950_kda_decode", "simt"),
+            ("fixture:gfx950-kda-decode:gfx950_kda_decode", "simt"),
+            ("fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill", "simt"),
+            ("fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill", "simt"),
+            ("fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix", "simt"),
+            ("fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix", "simt"),
             ("source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1", "simt"),
         ])
         pending = [variant for row in inventory["kernels"] for variant in row["variants"]
                    if variant["status"] == "pending"]
-        self.assertEqual(len(pending), 121)
+        self.assertEqual(len(pending), 101)
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
         fill = display[("first-fill", 0, "fill")]
         self.assertEqual(fill["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
-        self.assertEqual(fill["bindingStatus"], "pending")
+        self.assertEqual(fill["bindingStatus"], "fixture-source-contract")
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
         for row in inventory["displayItems"]:
-            if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
+            if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel" and row["tabOrdinal"] < 5:
                 self.assertEqual(row["kernelIds"], [])
 
     def test_attention_sources_have_distinct_required_pending_obligations(self):
@@ -921,7 +943,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(self.manifest, before)
         self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -933,19 +955,37 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
     def test_historical_fill_display_does_not_bind_the_migrated_source(self):
         lesson = self.curriculum_lesson()
         tab = lesson["codeTabs"][0]
-        self.assertEqual(tab["sourceCommit"], "7a536e0a001202ac0bb9d8647c5395661f8fa1ec")
-        self.assertEqual(tab["displayedUtf8Bytes"], 308)
+        self.assertEqual(tab["sourceCommit"], "f84c2a59ba34c3e4c12e316cc9b30f14342e36cf")
+        self.assertEqual(tab["displayedUtf8Bytes"], 680)
         self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
         current = (ROOT / "examples/fill/src/lib.rs").read_bytes()
-        self.assertNotEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
+        self.assertEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
         display = next(row for row in self.manifest["kernelInventory"]["displayItems"]
                        if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
                        and row["kernelSymbol"] == "fill")
-        self.assertEqual(display["bindingStatus"], "pending")
+        self.assertEqual(display["bindingStatus"], "fixture-source-contract")
         self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
-        display["bindingStatus"] = "fixture-source-contract"
+        # The previous whole-file identity still cannot bind the current source.
+        stale = copy.deepcopy(self.manifest)
+        stale_lesson = next(row for row in stale["curriculum"]["lessons"]
+                            if row["lessonId"] == "first-fill")
+        stale_lesson["codeTabs"][0].update(
+            sourceCommit="7a536e0a001202ac0bb9d8647c5395661f8fa1ec",
+            displayedUtf8Bytes=308,
+            displayedSha256="827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            sourceSha256="827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+        )
+        stale["kernelInventory"]["displayItems"] = [
+            row for row in stale["kernelInventory"]["displayItems"]
+            if not (row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
+                    and row["kernelSymbol"] == "fill_reference")
+        ]
+        stale_display = next(row for row in stale["kernelInventory"]["displayItems"]
+                             if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
+                             and row["kernelSymbol"] == "fill")
+        stale_display["functionUtf8Offset"] = 148
         with self.assertRaisesRegex(SystemExit, "fixture display differs from the exact current source occurrence"):
-            self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+            self.validator.validate_kernel_inventory(stale, None, repo_root=ROOT)
 
     def test_fill_reference_proof_is_opt_in_not_a_replacement_manifest_selection(self):
         fill = next(row for row in self.manifest["compilerFixtures"]
@@ -972,7 +1012,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 3)
+        self.assertEqual(report["sourceBoundVariantCount"], 23)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)

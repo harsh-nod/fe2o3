@@ -24,6 +24,7 @@ MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 MAX_IDENTITY_BYTES = 16 * 1024 * 1024
 MAX_CFG_TOKENS = 512
 MAX_INCLUDE_DEPTH = 32
+BUILTIN_DERIVES = frozenset({"Clone", "Copy", "Debug", "Default", "Eq", "PartialEq", "Ord", "PartialOrd", "Hash"})
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
@@ -94,6 +95,7 @@ class _Budget:
         self.maximum = maximum
         self.used = 0
         self.attribute_visits = 0
+        self.source_item_visits = 0
         self.identity_bytes = 0
         self.source_bytes = 0
         self.fragment_match_bytes = 0
@@ -115,6 +117,11 @@ class _Budget:
         if self.attribute_visits >= self.maximum:
             _fail("fixture selection attributes exceed their aggregate visit bound")
         self.attribute_visits += 1
+
+    def visit_source_item(self) -> None:
+        if self.source_item_visits >= self.maximum:
+            _fail("fixture source items exceed their aggregate visit bound")
+        self.source_item_visits += 1
 
 
 def _reference(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -356,7 +363,7 @@ def _fixture_trivia_end(source: str, start: int, end: int) -> int:
 
 def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int, end: int,
                        features: set[str], budget: _Budget, inner: bool,
-                       depth: int = 0) -> tuple[bool, int]:
+                       depth: int = 0, derives: set[str] | None = None) -> tuple[bool, int]:
     """Evaluate a bounded attribute subset, separately from the lexical census."""
     if depth > 32:
         _fail("fixture selection attribute exceeds its nesting bound")
@@ -407,10 +414,33 @@ def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int
             # Validate inactive branches too. Unsupported transformations must
             # not disappear simply because this particular feature is absent.
             child_enabled, child_kernels = _fixture_attribute(
-                source, code, pairs, first, last, features, budget, inner, depth + 1)
+                source, code, pairs, first, last, features, budget, inner, depth + 1, derives)
             enabled = enabled and child_enabled
             kernels += child_kernels
         return (enabled, kernels) if active else (True, 0)
+    if name == "derive":
+        if inner or arguments is None or derives is None:
+            _fail("unsupported fixture selection attribute")
+        cursor, last = arguments
+        names = set()
+        while True:
+            cursor = _fixture_trivia_end(source, cursor, last)
+            token = IDENTIFIER.match(source, cursor, last)
+            if token is None or token[0] not in BUILTIN_DERIVES or token[0] in names:
+                _fail("unsupported fixture builtin derive")
+            names.add(token[0])
+            cursor = _fixture_trivia_end(source, token.end(), last)
+            if cursor == last:
+                break
+            if source[cursor] != ",":
+                _fail("unsupported fixture builtin derive")
+            cursor = _fixture_trivia_end(source, cursor + 1, last)
+            if cursor == last:
+                break
+        if derives.intersection(names):
+            _fail("duplicate fixture builtin derive")
+        derives.update(names)
+        return True, 0
     if name == "no_std" and inner and depth == 0 and arguments is None:
         return True, 0
     if name not in {"allow", "deny", "forbid", "warn", "doc", "inline", "kernel"}:
@@ -446,15 +476,22 @@ class _FixtureIncludeScope:
         self.names: set[str] = set()
         self.ambiguous = False
         self.used = False
+        self.derives: set[str] = set()
+        self.derive_ambiguous = False
 
     def define(self, name: str) -> None:
         self.ambiguous |= name == "include" or name in self.names
         self.names.add(name)
+        self.derive_ambiguous |= name in BUILTIN_DERIVES
 
     def imported(self, item: str) -> None:
         self.ambiguous |= re.search(r"\b(?:include|as)\b|\*", item) is not None
+        self.derive_ambiguous |= (re.search(r"\bas\b|\*", item) is not None
+                                  or any(token[0] in BUILTIN_DERIVES for token in IDENTIFIER.finditer(item)))
 
     def validate(self) -> None:
+        if self.derives and self.derive_ambiguous:
+            _fail("fixture builtin derive has ambiguous macro or import scope")
         if self.used and self.ambiguous:
             _fail("literal fixture include has ambiguous macro or import scope")
 
@@ -491,60 +528,134 @@ def _fixture_include_path(source: str, start: int, end: int, pairs: dict[int, in
     return value
 
 
+def _fixture_data_item(code: str, start: int, boundary: int, end: int) -> bool:
+    """Admit inert non-generic data declarations, never item-producing tokens."""
+    head = code[start:boundary]
+    match = re.fullmatch(
+        r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?(struct|enum)\s+[A-Za-z_][A-Za-z0-9_]*"
+        r"\s*(\([^{};]*\)\s*)?", head)
+    if match is None:
+        return False
+    if ((match[1] == "enum" and (code[boundary] != "{" or match[2] is not None))
+            or (code[boundary] == "{" and match[2] is not None)):
+        _fail("unsupported fixture data declaration")
+    if re.search(r"[!#]|\b(?:fn|mod|impl|extern|use|macro_rules|struct|enum|union|type)\b",
+                 code[start + head.index(match[1]) + len(match[1]):end]):
+        _fail("fixture data declaration contains unsupported transformation or item")
+    return True
+
+
+_FixtureItem = tuple[tuple[tuple[bool, int, int], ...], tuple[int, int, int, int, int, int] | None]
+
+
+def _fixture_item_span(source: str, code: str, pairs: dict[int, int], start: int,
+                       previous_character: int, previous_byte: int) -> tuple[int, int, int, int, int, int]:
+    cursor = start
+    while cursor < len(code) and code[cursor] not in "{;":
+        if code[cursor] in "([":
+            cursor = pairs[cursor]
+        else:
+            cursor += 1
+    if cursor == len(code):
+        _fail("unsupported fixture item boundary")
+    boundary = cursor
+    cursor = pairs[cursor] if code[cursor] == "{" else cursor + 1
+    first_byte = previous_byte + len(source[previous_character:start].encode("utf-8"))
+    last_byte = first_byte + len(source[start:boundary].encode("utf-8"))
+    end_byte = last_byte + len(source[boundary:cursor].encode("utf-8"))
+    return start, boundary, cursor, first_byte, last_byte, end_byte
+
+
 def _fixture_declarations(
     source: str, features: set[str], scan_functions: Callable,
     rust_syntax: Callable, budget: _Budget,
     *, include_paths: list[str] | None = None, include_scope: _FixtureIncludeScope | None = None,
     macros_only: bool = False,
+    function_cache: dict[str, list[dict[str, Any]]] | None = None,
+    item_cache: dict[str, tuple[_FixtureItem, ...]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Select physical functions/modules; macro definitions are never expanded."""
     _utf8(source, "fixture source")
-    functions = budget.rows(scan_functions(source), "fixture function items")
+    # Coordinates depend only on source bytes, not the selected Cargo features.
+    functions = None if function_cache is None else function_cache.get(source)
+    if functions is None:
+        functions = budget.rows(scan_functions(source), "fixture function items")
+        if function_cache is not None:
+            function_cache[source] = functions
     code, pairs = rust_syntax(source)
+    # Cache only immutable coordinates after the complete traversal succeeds;
+    # lexer output and every feature/context-dependent decision remain fresh.
+    cached_items = None if item_cache is None else item_cache.get(source)
+    parsed_items = []
+    item_index = 0
     cursor = 0
     function_index = previous_character = previous_byte = 0
     selected = []
     modules = []
     attribute = re.compile(r"#\s*(!?)\s*\[")
-    while cursor < len(code):
-        cursor = _fixture_trivia_end(source, cursor, len(code))
-        if cursor == len(code):
-            break
-        if code[cursor] == ";":
-            cursor += 1
-            continue
-        budget.rows([None], "fixture source items")
+    while True:
+        if cached_items is None:
+            cursor = _fixture_trivia_end(source, cursor, len(code))
+            if cursor == len(code):
+                break
+            if code[cursor] == ";":
+                cursor += 1
+                continue
+            attributes = []
+            body = None
+        else:
+            if item_index == len(cached_items):
+                break
+            attributes, body = cached_items[item_index]
+            item_index += 1
+        # Syntax rows bound newly materialized records; a separate cumulative
+        # visit budget bounds every feature/context replay at the same maximum.
+        budget.visit_source_item()
+        if cached_items is None:
+            budget.rows([None], "fixture source items")
         enabled = True
         kernels = 0
-        while match := attribute.match(code, cursor):
-            if macros_only and match[1]:
+        derives: set[str] = set()
+        attribute_index = 0
+        while True:
+            if cached_items is None:
+                match = attribute.match(code, cursor)
+                if match is None:
+                    break
+                inner, opening = bool(match[1]), match.end() - 1
+                end = pairs[opening]
+                attributes.append((inner, opening, end))
+            elif attribute_index < len(attributes):
+                inner, opening, end = attributes[attribute_index]
+                attribute_index += 1
+            else:
+                break
+            if macros_only and inner:
                 _fail("included fixture source cannot contain inner attributes")
-            opening = match.end() - 1
-            end = pairs[opening]
             attr_enabled, attr_kernels = _fixture_attribute(
-                source, code, pairs, opening + 1, end - 1, features, budget, bool(match[1]))
+                source, code, pairs, opening + 1, end - 1, features, budget, inner, derives=derives)
             enabled = enabled and attr_enabled
             kernels += attr_kernels
-            if match[1] and not enabled:
+            if inner and not enabled:
                 _fail("conditional fixture crate/module is unsupported")
-            cursor = end
-            cursor = _fixture_trivia_end(source, cursor, len(code))
-        if cursor == len(code):
+            if cached_items is None:
+                cursor = _fixture_trivia_end(source, end, len(code))
+        if cached_items is None:
+            if cursor != len(code):
+                body = _fixture_item_span(source, code, pairs, cursor, previous_character, previous_byte)
+            if item_cache is not None:
+                parsed_items.append((tuple(attributes), body))
+        if body is None:
             break
-        start = cursor
-        while cursor < len(code) and code[cursor] not in "{;":
-            if code[cursor] in "([":
-                cursor = pairs[cursor]
-            else:
-                cursor += 1
-        if cursor == len(code):
-            _fail("unsupported fixture item boundary")
-        head = code[start:cursor]
-        boundary = cursor
-        cursor = pairs[cursor] if code[cursor] == "{" else cursor + 1
-        first_byte = previous_byte + len(source[previous_character:start].encode("utf-8"))
-        last_byte = first_byte + len(source[start:boundary].encode("utf-8"))
-        end_byte = last_byte + len(source[boundary:cursor].encode("utf-8"))
+        start, boundary, cursor, first_byte, last_byte, end_byte = body
+        head = code[start:boundary]
+        data_item = _fixture_data_item(code, start, boundary, cursor)
+        if derives:
+            if not data_item or include_scope is None:
+                _fail("fixture derive requires an ordinary data item and checked macro scope")
+            include_scope.derives.update(derives)
+        if data_item and kernels:
+            _fail("kernel attribute on a fixture data declaration")
         previous_character, previous_byte = cursor, end_byte
         inert_macro = code[boundary] == "{" and _fixture_macro_definition(source, start, boundary)
         if inert_macro and kernels:
@@ -568,6 +679,8 @@ def _fixture_declarations(
             continue
         if kernels > 1:
             _fail("duplicate active fixture kernel attributes")
+        if data_item:
+            continue
         if include_item:
             if kernels or code[boundary] != ";" or include_scope is None:
                 _fail("unsupported literal fixture include")
@@ -587,11 +700,16 @@ def _fixture_declarations(
             _fail("unsupported fixture item or module selection")
         if kernels:
             selected.extend(item_functions)
+    if item_cache is not None and cached_items is None:
+        item_cache[source] = tuple(parsed_items)
     return selected, modules
 
 
 def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_functions: Callable,
-                       rust_syntax: Callable, budget: _Budget) -> dict[str, tuple[str, int, str]]:
+                       rust_syntax: Callable, budget: _Budget, *,
+                       function_cache: dict[str, list[dict[str, Any]]] | None = None,
+                       item_cache: dict[str, tuple[_FixtureItem, ...]] | None = None,
+                       ) -> dict[str, tuple[str, int, str]]:
     library, sources, enabled = load_sources(fixture)
     # The loader authenticates the current physical package closure and Cargo
     # inputs. Traversal establishes only this bounded source selection, not rustc
@@ -615,7 +733,8 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
         includes = []
         functions, modules = _fixture_declarations(
             source, set(enabled), scan_functions, rust_syntax, budget,
-            include_paths=includes, include_scope=include_scope, macros_only=included)
+            include_paths=includes, include_scope=include_scope, macros_only=included,
+            function_cache=function_cache, item_cache=item_cache)
         for function in functions:
             symbol = function["kernelSymbol"]
             if symbol in selected:
@@ -779,6 +898,8 @@ def validate_kernel_inventory(
 
     selected_sources = {}
     source_digests = {}
+    function_cache: dict[str, list[dict[str, Any]]] = {}
+    item_cache: dict[str, tuple[_FixtureItem, ...]] = {}
 
     def selected_source(key: tuple[Any, ...]) -> tuple[str, int, str, str]:
         selection = selections[key]
@@ -798,7 +919,8 @@ def validate_kernel_inventory(
                            "features": case["features"], "kernelSymbols": [case["kernelSymbol"]]}}
                 loader = lambda _: load_source_case_sources(key[1], tab, case)
             selected_sources[cache_key] = _fixture_selection(
-                fixture, loader, scan_functions, rust_syntax, budget)
+                fixture, loader, scan_functions, rust_syntax, budget,
+                function_cache=function_cache, item_cache=item_cache)
         path, offset, source = selected_sources[cache_key][selection["symbol"]]
         digest_key = (cache_key, path)
         if digest_key not in source_digests:

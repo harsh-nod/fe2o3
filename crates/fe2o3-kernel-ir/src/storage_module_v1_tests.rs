@@ -391,19 +391,20 @@ fn module_wrapper_preserves_prior_denial_history_and_restores_invalid_input_floo
     module.storage_layouts[0].alignment = 3;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(1000);
     assert!(work.charge_work(1001).is_err());
-    let mut budget = Budget::new(&mut work, 10_000);
-    budget.reserve_storage(19).unwrap();
-    assert!(budget.reserve_storage(10_000).is_err());
-    assert!(matches!(
-        check_module_storage_v1(&module, limits(), &mut budget),
-        Err(StorageLayoutErrorV1::Invalid {
-            row: 0,
-            problem: StorageLayoutProblemV1::Alignment
-        })
-    ));
-    assert_eq!(budget.storage(), 19);
-    assert_eq!(budget.failed_storage(), Some(10_019));
-    drop(budget);
+    {
+        let mut budget = Budget::new(&mut work, 10_000);
+        budget.reserve_storage(19).unwrap();
+        assert!(budget.reserve_storage(10_000).is_err());
+        assert!(matches!(
+            check_module_storage_v1(&module, limits(), &mut budget),
+            Err(StorageLayoutErrorV1::Invalid {
+                row: 0,
+                problem: StorageLayoutProblemV1::Alignment
+            })
+        ));
+        assert_eq!(budget.storage(), 19);
+        assert_eq!(budget.failed_storage(), Some(10_019));
+    }
     assert_eq!(work.failed_work(), Some(1001));
 }
 

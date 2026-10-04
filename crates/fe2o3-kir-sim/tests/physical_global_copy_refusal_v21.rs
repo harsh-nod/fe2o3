@@ -23,7 +23,7 @@ fn global_copy_rows_refuse_every_existing_profile_without_reassigning_old_ids() 
             )
         })
         .collect();
-    assert_eq!(rows.len(), 2 * 4 * 9);
+    assert_eq!(rows.len(), 2 * 4 * 10);
     for row in rows {
         assert_eq!(
             row.capability,
@@ -44,7 +44,7 @@ fn global_copy_rows_refuse_every_existing_profile_without_reassigning_old_ids() 
                 && row.kir_wire_version != Wire::V22
                 && (row.operation as u8) < 44)
             .count(),
-        44 * 4 * 9
+        44 * 4 * 10
     );
 }
 

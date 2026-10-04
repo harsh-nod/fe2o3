@@ -227,8 +227,11 @@ script, and no unsupported dependency-feature edges. Unknown cases keep strict
 include rejection. It is not a replacement for rustc input custody or execution.
 
 `contract-bound` closes a source/test association, not a qualification obligation.
-The 48 compiler fixtures, SIMT/tile/mixed variants and hardware gates remain
-pending; the historical GEMM and GPT source-binding gaps remain explicit.
+The manifest retains every incomplete SIMT/tile/mixed variant and hardware gate.
+Missing historical source identities and unsupported current source selections
+remain explicit. A current source tab does not inherit historical execution
+evidence, and a source binding does not satisfy compilation, simulation, or
+target-matched hardware qualification.
 
 ## Qualification matrix
 

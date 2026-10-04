@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchRequestV1};
+include!("conditional_dispatch_empty_v1_tests.rs");
 
 #[test]
 fn bounded_copies_reject_excess_capacity_before_retaining_rows() {
@@ -47,6 +48,12 @@ fn slice(field: u16, length: u64, buffer: Option<usize>) -> ConditionalDispatchS
 fn kernarg(slices: &[ConditionalDispatchSliceV1]) -> Vec<u8> {
     let mut bytes = vec![0; slices.iter().map(|s| s.length_offset + 8).max().unwrap()];
     for s in slices {
+        let pointer = if s.buffer_index.is_none() {
+            u64::from(s.alignment)
+        } else {
+            0
+        };
+        bytes[s.pointer_offset..s.pointer_offset + 8].copy_from_slice(&pointer.to_le_bytes());
         bytes[s.length_offset..s.length_offset + 8].copy_from_slice(&s.length.to_le_bytes());
     }
     bytes
@@ -168,7 +175,7 @@ fn global_address_formation_does_not_require_global_readable_padding() {
 }
 
 #[test]
-fn empty_guarded_spans_still_check_formed_zero_address() {
+fn empty_guarded_spans_still_check_formed_dangling_address() {
     let s = [slice(0, 0, None), slice(1, 0, None)];
     let p = premises(&s, &[guarded(1)], 64).unwrap();
     assert!(p.check_live(&[]).is_ok());

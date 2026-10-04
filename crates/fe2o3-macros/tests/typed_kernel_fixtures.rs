@@ -1,3 +1,5 @@
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -22,7 +24,7 @@ fn cargo_check(manifest: &Path, target_dir: &Path, bin: Option<&str>) -> Output 
 fn typed_kernel_resolves_renamed_host_dependency() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = support::fixture_target_dir("renamed-typed-host-test");
     let output = cargo_check(&manifest, &target_dir, Some("renamed-typed-host-fixture"));
 
     assert!(
@@ -36,7 +38,7 @@ fn typed_kernel_resolves_renamed_host_dependency() {
 fn generated_arguments_retain_source_borrows() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = support::fixture_target_dir("renamed-typed-host-test");
     let cases: &[(&str, &str)] = &[
         (
             "arguments_lifetime_escape",
@@ -63,10 +65,7 @@ fn generated_arguments_retain_source_borrows() {
 fn kernel_context_entry_authenticates_the_user_spelled_type() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("../../target"))
-        .join("kernel-context-entry-test");
+    let target_dir = support::fixture_target_dir("kernel-context-entry-test");
     for (bin, diagnostic) in [
         ("context_entry", None),
         ("context_alias", None),
@@ -94,7 +93,7 @@ fn kernel_context_entry_authenticates_the_user_spelled_type() {
 fn generated_global_mut_arguments_reject_forgery_and_substitution() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = support::fixture_target_dir("renamed-typed-host-test");
     let cases: &[(&str, &[&str])] = &[
         (
             "global_mut_alias",
@@ -118,7 +117,10 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
         ("global_mut_raw_escape", &["no method named `as_raw`"]),
         (
             "global_mut_wrong_address_space",
-            &["requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`"],
+            &[
+                "general typed V1 argument 1 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "DeviceWorkgroupMutPtr<u32>",
+            ],
         ),
     ];
 
@@ -139,7 +141,7 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
 fn generated_worker_v3_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let target_dir = support::fixture_target_dir("generic-worker-v3-adapter-test");
     let output = cargo_check(&manifest, &target_dir, Some("pass"));
 
     assert!(
@@ -153,7 +155,7 @@ fn generated_worker_v3_adapter_compiles_downstream() {
 fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let target_dir = support::fixture_target_dir("generic-worker-v3-adapter-test");
     let cases: &[(&str, &[&str])] = &[
         ("lifetime_escape", &["lifetime may not live long enough"]),
         ("private_fields", &["private"]),
@@ -208,7 +210,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
 fn typed_kernel_compile_fail_diagnostics_are_stable() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
+    let target_dir = support::fixture_target_dir("typed-kernel-invalid-test");
     let cases: &[(&str, &[&str])] = &[
         (
             "invalid_safe_kernel",
@@ -230,14 +232,13 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
         (
             "invalid_signatures",
             &[
-                "#[kernel(typed)] requires a public kernel function",
-                "#[kernel(typed)] requires a safe kernel function",
-                "#[kernel(typed)] does not support generic kernel functions",
-                "#[kernel(typed)] requires the unit return type",
-                "#[kernel(typed)] requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`",
-                "#[kernel(typed)] argument 1 must have exact type `&[f32]`",
-                "#[kernel(typed)] argument 2 must have exact type `&[f32]`",
-                "#[kernel(typed)] argument 3 must have exact type `DisjointSlice<f32>`",
+                "general typed V1 requires a public kernel function",
+                "general typed V1 requires a safe kernel function",
+                "general typed V1 does not support generic kernel functions",
+                "general typed V1 requires the unit return type or KernelResult",
+                "general typed V1 argument 1 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "general typed V1 argument 2 must be a supported scalar, pointer-free by-value struct/tuple/array",
+                "general typed V1 argument 3 must be a supported scalar, pointer-free by-value struct/tuple/array",
             ],
         ),
         (
@@ -256,7 +257,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "general typed V1 explicit launch requires required dimensions",
                 "general typed V1 explicit launch requires identical required and max dimensions",
                 "general typed V1 requires exact [N, 1, 1] launch dimensions with N in 1..=256",
-                "the typed vecadd V2 profile requires an exact 256x1x1 launch contract",
+                "general typed V1 does not support launch occupancy constraints",
             ],
         ),
         (
@@ -312,7 +313,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
 fn ordinary_kernel_profile_accepts_safe_only_source() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
+    let target_dir = support::fixture_target_dir("typed-kernel-invalid-test");
     let output = cargo_check(&manifest, &target_dir, Some("safe_kernel"));
 
     assert!(

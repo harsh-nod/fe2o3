@@ -30,6 +30,28 @@ wrapper-managed package.
 
 ## Generic validation
 
+The standalone numerical reference models have a focused CPU-only lane:
+
+```text
+bash scripts/ci-local.sh host-reference
+```
+
+This also runs from `test`, `generic-core`, and `generic`. It checks formatting,
+strict Clippy, all test targets in debug and release, and strict rustdoc for
+RMSNorm/residual, GQA prefill, paged GQA decode, SwiGLU, logits/compact
+completion, RoPE/paged KV, and the pinned Ferric B3 linear reference.
+The standalone manifests are selected explicitly;
+root workspace tests do not include them. All share a `host-reference` subdirectory of
+the configured Cargo target root, and each test harness runs serially.
+Their tracked lockfiles also participate in `standalone-locks`.
+
+These are bounded host arithmetic and metadata models, not GPU kernels,
+compiler fixtures, or a model inference runtime. Their declared FP32 schedules
+and final BF16 rounding are not a bitwise Hugging Face reference: intermediate
+RMSNorm and attention rounding points can differ. Identity hashes describe
+those host policies and grant no compiler, artifact, or runtime authority.
+Passing this lane does not qualify SIMT/tile tutorial pairs or GPU execution.
+
 This lane does not require ROCm or a GPU:
 
 ```text
@@ -343,9 +365,30 @@ link the unversioned `librustc_codegen_fe2o3.so`. A later variant can replace
 that file and leave an integration-test binary expecting Rust symbols from the
 earlier variant. The failure then appears as an undefined dynamic symbol even
 though the test passes by itself. The repository command runs the library test
-target and every integration target in deterministic separate Cargo
+target, the `fe2o3-rustc-extract` and `fe2o3-export-sim` binary targets, and every
+integration target in deterministic separate Cargo
 invocations. Each test therefore executes against the exact dylib produced for
 its link, without changing compiler or crate behavior.
+
+`generic-core` runs the backend library and both binary unit-test suites once;
+integration shards run only their assigned integration targets. The binary
+suites use default features and the production limited-debug profile. These
+unit regressions do not replace source-to-simulator, proof, or GPU qualification.
+
+`scripts/ci-local.sh backend` checks both default and all-feature package builds,
+one at a time. Each build uses limited debug information and no incremental
+compilation, and binds the actual Cargo JSON artifact to the workspace package
+and source. The gate enforces the runtime's existing 1 GiB backend bound,
+ELF64/ET_DYN shape, and a bounded metadata-only load with the selected rustc.
+The compiler is selected by `RUSTC` or the workspace's `rustc` proxy and set
+explicitly for Cargo as well; configured compiler wrappers are disabled for
+these host backend builds. No stripping or runtime limit change is applied.
+
+The checker reports bytes, headroom, and SHA-256 only after descriptor and path
+identity plus content checks succeed before and after loading. This is a CI
+artifact/loadability check, not sealed runtime custody, GPU code generation,
+source qualification, or launch authority. The checker regressions and both
+build/load checks run in the normal `generic-core` pipeline.
 
 The comprehensive lane may link ROCm libraries through workspace packages. It
 does not opt in to ignored GPU execution tests.

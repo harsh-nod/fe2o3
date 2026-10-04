@@ -368,7 +368,7 @@ fn physical_capability_rows_are_exact_v20_gfx942_symbolic_cpu_ownership() {
             ));
         }
     }
-    assert_eq!(rows, 4 * 9 * 2);
+    assert_eq!(rows, 4 * 10 * 2);
     assert!(!matrix.hardware_observed);
     assert_eq!(matrix.authority, "none");
 }

@@ -2,9 +2,7 @@
 use super::*;
 use fe2o3_functional_proof::FunctionalRefinementImportErrorV2;
 use fe2o3_kernel_ir::{Constant, OperationKind};
-use fe2o3_lower_mir_kernel::{
-    NativeSourceReplayErrorV1, ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
-};
+use fe2o3_lower_mir_kernel::{NativeSourceReplayErrorV1, ProductionSemanticKirErrorV1};
 
 fn assert_store_values(graph: &VerifiedCanonicalKernelIrModuleV12) {
     assert_eq!(graph.module().kernels.len(), STORES.len());
@@ -430,10 +428,10 @@ fn complete_packet_two_root_exact_and_one_short_resource_limits() {
                     matches!(
                         error,
                         E::Source(NativeSourceReplayErrorV1::RankedSource(
-                            ProductionSemanticKirErrorV1::MirPlironTranslation(
-                                ProductionMirPlironTranslationErrorV1::ResourceLimit
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                Resource::Work(limit)
                             )
-                        ))
+                        )) if limit.actual() == used && limit.limit() == work_limit
                     ),
                     "{error:?}"
                 );

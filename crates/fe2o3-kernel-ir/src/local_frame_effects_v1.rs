@@ -683,8 +683,8 @@ fn derive_block(
                 operation.kind,
                 OperationKind::Alloca { .. } | OperationKind::GetElementPointer { .. }
             );
-            if !matches!(result.ty, Type::Scalar(_) | Type::Unit)
-                && !(allowed_pointer && matches!(result.ty, Type::Pointer(_)))
+            if !(matches!(result.ty, Type::Scalar(_) | Type::Unit)
+                || allowed_pointer && matches!(result.ty, Type::Pointer(_)))
             {
                 return Err(refusal(function_ordinal, Some(at), Reason::PointerUse));
             }

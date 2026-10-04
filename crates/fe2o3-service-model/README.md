@@ -5,6 +5,10 @@ services described by issue #135. It contains bounded identity inputs, abstract
 states, legal transition relations, global invariant checking, and independent
 property classifications.
 
+The [persistent execution contract](../../docs/persistent-gpu-execution-semantics-v1.md)
+separates these implemented model checks from resident scheduling, hardware
+qualification, and conditional progress requirements.
+
 This crate does **not** implement a queue, scheduler, host service, GPU kernel,
 compiler lowering, AMD memory operation, proof, or runtime integration. A
 validated value is descriptive model data only. It grants no proof, artifact,

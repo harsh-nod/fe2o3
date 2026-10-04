@@ -12,8 +12,9 @@
 //! while that exact generation is current. Both registries use the same pinned directory and
 //! exclusive lock. Attempt state prevents stale cooperating compilers from publishing, but it is
 //! coordination metadata rather than artifact or launch authority.
-//! On Linux, a canonical `/proc/self/fd/<n>` output root is imported by duplicating that descriptor;
-//! every ordinary configured path is still opened one component at a time without following
+//! On Linux, a canonical `/proc/self/fd/<n>` output root is imported by duplicating that descriptor
+//! as a stable identity anchor, then opening a readable handle for the same exact directory inode.
+//! Every ordinary configured path is still opened one component at a time without following
 //! symlinks.
 //!
 //! The configured output directory is a generated-artifact namespace. Canonically named files
@@ -1199,6 +1200,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    include!("proc_self_fd_tests.rs");
 
     fn spawn_test_process(command: &mut process::Command) -> io::Result<process::Child> {
         with_artifact_process_spawn_v1(|| command.spawn())
@@ -4850,15 +4853,40 @@ fn duplicate_proc_self_fd_directory(path: &Path) -> Option<Result<OwnedFd, EmitE
     if duplicated < 0 {
         return Some(Err(std::io::Error::last_os_error().into()));
     }
-    let directory = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let anchor = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let anchor_stat = match fstat(&anchor) {
+        Ok(stat) => stat,
+        Err(error) => return Some(Err(std::io::Error::from(error).into())),
+    };
+    if FileType::from_raw_mode(anchor_stat.st_mode) != FileType::Directory {
+        return Some(Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "procfs descriptor does not reference a directory".to_string(),
+        }));
+    }
+
+    // O_PATH imports need a readable handle; resolve it relative to the retained inode.
+    let directory = match openat(
+        &anchor,
+        Path::new("."),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(directory) => directory,
+        Err(error) => return Some(Err(std::io::Error::from(error).into())),
+    };
     let stat = match fstat(&directory) {
         Ok(stat) => stat,
         Err(error) => return Some(Err(std::io::Error::from(error).into())),
     };
-    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_dev != anchor_stat.st_dev
+        || stat.st_ino != anchor_stat.st_ino
+        || stat.st_mode != anchor_stat.st_mode
+    {
         return Some(Err(EmitError::InvalidArtifactDestination {
             path: path.to_path_buf(),
-            reason: "procfs descriptor does not reference a directory".to_string(),
+            reason: "procfs descriptor did not retain one readable directory identity".to_string(),
         }));
     }
     Some(Ok(directory))

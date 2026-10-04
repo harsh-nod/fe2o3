@@ -499,5 +499,8 @@ mod slice_to_generic_tests;
 #[path = "kir_bridge_v18_resource_tests.rs"]
 mod resource_tests;
 #[cfg(test)]
+#[path = "kir_bridge_v18_table_tests.rs"]
+mod table_tests;
+#[cfg(test)]
 #[path = "kir_bridge_v18_tests.rs"]
 mod tests;

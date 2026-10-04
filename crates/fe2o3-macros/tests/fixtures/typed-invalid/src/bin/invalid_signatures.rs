@@ -32,7 +32,7 @@ pub fn unsupported_third(a: &[f32], b: &[f32], c: *mut f32) {}
 pub fn mutable_slice(a: &mut [f32]) {}
 
 #[kernel(typed)]
-pub fn aggregate(value: (u32, u32)) {}
+pub fn borrowed_aggregate(value: &(u32, u32)) {}
 
 #[kernel(typed)]
 pub fn empty_nonunit() -> u32 {

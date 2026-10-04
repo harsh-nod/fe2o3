@@ -278,11 +278,12 @@ fn complete_root_request_case() {
     let mut displaced = Budget::new(&mut displaced_work, STORAGE);
     let mut foreign = Budget::new(&mut foreign_work, STORAGE);
     b.reserve_storage(HARNESS + FRAME).unwrap();
+    b.charge_work(CreatorScope::CONTROL_WORK).unwrap();
     let ledger = b.work_ledger_identity_v1();
     let address = &b as *const Budget<'_> as usize;
     let pool = Cleanup::admit(Account::new(Work::new(WORK), STORAGE)).unwrap();
-    // SAFETY: this explicitly selected isolated subprocess owns its real pool;
-    // an assertion/unwind cannot return while the creator is still armed.
+    // SAFETY: this isolated subprocess owns its real pool and prepays scope
+    // control above; an assertion/unwind cannot return while it is still armed.
     let mut creator = unsafe { CreatorScope::enter(pool) };
     // SAFETY: preparation borrows only this creator's original live cleanup pool.
     let (f, prepared) = fixtures::prepare(unsafe { creator.cleanup_for_launch() }, &mut b);

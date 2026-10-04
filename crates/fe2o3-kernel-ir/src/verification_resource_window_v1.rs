@@ -29,6 +29,17 @@ impl WindowState {
     pub(super) fn ceiling(&self) -> usize {
         self.ceiling.load(Ordering::Relaxed)
     }
+
+    pub(super) const fn bounded(floor: usize, ceiling: usize) -> Self {
+        Self {
+            floor: AtomicUsize::new(floor),
+            ceiling: AtomicUsize::new(ceiling),
+        }
+    }
+
+    pub(super) fn protect_floor(&self, floor: usize) {
+        self.floor.store(floor, Ordering::Relaxed);
+    }
 }
 
 struct Restore<'a> {
@@ -48,7 +59,7 @@ impl CanonicalKernelIrVerificationResourceBudgetV1<'_> {
     pub const STORAGE_WINDOW_WORK_V1: usize = 8;
     /// Control-frame allowance for enclosing callers, not an allocation/RSS bound.
     pub const STORAGE_WINDOW_SCRATCH_V1: usize =
-        4 * size_of::<Restore<'static>>() + 8 * size_of::<usize>() + 1024;
+        4 * size_of::<Restore<'static>>() + size_of::<[usize; 8]>() + 1024;
 
     /// Identifies owned storage independently of the Budget slot and Work pointer.
     /// Meaningful only while this account's original borrow remains alive.

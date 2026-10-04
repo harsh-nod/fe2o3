@@ -240,6 +240,7 @@ pub(super) fn execute(
                             engine.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow)
                         })?;
                     let pointer = PointerValue {
+                        exposed_generic: slice.exposed_generic,
                         allocation: slice.allocation,
                         byte_offset: slice.byte_offset,
                         element: slice.element,

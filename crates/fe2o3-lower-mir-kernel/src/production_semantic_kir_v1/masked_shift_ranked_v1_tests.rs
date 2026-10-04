@@ -369,7 +369,7 @@ mod masked_shift_ranked_v1_tests {
                     let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
                     assert!(matches!(
                         validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                            Some(source.semantic_ssa().source_semantic()),
+                            Some(source.semantic_ssa()),
                             source.executable().module(),
                             &source.correspondence,
                             NAME,
@@ -395,7 +395,7 @@ mod masked_shift_ranked_v1_tests {
                 let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
                 assert!(matches!(
                     validate_mir_pliron_translation_with_semantic_and_budget_v1(
-                        Some(source.semantic_ssa().source_semantic()),
+                        Some(source.semantic_ssa()),
                         &module,
                         &source.correspondence,
                         NAME,

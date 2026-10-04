@@ -85,6 +85,7 @@ fn actual_normalizer_caps_shallow_dag_expansion_before_tree_allocation() {
             budget: &mut budget,
             allowance: None,
             failed: false,
+            resource_error: None,
         };
         meter.work(reserved_nodes).unwrap();
         meter.reserve(bytes).unwrap();
@@ -147,6 +148,7 @@ fn per_argument_failure_restores_enclosing_allowance_and_keeps_correlation_limit
         budget: &mut budget,
         allowance: None,
         failed: false,
+        resource_error: None,
     };
     meter.reserve(bytes).unwrap();
     {
@@ -201,6 +203,7 @@ fn argument_allowance_restores_original_state_and_panic_payload() {
         budget: &mut budget,
         allowance: None,
         failed: false,
+        resource_error: None,
     };
     for original in [None, Some(0), Some(17)] {
         let mut expansion = NativeValueExpansion {
@@ -366,7 +369,7 @@ fn genuine_nested_helper_result_is_limited_before_emit_with_exact_ledger_boundar
         budget.reserve_storage(floor).unwrap();
         let mut reached_preflight = false;
         let result = with_native_value_expansion_v1(
-            Some(owner.semantic_ssa().source_semantic()),
+            Some(owner.semantic_ssa()),
             module,
             &owner.correspondence,
             module.kernels[0].id.as_str(),

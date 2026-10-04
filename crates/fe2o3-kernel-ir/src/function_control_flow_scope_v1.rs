@@ -359,6 +359,68 @@ fn function_scope_header_v1() -> Result<usize, Resource> {
     })
 }
 
+// The catch closure owns exactly this frame; the callback remains inside it
+// until the graph is constructed. All graph/query payload retains its old units.
+#[repr(C)]
+struct FunctionScopeInvocationV1<'scope, 'function, 'work, F> {
+    function: &'function Function,
+    limits: ControlFlowLimits,
+    budget: &'scope mut Budget<'work>,
+    flow: &'scope mut Option<MeteredIndexedControlFlowV1>,
+    failure: &'scope mut Option<Error>,
+    origins: &'scope mut Option<Vec<(ValueId, Option<ValueId>)>>,
+    run: F,
+}
+
+impl<'function, 'work, F> FunctionScopeInvocationV1<'_, 'function, 'work, F>
+where
+    F: for<'scope> FnOnce(
+        &mut FunctionControlFlowViewV1<'scope, 'function, 'work>,
+    ) -> Result<(), Error>,
+{
+    fn invoke(self) -> Result<(), Error> {
+        let Self {
+            function,
+            limits,
+            budget,
+            flow,
+            failure,
+            origins,
+            run,
+        } = self;
+        *flow = Some(
+            analyze_control_flow_with_verification_budget_v1(function, limits, budget).map_err(
+                |error| match error {
+                    MeteredControlFlowErrorV1::Resource(error) => Error::Resource(error),
+                    MeteredControlFlowErrorV1::ControlFlow(error) => Error::ControlFlow(error),
+                },
+            )?,
+        );
+        let mut view = FunctionControlFlowViewV1 {
+            function,
+            flow: flow.as_ref().expect("constructed CFG"),
+            budget,
+            failure,
+            origins,
+        };
+        run(&mut view)
+    }
+}
+
+fn function_scope_callback_header_v1<F>(_: &F) -> Result<usize, Resource> {
+    // Conservative coexisting parameter, invocation and unwind envelopes.
+    // Result/query envelopes are already in function_scope_header_v1.
+    [
+        size_of::<F>(),
+        size_of::<FunctionScopeInvocationV1<'_, '_, '_, F>>(),
+        size_of::<AssertUnwindSafe<FunctionScopeInvocationV1<'_, '_, '_, F>>>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, value| {
+        sum.checked_add(value).ok_or(Resource::Arithmetic)
+    })
+}
+
 /// Reuses the existing bounded CFG builder on a borrowed raw Function. Its
 /// inherited logical row-cell storage units are retained, not relabeled as bytes.
 /// The wrapper additionally reserves its explicit stack-envelope bytes.
@@ -398,28 +460,23 @@ pub fn with_function_control_flow_v1<'function, 'work>(
     // Entry and settlement work is prepaid; failure cleanup spends no work.
     budget.charge_work(4)?;
     let before = budget.storage();
-    budget.reserve_storage(function_scope_header_v1()?)?;
+    let headers = function_scope_header_v1()?
+        .checked_add(function_scope_callback_header_v1(&run)?)
+        .ok_or(Resource::Arithmetic)?;
+    budget.reserve_storage(headers)?;
     let mut flow = None;
     let mut failure = None;
     let mut origins = None;
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        flow = Some(
-            analyze_control_flow_with_verification_budget_v1(function, limits, budget).map_err(
-                |error| match error {
-                    MeteredControlFlowErrorV1::Resource(error) => Error::Resource(error),
-                    MeteredControlFlowErrorV1::ControlFlow(error) => Error::ControlFlow(error),
-                },
-            )?,
-        );
-        let mut view = FunctionControlFlowViewV1 {
-            function,
-            flow: flow.as_ref().expect("constructed CFG"),
-            budget,
-            failure: &mut failure,
-            origins: &mut origins,
-        };
-        run(&mut view)
-    }));
+    let invocation = FunctionScopeInvocationV1 {
+        function,
+        limits,
+        budget,
+        flow: &mut flow,
+        failure: &mut failure,
+        origins: &mut origins,
+        run,
+    };
+    let result = catch_unwind(AssertUnwindSafe(move || invocation.invoke()));
     let owned = budget
         .storage()
         .checked_sub(before)

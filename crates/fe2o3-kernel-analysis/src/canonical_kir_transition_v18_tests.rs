@@ -1108,3 +1108,6 @@ pub(super) fn all_layouts() -> Vec<StorageLayoutV1> {
 
 #[path = "canonical_kir_transition_v18_payload_tests.rs"]
 mod payload_tests;
+
+#[path = "canonical_kir_transition_v18_ordered_tests.rs"]
+mod ordered_tests;

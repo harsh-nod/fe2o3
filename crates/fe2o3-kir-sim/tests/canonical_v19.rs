@@ -596,7 +596,7 @@ fn capability_rows_activate_only_v19_gfx942_and_keep_previous_ids_and_baseline()
                     && row.operation == surface
             })
             .collect();
-        assert_eq!(rows.len(), 4 * 9); // four targets across all nine exact wire profiles
+        assert_eq!(rows.len(), 4 * 10); // four targets across ten profiles excluding V21/V22
         for row in rows {
             if row.kir_wire_version == Wire::V19 && row.profile == Profile::Gfx942XnackMinus {
                 assert!(matches!(row.capability, Disposition::Owned { .. }));

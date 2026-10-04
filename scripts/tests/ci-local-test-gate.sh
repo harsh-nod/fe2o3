@@ -15,6 +15,7 @@ trap cleanup_timeout_test_root EXIT
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
+python3 "${TEST_SCRIPT_DIR}/host-reference-ci.py"
 
 VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
 (
@@ -28,10 +29,10 @@ VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
     VERUS=/opt/verus/mir-pliron \
     run_verus
 )
-[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 4 ]]
+[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 5 ]]
 rg -F $'runtime-model-verus\tenv VERUS=/opt/verus/runtime-model ' \
   "${VERUS_DISPATCH_LOG}" >/dev/null
-for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus; do
+for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus qwen3-rope-kv-verus; do
   rg -F "${step}"$'\tenv VERUS=/opt/verus/mir-pliron ' \
     "${VERUS_DISPATCH_LOG}" >/dev/null
 done
@@ -372,6 +373,17 @@ assert_no_codegen_test_driver() {
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
+assert_host_reference_steps() {
+  local example kind
+  for example in rmsnorm_residual_v1 qwen3_gqa_prefill_v1 \
+    qwen3_paged_gqa_decode_v1 qwen3_swiglu_v1 qwen3_logits_compact_v1; do
+    for kind in format clippy test release doc; do
+      assert_step_count "host-reference-${example}-${kind}" 1 \
+        'CPU lane omitted or duplicated a standalone host-reference step'
+    done
+  done
+}
+
 assert_runtime_release_gate() {
   assert_step_count fe2o3-runtime-release-tests 1 \
     'runtime release tests did not run exactly once'
@@ -556,6 +568,56 @@ assert_source_isa_characteristic_matrix_v2_gate() {
   STEP_COMMANDS=()
 }
 
+assert_codegen_lib_steps() {
+  local step index
+  for step in rustc-codegen-lib-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+    assert_step_count "${step}" 1 "backend unit step ${step} did not run exactly once"
+  done
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+    "$(step_command rustc-codegen-lib-tests)" \
+    'backend library test command changed'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --bin fe2o3-rustc-extract" \
+    "$(step_command rustc-codegen-extractor-bin-tests)" \
+    'extractor unit tests are not isolated and selector-free'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --bin fe2o3-export-sim" \
+    "$(step_command rustc-codegen-exporter-bin-tests)" \
+    'exporter unit tests are not isolated and selector-free'
+  for index in "${!STEP_NAMES[@]}"; do
+    if [[ "${STEP_NAMES[index]}" == rustc-codegen-lib-tests ]]; then
+      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+1]:-}" \
+        'extractor unit tests did not follow the backend library'
+      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+2]:-}" \
+        'exporter unit tests did not follow the extractor'
+    fi
+  done
+}
+
+assert_codegen_lib_fail_fast() {
+  local step status trace
+  for step in rustc-codegen-lib-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+    trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+    status=0
+    timeout --signal=TERM --kill-after=2s 10s \
+      env LIBRARY_FAIL_STEP="${step}" LIBRARY_TRACE="${trace}" \
+      bash -c '
+        source "$1"
+        run_step() {
+          printf "%s\n" "$1" >>"${LIBRARY_TRACE}"
+          [[ "$1" != "${LIBRARY_FAIL_STEP}" ]] || return 37
+        }
+        run_rustc_codegen_lib_tests
+        printf "%s\n" unexpected-success
+      ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+      >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+    assert_equals 37 "${status}" 'a backend unit failure was suppressed'
+    assert_equals "${step}" "$(tail -n 1 "${trace}")" 'backend unit tests continued after failure'
+    [[ ! -s "${trace}.stdout" ]]
+  done
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -590,10 +652,12 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
+assert_codegen_lib_fail_fast
 assert_source_isa_unit_matrix_gate
 assert_source_isa_characteristic_contract_v2_gate
 assert_source_isa_characteristic_matrix_v2_gate
 run_tests
+assert_host_reference_steps
 assert_no_codegen_test_driver
 assert_runtime_release_gate
 assert_equals \
@@ -639,6 +703,10 @@ done
   printf '%s\n' 'raw CPU tests omitted the computed ordinary example package' >&2
   exit 1
 }
+[[ " ${cpu_command} " == *" -p fe2o3-protected-service-profile "* ]] || {
+  printf '%s\n' 'raw CPU tests omitted protected-service startup and refusal regressions' >&2
+  exit 1
+}
 if [[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; then
   printf '%s\n' 'raw CPU tests restored the deleted scalar runtime lane' >&2
   exit 1
@@ -665,10 +733,7 @@ assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'generic backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -722,10 +787,7 @@ assert_equals \
   'full workspace tests did not retain the descriptor-safe artifact-transaction bound'
 assert_step_count fe2o3-artifact-transaction-tests 1 \
   'full workspace tests did not run artifact-transaction tests exactly once'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'full workspace backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -746,6 +808,10 @@ assert_equals \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
+assert_step_count rustc-codegen-extractor-bin-tests 0 \
+  'integration shard unexpectedly reran extractor unit tests'
+assert_step_count rustc-codegen-exporter-bin-tests 0 \
+  'integration shard unexpectedly reran exporter unit tests'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
     [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
@@ -758,6 +824,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
+assert_host_reference_steps
 assert_runtime_release_gate
 assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
@@ -793,6 +860,7 @@ for core_step in \
   workspace-binding-projection-revalidation \
   standalone-tiled-gemm-general-host-check \
   standalone-flash-attention-general-host-check \
+  backend-check-tests \
   backend-build \
   backend-all-features-build \
   virtual-runtime-no-gpu-metadata \
@@ -807,6 +875,7 @@ for core_step in \
   kir-sim-scalar-differential \
   kir-sim-semantic-differential \
   ci-local-test-gate \
+  generic-cpu-group-tests \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
   fe2o3-pliron-default-api-ui \
@@ -819,6 +888,8 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
+  rustc-codegen-extractor-bin-tests \
+  rustc-codegen-exporter-bin-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -830,6 +901,7 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_codegen_lib_steps
 assert_equals \
   'python3 -B scripts/tests/tutorial_cpu_reference.py' \
   "$(step_command tutorial-cpu-reference-tests)" \
@@ -879,9 +951,42 @@ assert_equals \
   "$(step_command generic-check-cargo-fe2o3-bootstrap)" \
   'generic check did not retain the feature-free production driver'
 assert_equals \
-  'env CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p rustc-codegen-fe2o3 --all-features' \
+  'python3 -B scripts/check-rustc-codegen-backend.py --all-features' \
   "$(step_command backend-all-features-build)" \
   'generic core did not build the all-feature production backend'
+assert_equals \
+  'python3 -B scripts/check-rustc-codegen-backend.py' \
+  "$(step_command backend-build)" \
+  'generic core did not check the default backend artifact'
+assert_equals \
+  'python3 -B scripts/tests/check-rustc-codegen-backend.py' \
+  "$(step_command backend-check-tests)" \
+  'generic core omitted backend checker regressions'
+for index in "${!STEP_NAMES[@]}"; do
+  if [[ "${STEP_NAMES[index]}" == backend-check-tests ]]; then
+    assert_equals backend-build "${STEP_NAMES[index+1]:-}" 'default backend check is out of order'
+    assert_equals backend-all-features-build "${STEP_NAMES[index+2]:-}" 'all-feature backend check is out of order'
+  fi
+done
+for step in backend-check-tests backend-build backend-all-features-build; do
+  trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+  status=0
+  timeout --signal=TERM --kill-after=2s 10s \
+    env BACKEND_FAIL_STEP="${step}" BACKEND_TRACE="${trace}" \
+    bash -c '
+      source "$1"
+      run_step() {
+        printf "%s\n" "$1" >>"${BACKEND_TRACE}"
+        [[ "$1" != "${BACKEND_FAIL_STEP}" ]] || return 37
+      }
+      run_backend_build
+      printf "%s\n" unexpected-success
+    ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+    >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+  assert_equals 37 "${status}" 'backend build/check failure was suppressed'
+  assert_equals "${step}" "$(tail -n 1 "${trace}")" 'backend checks continued after failure'
+  [[ ! -s "${trace}.stdout" ]]
+done
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
@@ -974,13 +1079,13 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic
+assert_host_reference_steps
 assert_no_codegen_test_driver
 assert_runtime_release_gate
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
-assert_step_count rustc-codegen-lib-tests 1 \
-  'serial generic gate did not run backend library tests exactly once'
+assert_codegen_lib_steps
 assert_step_count tutorial-cpu-reference-tests 1 \
   'serial generic gate did not run tutorial CPU runner protocols exactly once'
 assert_step_count cpu-reference-tiled-gemm-paired-default 1 \
@@ -994,6 +1099,7 @@ EMPTY_WRAPPER_CPU_INTERSECTION=1
 CARGO_FE2O3_DRIVER_PROFILE=
 reset_mock_production_driver
 run_cpu_tests
+assert_host_reference_steps
 assert_runtime_release_gate
 assert_step_count wrapper-managed-cpu-tests 0 \
   'empty managed CPU intersection still invoked the binding test command'
@@ -1242,6 +1348,8 @@ for production_step in \
   rocm-production-write-only-witness-mappings \
   rocm-production-barrier-cfg \
   rocm-production-simulation-bundle-gfx942 \
+  rocm-production-explicit-bin-source-dependencies \
+  rocm-production-explicit-bin-source-sim \
   rocm-production-simulation-bundle-gfx950 \
   rocm-production-simulation-float-casts \
   rocm-production-simulation-wrapping-integers \
@@ -1267,6 +1375,14 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo fetch --locked --manifest-path crates/rustc-codegen-fe2o3/tests/fixtures/production-explicit-bin-device/Cargo.toml' \
+  "$(step_command rocm-production-explicit-bin-source-dependencies)" \
+  'ROCm compile omitted exact standalone bin dependency preparation'
+assert_equals \
+  'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 explicit_bin_source_exports_and_simulates_its_own_kernel_not_the_same_named_library -- --ignored --exact' \
+  "$(step_command rocm-production-explicit-bin-source-sim)" \
+  'ROCm compile omitted exact explicit-bin source/SIM regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_neutral_workgroup_reduce_driver_v1 ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact' \
   "$(step_command rocm-production-row-affine-source-sim)" \

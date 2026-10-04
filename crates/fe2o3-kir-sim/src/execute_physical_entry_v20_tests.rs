@@ -15,6 +15,7 @@ fn site(index: u32) -> CompactSite {
 }
 fn pointer() -> PointerValue {
     PointerValue {
+        exposed_generic: false,
         allocation: 7,
         byte_offset: 0,
         element: ScalarType::U32,

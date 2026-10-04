@@ -380,30 +380,7 @@ impl SealedImage {
         length: u64,
         label: &str,
     ) -> Result<Self, String> {
-        use std::io::{Seek as _, SeekFrom};
-        writable
-            .seek(SeekFrom::Start(0))
-            .map_err(|error| format!("failed to rewind sealed {label} image: {error}"))?;
-        let mut observed_digest = Sha256::new();
-        let mut observed_length = 0_u64;
-        let mut buffer = [0_u8; 16 * 1024];
-        loop {
-            let read = writable
-                .read(&mut buffer)
-                .map_err(|error| format!("failed to verify sealed {label} image: {error}"))?;
-            if read == 0 {
-                break;
-            }
-            observed_length = observed_length
-                .checked_add(read as u64)
-                .ok_or_else(|| format!("sealed {label} image length overflow"))?;
-            observed_digest.update(&buffer[..read]);
-        }
-        if observed_length != length || <[u8; 32]>::from(observed_digest.finalize()) != digest {
-            return Err(format!(
-                "sealed {label} image content does not match its source"
-            ));
-        }
+        Self::verify_contents(&mut writable, digest, length, label)?;
         rustix::fs::fchmod(
             &writable,
             rustix::fs::Mode::from_raw_mode(if executable { 0o500 } else { 0o400 }),
@@ -412,9 +389,11 @@ impl SealedImage {
         let data_seals = rustix::fs::SealFlags::WRITE
             | rustix::fs::SealFlags::GROW
             | rustix::fs::SealFlags::SHRINK;
-        rustix::fs::fcntl_add_seals(&writable, data_seals)
-            .and_then(|()| rustix::fs::fcntl_add_seals(&writable, rustix::fs::SealFlags::SEAL))
-            .map_err(|error| format!("failed to seal {label} image: {error}"))?;
+        fe2o3_process_identity::seal_immutable_memfd_v1(
+            &writable,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
+        )
+        .map_err(|error| format!("failed to seal {label} image: {error}"))?;
         let seals = rustix::fs::fcntl_get_seals(&writable)
             .map_err(|error| format!("failed to inspect sealed {label} image: {error}"))?;
         let required = data_seals | rustix::fs::SealFlags::SEAL;
@@ -427,6 +406,8 @@ impl SealedImage {
         if !writable_metadata.is_file() || writable_metadata.len() != length {
             return Err(format!("sealed {label} image has an invalid object shape"));
         }
+        // A writer may have changed bytes while the bounded seal retry quiesced.
+        Self::verify_contents(&mut writable, digest, length, label)?;
         let read_path = format!("/proc/self/fd/{}", writable.as_raw_fd());
         let read_only = rustix::fs::open(
             read_path,
@@ -456,6 +437,38 @@ impl SealedImage {
             seals,
             digest,
         })
+    }
+
+    fn verify_contents(
+        file: &mut File,
+        digest: [u8; 32],
+        length: u64,
+        label: &str,
+    ) -> Result<(), String> {
+        use std::io::{Seek as _, SeekFrom};
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| format!("failed to rewind sealed {label} image: {error}"))?;
+        let mut observed_digest = Sha256::new();
+        let mut observed_length = 0_u64;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| format!("failed to verify sealed {label} image: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            observed_length = observed_length
+                .checked_add(read as u64)
+                .ok_or_else(|| format!("sealed {label} image length overflow"))?;
+            observed_digest.update(&buffer[..read]);
+        }
+        if observed_length != length || <[u8; 32]>::from(observed_digest.finalize()) != digest {
+            return Err(format!(
+                "sealed {label} image content does not match its source"
+            ));
+        }
+        Ok(())
     }
 
     fn validate(&self, label: &str) -> Result<(), String> {
@@ -8007,6 +8020,7 @@ mod test_python;
 
 #[cfg(test)]
 mod tests {
+    include!("profile_command_sealed_memfd_tests.rs");
     use super::*;
     use fe2o3_semantic_import::decode_profiler_bundle_v4;
     use fe2o3_source_isa_observation::characteristic_v1::{

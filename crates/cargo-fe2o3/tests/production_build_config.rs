@@ -187,44 +187,425 @@ fn production_capability_release_preserves_v1_and_defers_only_selected_v2() {
     assert!(!broker.contains("pinned_cargo_image: File"));
 }
 
+fn wrapper_path_is(path: &syn::Path, expected: &str) -> bool {
+    path.leading_colon.is_none()
+        && path
+            .segments
+            .iter()
+            .all(|segment| segment.arguments.is_empty())
+        && path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .eq(expected.split("::"))
+}
+
+fn wrapper_expression_is(expression: &syn::Expr, expected: &str) -> bool {
+    matches!(expression, syn::Expr::Path(path)
+        if path.qself.is_none() && wrapper_path_is(&path.path, expected))
+}
+
+fn wrapper_local<'a>(block: &'a syn::Block, name: &str) -> Result<(usize, &'a syn::Expr), String> {
+    let locals: Vec<_> = block
+        .stmts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, statement)| {
+            let syn::Stmt::Local(local) = statement else {
+                return None;
+            };
+            let syn::Pat::Ident(pattern) = &local.pat else {
+                return None;
+            };
+            (pattern.ident == name).then_some((index, local))
+        })
+        .collect();
+    let [(index, local)] = locals.as_slice() else {
+        return Err(format!("expected one {name} binding"));
+    };
+    let initializer = local
+        .init
+        .as_ref()
+        .ok_or_else(|| format!("missing {name} initializer"))?;
+    if initializer.diverge.is_some() {
+        return Err(format!("unexpected {name} fallback"));
+    }
+    Ok((*index, &initializer.expr))
+}
+
+#[derive(Default)]
+struct WrapperAuthenticationCalls<'a> {
+    statement: usize,
+    calls: Vec<(usize, &'a syn::ExprCall)>,
+    methods: Vec<(usize, &'a syn::ExprMethodCall)>,
+}
+
+impl<'a> syn::visit::Visit<'a> for WrapperAuthenticationCalls<'a> {
+    fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
+        self.calls.push((self.statement, call));
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'a syn::ExprMethodCall) {
+        self.methods.push((self.statement, call));
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+impl WrapperAuthenticationCalls<'_> {
+    fn stage(&self, name: &str) -> Result<usize, String> {
+        let stages: Vec<_> = self
+            .calls
+            .iter()
+            .filter_map(|(index, call)| wrapper_expression_is(&call.func, name).then_some(*index))
+            .chain(
+                self.methods
+                    .iter()
+                    .filter_map(|(index, call)| (call.method == name).then_some(*index)),
+            )
+            .collect();
+        match stages.as_slice() {
+            [index] => Ok(*index),
+            _ => Err(format!("expected one production stage: {name}")),
+        }
+    }
+}
+
+fn wrapper_authentication_order(source: &str) -> Result<(), String> {
+    use syn::visit::Visit;
+
+    let file = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let runs: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "run" => Some(function),
+            _ => None,
+        })
+        .collect();
+    let [run] = runs.as_slice() else {
+        return Err("expected one wrapper run function".into());
+    };
+    let invocations: Vec<_> = run
+        .block
+        .stmts
+        .iter()
+        .filter_map(|statement| {
+            let syn::Stmt::Local(local) = statement else {
+                return None;
+            };
+            let syn::Expr::Match(selection) = &*local.init.as_ref()?.expr else {
+                return None;
+            };
+            wrapper_expression_is(&selection.expr, "invocation").then_some(selection)
+        })
+        .collect();
+    let [invocation] = invocations.as_slice() else {
+        return Err("expected one invocation selection".into());
+    };
+    let arms: Vec<_> = invocation
+        .arms
+        .iter()
+        .filter(|arm| {
+            matches!(&arm.pat, syn::Pat::TupleStruct(pattern)
+            if wrapper_path_is(&pattern.path, "RustcInvocationV2::Compile"))
+        })
+        .collect();
+    let [arm] = arms.as_slice() else {
+        return Err("expected one compile arm".into());
+    };
+    let syn::Expr::Block(compile) = &*arm.body else {
+        return Err("expected compile block".into());
+    };
+    if arm.guard.is_some() {
+        return Err("unexpected compile guard".into());
+    }
+    let block = &compile.block;
+
+    let (family_index, family) = wrapper_local(block, "profile_family")?;
+    let syn::Expr::Try(family) = family else {
+        return Err("route selection must propagate failure".into());
+    };
+    let syn::Expr::MethodCall(mapping) = &*family.expr else {
+        return Err("missing route error mapping".into());
+    };
+    let syn::Expr::Call(route) = &*mapping.receiver else {
+        return Err("missing route selection".into());
+    };
+    if mapping.method != "map_err"
+        || !wrapper_expression_is(
+            &route.func,
+            "capability_broker::broker_route_family_from_environment",
+        )
+        || !route.args.is_empty()
+    {
+        return Err("route family must come from the existing selector".into());
+    }
+    let (binding_index, binding) = wrapper_local(block, "capability_binding")?;
+    let syn::Expr::Try(binding) = binding else {
+        return Err("binding must propagate failure".into());
+    };
+    let syn::Expr::MethodCall(mapping) = &*binding.expr else {
+        return Err("missing binding error mapping".into());
+    };
+    let syn::Expr::Match(selection) = &*mapping.receiver else {
+        return Err("missing family parser selection".into());
+    };
+    if mapping.method != "map_err"
+        || !wrapper_expression_is(&selection.expr, "profile_family")
+        || selection.arms.len() != 2
+    {
+        return Err("binding must select exactly the two authenticated route parsers".into());
+    }
+    for (family, parser) in [
+        ("LegacyV1", "from_environment_for_client"),
+        ("NativeV3", "from_environment_for_client_v4"),
+    ] {
+        let expected_family =
+            format!("capability_broker::CompilerExecutionProfileFamily::{family}");
+        let arms: Vec<_> = selection.arms.iter().filter(|arm| {
+            matches!(&arm.pat, syn::Pat::Path(path) if wrapper_path_is(&path.path, &expected_family))
+        }).collect();
+        let [arm] = arms.as_slice() else {
+            return Err(format!("missing unique {family} parser arm"));
+        };
+        let syn::Expr::Block(body) = &*arm.body else {
+            return Err("parser arm must be a block".into());
+        };
+        let [syn::Stmt::Expr(syn::Expr::Call(call), None)] = body.block.stmts.as_slice() else {
+            return Err("parser arm must contain only its binding constructor".into());
+        };
+        if arm.guard.is_some()
+            || !wrapper_expression_is(
+                &call.func,
+                &format!("capability_broker::CapabilityBindingV3::{parser}"),
+            )
+            || call.args.len() != 1
+            || !wrapper_expression_is(
+                &call.args[0],
+                "capability_broker::CapabilityProfileV1::Ordinary",
+            )
+        {
+            return Err(format!("wrong {family} binding constructor"));
+        }
+    }
+
+    let (_, transfer) = wrapper_local(block, "transferred")?;
+    let syn::Expr::Try(transfer) = transfer else {
+        return Err("receive must propagate failure".into());
+    };
+    let syn::Expr::Call(receive) = &*transfer.expr else {
+        return Err("receive must be called directly".into());
+    };
+    if !wrapper_expression_is(&receive.func, "receive_validated_compiler_capabilities")
+        || receive.args.len() != 2
+        || !wrapper_expression_is(&receive.args[0], "capability_binding")
+        || !wrapper_expression_is(&receive.args[1], "profile_family")
+    {
+        return Err("receive must authenticate this binding and selected family".into());
+    }
+
+    let mut calls = WrapperAuthenticationCalls::default();
+    for (index, statement) in block.stmts.iter().enumerate() {
+        calls.statement = index;
+        calls.visit_stmt(statement);
+    }
+    let propagated_call = |index: usize| -> Result<&syn::ExprCall, String> {
+        let syn::Stmt::Expr(syn::Expr::Try(propagated), Some(_)) = &block.stmts[index] else {
+            return Err("authentication must directly propagate its failure".into());
+        };
+        let syn::Expr::Call(call) = &*propagated.expr else {
+            return Err("authentication must be a direct call".into());
+        };
+        Ok(call)
+    };
+    let rustc_index = calls.stage("authenticate_pinned_rustc")?;
+    let rustc = propagated_call(rustc_index)?;
+    if !wrapper_expression_is(&rustc.func, "authenticate_pinned_rustc")
+        || rustc.args.len() != 2
+        || !matches!(&rustc.args[0], syn::Expr::Reference(reference)
+            if reference.mutability.is_none() && wrapper_expression_is(&reference.expr, "pinned_rustc"))
+        || !matches!(&rustc.args[1], syn::Expr::MethodCall(call)
+            if call.method == "rustc_executable_sha256" && call.args.is_empty()
+                && wrapper_expression_is(&call.receiver, "capability_binding"))
+    {
+        return Err(
+            "rustc authentication must bind the pinned descriptor and selected capability".into(),
+        );
+    }
+    let descriptor_index = calls.stage("validate_rustc_lib_tree_descriptor")?;
+    let descriptor = propagated_call(descriptor_index)?;
+    if !wrapper_expression_is(&descriptor.func, "validate_rustc_lib_tree_descriptor")
+        || descriptor.args.len() != 1
+        || !wrapper_expression_is(&descriptor.args[0], "capability_binding")
+    {
+        return Err("library-tree validation must authenticate the selected binding".into());
+    }
+    let stages = [
+        family_index,
+        binding_index,
+        rustc_index,
+        descriptor_index,
+        calls.stage("receive_validated_compiler_capabilities")?,
+        calls.stage("PreparedProductionBuildConfig::from_environment")?,
+        calls.stage("validate_expected_build_config_identity")?,
+        wrapper_local(block, "source_isa_selection")?.0,
+        calls.stage("CompilerCapabilities::from_authenticated_transfer")?,
+        calls.stage("prepare_production_managed_attempt")?,
+        calls.stage("release_invocation_with_source_isa_observer")?,
+        calls.stage("scope_managed_rustc_arguments")?,
+    ];
+    if !stages.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err("out-of-order production authentication stage".into());
+    }
+    let (_, identity) = calls
+        .calls
+        .iter()
+        .find(|(_, call)| {
+            wrapper_expression_is(&call.func, "validate_expected_build_config_identity")
+        })
+        .unwrap();
+    if identity.args.len() != 2
+        || !matches!(&identity.args[1], syn::Expr::MethodCall(call)
+        if call.method == "config_identity" && call.args.is_empty()
+            && wrapper_expression_is(&call.receiver, "capability_binding"))
+    {
+        return Err("configuration must match the authenticated binding".into());
+    }
+    Ok(())
+}
+
 #[test]
 fn wrapper_authenticates_before_configuration_io_and_attempt_creation() {
     let source = include_str!("../src/binding_wrapper.rs");
-    let run = source
-        .split("pub(crate) fn run(")
-        .nth(1)
-        .unwrap()
-        .split("scope_managed_rustc_arguments")
-        .next()
-        .unwrap();
-    let mut previous = 0;
-    for stage in [
-        "CapabilityBindingV3::from_environment_for_client",
-        "authenticate_pinned_rustc(&pinned_rustc",
-        "validate_rustc_lib_tree_descriptor(capability_binding)?",
+    wrapper_authentication_order(source).unwrap();
+    let formatted = source.replace(
         "receive_validated_compiler_capabilities(capability_binding, profile_family)?",
-        "PreparedProductionBuildConfig::from_environment()",
-        "validate_expected_build_config_identity(",
-        "let source_isa_selection =",
-        "CompilerCapabilities::from_authenticated_transfer(",
-        "prepare_production_managed_attempt(",
-        "release_invocation_with_source_isa_observer(",
+        "receive_validated_compiler_capabilities(\n capability_binding, /* selected route */ profile_family\n )?",
+    );
+    assert_ne!(formatted, source);
+    wrapper_authentication_order(&formatted).unwrap();
+}
+
+#[test]
+fn wrapper_authentication_rejects_changed_routes_missing_stages_and_reordering() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let receive = "receive_validated_compiler_capabilities(capability_binding, profile_family)?";
+    for replacement in [
+        "unreachable!()",
+        "receive_validated_compiler_capabilities(capability_binding)?",
+        "receive_validated_compiler_capabilities(capability_binding, other_family)?",
+        "receive_validated_compiler_capabilities(other_binding, profile_family)?",
+        "receive_validated_compiler_capabilities(capability_binding, profile_family)",
     ] {
-        let offset = run.find(stage).unwrap_or_else(|| panic!("missing {stage}"));
-        assert!(offset > previous, "out-of-order production stage: {stage}");
-        previous = offset;
+        let changed = source.replacen(receive, replacement, 1);
+        assert_ne!(changed, source);
+        assert!(
+            wrapper_authentication_order(&changed).is_err(),
+            "accepted {replacement}"
+        );
     }
-    assert!(run.contains("capability_binding.config_identity()"));
-    assert_eq!(
-        run.matches("receive_validated_compiler_capabilities(")
-            .count(),
-        1
+    for (from, to) in [
+        (
+            "broker_route_family_from_environment()",
+            "untrusted_route_family()",
+        ),
+        (
+            "let capability_binding = match profile_family",
+            "let capability_binding = match other_family",
+        ),
+        (
+            "CapabilityBindingV3::from_environment_for_client(",
+            "CapabilityBindingV3::from_environment_for_client_v4(",
+        ),
+        (
+            "CapabilityBindingV3::from_environment_for_client_v4(",
+            "CapabilityBindingV3::from_environment_for_client(",
+        ),
+        (
+            "validate_rustc_lib_tree_descriptor(capability_binding)?",
+            "validate_rustc_lib_tree_descriptor(other_binding)?",
+        ),
+        (
+            "validate_rustc_lib_tree_descriptor(capability_binding)?",
+            "validate_rustc_lib_tree_descriptor(capability_binding)",
+        ),
+        (
+            "authenticate_pinned_rustc(&pinned_rustc,",
+            "authenticate_pinned_rustc(&other_rustc,",
+        ),
+        (
+            "authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?",
+            "authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())",
+        ),
+        (
+            "capability_binding.rustc_executable_sha256()",
+            "other_binding.rustc_executable_sha256()",
+        ),
+        (
+            "capability_binding.config_identity()",
+            "other_binding.config_identity()",
+        ),
+    ] {
+        let changed = source.replacen(from, to, 1);
+        assert_ne!(changed, source);
+        assert!(
+            wrapper_authentication_order(&changed).is_err(),
+            "accepted {to}"
+        );
+    }
+    for parser in [
+        "from_environment_for_client",
+        "from_environment_for_client_v4",
+    ] {
+        let constructor = format!("capability_broker::CapabilityBindingV3::{parser}(");
+        let (prefix, selected) = source.split_at(source.find(&constructor).unwrap());
+        let changed = format!(
+            "{prefix}{}",
+            selected.replacen(
+                "capability_broker::CapabilityProfileV1::Ordinary",
+                "capability_broker::CapabilityProfileV1::Other",
+                1
+            )
+        );
+        assert_ne!(changed, source);
+        assert!(
+            wrapper_authentication_order(&changed).is_err(),
+            "accepted changed {parser} profile"
+        );
+    }
+    let receive_statement = format!("            let transferred =\n                {receive};\n");
+    assert_eq!(source.matches(&receive_statement).count(), 1);
+    let duplicate = source.replacen(
+        &receive_statement,
+        &format!("{receive_statement}{receive_statement}"),
+        1,
     );
-    assert_eq!(
-        run.matches("PreparedProductionBuildConfig::from_environment()")
-            .count(),
-        1
+    assert!(wrapper_authentication_order(&duplicate).is_err());
+    let without_receive = source.replacen(&receive_statement, "", 1);
+    for before in [
+        "            validate_expected_build_config_identity(",
+        "            let source_isa_selection =",
+        "            let mut release_guard =",
+    ] {
+        assert_eq!(without_receive.matches(before).count(), 1);
+        let reordered =
+            without_receive.replacen(before, &format!("{receive_statement}{before}"), 1);
+        assert!(
+            wrapper_authentication_order(&reordered).is_err(),
+            "accepted receive before {before}"
+        );
+    }
+    let config_statement = "            let build_config = PreparedProductionBuildConfig::from_environment()\n                .map_err(BindingWrapperError::BuildConfiguration)?;\n";
+    assert_eq!(source.matches(config_statement).count(), 1);
+    let duplicate = source.replacen(
+        config_statement,
+        &format!("{config_statement}{config_statement}"),
+        1,
     );
+    assert!(wrapper_authentication_order(&duplicate).is_err());
+    let missing = source.replacen(config_statement, "", 1);
+    assert!(wrapper_authentication_order(&missing).is_err());
 }
 
 #[test]

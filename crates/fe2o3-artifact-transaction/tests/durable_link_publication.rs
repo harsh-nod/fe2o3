@@ -1,6 +1,10 @@
 #[path = "support/process.rs"]
 mod test_process;
 
+#[cfg(target_os = "linux")]
+#[path = "durable_link_publication/proc_self_fd.rs"]
+mod proc_self_fd;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,

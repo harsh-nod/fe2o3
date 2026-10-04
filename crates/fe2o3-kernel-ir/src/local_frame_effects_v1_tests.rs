@@ -986,10 +986,9 @@ fn retained_index(alias_zero: bool) -> Module {
             .results
             .first()
             .is_some_and(|result| result.id == ValueId(3))
+            && let OperationKind::GetElementPointer { offset, .. } = &mut operation.kind
         {
-            if let OperationKind::GetElementPointer { offset, .. } = &mut operation.kind {
-                *offset = ValueId(72);
-            }
+            *offset = ValueId(72);
         }
     }
     module

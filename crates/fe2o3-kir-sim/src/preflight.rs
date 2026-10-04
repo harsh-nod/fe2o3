@@ -320,7 +320,7 @@ pub enum SimulationPreflightErrorV1 {
     PhysicalLdsExchangeAliasedArgumentsV22,
     PhysicalGlobalCopyAliasedArgumentsV21,
     InvalidLimits(SimulationLimitsErrorV1),
-    /// Typed storage is outside every existing simulation profile.
+    /// Module-owned storage tables require exact V18 simulation admission.
     StorageProfileNotAdmitted,
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
@@ -524,7 +524,8 @@ pub(crate) fn preflight(
     let limits = limits
         .validate()
         .map_err(SimulationPreflightErrorV1::InvalidLimits)?;
-    if !module.storage_layouts.is_empty() {
+    if !module.storage_layouts.is_empty() && wire_version != fe2o3_kernel_ir::KERNEL_IR_VERSION_V18
+    {
         return Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted);
     }
     let input_peak = conservative_preflight_input_bytes(admitted_resident_bytes, module, request)
@@ -576,6 +577,7 @@ pub(crate) fn preflight(
             target,
             limits,
             OrderedProfiles {
+                storage_scalar: wire_version == fe2o3_kernel_ir::KERNEL_IR_VERSION_V18,
                 region: crate::ordered_region_v16::launch_profile_matches(
                     module, kernel, request, target,
                 ),
@@ -1253,6 +1255,7 @@ fn check_limit(
 
 #[derive(Clone, Copy)]
 struct OrderedProfiles {
+    storage_scalar: bool,
     region: bool,
     program: bool,
     complete_body: bool,
@@ -1311,7 +1314,12 @@ fn scan_reachable(
             && crate::physical_entry_v20::scope_profile_matches(&function.required_capabilities);
         let complete_body_profile = launch_profiles.complete_body
             && crate::complete_body_v19::scope_profile_matches(&function.required_capabilities);
-        scan_signature(function, target, &mut findings);
+        scan_signature(
+            function,
+            target,
+            &mut findings,
+            launch_profiles.storage_scalar && function.role == FunctionRole::InternalHelper,
+        );
         let Some(body) = &function.body else {
             let identifier_bytes = function.id.retained_capacity_bytes().saturating_mul(2);
             findings.push(identifier_bytes, || {
@@ -1357,6 +1365,7 @@ fn scan_reachable(
                     allow_dynamic_workgroup_memory,
                     target,
                     OrderedProfiles {
+                        storage_scalar: launch_profiles.storage_scalar,
                         region: ordered_region_profile,
                         program: ordered_program_profile,
                         complete_body: complete_body_profile,
@@ -1678,6 +1687,7 @@ fn scan_signature(
     function: &Function,
     target: SimulationTargetV1,
     findings: &mut UnsupportedCollectorV1,
+    allow_generic: bool,
 ) {
     let identifier_bytes = function.id.retained_capacity_bytes();
     for ty in function
@@ -1686,7 +1696,7 @@ fn scan_signature(
         .iter()
         .chain(&function.signature.results)
     {
-        if let Some(feature) = unsupported_type(ty, target) {
+        if let Some(feature) = unsupported_type_with_generic(ty, target, allow_generic) {
             findings.push(identifier_bytes, || signature_finding(function, feature));
         }
     }
@@ -1800,13 +1810,45 @@ fn scan_operation(
         };
     }
     for result in &operation.results {
-        if let Some(feature) = unsupported_type(&result.ty, target) {
+        // This flag is issued only for exact V18 admission. A result is allowed
+        // only on its closed lifecycle producer; signatures and block arguments
+        // still follow the ordinary execution-role refusal.
+        if ordered_profiles.storage_scalar
+            && crate::execute::execution_lifecycle_v18::supports_operation(operation)
+        {
+            continue;
+        }
+        if ordered_profiles.storage_scalar
+            && crate::storage_scalar_v18::private_pointer(module, &result.ty, target).is_some()
+        {
+            continue;
+        }
+        if let Some(feature) =
+            unsupported_type_with_generic(&result.ty, target, ordered_profiles.storage_scalar)
+        {
             reject!(feature);
         }
     }
     match &operation.kind {
-        OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
-        OperationKind::Storage(_) => reject!(UnsupportedFeatureV1::InertStorage),
+        OperationKind::Execution(_) => {
+            if !ordered_profiles.storage_scalar
+                || !crate::execute::execution_lifecycle_v18::supports_operation(operation)
+            {
+                reject!(UnsupportedFeatureV1::InertExecutionV15);
+            }
+        }
+        OperationKind::Storage(storage) => {
+            if !ordered_profiles.storage_scalar
+                || !crate::storage_scalar_v18::supports_operation(
+                    module,
+                    storage,
+                    value_types,
+                    target,
+                )
+            {
+                reject!(UnsupportedFeatureV1::InertStorage);
+            }
+        }
         OperationKind::Constant(constant) => {
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
             {
@@ -1828,8 +1870,12 @@ fn scan_operation(
             value: operand,
             to,
         } => match (kind, value_types.get(operand), to) {
+            (kind, Some(from), to)
+                if ordered_profiles.storage_scalar
+                    && crate::generic_exposure_v18::supports_cast(*kind, from, to, target) => {}
             (CastKind::RestrictPointerAccess, Some(Type::Pointer(from)), Type::Pointer(to))
                 if from.pointee == to.pointee
+                    && !matches!(from.pointee.as_ref(), Type::StorageObject(_))
                     && from.address_space == to.address_space
                     && from.access == AccessMode::ReadWrite
                     && to.access == AccessMode::ReadOnly => {}
@@ -1928,7 +1974,10 @@ fn scan_operation(
                     *address_space,
                 ));
             }
-            if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
+            if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
+                && !(ordered_profiles.storage_scalar
+                    && crate::storage_scalar_v18::scalar_layout(module, element, target).is_some())
+            {
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
@@ -1939,6 +1988,7 @@ fn scan_operation(
                     slice.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -1951,6 +2001,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -1961,6 +2012,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    ordered_profiles.storage_scalar,
                 );
             }
         }
@@ -1977,6 +2029,7 @@ fn scan_operation(
                     pointer.address_space,
                     &mut |feature| reject!(feature),
                     target,
+                    false,
                 );
             }
         }
@@ -2225,6 +2278,7 @@ fn scan_memory_type(
     address_space: AddressSpace,
     reject: &mut impl FnMut(UnsupportedFeatureV1),
     target: SimulationTargetV1,
+    allow_generic: bool,
 ) {
     if !matches!(
         address_space,
@@ -2232,7 +2286,8 @@ fn scan_memory_type(
             | AddressSpace::Private
             | AddressSpace::Workgroup
             | AddressSpace::Constant
-    ) {
+    ) && !(allow_generic && address_space == AddressSpace::Generic)
+    {
         reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
     }
     if !matches!(pointee, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
@@ -2354,6 +2409,18 @@ fn scan_terminator(
                 feature: UnsupportedFeatureV1::FloatOperation,
             }
         });
+    }
+}
+
+fn unsupported_type_with_generic(
+    ty: &Type,
+    target: SimulationTargetV1,
+    allow_generic: bool,
+) -> Option<UnsupportedFeatureV1> {
+    if allow_generic && crate::generic_exposure_v18::supports_type(ty, target) {
+        None
+    } else {
+        unsupported_type(ty, target)
     }
 }
 
@@ -2773,6 +2840,7 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("preflight_execution_lifecycle_v18_tests.rs");
 
     #[test]
     fn execution_v15_raw_preflight_has_no_execution_plan() {
@@ -3242,6 +3310,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3302,6 +3371,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3367,6 +3437,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,
@@ -3415,6 +3486,7 @@ mod tests {
             false,
             SimulationTargetV1::amdgpu_64(),
             OrderedProfiles {
+                storage_scalar: false,
                 region: false,
                 program: false,
                 complete_body: false,

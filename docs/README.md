@@ -36,6 +36,8 @@ documentation.
   do not establish.
 - [GPU safety contract](gpu-safety-contract-v1.md): memory, launch, artifact,
   and runtime safety obligations.
+- [Persistent execution semantics](persistent-gpu-execution-semantics-v1.md):
+  service accounting, KFD boundaries, and conditional progress requirements.
 
 ## Compile and execute
 

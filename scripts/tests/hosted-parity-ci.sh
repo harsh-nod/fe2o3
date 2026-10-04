@@ -179,27 +179,88 @@ for path in \
   .github/parity-trust-reviewers.txt; do
   require_text "${PROTECTED_WORKFLOW}" "- ${path}"
 done
-for ownership in \
-  /docs/parity-row-evidence-policy-v2.tsv \
-  /docs/parity-evidence/trust-policy-v2.tsv \
-  /docs/parity-evidence/trusted-keys/ \
-  /scripts/parity-publisher-client.py \
-  /scripts/parity-signed-evidence.py \
-  /scripts/parity-protected-change-policy.sh \
-  /scripts/parity-repository-rules.py \
-  /scripts/parity-repository-rules.sh \
-  /.github/workflows/parity-promotion.yml \
-  /.github/workflows/parity-publisher-gate.yml \
-  /.github/workflows/source-isa-unit-matrix.yml \
-  /.github/CODEOWNERS; do
-  require_text "${CODEOWNERS}" "${ownership} @powderluv"
+readonly -a REQUIRED_CODEOWNER_PATHS=(
+  /docs/parity-row-evidence-policy-v2.tsv
+  /docs/parity-evidence/trust-policy-v2.tsv
+  /docs/parity-evidence/trusted-keys/
+  /scripts/parity-publisher-client.py
+  /scripts/parity-signed-evidence.py
+  /scripts/parity-protected-change-policy.sh
+  /scripts/parity-repository-rules.py
+  /scripts/parity-repository-rules.sh
+  /.github/workflows/ci.yml
+  /.github/workflows/parity-promotion.yml
+  /.github/workflows/parity-publisher-gate.yml
+  /.github/workflows/source-isa-unit-matrix.yml
+  /.github/CODEOWNERS
+  /.github/parity-trust-reviewers.txt
+)
+
+check_codeowners() {
+  # This repository's current single-owner profile, not a general glob parser.
+  # Requiring that owner on every active row also rejects later overriding rules.
+  awk -v required="$(printf '%s\n' "${REQUIRED_CODEOWNER_PATHS[@]}")" '
+    BEGIN { count = split(required, paths, "\n") }
+    NF == 0 || $1 ~ /^#/ { next }
+    {
+      if (NF != 2 || $2 != "@powderluv") bad = 1
+      seen[$1]++
+    }
+    END {
+      for (i = 1; i <= count; i++) if (seen[paths[i]] != 1) bad = 1
+      exit bad
+    }
+  ' "$1" || {
+    printf 'CODEOWNERS ownership profile differs from the protected paths\n' >&2
+    return 1
+  }
+}
+
+check_codeowners "${CODEOWNERS}"
+awk '
+  NF && $1 !~ /^#/ { rows[++count] = "\t" $1 " \t" $2 "  " }
+  END {
+    print "# Equivalent active ownership rows\n"
+    for (i = count; i > 0; i--) print rows[i]
+  }
+' "${CODEOWNERS}" >"${TEST_ROOT}/codeowners-reordered"
+check_codeowners "${TEST_ROOT}/codeowners-reordered"
+cp "${CODEOWNERS}" "${TEST_ROOT}/codeowners-extra"
+printf '/scripts/s09-* @powderluv\n' >>"${TEST_ROOT}/codeowners-extra"
+check_codeowners "${TEST_ROOT}/codeowners-extra"
+
+for index in "${!REQUIRED_CODEOWNER_PATHS[@]}"; do
+  awk -v path="${REQUIRED_CODEOWNER_PATHS[index]}" '$1 != path' \
+    "${CODEOWNERS}" >"${TEST_ROOT}/codeowners-missing"
+  expect_failure "codeowners-missing-${index}" 'CODEOWNERS ownership profile' \
+    check_codeowners "${TEST_ROOT}/codeowners-missing"
+done
+for mutation in comment near-match owner duplicate; do
+  awk -v mutation="${mutation}" '
+    $1 == "/.github/workflows/ci.yml" {
+      if (mutation == "comment") { print "# " $0; next }
+      if (mutation == "near-match") $1 = $1 ".other"
+      if (mutation == "owner") $2 = "@someone_else"
+      if (mutation == "duplicate") print
+    }
+    { print }
+  ' "${CODEOWNERS}" >"${TEST_ROOT}/codeowners-mutated"
+  expect_failure "codeowners-${mutation}" 'CODEOWNERS ownership profile' \
+    check_codeowners "${TEST_ROOT}/codeowners-mutated"
+done
+readonly -a CODEOWNER_OVERRIDE_ROWS=('*' '* @someone_else')
+for index in "${!CODEOWNER_OVERRIDE_ROWS[@]}"; do
+  cp "${CODEOWNERS}" "${TEST_ROOT}/codeowners-override"
+  printf '%s\n' "${CODEOWNER_OVERRIDE_ROWS[index]}" >>"${TEST_ROOT}/codeowners-override"
+  expect_failure "codeowners-override-${index}" 'CODEOWNERS ownership profile' \
+    check_codeowners "${TEST_ROOT}/codeowners-override"
 done
 
 
 require_text "${GENERIC_WORKFLOW}" 'direct default-branch parity promotion is forbidden; repository rules must prevent this push'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic parity policy gate'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic validation'
-require_text "${GENERIC_WORKFLOW}" 'name: Generic core'
+require_text "${GENERIC_WORKFLOW}" 'name: Generic core (${{ matrix.group }})'
 require_text "${GENERIC_WORKFLOW}" 'name: Rustc codegen shard (${{ matrix.shard }})'
 if ! sed -n '/^  parity-policy:/,/^  generic-core:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '    timeout-minutes: 10' >/dev/null; then
@@ -221,7 +282,7 @@ if ! sed -n '/^  generic-validation:/,$p' "${GENERIC_WORKFLOW}" |
   printf 'generic aggregate timeout is not exactly 10 minutes\n' >&2
   exit 1
 fi
-require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core'
+require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core "${{ matrix.group }}"'
 if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW}" |
   rg -Fx '          sudo apt-get install --yes llvm ripgrep' >/dev/null; then
   printf 'generic core must install the llvm-as provider and ripgrep\n' >&2
@@ -229,11 +290,11 @@ if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW
 fi
 require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh rustc-codegen-shard "${{ matrix.shard }}"'
 require_text "${GENERIC_WORKFLOW}" 'fail-fast: false'
-require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core'
-require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core'
+require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core-${{ matrix.group }}'
+require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/generic-core-${{ matrix.group }}'
 require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}'
 require_text "${GENERIC_WORKFLOW}" 'CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}'
-require_text "${GENERIC_WORKFLOW}" 'name: generic-core-logs-${{ github.run_attempt }}'
+require_text "${GENERIC_WORKFLOW}" 'name: generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}'
 require_text "${GENERIC_WORKFLOW}" 'name: rustc-codegen-${{ matrix.shard }}-logs-${{ github.run_attempt }}'
 if [[ "$(rg -Fc 'if: ${{ failure() || cancelled() }}' "${GENERIC_WORKFLOW}")" -ne 2 ]]; then
   printf 'generic core and shards do not both upload logs after failure or cancellation\n' >&2

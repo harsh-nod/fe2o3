@@ -21,6 +21,53 @@ changing the source owner's canonical bytes. It does not add a simulation-bundle
 CLI, or debugger import route. Its canonical/resident limits retain the existing
 post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
 
+`admit_v18_with_verification_budget` borrows exact move-only
+`VerifiedCanonicalKernelIrModuleV18` custody and constructs an independent
+CPU view on the supplied original verification budget. The full layout table,
+explicit function roles and V18 canonical identity survive admission. Keep the
+original owner's reservation live, immediately reserve the returned
+`SimulationViewStorageV18` receipt, and release that payment only after
+dropping the view. Failed admission restores the incoming storage floor without
+resetting cumulative work, peak storage or first-denial history.
+
+V18 additionally executes private scalar storage cells with nonvolatile access: `Alloca` over an exact
+`StorageObject` scalar row followed by `Storage::WriteValue` and
+`Storage::ReadValue`. The row's byte size must match the selected target,
+including 32-bit versus 64-bit Index. Values retain their row identity; the
+existing finite-width, bounds, alignment, initialization, memory-event and
+allocation-lifetime checks apply. Existing simulation limits remain unchanged.
+
+V18 scalar pointer and admitted slice exposure to Generic retains the concrete allocation,
+view bounds, permissions and lifetime. Ordinary scalar memory, slice/GEP operations,
+internal calls and CFG/select transport use that retained backing. Debug values
+show the logical Generic type; memory events keep the concrete address space.
+Concrete slice inputs remain limited to Global/Constant types; the root buffer
+ABI remains Global-only. Private/Workgroup slices do not become newly admitted.
+Generic kernel arguments, allocations, atomics and memory intrinsics remain refused.
+
+Aggregate/pointer storage, projections, object copies, discriminants and storage-bearing
+function parameters/results remain unsupported. Storage
+pointers are not ordinary scalar pointers. Debug capture executes this subset
+and retains memory events/checkpoints, but reports stacks containing tagged
+storage pointers as `NotCaptured`; it never erases their type into the legacy
+pointer DTO. The capability matrix names typed-memory ownership with explicit
+remaining `InertStorage` refusals.
+
+V18 executes the verified lifecycle subset `ContextIssue`, `WorkgroupDerive`,
+and `ScopeEnd` with an empty discard list. Tokens retain the actual invocation,
+function, producer and checked generation; ending a workgroup scope releases its
+bounded SSA cell without inventing tile scheduling or memory operations.
+Execution-role arguments/results, unscheduled tiles/fragments, nonempty discards
+and older wire profiles remain refused. The V1 debugger cannot represent these
+tokens: after `ContextIssue`, the entire value stack is `NotCaptured`, including
+ordinary scalar and pointer values. Ending the workgroup does not restore stack
+capture because the context remains live. Operation events and concrete memory
+events/checkpoints remain available; no token is reported as a fake scalar.
+
+Raw V18 diagnostic CLI imports are separate from original-source custody.
+Neither route grants source or GPU execution authority or adds a bundle or
+persisted-schedule format.
+
 `admit_v20` borrows exact verified V20 custody for the separate
 `gfx942:xnack-` / Wave64 / `physical_entry_u32_out_v1` profile.
 Each physical instruction is an actual canonical SSA operation and the existing

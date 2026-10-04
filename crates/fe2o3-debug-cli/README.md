@@ -746,3 +746,38 @@ No canonical or debugger schema version changes are made by this route.
 Existing V20 configuration/page domains and response bytes remain unchanged.
 These implementation and test descriptions are not successful-run evidence;
 actual-source CLI qualification is [recorded separately](../../../docs/physical-global-copy-cpu-debug-qualification-20260924.md).
+
+## Diagnostic V18 CPU Debugging
+
+`fe2o3-debug sim --diagnostic-kir-v18 kernel-v18.kir --request request.json --protocol jsonl --wave-width 64`
+uses the ordinary simulator capture and JSONL debugger backend. Existing
+supported scalar memory operations support logical stepping,
+dispatch/workgroup/wave/lane
+inspection and checkpoint memory inspection while retaining exact V18 identity
+and inert layout metadata. Configuration identity binds the typed request,
+target and capture limits, not merely input file names.
+
+The original admission ledger remains live until the input and backend have
+dropped, including stream errors and unwinding. Request, capture and protocol
+allocations retain their existing separate bounds; no process-wide accounting
+claim is made. Raw V18 carries no authenticated source-variable mapping,
+persisted replay or GPU authority. Source maps, runtime-observation mode and
+Wave32 are rejected before input IO; diagnosis V2 reports unavailable rather
+than presenting V18 as a legacy source-bound graph.
+
+Private scalar storage allocation/read/write executes with exact target-sized
+layout rows and the existing memory and lifetime checks. Stepping and memory
+events/checkpoint snapshots remain available. A stack containing a tagged
+storage pointer is explicitly `NotCaptured`: the legacy debugger value format
+cannot represent its row identity, so it is never converted into an ordinary
+pointer or silently omitted. V18 scalar pointer/slice exposure to Generic keeps
+the concrete allocation, permissions, view bounds and lifetime. Debug values
+retain the logical Generic address space; memory events and allocation snapshots
+retain the concrete backing. Slice source types remain Global/Constant and root
+buffers remain Global-only; Private/Workgroup slices are not newly admitted.
+Generic kernel arguments, allocations, atomics and
+memory intrinsics remain refused. Aggregate/pointer storage, projections, copies,
+discriminants and storage-bearing function parameters/results remain unsupported.
+
+This adds no debugger protocol or KIR format change. Raw canonical bytes do not
+authenticate an original Rust source owner or a compiler continuation.

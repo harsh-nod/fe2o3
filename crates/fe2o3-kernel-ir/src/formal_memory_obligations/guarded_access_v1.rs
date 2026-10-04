@@ -7,6 +7,12 @@ use crate::{
 };
 use std::mem::size_of;
 
+#[path = "guarded_meter_v1.rs"]
+mod meter;
+use meter::GuardMeter;
+#[path = "guarded_origins_v1.rs"]
+pub(super) mod origins;
+
 #[path = "runtime_slice_read_v1.rs"]
 mod runtime_slice_read_v1;
 

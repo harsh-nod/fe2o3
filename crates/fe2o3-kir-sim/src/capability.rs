@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_061_127;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 5_158_777;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -22,7 +22,7 @@ pub const SCALAR_CAPABILITY_ROWS_V1: usize = SimulationCapabilityProfileV1::COUN
         + COMPARE_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len()
         + CAST_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len());
 pub const POINTER_CAPABILITY_ROWS_V1: usize =
-    SimulationCapabilityProfileV1::COUNT * SimulationKirWireVersionV1::COUNT;
+    SimulationCapabilityProfileV1::COUNT * SimulationKirWireVersionV1::COUNT * (1 + 2 * 3);
 
 const SCALAR_TYPES: [ScalarType; 16] = [
     ScalarType::Bool,
@@ -122,10 +122,11 @@ pub enum SimulationKirWireVersionV1 {
     V20,
     V21,
     V22,
+    V18,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::V7,
         Self::V9,
         Self::V10,
@@ -137,6 +138,7 @@ impl SimulationKirWireVersionV1 {
         Self::V20,
         Self::V21,
         Self::V22,
+        Self::V18,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -151,6 +153,7 @@ pub enum SimulationOperationSurfaceV1 {
     Unary = 3,
     Binary = 4,
     Compare = 5,
+    /// Numeric casts; pointer casts have separate typed-memory rows.
     Cast = 6,
     Select = 7,
     Call = 8,
@@ -483,6 +486,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                         | SimulationKirWireVersionV1::V12
                         | SimulationKirWireVersionV1::V16
                         | SimulationKirWireVersionV1::V17
+                        | SimulationKirWireVersionV1::V18
                         | SimulationKirWireVersionV1::V19
                         | SimulationKirWireVersionV1::V20
                 ) {
@@ -500,6 +504,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
             });
         }
     }
+    append_generic_exposure_rows(&mut pointer_rows);
     debug_assert_eq!(top_level_rows.len(), TOP_LEVEL_CAPABILITY_ROWS_V1);
     debug_assert_eq!(scalar_rows.len(), SCALAR_CAPABILITY_ROWS_V1);
     debug_assert_eq!(pointer_rows.len(), POINTER_CAPABILITY_ROWS_V1);
@@ -512,6 +517,40 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
         top_level_rows,
         scalar_rows,
         pointer_rows,
+    }
+}
+
+fn append_generic_exposure_rows(rows: &mut Vec<SimulationPointerCapabilityRowV1>) {
+    use SimulationSemanticOwnerV1 as Owner;
+    use SimulationUnsupportedReasonCodeV1 as Reason;
+    for profile in SimulationCapabilityProfileV1::ALL {
+        for kir_wire_version in SimulationKirWireVersionV1::ALL {
+            for operation in ["pointer_to_generic", "slice_to_generic"] {
+                for access in ["read_only", "write_only", "read_write"] {
+                    rows.push(SimulationPointerCapabilityRowV1 {
+                        profile,
+                        kir_wire_version,
+                        operation,
+                        from_access: access,
+                        to_access: access,
+                        capability: if kir_wire_version == SimulationKirWireVersionV1::V18 {
+                            SimulationCapabilityDispositionV1::Owned {
+                                owner: Owner::TypedMemory,
+                                typed_rejections: &[
+                                    Reason::UnsupportedAddressSpace,
+                                    Reason::NonScalarMemory,
+                                    Reason::UnsupportedScalarOperation,
+                                ],
+                            }
+                        } else {
+                            SimulationCapabilityDispositionV1::Unsupported {
+                                reason: Reason::UnsupportedAddressSpace,
+                            }
+                        },
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -626,7 +665,11 @@ fn top_level_capability(
     };
     let unsupported = |reason| SimulationCapabilityDispositionV1::Unsupported { reason };
     if operation == Surface::Storage {
-        return unsupported(Reason::InertStorage);
+        return if kir_wire_version == SimulationKirWireVersionV1::V18 {
+            owned(Owner::TypedMemory, &[Reason::InertStorage])
+        } else {
+            unsupported(Reason::InertStorage)
+        };
     }
     if kir_wire_version == SimulationKirWireVersionV1::V22 {
         return match (profile, operation) {
@@ -809,6 +852,11 @@ fn top_level_capability(
         Surface::PhysicalEntryDeclaration | Surface::PhysicalEntryStep => {
             unsupported(Reason::PhysicalEntryProfile)
         }
+        // Only affine context/empty-workgroup lifecycle state is interpreted.
+        // Unscheduled tiles, fragments and descendant disposal remain inert.
+        Surface::Execution if kir_wire_version == SimulationKirWireVersionV1::V18 => {
+            owned(Owner::ControlFlow, &[Reason::InertExecutionV15])
+        }
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::Storage => unsupported(Reason::InertStorage),
         Surface::VectorLoad
@@ -910,7 +958,8 @@ const fn scalar_owner(ty: ScalarType) -> SimulationSemanticOwnerV1 {
 
 const fn cast_owner(kind: CastKind) -> SimulationSemanticOwnerV1 {
     match kind {
-        // The new casts are not in CAST_OPERATIONS and supported_cast refuses them.
+        // Pointer casts never enter the scalar Cartesian product. Their versioned
+        // typed-memory rows are independent of the numeric supported_cast predicate.
         CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
             SimulationSemanticOwnerV1::TypedMemory
         }
@@ -1017,7 +1066,10 @@ mod storage_compatibility_tests {
             SimulationUnsupportedReasonCodeV1::InertStorage
         );
         for profile in SimulationCapabilityProfileV1::ALL {
-            for version in SimulationKirWireVersionV1::ALL {
+            for version in SimulationKirWireVersionV1::ALL
+                .into_iter()
+                .filter(|version| *version != SimulationKirWireVersionV1::V18)
+            {
                 assert_eq!(
                     top_level_capability(SimulationOperationSurfaceV1::Storage, profile, version),
                     SimulationCapabilityDispositionV1::Unsupported {

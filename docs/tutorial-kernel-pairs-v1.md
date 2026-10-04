@@ -173,18 +173,39 @@ Do not add these collections to obtain a kernel count. They can overlap, repeat
 symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
-Two SIMT variants have exact source associations; the remaining 121 variants
-are pending and no pair is source-bound. Stages are not evaluated unless a
+The current projection records 61 known kernel identities and 123 variant
+obligations: 22 variants have exact source associations, 101 remain pending,
+and no pair is source-bound. Five displayed declarations lack exact
+source/display bindings; every existing positive selection has a display binding.
+Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
 acquire new source/variant/target bindings from this report.
 
-The first-fill kernel display retains the historical 308-byte library file at
-`7a536e0a001202ac0bb9d8647c5395661f8fa1ec`, including its whole-file digest.
-The current library adds an independent CPU point reference. Its old display
-therefore has a pending current-source binding, not a fixture-source contract.
-The tutorial's recorded no-GPU execution keeps its historical source pin; the
-source migration supplies no new execution or tile-pair qualification.
+The reductions-and-scans lesson now presents one exact current Wave64 kernel.
+Its former duplicate historical source remains archived with its original
+source-model identity and immutable link, rather than as a second active
+instructional implementation. All 61 kernel identities and 123 mode
+obligations are retained; this display migration qualifies no execution.
+
+The LDS/barriers and MoE-routing lessons likewise present their exact current
+source as the primary Kernel tab, without a duplicate current-source tab.
+Their superseded historical sources and claims retain their original immutable
+identities outside the active instructional tabs. The six removed display
+declarations were two unbound historical entries and four ordinary helpers;
+no kernel record, source binding, variant obligation or negative case is removed.
+
+The first-fill kernel display now binds the 680-byte library file at
+`f84c2a59ba34c3e4c12e316cc9b30f14342e36cf`, including its independent CPU
+point reference and exact whole-file digest. Recorded no-GPU execution of the
+historical 308-byte library at `7a536e0a001202ac0bb9d8647c5395661f8fa1ec`
+keeps that historical identity; the current source association supplies no new
+execution or tile-pair qualification.
+
+The MoE routing lesson's current-source tab binds the existing top-2 fixture
+through its full physical module closure, including ordinary enum/struct
+declarations with checked builtin derives. This source selection is not a rustc,
+simulation or GPU result, and it does not bind the archived older revision.
 
 The CPU simulation lesson's whole-file tab 6 binds
 `row_affine_sum_u32_v1` from
@@ -192,7 +213,7 @@ The CPU simulation lesson's whole-file tab 6 binds
 source-driver contract, with `row-affine-u32-kernel` and default features disabled.
 The associated production test exports Bundle V5 and compares 86 independent
 oracle cases on the gfx942 and gfx950 CPU profiles, including execution and
-exact persisted replay. This is the second source-bound SIMT variant, not a
+exact persisted replay. This is a source-bound SIMT variant, not a
 new native fixture or a completed pair. Tile and mixed implementations,
 native artifact/generated-host admission, and direct-KFD GPU validation remain
 pending for gfx942/mi300x and gfx950/mi350. The inventory does not ingest these
@@ -308,9 +329,9 @@ attention displays, including their performance-lab excerpts, also bind to the
 registered feature-selected source. The declared runners use non-test
 `cargo check --lib`; test-only declarations are excluded from this selection.
 Together with fourteen systems occurrences and the four whole-file
-displays described below, these thirty-six associations leave 28 pending
-display bindings and the historical
-GEMM lesson's source gap unresolved. The two attention variants are required
+displays described below, these associations preserve distinct source
+identities. The historical GEMM lesson's source gap remains unresolved.
+The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
 registrations, together with the explicit SIMT row source above, bring known
@@ -334,6 +355,13 @@ the required source-produced Bundle V7/KIR V12 simulation and oracle checks run.
 Comparator tests alone do not execute or qualify either kernel variant.
 Other source/display joins remain `pending`; a fixture's lesson scope is not
 an exact displayed-source binding.
+
+The typed-vecadd and LDS/barriers lessons each add a current whole-file entry
+tab bound to its existing feature-selected fixture. Their earlier historical
+tabs retain their original bytes and pending bindings; a current entry does not
+authenticate an older wrapper or helper closure. These source associations add
+neither execution receipts nor tile implementations. The displayed mixed-tile
+CPU source remains pinned to a published WIP revision, not compiler main.
 
 The V2 report's `kernelInventory` projects these records and reports known
 identity, display, negative-case and pending-join counts separately.

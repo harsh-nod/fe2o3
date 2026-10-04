@@ -195,6 +195,9 @@ fn combined_translation_work_is_exact_and_one_short_refuses_without_refund() {
 #[test]
 fn attachment_refuses_zero_remaining_work_and_preserves_live_floor() {
     let (receipt, floor) = receipt();
+    let expected = receipt.materialized.executable.module().kernels.len()
+        + receipt.materialized.executable.module().functions.len()
+        + receipt.materialized.correspondence.lowered_functions.len();
     let mut work = Work::new(0);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(floor).unwrap();
@@ -202,11 +205,11 @@ fn attachment_refuses_zero_remaining_work_and_preserves_live_floor() {
         try_attach_materialized_ranked_checks_with_bounded_translation_budget_v1(receipt, &mut budget);
     assert!(matches!(
         error,
-        Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-            ProductionMirPlironTranslationErrorV1::ResourceLimit
-        ))
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+            ArgumentResourceV1::Work(error)
+        )) if error.actual() == expected && error.limit() == 0
     ));
-    assert!(budget.failed_work().is_some());
+    assert_eq!(budget.failed_work(), Some(expected));
     assert_eq!(budget.work(), 0);
     assert_eq!(budget.storage(), floor);
 }
@@ -222,6 +225,8 @@ fn no_helper_fixture_adds_work_not_a_fabricated_cache_reservation() {
 #[test]
 fn formal_first_semantic_replay_refusal_is_not_formal_admission() {
     let (owner, floor) = attached();
+    let expected = owner.module.kernels.len() + owner.module.functions.len()
+        + owner.correspondence.lowered_functions.len();
     let mut work = Work::new(0);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(floor).unwrap();
@@ -229,12 +234,13 @@ fn formal_first_semantic_replay_refusal_is_not_formal_admission() {
     assert!(matches!(
         result,
         Err(crate::ProductionFormalMemoryErrorV1::SemanticKir(
-            ProductionSemanticKirErrorV1::MirPlironTranslation(
-                ProductionMirPlironTranslationErrorV1::ResourceLimit
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(error)
             )
-        ))
+        )) if error.actual() == expected && error.limit() == 0
     ));
-    assert!(budget.failed_work().is_some());
+    assert_eq!(budget.failed_work(), Some(expected));
+    assert_eq!(budget.work(), 0);
     assert_eq!(budget.storage(), floor);
 }
 

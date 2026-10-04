@@ -1,3 +1,5 @@
+mod support;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -5,7 +7,7 @@ use std::process::Command;
 fn kernel_marker_resolves_renamed_device_dependency() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-device/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-device-marker-test");
+    let target_dir = support::fixture_target_dir("renamed-device-marker-test");
 
     let output = Command::new(env!("CARGO"))
         .arg("check")
@@ -29,7 +31,7 @@ fn kernel_marker_resolves_renamed_device_dependency() {
 fn generated_control_flow_sidecar_decodes_canonically() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-device/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-device-marker-test");
+    let target_dir = support::fixture_target_dir("renamed-device-marker-test");
 
     let output = Command::new(env!("CARGO"))
         .arg("run")

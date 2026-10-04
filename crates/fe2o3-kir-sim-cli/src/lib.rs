@@ -646,6 +646,73 @@ pub fn load_debug_simulation_input_bytes_v16(
     }
 }
 
+/// Admits exact diagnostic V18 plus a strictly parsed request on the original ledger.
+///
+/// The returned CPU view receipt is unreserved: reserve it immediately on this
+/// same budget and retain that charge until the whole input (including any
+/// debugger backend that consumes its module) is dropped. The plain input type
+/// does not enforce this lifetime. Admission errors and unwind restore the entry
+/// storage floor while retaining work, peak storage and first-denial history.
+/// File capture and request/execution allocations have separate existing bounds;
+/// this receipt is not a combined request, allocator, or RSS guarantee.
+///
+/// Layout tables and exact V18 identity are preserved. This is diagnostic CPU
+/// input, not source custody, a compiler route, proof, launch or GPU authority.
+pub fn load_debug_simulation_input_v18(
+    kir_v18: &Path,
+    request: &Path,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<
+    (
+        AdmittedSimulationInputV1,
+        fe2o3_kir_sim::SimulationViewStorageV18,
+    ),
+    SimulationInputErrorV1,
+> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v18::load_debug_simulation_input_v18(kir_v18, request, budget)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v18, request, budget);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V18 input admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Admits captured V18/request bytes with the same receipt and lifetime contract
+/// as [load_debug_simulation_input_v18]. Borrowed extents are charged, not unknown
+/// caller allocation capacities; this route makes no filesystem-capture claim.
+pub fn load_debug_simulation_input_bytes_v18(
+    kir_v18: &[u8],
+    request: &[u8],
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<
+    (
+        AdmittedSimulationInputV1,
+        fe2o3_kir_sim::SimulationViewStorageV18,
+    ),
+    SimulationInputErrorV1,
+> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v18::load_debug_simulation_input_bytes_v18(kir_v18, request, budget)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v18, request, budget);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V18 byte admission requires Linux".to_owned(),
+        })
+    }
+}
+
 /// Securely admits exact canonical V19 bytes and a strict simulation request.
 ///
 /// This diagnostic CPU route authenticates neither source nor hardware and

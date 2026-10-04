@@ -46,9 +46,13 @@ pub fn general_wrong_block(value: u32) {
 
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1])
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        min_workgroups_per_compute_unit = 2
+    )
 )]
-pub fn vecadd_wrong_launch(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
+pub fn general_unsupported_occupancy(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
     let _ = (a, b, output);
 }
 

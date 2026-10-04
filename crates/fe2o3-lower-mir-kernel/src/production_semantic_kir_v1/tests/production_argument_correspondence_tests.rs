@@ -5,6 +5,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 
 include!("production_argument_test_fixture.rs");
+include!("production_native_argument_test_fixture.rs");
 
 fn argument_launch_roster(
     source: &ProductionSemanticSsaOwnerV1,

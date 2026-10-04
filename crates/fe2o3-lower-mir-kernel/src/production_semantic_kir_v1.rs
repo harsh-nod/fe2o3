@@ -2188,7 +2188,7 @@ impl ProductionSemanticKirOwnerV1 {
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
             let translation_validation = validate_mir_pliron_translation_with_semantic_v1(
-                Some(semantic.semantic()),
+                Some(&semantic_ssa),
                 &module,
                 &correspondence,
                 &function_name,
@@ -2321,8 +2321,8 @@ impl ProductionSemanticKirOwnerV1 {
             {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
-            let revalidated = validate_mir_pliron_translation_with_allowance_v1(
-                Some(self.semantic_ssa.source_semantic()),
+            let revalidated = validate_mir_pliron_translation_with_allowance_resources_v1(
+                Some(&self.semantic_ssa),
                 &self.module,
                 &self.correspondence,
                 &generic_checks.function_name,
@@ -2333,7 +2333,7 @@ impl ProductionSemanticKirOwnerV1 {
                 budget,
                 allowance.as_deref_mut(),
             )
-            .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+            .map_err(native_helper_value_expansion_v1::NativeTranslationErrorV1::into_semantic)?;
             if revalidated != generic_checks.translation_validation {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
@@ -25832,7 +25832,7 @@ mod resource_tests {
     mod correspondence_replay_core_tests {
         include!("production_semantic_kir_v1/tests/production_correspondence_replay_core_tests.rs");
     }
-    mod argument_correspondence_tests {
+    pub(super) mod argument_correspondence_tests {
         include!("production_semantic_kir_v1/tests/production_argument_correspondence_tests.rs");
     }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");

@@ -51,6 +51,9 @@ mod secure_start {
     // Written once by the ELF entrypoint, before libc or any thread exists.
     static DESCRIPTOR_INVOCATION: AtomicBool = AtomicBool::new(false);
 
+    // Only static service executables have the CRT entry this assembly resumes.
+    // Dynamic consumers still observe a false invocation flag and reject.
+    #[cfg(target_feature = "crt-static")]
     core::arch::global_asm!(
         include_str!("secure_start_x86_64.S"),
         invocation = sym DESCRIPTOR_INVOCATION,
@@ -62,6 +65,7 @@ mod secure_start {
         DESCRIPTOR_INVOCATION.load(Ordering::Acquire)
     }
 
+    #[cfg(target_feature = "crt-static")]
     unsafe extern "C" {
         fn fe2o3_secure_start_v1();
     }
@@ -73,9 +77,19 @@ mod secure_start {
     /// limit, then bounds the initial argv0 and requires an empty environment, before libc or
     /// Rust startup can inspect inherited descriptors. Bypassing this entrypoint leaves the
     /// private invocation observation unset and descriptor-only admission fails closed.
+    ///
+    /// Returns zero when the CRT is not statically linked: dynamic libraries have no
+    /// protected entrypoint to retain. This retention value never grants admission.
     #[inline(never)]
     pub fn protected_service_secure_start_address_v1() -> usize {
-        fe2o3_secure_start_v1 as *const () as usize
+        #[cfg(target_feature = "crt-static")]
+        {
+            fe2o3_secure_start_v1 as *const () as usize
+        }
+        #[cfg(not(target_feature = "crt-static"))]
+        {
+            0
+        }
     }
 }
 

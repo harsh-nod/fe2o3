@@ -19,6 +19,8 @@ use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
 };
 
+#[path = "shared/cargo_target_selection_v1.rs"]
+mod cargo_target_selection_v1;
 #[path = "fe2o3-rustc-extract/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
 include!("fe2o3-rustc-extract/ordered_composition_v1.rs");
@@ -26,6 +28,7 @@ include!("fe2o3-rustc-extract/bf16_tile_source_v1.rs");
 include!("fe2o3-rustc-extract/bf16_generated_source_v1.rs");
 include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
 include!("fe2o3-rustc-extract/normal_composition_v1.rs");
+include!("fe2o3-rustc-extract/binding_only_v1.rs");
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_ENGINEERING_CAPTURE_ENV_V1: &str = "FE2O3_EXTRACT_ENGINEERING_CAPTURE_V1";
@@ -173,7 +176,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let prepared = prepare(
+    let prepared = prepare_for_target(
         env::args_os().collect(),
         env::var_os(EXTRACT_CRATE_ENV_V1),
         env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1),
@@ -183,6 +186,7 @@ fn main() {
         simulation_output,
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
+        env::var_os(cargo_target_selection_v1::ENV),
     )
     .map(|prepared| select_simulation_mode(prepared, version))
     .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff))
@@ -226,6 +230,11 @@ enum PreparedExtractionV1 {
     Passthrough {
         executable: OsString,
         forwarded_args: Vec<OsString>,
+    },
+    BindingOnly {
+        executable: OsString,
+        forwarded_args: Vec<OsString>,
+        crate_binding: CrateBindingIdV1,
     },
     Selected(SelectedExtractionV1),
 }
@@ -669,6 +678,7 @@ fn select_simulation_mode(
     prepared
 }
 
+#[cfg(test)]
 fn prepare(
     argv: Vec<OsString>,
     selected_crate: Option<OsString>,
@@ -680,6 +690,44 @@ fn prepare(
     crate_binding_path: Option<OsString>,
     package_identity: Option<PortablePackageIdentityV1>,
 ) -> Result<PreparedExtractionV1, String> {
+    prepare_for_target(
+        argv,
+        selected_crate,
+        ranked_memory,
+        amdgpu_llvm_path,
+        gfx942_llvm_path,
+        gfx942_compiler_handoff_path,
+        simulation_bundle_path,
+        crate_binding_path,
+        package_identity,
+        None,
+    )
+}
+
+fn prepare_for_target(
+    argv: Vec<OsString>,
+    selected_crate: Option<OsString>,
+    ranked_memory: Option<OsString>,
+    amdgpu_llvm_path: Option<OsString>,
+    gfx942_llvm_path: Option<OsString>,
+    gfx942_compiler_handoff_path: Option<OsString>,
+    simulation_bundle_path: Option<OsString>,
+    crate_binding_path: Option<OsString>,
+    package_identity: Option<PortablePackageIdentityV1>,
+    selected_target: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    let selected_target = match selected_target {
+        None => None,
+        Some(value) => {
+            let crate_name = selected_crate
+                .as_deref()
+                .and_then(|name| name.to_str())
+                .ok_or("exact Cargo target selection requires a UTF-8 selected crate")?;
+            Some(cargo_target_selection_v1::Selection::decode(
+                &value, crate_name,
+            )?)
+        }
+    };
     let actual_rustc_argv = argv
         .get(1..)
         .filter(|argv| !argv.is_empty())
@@ -705,7 +753,14 @@ fn prepare(
     let RustcInvocationV2::Compile(compile) = invocation else {
         return Ok(prepare_passthrough(invocation));
     };
-    if compile.crate_name() != selected_crate {
+    if let Some(selected) = &selected_target {
+        if !selected.matches(compile)? {
+            if let Some(identity) = selected.binding_only_identity(compile)? {
+                return prepare_binding_only_compile(compile, &identity);
+            }
+            return Ok(prepare_passthrough(invocation));
+        }
+    } else if compile.crate_name() != selected_crate {
         return Ok(prepare_passthrough(invocation));
     }
 
@@ -929,6 +984,11 @@ fn execute(prepared: PreparedExtractionV1) -> Result<i32, String> {
             executable,
             forwarded_args,
         } => execute_passthrough(executable, forwarded_args),
+        PreparedExtractionV1::BindingOnly {
+            executable,
+            forwarded_args,
+            crate_binding,
+        } => execute_binding_only(executable, forwarded_args, crate_binding),
         PreparedExtractionV1::Selected(selected) => execute_selected(selected),
     }
 }
@@ -944,7 +1004,8 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
         .env_remove(EXTRACT_COMPOSITION_NORMAL_ENV_V1)
         .env_remove(EXTRACT_BF16_TILE_SOURCE_DIRECTORY_ENV_V1)
         .env_remove(EXTRACT_BF16_TILE_PROMOTION_REQUEST_ENV_V1)
-        .env_remove(EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1);
+        .env_remove(EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1)
+        .env_remove(cargo_target_selection_v1::ENV);
     command
 }
 
@@ -1218,6 +1279,8 @@ mod tests {
     include!("fe2o3-rustc-extract/bf16_generated_source_v1_tests.rs");
     include!("fe2o3-rustc-extract/composition_promotion_v1_tests.rs");
     include!("fe2o3-rustc-extract/normal_composition_v1_tests.rs");
+    include!("fe2o3-rustc-extract/bin_target_v1_tests.rs");
+    include!("fe2o3-rustc-extract/binding_only_v1_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

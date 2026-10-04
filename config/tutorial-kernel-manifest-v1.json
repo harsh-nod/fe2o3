@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "2ee23b1fe2a2c4e448cf40d0143009d748ceb0cf",
-      "tree": "977e763899d2bb6a43d2f7c3ecb1bf6b5a8478a4"
+      "commit": "d462403a78e31c614046cba6361092c58ceed996",
+      "tree": "97cb58f5f01dbdb58b8747d41b31473f4cc5d96b"
     },
     "status": "pending",
     "lessons": [
@@ -193,11 +193,11 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 308,
-            "displayedSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            "displayedUtf8Bytes": 680,
+            "displayedSha256": "66593042d32204a35d4371de11387466c6eb553b54a24d21e370f47b3ee4789e",
             "sourcePath": "examples/fill/src/lib.rs",
-            "sourceCommit": "7a536e0a001202ac0bb9d8647c5395661f8fa1ec",
-            "sourceSha256": "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            "sourceCommit": "f84c2a59ba34c3e4c12e316cc9b30f14342e36cf",
+            "sourceSha256": "66593042d32204a35d4371de11387466c6eb553b54a24d21e370f47b3ee4789e",
             "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
@@ -382,6 +382,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 5,
+            "kind": "kernel",
+            "label": "Current source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 369,
+            "displayedSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+            "sourcePath": "examples/vecadd/src/lib.rs",
+            "sourceCommit": "302aabc3ed80fe39d5655fbb39fca7cb5859bd9c",
+            "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+            "sourceDigestScope": "file",
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceFragmentsSha256": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -392,7 +409,7 @@
         "sourceEntryIds": [
           "cpu-semantic-simulation"
         ],
-        "sourceBindingGap": null,
+        "sourceBindingGap": "The displayed mixed tile source and its production source-driver closure are not present in the current public compiler; source association and execution qualification remain pending.",
         "variants": [
           {
             "kind": "simt",
@@ -440,7 +457,7 @@
                 "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
                 "packageManifestSha256": "8c816db43da65108b02b41b06781687bfab338407e5948648b8c623762da2f85",
                 "cargoLockPath": "Cargo.lock",
-                "cargoLockSha256": "a3650cf64b4441968ded2837deeea58a5a2a28b148c7e9c757bd9d9f5b4386e3",
+                "cargoLockSha256": "1c525d4f5f947ae3feeea5932665c5038947d4545c021620e8789bd04696beeb",
                 "sourcePaths": [
                   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
                 ],
@@ -656,7 +673,7 @@
                   }
                 }
               ],
-              "contractSha256": "102331a9262a99f9fb40855255705e71a0ff551b7401905a44171e239b1a5093"
+              "contractSha256": "99de170a5dcbdfbac009e5de17e2ae6180279a5047389b5bb3ec0dd8b6735a6a"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -806,6 +823,74 @@
               "contractSha256": "e5c37c3aa4e0396478ccd4809204070ff55de6a5ed0d768143e036e3d8fdab9c"
             },
             "sourceItemStatus": "contract-bound"
+          },
+          {
+            "ordinal": 7,
+            "kind": "kernel",
+            "label": "Mixed tile source",
+            "language": "rust",
+            "displayedUtf8Bytes": 1247,
+            "displayedSha256": "e8aad7f11d63371e7d97e915dcbb5e35a6f44b885750a621696895f7d8810ee5",
+            "sourcePath": "examples/workgroup_sync_v1/src/kernel_mixed_tile_u32.rs",
+            "sourceCommit": "fed6998b1a5eaf2530e94664a1ede650382a8990",
+            "sourceSha256": "e8aad7f11d63371e7d97e915dcbb5e35a6f44b885750a621696895f7d8810ee5",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
+          },
+          {
+            "ordinal": 8,
+            "kind": "reference",
+            "label": "Mixed tile oracle",
+            "language": "rust",
+            "displayedUtf8Bytes": 3084,
+            "displayedSha256": "e7f6db79016e7fa1f559294c292817802c0466b608f060448e5e5e58601230cf",
+            "sourcePath": "examples/workgroup_sync_v1/src/mixed_tile_oracle.rs",
+            "sourceCommit": "fed6998b1a5eaf2530e94664a1ede650382a8990",
+            "sourceSha256": "e7f6db79016e7fa1f559294c292817802c0466b608f060448e5e5e58601230cf",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 9,
+            "kind": "host",
+            "label": "Public CLI workflow",
+            "language": "bash",
+            "displayedUtf8Bytes": 4709,
+            "displayedSha256": "7f93ce81aa9f1e1c9b25d8df20546bc897679fcd63ce7de17f0e5ff5457f06fa",
+            "sourcePath": null,
+            "sourceCommit": null,
+            "sourceSha256": null,
+            "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
+            "explanatory": true,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 10,
+            "kind": "result",
+            "label": "Recorded mixed CPU observations",
+            "language": "text",
+            "displayedUtf8Bytes": 1140,
+            "displayedSha256": "fc73006a8ba9ec2ccecc8fdd7164901b011f409e9b0964fb4b5209c45aaf83bb",
+            "sourcePath": null,
+            "sourceCommit": null,
+            "sourceSha256": null,
+            "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
+            "explanatory": true,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
           }
         ]
       },
@@ -1094,15 +1179,15 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 2400,
-            "displayedSha256": "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4",
+            "displayedUtf8Bytes": 2384,
+            "displayedSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
             "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
-            "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
-            "sourceSha256": "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4",
-            "sourceDigestScope": null,
-            "explanatory": false,
-            "evidenceId": "wave64-collectives-source-v1",
+            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
+            "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+            "sourceDigestScope": "file",
             "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": "wave64-collectives-current-source-v1",
             "sourceItem": null,
             "sourceItemStatus": "pending"
           },
@@ -1117,9 +1202,9 @@
             "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
             "sourceSha256": "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": false,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1134,9 +1219,9 @@
             "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": "wave64-collectives-source-v1",
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1151,9 +1236,9 @@
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1162,15 +1247,15 @@
             "kind": "result",
             "label": "Expected result",
             "language": "text",
-            "displayedUtf8Bytes": 413,
-            "displayedSha256": "496ed7d3ac195dd11d2b4c131856cd39335e1752f2d96c2bbe67233a699a79ec",
+            "displayedUtf8Bytes": 562,
+            "displayedSha256": "106d0af754d6c229bb2ee2551ece12c4d310e276f728e87ddf7592edf72d0174",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           }
@@ -1204,15 +1289,15 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 2832,
-            "displayedSha256": "991542b783a144598be967ae1671609b2a02a812ca084c3bf6358a9f70968105",
+            "displayedUtf8Bytes": 2626,
+            "displayedSha256": "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515",
             "sourcePath": "examples/workgroup_sync_v1/src/kernel.rs",
-            "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
-            "sourceSha256": "991542b783a144598be967ae1671609b2a02a812ca084c3bf6358a9f70968105",
-            "sourceDigestScope": null,
-            "explanatory": false,
-            "evidenceId": "workgroup-sync-source-v1",
+            "sourceCommit": "302aabc3ed80fe39d5655fbb39fca7cb5859bd9c",
+            "sourceSha256": "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515",
+            "sourceDigestScope": "file",
             "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": "workgroup-sync-current-source-v1",
             "sourceItem": null,
             "sourceItemStatus": "pending"
           },
@@ -1227,9 +1312,9 @@
             "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
             "sourceSha256": "f1b32bea55b8a6b908caaeb3f08d069bf969231735966b81bc67aa0f87ed421c",
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": false,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1244,9 +1329,9 @@
             "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": "workgroup-sync-source-v1",
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1261,9 +1346,9 @@
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -1272,15 +1357,15 @@
             "kind": "result",
             "label": "Expected result",
             "language": "text",
-            "displayedUtf8Bytes": 688,
-            "displayedSha256": "b20ea8e0fb1cb94dfe90ab494842262f6473f418405cfdd54991c2cc292285c9",
+            "displayedUtf8Bytes": 863,
+            "displayedSha256": "321dbbae5168b0ff337cf971da7d141283023d168c1bbc0037a163dc332f3576",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           }
@@ -1433,6 +1518,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 7,
+            "kind": "kernel",
+            "label": "Scalar source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 1818,
+            "displayedSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+            "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
+            "sourceCommit": "6399ee2cf8456c6237a89d5507f50c1872602269",
+            "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+            "sourceDigestScope": "file",
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceFragmentsSha256": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -1707,12 +1809,12 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 3963,
-            "displayedSha256": "8b4775baafb5ebc3e92ebb249e8362d06a64c33dbba96028802a529ec3b003c3",
+            "displayedUtf8Bytes": 3979,
+            "displayedSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
             "sourcePath": "examples/row_softmax_general_v1/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "8b4775baafb5ebc3e92ebb249e8362d06a64c33dbba96028802a529ec3b003c3",
-            "sourceDigestScope": null,
+            "sourceCommit": "bfa616c996fa529da67f2f6c32e7829213914e3e",
+            "sourceSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -1961,15 +2063,15 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 7364,
-            "displayedSha256": "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2",
+            "displayedUtf8Bytes": 7332,
+            "displayedSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
             "sourcePath": "examples/moe_top2_v1/src/kernel.rs",
-            "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
-            "sourceSha256": "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2",
-            "sourceDigestScope": null,
-            "explanatory": false,
-            "evidenceId": "moe-top2-source-v1",
+            "sourceCommit": "5e35bd967e3e038cc6399c46ed8cb89db82405cd",
+            "sourceSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
+            "sourceDigestScope": "file",
             "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": "moe-top2-current-source-v1",
             "sourceItem": null,
             "sourceItemStatus": "pending"
           },
@@ -1984,9 +2086,9 @@
             "sourceCommit": "308d8fa00fa41e098b2a1a47bbfea1bc29735464",
             "sourceSha256": "a91d913d7fb7a91e0a24008ad4f1a15663225eb457ac0b0e3227f724a147785c",
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": false,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -2001,9 +2103,9 @@
             "sourceCommit": "af0fd523e3b774377a9c5192cf0511e34fa19735",
             "sourceSha256": "4a5a60b66284567522ab3f07d93309c7002abf75870f4aa9db752f8260cb296c",
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": false,
             "evidenceId": "moe-top2-verus-v1",
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -2018,9 +2120,9 @@
             "sourceCommit": "b1302940e9f7bc1cdcd58709a5d716bc2404df97",
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           },
@@ -2029,15 +2131,15 @@
             "kind": "result",
             "label": "Expected result",
             "language": "text",
-            "displayedUtf8Bytes": 1591,
-            "displayedSha256": "4f983ff57abfd04644a87c230f340cccef5a73de0844a1e01a56806ac31f89ce",
+            "displayedUtf8Bytes": 1815,
+            "displayedSha256": "44c9fd0a7bd1ddcb096c52a115ffa4f9c7054b15d8649d17ef3654bd8f870815",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
             "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
             "explanatory": true,
             "evidenceId": null,
-            "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
           }
@@ -3353,6 +3455,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 6,
+            "kind": "kernel",
+            "label": "Baseline source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 10258,
+            "displayedSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+            "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+            "sourceCommit": "6399ee2cf8456c6237a89d5507f50c1872602269",
+            "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+            "sourceDigestScope": "file",
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceFragmentsSha256": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -8621,8 +8740,8 @@
           "fill"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "a3650cf64b4441968ded2837deeea58a5a2a28b148c7e9c757bd9d9f5b4386e3",
-        "contractSha256": "ac048b478b37f92441d4076bb93cf59eda8e64e6d58401d7228b30c00ce33812"
+        "cargoLockSha256": "1c525d4f5f947ae3feeea5932665c5038947d4545c021620e8789bd04696beeb",
+        "contractSha256": "a1a0de205747d0e5e0e92c28ec08db6aced7003240e57056371cfeb287549e63"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -8891,8 +9010,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "a3650cf64b4441968ded2837deeea58a5a2a28b148c7e9c757bd9d9f5b4386e3",
-        "contractSha256": "452e3c34281dfb04eb676db9dd1f4e56f3f9cc7792ae45cfa3dd2e466adca04b"
+        "cargoLockSha256": "1c525d4f5f947ae3feeea5932665c5038947d4545c021620e8789bd04696beeb",
+        "contractSha256": "af39b06928e319131fc33ccc8cdd6f1ab952ae1d436a4c8dce0cddcd395c520f"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
@@ -8981,8 +9100,8 @@
           "vecadd"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "a3650cf64b4441968ded2837deeea58a5a2a28b148c7e9c757bd9d9f5b4386e3",
-        "contractSha256": "44951a85c3c67992b0bc7addabf9a4dfc296d064770f07cf43f0f51d7fa6a992"
+        "cargoLockSha256": "1c525d4f5f947ae3feeea5932665c5038947d4545c021620e8789bd04696beeb",
+        "contractSha256": "031a2d01dbc9d04f29022d4503fe07b0b432cbdb6d41895af2682a1d8f244534"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",
@@ -11458,7 +11577,7 @@
                 "fixtureId": "gfx942-fill-simulation",
                 "kernelSymbol": "fill"
               },
-              "selectionSha256": "3f9f1af7f192a89d6a77c4c3facb5d3f43f20fd65c2026214b2d1fc410b3ae06",
+              "selectionSha256": "a029160397ae981a1f55ec26368bfff9b4c11dac19f43d00d39eb1073e9d718e",
               "sourcePath": "examples/fill/src/lib.rs",
               "sourceSha256": "66593042d32204a35d4371de11387466c6eb553b54a24d21e370f47b3ee4789e",
               "functionUtf8Offset": 520
@@ -11589,12 +11708,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-moe-top2",
+                "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1"
+              },
+              "selectionSha256": "ae3c4b45881c41878e6ee594433eb3d65d9c66a96e76bde2f96652d771da30fe",
+              "sourcePath": "examples/moe_top2_v1/src/kernel.rs",
+              "sourceSha256": "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4",
+              "functionUtf8Offset": 3605
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11653,12 +11783,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-scalar-gemm:scalar_gemm_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-scalar-gemm",
+                "kernelSymbol": "scalar_gemm_v1"
+              },
+              "selectionSha256": "c9ecf7bfc2783de519fdc7a8c6bdc5dd430c714385eed78f250606eabf44aae3",
+              "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
+              "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
+              "functionUtf8Offset": 673
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11717,12 +11858,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-typed-vecadd-source:vecadd",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-typed-vecadd-source",
+                "kernelSymbol": "vecadd"
+              },
+              "selectionSha256": "8d5d725cfd85a18139613299f3d88d5512d1526a9a28f430e53a5a1914227c14",
+              "sourcePath": "examples/vecadd/src/lib.rs",
+              "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+              "functionUtf8Offset": 203
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11749,12 +11901,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-wave64-collectives:wave64_collectives_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-wave64-collectives",
+                "kernelSymbol": "wave64_collectives_v1"
+              },
+              "selectionSha256": "ff80160032bfa8656957bfcb302fd49d7b2bc0a9545c3d8af58e52fe5ab9eb26",
+              "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
+              "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
+              "functionUtf8Offset": 842
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11781,12 +11944,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx942-workgroup-collectives",
+                "kernelSymbol": "lds_publish_read_reduce_i32_v1"
+              },
+              "selectionSha256": "10a7e0fc7479a51f0b20fccd4d6e202d08ff78d50498f95e4767baaf3fff02fc",
+              "sourcePath": "examples/workgroup_sync_v1/src/kernel.rs",
+              "sourceSha256": "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515",
+              "functionUtf8Offset": 1194
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11813,12 +11987,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-attnres-aggregate-explicit-reuse",
+                "kernelSymbol": "gfx950_attnres_aggregate"
+              },
+              "selectionSha256": "16fa079656eadc9bc8e638421ea84d63091e9cc232b8107dc43ee7325f4f2dd8",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 1111
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11845,12 +12030,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-attnres-aggregate",
+                "kernelSymbol": "gfx950_attnres_aggregate"
+              },
+              "selectionSha256": "87950572f62b2853d5f79d3931b70662385c47d35b0d9a290569cd0242b6a4a8",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 66151
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11909,12 +12105,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-compressed-hybrid-attention-division-baseline",
+                "kernelSymbol": "gfx950_compressed_hybrid_attention"
+              },
+              "selectionSha256": "49841029c150a1706bed0ce4d329386de9b648cf1a528dce39994df85649d16b",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 55423
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11941,12 +12148,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-compressed-hybrid-attention",
+                "kernelSymbol": "gfx950_compressed_hybrid_attention"
+              },
+              "selectionSha256": "479201ca6a08a18f4c7efa8729b97afe152409813d631447a75c9024ad636fc3",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 55423
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -11973,12 +12191,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-content-sparse-attention-reciprocal-reuse",
+                "kernelSymbol": "gfx950_content_sparse_attention"
+              },
+              "selectionSha256": "657b5849748f0c02667bdbdfe4269f86208cfad3f32ce2be122bcac4a49234a2",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 24024
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12005,12 +12234,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-content-sparse-attention",
+                "kernelSymbol": "gfx950_content_sparse_attention"
+              },
+              "selectionSha256": "f9086ab5b63359b35f88626b8ac3621b3a6cb82bf35dcd0ec65d56e1bc56dc28",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 24024
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12037,12 +12277,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-deepseek-sparse-attention",
+                "kernelSymbol": "gfx950_deepseek_sparse_attention"
+              },
+              "selectionSha256": "f7acd4552700ff3641b9a78225bc31c1dccf9a013a1b4ef37e164a2c951c5c35",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 42129
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12069,12 +12320,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-four-branch-residual-explicit",
+                "kernelSymbol": "gfx950_four_branch_residual"
+              },
+              "selectionSha256": "913042fbf05de4f76c3160813397d4d5a9c33f5df94142f66b9feffc5d4ec11c",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 3730
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12101,12 +12363,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-four-branch-residual",
+                "kernelSymbol": "gfx950_four_branch_residual"
+              },
+              "selectionSha256": "459612da6acfee73b4ad15cdd62e0620752806d93b87a0f7d9c64f0067d1560b",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 69970
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12485,12 +12758,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-decode-baseline:gfx950_kda_decode",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-decode-baseline",
+                "kernelSymbol": "gfx950_kda_decode"
+              },
+              "selectionSha256": "01779ca658f4a5ffdb4eba3a000b938336eb1ff83f684b369a430bcd8378b478",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+              "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+              "functionUtf8Offset": 1610
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12517,12 +12801,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-decode:gfx950_kda_decode",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-decode",
+                "kernelSymbol": "gfx950_kda_decode"
+              },
+              "selectionSha256": "3ded7cbbe6953da0ad23e6fa234c2715b99e92b25b14ea0fadebcfe84360a821",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 10324
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12549,12 +12844,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-prefill-baseline",
+                "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+              },
+              "selectionSha256": "9a3b82531f19e68c96d163009b0c4e117fff19dabf1746e7812c678565c55baf",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+              "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+              "functionUtf8Offset": 4908
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12581,12 +12887,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-prefill",
+                "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+              },
+              "selectionSha256": "dbe33b5fb0c6b533031912249ffc0a6022b1cac9d07dc91cf08dda563cf82182",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 15126
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12613,12 +12930,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix-scalar",
+                "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+              },
+              "selectionSha256": "a747b9d8271ead1a450c94890e6236fe0d38ad6827c094159a140ac8eaa4b42d",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 5895
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -12645,12 +12973,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix",
+                "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+              },
+              "selectionSha256": "84d79455757ca3cfa630a975c1ffa9eca3d780e18f4fb8389392d378b5cc04a1",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 73034
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
             }
           },
           {
@@ -13916,19 +14255,6 @@
         "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
       },
       {
-        "lessonId": "first-fill",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 148,
-        "kernelSymbol": "fill",
-        "classification": "kernel",
-        "kernelIds": [
-          "fixture:gfx942-fill-simulation:fill"
-        ],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The retained display is historical source; current fill adds an opt-in CPU reference while preserving default features. A fresh tutorial display and independent execution evidence remain required."
-      },
-      {
         "lessonId": "flash-attention",
         "tabOrdinal": 0,
         "functionUtf8Offset": 885,
@@ -14112,10 +14438,12 @@
         "functionUtf8Offset": 144,
         "kernelSymbol": "gfx950_attnres_aggregate",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14123,10 +14451,12 @@
         "functionUtf8Offset": 2141,
         "kernelSymbol": "gfx950_four_branch_residual",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14134,10 +14464,12 @@
         "functionUtf8Offset": 3652,
         "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14145,10 +14477,12 @@
         "functionUtf8Offset": 1111,
         "kernelSymbol": "gfx950_attnres_aggregate",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14156,10 +14490,12 @@
         "functionUtf8Offset": 3730,
         "kernelSymbol": "gfx950_four_branch_residual",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14167,10 +14503,12 @@
         "functionUtf8Offset": 5895,
         "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-performance-lab",
@@ -14178,10 +14516,12 @@
         "functionUtf8Offset": 144,
         "kernelSymbol": "gfx950_attnres_aggregate",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-compressed-hybrid-attention",
@@ -14189,10 +14529,13 @@
         "functionUtf8Offset": 582,
         "kernelSymbol": "gfx950_compressed_hybrid_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention",
+          "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-compressed-hybrid-performance-lab",
@@ -14200,10 +14543,13 @@
         "functionUtf8Offset": 582,
         "kernelSymbol": "gfx950_compressed_hybrid_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention",
+          "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-content-sparse-performance-lab",
@@ -14211,10 +14557,13 @@
         "functionUtf8Offset": 575,
         "kernelSymbol": "gfx950_content_sparse_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention",
+          "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-deepseek-sparse-attention",
@@ -14222,10 +14571,12 @@
         "functionUtf8Offset": 107,
         "kernelSymbol": "gfx950_deepseek_sparse_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-deepseek-sparse-performance-lab",
@@ -14233,10 +14584,12 @@
         "functionUtf8Offset": 107,
         "kernelSymbol": "gfx950_deepseek_sparse_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-expert-combine-performance-lab",
@@ -14257,10 +14610,12 @@
         "functionUtf8Offset": 141,
         "kernelSymbol": "gfx950_four_branch_residual",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-fp4-attention",
@@ -14526,10 +14881,13 @@
         "functionUtf8Offset": 575,
         "kernelSymbol": "gfx950_content_sparse_attention",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention",
+          "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-kda-decode-performance-lab",
@@ -14537,10 +14895,12 @@
         "functionUtf8Offset": 107,
         "kernelSymbol": "gfx950_kda_decode",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-kda-decode:gfx950_kda_decode"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-kda-gdn-linear-attention",
@@ -14548,10 +14908,12 @@
         "functionUtf8Offset": 4072,
         "kernelSymbol": "gfx950_kda_decode",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-kda-decode:gfx950_kda_decode"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-kda-gdn-linear-attention",
@@ -14559,10 +14921,12 @@
         "functionUtf8Offset": 7530,
         "kernelSymbol": "gfx950_kda_chunkwise_prefill",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-kda-prefill-performance-lab",
@@ -14570,10 +14934,12 @@
         "functionUtf8Offset": 107,
         "kernelSymbol": "gfx950_kda_chunkwise_prefill",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-mhc-performance-lab",
@@ -14581,10 +14947,12 @@
         "functionUtf8Offset": 141,
         "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
       },
       {
         "lessonId": "gfx950-moe-expert-performance-lab",
@@ -14711,17 +15079,6 @@
         "reason": "Exact displayed bytes and UTF-8 function coordinates bind to the current feature-selected fixture source; this association does not qualify compilation, simulation, hardware execution or a SIMT/tile pair."
       },
       {
-        "lessonId": "lds-barriers-atomics",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 1262,
-        "kernelSymbol": "lds_publish_read_reduce_i32_v1",
-        "classification": "kernel",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
-      },
-      {
         "lessonId": "memory-race-proof",
         "tabOrdinal": 0,
         "functionUtf8Offset": 668,
@@ -14779,105 +15136,6 @@
         "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
       },
       {
-        "lessonId": "moe-routing",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 1217,
-        "kernelSymbol": "candidate_precedes_v1",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Ordinary ranking helper retained with its kernel source, not a GPU entry."
-      },
-      {
-        "lessonId": "moe-routing",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 1493,
-        "kernelSymbol": "select_top2_v1",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Ordinary routing helper retained with its kernel source, not a GPU entry."
-      },
-      {
-        "lessonId": "moe-routing",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 2262,
-        "kernelSymbol": "logits_are_finite_v1",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Ordinary input-validation helper retained with its kernel source, not a GPU entry."
-      },
-      {
-        "lessonId": "moe-routing",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 2491,
-        "kernelSymbol": "write_value_v1",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Ordinary output helper retained with its kernel source, not a GPU entry."
-      },
-      {
-        "lessonId": "moe-routing",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 3621,
-        "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
-        "classification": "kernel",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
-      },
-      {
-        "lessonId": "reductions-scans",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 842,
-        "kernelSymbol": "wave64_collectives_v1",
-        "classification": "kernel",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
-      },
-      {
-        "lessonId": "softmax-invariant",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 508,
-        "kernelSymbol": "accessed_extent",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
-      },
-      {
-        "lessonId": "softmax-invariant",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 1121,
-        "kernelSymbol": "row_softmax_general_v1",
-        "classification": "kernel",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
-      },
-      {
-        "lessonId": "softmax-invariant",
-        "tabOrdinal": 0,
-        "functionUtf8Offset": 3810,
-        "kernelSymbol": "accessed_extent_excludes_trailing_padding",
-        "classification": "helper",
-        "kernelIds": [],
-        "negativeCases": [],
-        "bindingStatus": "not-applicable",
-        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
-      },
-      {
         "lessonId": "typed-vecadd",
         "tabOrdinal": 0,
         "functionUtf8Offset": 668,
@@ -14922,6 +15180,211 @@
         "negativeCases": [],
         "bindingStatus": "source-driver-contract",
         "reason": "The whole-file SIMT row display binds the exact production source-driver selection only; tile/mixed implementations and native/generated-host/direct-KFD stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 7,
+        "functionUtf8Offset": 468,
+        "kernelSymbol": "mixed_tile_probe",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed mixed source and its production source-driver closure are not present in the current public compiler; association and all execution qualification remain pending."
+      },
+      {
+        "lessonId": "first-fill",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 152,
+        "kernelSymbol": "fill_reference",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Unattributed safe CPU helper in the exact whole-file fill source; not a separate kernel or execution receipt."
+      },
+      {
+        "lessonId": "first-fill",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 520,
+        "kernelSymbol": "fill",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-fill-simulation:fill"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact whole-file source matches the existing default-feature fill fixture. The reference-proof feature remains unselected; simulation, artifact, generated-host, KFD and SIMT/tile qualification remain pending."
+      },
+      {
+        "lessonId": "gemm-tiling",
+        "tabOrdinal": 7,
+        "functionUtf8Offset": 673,
+        "kernelSymbol": "scalar_gemm_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-scalar-gemm:scalar_gemm_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 1610,
+        "kernelSymbol": "gfx950_kda_decode",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx950-kda-decode-baseline:gfx950_kda_decode"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact whole-file baseline display selects this feature-specific declaration; source association only, with historical evidence and all execution qualification unchanged."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 4908,
+        "kernelSymbol": "gfx950_kda_chunkwise_prefill",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact whole-file baseline display selects this feature-specific declaration; source association only, with historical evidence and all execution qualification unchanged."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1217,
+        "kernelSymbol": "candidate_precedes_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1493,
+        "kernelSymbol": "select_top2_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2262,
+        "kernelSymbol": "logits_are_finite_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2491,
+        "kernelSymbol": "write_value_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper retained in the exact current kernel source; not a GPU entry or independent qualification."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3605,
+        "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "reductions-scans",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 842,
+        "kernelSymbol": "wave64_collectives_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-wave64-collectives:wave64_collectives_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 508,
+        "kernelSymbol": "accessed_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1121,
+        "kernelSymbol": "row_softmax_general_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-row-softmax:row_softmax_general_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3826,
+        "kernelSymbol": "accessed_extent_excludes_trailing_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "typed-vecadd",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 203,
+        "kernelSymbol": "vecadd",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-typed-vecadd-source:vecadd"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "lds-barriers-atomics",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1194,
+        "kernelSymbol": "lds_publish_read_reduce_i32_v1",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
       }
     ]
   }

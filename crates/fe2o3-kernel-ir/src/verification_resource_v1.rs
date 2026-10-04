@@ -122,6 +122,9 @@ pub struct CanonicalKernelIrVerificationResourceBudgetV1<'work> {
 mod window;
 pub use window::CanonicalKernelIrStorageAccountIdentityV1;
 
+#[path = "verification_resource_scope_v1.rs"]
+mod scope;
+
 struct StorageState {
     storage: usize,
     peak_storage: usize,

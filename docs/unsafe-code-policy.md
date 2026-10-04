@@ -619,28 +619,74 @@ additionally requires observed aggregate emptiness and successful removal of
 the exact retained cgroup. `WNOWAIT` and `ECHILD` are not terminal
 evidence. See [cleanup custody](compiler-execution-cleanup-custody.md).
 
-The compiler-only pre-exec restriction module has one unsafe function/block:
-a read-only personality query rejects query errors or inherited READ_IMPLIES_EXEC
-in the actual child; three direct `prctl` calls then install/check a fixed
-immutable 57-instruction filter and live native `sock_fprog` header, synchronously
-copied by the kernel. There is no allocation, lock, callback or borrowed pointer
-escaping the child call. The original parent pays 8,256 additional compiler-only
-work before slot reservation
-and clone; the fixed spawn frame includes 728 bytes of filter/ABI scratch. The
-closed compiler stage installs it after profile/channel setup but before READY
-and exec; error uses the existing status-13 failure and original cleanup owner.
-Ordinary service stages do not install it. These are explicit argument-bit
-restrictions, not complete W^X, exec-established personality, immutable backing,
-descendant, source/output or runtime-enforcement admission. Existing guards stay.
-Six diagnostic blocks stage/clone actual retained inert inputs, query/set/restore
-only the isolated creator thread's personality, and install an outer test-only
-filter after subprocess startup. The restoration guard is armed before mutation
-and covers error/unwind exits. The outer filter makes the real query or filter
-installation fail; it never weakens the production filter or manufactures
-process authority. Installation-denial setup verifies a clean readable
-personality so the earlier query gate cannot substitute for its intended failure.
-Each native selector requires a fresh test process and static `-pthread` fixture;
-execution evidence is separate from this source inventory review.
+The compiler-only pre-exec restriction module retains one unsafe function/block.
+It consumes the actual child's pinned personality observation before three direct
+`prctl` calls install/check the immutable 57-instruction filter and its live
+native ABI header. The kernel copies the header and filter synchronously; no
+allocation, lock, callback or borrowed pointer escapes the child call.
+
+The private `native_compiler_personality.rs` module has nine blocks and six
+unsafe functions. After required namespace mapping, before credential and
+dumpability changes, it opens verified procfs directories and the calling child's
+personality inode using bounded, no-symlink paths. The proc thread-self coordinates
+must match actual getpid/gettid. The retained descriptor survives the profile
+transition; a bounded read must contain exactly eight hexadecimal digits and a
+newline, followed by EOF, with READ_IMPLIES_EXEC absent. Identity, filesystem,
+read, format and close failures refuse; there is no personality-syscall query
+fallback, supplied descriptor or parent snapshot. Each private descriptor is
+consumed once, including abort paths, without retrying close. The caller excludes
+foreign FD and mount mutation and retains the original child identity.
+
+The original parent prepays `native_compiler_personality::{WORK, SCRATCH}`
+through `native_work::COMPILER_RESTRICTION_WORK`, the compiler restriction
+scratch constant and `StagedProtectedServiceExecV2::SPAWN_SCRATCH` before clone.
+These are logical work/storage charges, not process RSS or syscall deadlines.
+Acquisition refusal is stage 15, post-profile observation refusal is stage 16,
+and compiler-filter installation refusal is stage 13; each precedes READY and
+exec and retains the original cleanup owner. Ordinary service stages do not
+install the compiler filter. This observes pre-exec state only, not personality
+established by ELF exec, complete W^X, immutable backing, descendant confinement,
+source/output enforcement or runtime admission.
+
+Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
+stage/clone retained inert inputs, query/set/restore isolated creator state,
+inspect initialized scalar buffers and install outer test-only denial filters.
+Restorable controls arm their guard before mutation; dirty locked controls
+terminate their disposable process without clearing the state. Exact-test
+subprocesses isolate irreversible filters and dumpability changes. The controls
+distinguish acquisition, profile, record/EOF and installation failures; neither
+an earlier refusal nor a filter supplied by the host qualifies the intended
+boundary. Each native selector requires its stated isolated deployment and
+static `-pthread` fixture. Execution evidence remains separate from this review.
+
+The unsafe sites in eleven reconciled inventory entries are inherited from
+public `8ecfb2a5e3af052fbd36034c73b51ab0fca7804f`. The review also repaired the
+root-request subprocess test to prepay `CreatorScope::CONTROL_WORK` before
+scope entry, as the unsafe API requires. The production entrypoint already
+prepays this control allowance before constructing its creator. In the
+coordinator, the reviewed entries are
+`native_compiler_attempt.rs`, `native_compiler_attempt_tests.rs`,
+`native_entrypoint.rs`, `native_root_request.rs`,
+`native_root_request_preexec_process_tests.rs` and
+`native_root_request_process_tests.rs`. Original request ownership is installed
+before fallible preparation; helper/child backing enters the original funded
+cleanup slot before clone. Original work lifetimes, received objects, exclusive
+consuming waits and outside whole-domain custody remain required. The compiler
+exec gate stays closed. The attempt test's unsafe-function site is a signature
+assertion, not an unsafe call.
+
+The other five entries, in protected-service spawn, are
+`native_compiler_personality.rs`, `native_compiler_restrictions_exec_tests.rs`,
+`native_compiler_spawn_tests.rs`, `native_namespace_restrictions.rs` and
+`native_cgroup_mount_tests.rs`. The namespace filter uses one unsafe function
+and block with a synchronous immutable native ABI program; compiler and actually
+mapped children install it before READY, with stage-14 failure, while unmapped
+service creators retain their existing behavior. Inert staging tests launch no
+child. Mount controls use live C strings and change only a disposable process's
+unshared, private-propagation mount namespace. Counts add 32 blocks and ten
+function syntax sites; no production behavior or test gate changes. This static
+review does not execute or qualify the ignored native controls, establish
+deployment provenance, or grant compiler, proof or GPU authority.
 
 The optional native fresh-domain spawn extends that same clone path with
 `CLONE_INTO_CGROUP`. It reserves rollback custody before mkdir and transfers the

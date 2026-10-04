@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "function_control_flow_callback_v1_tests.rs"]
+mod callback_resources;
 use crate::{
     BasicBlock, CanonicalKernelIrWorkBudgetV1 as Work, Signature, Terminator, Type, ValueId,
 };
@@ -269,6 +272,22 @@ fn graph(duplicate: bool, bypass: bool) -> Function {
         ],
     )
 }
+fn run_callback<'function, 'work>(
+    function: &'function Function,
+    query: bool,
+) -> impl for<'scope> FnOnce(&mut FunctionControlFlowViewV1<'scope, 'function, 'work>) -> Result<(), Error>
+{
+    move |view| {
+        assert!(std::ptr::eq(view.function(), function));
+        if query {
+            assert!(view.success_edge_dominates(BlockId(90), 0, BlockId(40))?);
+            assert!(!view.is_reachable(BlockId(99))?);
+            assert!(!view.dominates(BlockId(99), BlockId(99))?);
+        }
+        Ok(())
+    }
+}
+
 fn run(
     function: &Function,
     work_limit: usize,
@@ -278,15 +297,12 @@ fn run(
     let mut work = Work::new(work_limit);
     let mut budget = Budget::new(&mut work, storage_limit);
     budget.reserve_storage(FLOOR).unwrap();
-    let result = with_function_control_flow_v1(function, Default::default(), &mut budget, |view| {
-        assert!(std::ptr::eq(view.function(), function));
-        if query {
-            assert!(view.success_edge_dominates(BlockId(90), 0, BlockId(40))?);
-            assert!(!view.is_reachable(BlockId(99))?);
-            assert!(!view.dominates(BlockId(99), BlockId(99))?);
-        }
-        Ok(())
-    });
+    let result = with_function_control_flow_v1(
+        function,
+        Default::default(),
+        &mut budget,
+        run_callback(function, query),
+    );
     assert_eq!(budget.storage(), FLOOR);
     (result, budget.work(), budget.peak_storage())
 }
@@ -416,6 +432,7 @@ fn independent_scope_header_and_query_costs_match_exact_and_one_short_limits() {
         + size_of::<&Function>()
         + size_of::<&MeteredIndexedControlFlowV1>()
         + 3 * size_of::<usize>();
+    let header = header + callback_resources::independent_callback(&run_callback(&function, false));
     drop(flow);
     let constructor = run(&function, LIMIT, LIMIT, false);
     assert_eq!(constructor.0, Ok(()));

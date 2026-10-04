@@ -13,6 +13,7 @@ type Error = &'static str;
 type Key = (usize, BlockId, usize);
 
 include!("native_helper_inline_source_v30.rs");
+include!("native_helper_checked_arguments_v1.rs");
 
 struct Call<'a> {
     key: Key,
@@ -20,16 +21,20 @@ struct Call<'a> {
     source: &'a SemanticDirectCallV1,
     target: usize,
     local: bool,
+    checked_arguments: bool,
 }
 
 struct Anchor<'a> {
     key: Key,
+    caller: SemanticFunctionIdV1,
+    block: SemanticBlockIdV1,
     source: &'a SemanticDirectCallV1,
     local: bool,
     seen: bool,
 }
 
 pub(super) struct NativeHelperValues<'a> {
+    owner: &'a ProductionSemanticSsaOwnerV1,
     module: &'a Module,
     semantic: &'a AdmittedInertSemanticMirV1,
     correspondence: &'a SemanticKirCorrespondenceV1,
@@ -99,36 +104,16 @@ fn signature(
         || function.role != FunctionRole::InternalHelper
         || function.body.is_none()
         || abi.canon_abi() != SemanticCanonAbiV1::Rust
-        || abi.extern_abi() != SemanticExternAbiV1::Rust
+        || !matches!(
+            abi.extern_abi(),
+            SemanticExternAbiV1::Rust | SemanticExternAbiV1::RustCall
+        )
         || abi.can_unwind()
         || abi.c_variadic()
         || !abi.hidden_arguments().is_empty()
-        || abi.fixed_count() as usize != abi.arguments().len()
-        || abi.arguments().len() != abi.source_input_types().len()
-        || abi.arguments().len() != abi.source_argument_ownership().len()
-        || abi.arguments().len() != function.signature.parameters.len()
         || function.signature.results.len() != 1
     {
         return Err("native helper source/native role or direct Rust ABI mismatch");
-    }
-    for (((argument, ty), ownership), actual) in abi
-        .arguments()
-        .iter()
-        .zip(abi.source_input_types())
-        .zip(abi.source_argument_ownership())
-        .zip(&function.signature.parameters)
-    {
-        meter.work(9)?;
-        if !argument.is_source()
-            || argument.ty() != *ty
-            || argument.value().adjusted().is_some()
-            || argument.value().pointee_override().is_some()
-            || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-            || *ownership != SemanticSourceArgumentOwnershipV1::ByValue
-            || scalar_type(semantic, *ty)? != *actual
-        {
-            return Err("native helper exact scalar parameter ABI mismatch");
-        }
     }
     let result = abi.return_value();
     if result.source_ty() != abi.source_output_type()
@@ -207,8 +192,9 @@ impl NativeHelperValues<'_> {
                 .checked_add(1)
                 .ok_or("native helper name work overflow")?,
         )?;
-        if callee != &function.id
-            || arguments.len() != row.source.arguments().len()
+        if !row.checked_arguments
+            || callee != &function.id
+            || arguments.len() != function.signature.parameters.len()
             || operation.results.len() != 1
             || function.signature.results.len() != 1
             || function.signature.results.first() != Some(&operation.results[0].ty)
@@ -376,7 +362,7 @@ fn index_functions(
 
 fn index_calls<'a>(
     context: &mut NativeHelperValues<'a>,
-    meter: &mut dyn Meter,
+    meter: &mut dyn NativeHelperMeter,
 ) -> Result<(), Error> {
     let (mut blocks, block_storage) = vector(context.correspondence.blocks.len(), meter)?;
     let (mut anchors, anchor_storage) =
@@ -461,6 +447,8 @@ fn index_calls<'a>(
                 .map_err(|_| "helper call anchor lacks source/native block")?;
             anchors.push(Anchor {
                 key: (native, blocks[block].1, call_operation as usize),
+                caller: row.semantic_function,
+                block: row.semantic_block,
                 source: call,
                 local: matches!(destination, SemanticKirCallDestinationV1::Local),
                 seen: false,
@@ -518,15 +506,28 @@ fn index_calls<'a>(
                             .checked_add(1)
                             .ok_or("native helper callee work overflow")?,
                     )?;
-                    if callee != &actual.id || arguments.len() != anchor.source.arguments().len() {
+                    if callee != &actual.id || arguments.len() != actual.signature.parameters.len()
+                    {
                         return Err("native/source helper call callee or arity mismatch");
                     }
+                    let checked_arguments = meter.check_call(NativeHelperCallQuery {
+                        owner: context.owner,
+                        module: context.module,
+                        correspondence: context.correspondence,
+                        root: context.root,
+                        caller: anchor.caller,
+                        block: anchor.block,
+                        source: anchor.source,
+                        operation,
+                        target: actual,
+                    })?;
                     context.calls.push(Call {
                         key,
                         operation,
                         source: anchor.source,
                         target,
                         local: anchor.local,
+                        checked_arguments,
                     });
                 }
             }
@@ -688,14 +689,15 @@ fn build(context: &mut NativeHelperValues<'_>, meter: &mut dyn Meter) -> Result<
 }
 
 pub(super) fn with_native_helper_values<R>(
-    semantic: &AdmittedInertSemanticMirV1,
+    owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     root: SemanticFunctionIdV1,
     entry: &Function,
-    meter: &mut dyn Meter,
+    meter: &mut dyn NativeHelperMeter,
     action: impl for<'s> FnOnce(&'s NativeHelperValues<'_>, &mut dyn Meter) -> Result<R, Error>,
 ) -> Result<R, Error> {
+    let semantic = owner.source_semantic();
     let ledger = meter.identity()?;
     let floor = meter.storage()?;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -729,6 +731,7 @@ pub(super) fn with_native_helper_values<R>(
                     .ok_or("native helper header storage overflow")
             })?;
         let mut context = NativeHelperValues {
+            owner,
             module,
             semantic,
             correspondence,

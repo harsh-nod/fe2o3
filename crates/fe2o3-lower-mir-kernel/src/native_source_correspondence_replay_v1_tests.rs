@@ -669,15 +669,29 @@ fn native_ranked_attachment_exact_and_one_short_work_storage_restore_floor() {
                                 floor + wrapper + root + retained_root + 22
                             );
                         } else {
-                            assert!(
-                                matches!(
-                                    &error,
-                                    E::RankedSource(crate::ProductionSemanticKirErrorV1::MirPlironTranslation(
-                                        crate::ProductionMirPlironTranslationErrorV1::ResourceLimit
-                                    ))
+                            let E::RankedSource(
+                                crate::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                    resource,
                                 ),
-                                "complete replay resource denial: {error:?}"
-                            );
+                            ) = &error
+                            else {
+                                panic!("complete replay resource denial: {error:?}");
+                            };
+                            match (case, resource) {
+                                (2, Resource::Work(limit)) => {
+                                    assert_eq!(
+                                        (limit.actual(), limit.limit()),
+                                        (complete.unwrap().0, work_limit)
+                                    );
+                                }
+                                (3, Resource::Storage(limit)) => {
+                                    assert_eq!(
+                                        (limit.actual(), limit.limit()),
+                                        (floor + complete.unwrap().1, floor + extra_storage)
+                                    );
+                                }
+                                _ => panic!("wrong replay resource: {error:?}"),
+                            }
                         }
                         if case == 2 {
                             assert!(bounded.work() < complete.unwrap().0);
