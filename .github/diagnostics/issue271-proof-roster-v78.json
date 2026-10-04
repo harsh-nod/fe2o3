@@ -1,6 +1,6 @@
 {
-  "head": "019234a5ee7ba5f6f963197186125a4c167f3368",
-  "tree": "ab2d7ce89e176f9429b5e4490f014d98d5623365",
+  "head": "3de8b8e68683739c17c01962d789baa57231b32b",
+  "tree": "15d7130d33b634a68ab351560e9efc1e0f10ea3f",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
@@ -250,6 +250,9 @@
     "source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries",
     "source_length_query_refuses_foreign_budget_without_debit_or_refund",
     "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial",
+    "thread_write_memory_payload_has_exact_and_one_short_transaction_resources",
+    "thread_write_memory_payload_rejects_forged_producer_occurrence_value_and_role",
+    "thread_write_memory_payload_replays_readonly_input_before_and_after_optimization",
     "typed_source_guard_v85_preserves_cfg_identity_without_inventing_explicit_edge",
     "whole_and_projected_array_moves_keep_distinct_original_ssa_occurrences"
   ],
@@ -1243,6 +1246,18 @@
       "name": "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial"
     },
     {
+      "name": "thread_write_memory_payload_has_exact_and_one_short_transaction_resources",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_memory_payload_v88_tests.rs"
+    },
+    {
+      "name": "thread_write_memory_payload_rejects_forged_producer_occurrence_value_and_role",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_memory_payload_v88_tests.rs"
+    },
+    {
+      "name": "thread_write_memory_payload_replays_readonly_input_before_and_after_optimization",
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_memory_payload_v88_tests.rs"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_guard_v85.rs",
       "name": "typed_source_guard_v85_preserves_cfg_identity_without_inventing_explicit_edge"
     },
@@ -1403,7 +1418,7 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_accesses_v29.rs",
-      "sha256": "1ef1250c424ec73436ef6004954f6158590713b1895b7b75604d0770957ed02d"
+      "sha256": "670f1275af271590f1011e1ad0f4a85617d616f46b0a523200932b9761a9d347"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
@@ -1435,11 +1450,15 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs",
-      "sha256": "b6a80c934dd616b686ac43b51ceb7a562578b05634b0bfd0e2bca875351b3a5c"
+      "sha256": "9f610e2b49dee7a6228ad58461aa38e5c0fabde92d10da474998fbffba8be390"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86.rs",
       "sha256": "4d6efd4f7abac090986486f733570af3a64cfa72d6c7145084bfd2bc92f96cc3"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_memory_payload_v88_tests.rs",
+      "sha256": "f6761aeff501eb445610e856f9dd09f4122805250b27e5bea7c8dd814773f22b"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_replay_v86.rs",
@@ -1447,10 +1466,10 @@
     }
   ],
   "union": {
-    "prior_joint": 245,
-    "optimized_thread_write": 4,
+    "prior_joint": 249,
+    "memory_thread_write": 3,
     "duplicate_rows_removed": 0,
-    "distinct": 249
+    "distinct": 252
   },
   "scope": "Joint lowerer regression only. Typed explicit-predicate endpoints still refuse V26 completion; checked-write suffix validates emitted physical equations, not original source authority. No proof or activation credit."
 }

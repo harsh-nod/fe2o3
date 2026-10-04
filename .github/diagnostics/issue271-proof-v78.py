@@ -12,18 +12,18 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "019234a5ee7ba5f6f963197186125a4c167f3368"
-TREE = "ab2d7ce89e176f9429b5e4490f014d98d5623365"
+HEAD = "3de8b8e68683739c17c01962d789baa57231b32b"
+TREE = "15d7130d33b634a68ab351560e9efc1e0f10ea3f"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
 TEMP = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
-LOGS = TEMP / "issue271-optimized-write-v87-logs"
+LOGS = TEMP / "issue271-memory-write-v88-logs"
 ROSTER = CONTROL / ".github/diagnostics/issue271-proof-roster-v78.json"
 os.umask(0o077)
 assert TEMP != ROOT and ROOT not in TEMP.parents
 LOGS.mkdir(mode=0o700)
-LANE = Path(tempfile.mkdtemp(prefix="issue271-optimized-write-v87-", dir=TEMP))
+LANE = Path(tempfile.mkdtemp(prefix="issue271-memory-write-v88-", dir=TEMP))
 IDENTITY = (LANE.stat().st_dev, LANE.stat().st_ino, LANE.stat().st_uid)
 INTERRUPTED = []
 ACTIVE_CHILD = None
@@ -78,14 +78,14 @@ def group_tasks(pgid):
 def parse_coverage(log, filters):
     roster_log = re.split(r"^failures:$", log, maxsplit=1, flags=re.M)[0]
     rows = re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)(?:,.*)?$", roster_log, re.M)
-    assert len(rows) == 249 and len({name for name, _ in rows}) == 249
+    assert len(rows) == 252 and len({name for name, _ in rows}) == 252
     assert sorted(name.rsplit("::", 1)[-1] for name, _ in rows) == sorted(filters)
     assert all(result == "ok" for _, result in rows)
-    assert re.findall(r"^running (\d+) tests?$", roster_log, re.M) == ["249"]
+    assert re.findall(r"^running (\d+) tests?$", roster_log, re.M) == ["252"]
     assert len(re.findall(r"^test result:", log, re.M)) == 1
-    summary = re.search(r"test result: ok\. 249 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in [0-9.]+s\s*\Z", log)
+    summary = re.search(r"test result: ok\. 252 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in [0-9.]+s\s*\Z", log)
     assert summary is not None
-    return {"passed": 249, "failed": 0, "ignored": 0, "filtered": int(summary.group(1)), "rows": rows,
+    return {"passed": 252, "failed": 0, "ignored": 0, "filtered": int(summary.group(1)), "rows": rows,
             "ignored_owning_parents_executed": False}
 
 
@@ -184,11 +184,11 @@ def run(name, args, environment, seconds, limit):
 before, error, coverage, tools, tool_pins = None, None, None, [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "494a747309154838b000ecf77679ae9609a677d6699bf7a54b9afb261188e94b"
+    assert before["roster_sha256"] == "32f52775c3846d8c741148354f146e1c8678c9c67d928d521211ac8c6484da87"
     roster = json.loads(ROSTER.read_text())
     assert roster["head"] == HEAD and roster["package"] == "fe2o3-lower-mir-kernel"
     filters = roster["filters"]
-    assert len(filters) == len(set(filters)) == 249
+    assert len(filters) == len(set(filters)) == 252
     nightly = Path.home() / ".rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu"
     environment = {"HOME": str(Path.home()), "PATH": f"{nightly}/bin:/usr/bin:/bin",
                    "RUSTUP_HOME": str(Path.home() / ".rustup"), "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
