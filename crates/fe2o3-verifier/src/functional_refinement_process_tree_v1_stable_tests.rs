@@ -31,6 +31,8 @@ enum CleanupObservation {
     QueryRefused,
     ResumedBirthVisible(i32),
     GroupLeaderExitResumed(i32, Vec<i32>),
+    GroupContinueEsrchInjected(i32),
+    GroupTerminalAwaited(i32),
     ChildIdentified(i32),
     StopObserved(i32, i32),
     KillRequested(i32),
@@ -48,10 +50,39 @@ enum BirthRefusal {
 struct CleanupProbe {
     refusal: Option<BirthRefusal>,
     abort_group_exit: bool,
+    inject_group_continue_esrch: bool,
     observations: Vec<CleanupObservation>,
 }
 
 thread_local! { static CLEANUP_PROBE: RefCell<Option<CleanupProbe>> = RefCell::new(None); }
+
+pub(super) fn group_exit_continue_result(pid: i32, result: io::Result<()>) -> io::Result<()> {
+    // A real CONT was attempted. Change only its returned result after success
+    // or actual ESRCH; never suppress another error or synthesize a wait status.
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.raw_os_error() != Some(3))
+    {
+        return result;
+    }
+    let inject = CLEANUP_PROBE.with(|probe| {
+        probe
+            .borrow_mut()
+            .as_mut()
+            .is_some_and(|probe| std::mem::take(&mut probe.inject_group_continue_esrch))
+    });
+    if inject {
+        record_cleanup(CleanupObservation::GroupContinueEsrchInjected(pid));
+        Err(io::Error::from_raw_os_error(3))
+    } else {
+        result
+    }
+}
+
+pub(super) fn record_group_exit_wait_only(pid: i32) {
+    record_cleanup(CleanupObservation::GroupTerminalAwaited(pid));
+}
 
 pub(super) fn fail_birth_query_once() -> bool {
     CLEANUP_PROBE.with(|probe| {
@@ -263,6 +294,10 @@ fn host_executables() -> Vec<AllowedRuntimeExecutableV1> {
 }
 
 fn hostile_race(mode: u64, expected_error: &str) {
+    hostile_race_with_continue_error(mode, expected_error, false);
+}
+
+fn hostile_race_with_continue_error(mode: u64, expected_error: &str, inject_cont_esrch: bool) {
     let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -385,6 +420,7 @@ fn hostile_race(mode: u64, expected_error: &str) {
         CLEANUP_PROBE.with(|probe| {
             *probe.borrow_mut() = Some(CleanupProbe {
                 abort_group_exit: mode == 5,
+                inject_group_continue_esrch: inject_cont_esrch,
                 ..Default::default()
             });
         });
@@ -460,6 +496,31 @@ fn hostile_race(mode: u64, expected_error: &str) {
     }
     if matches!(mode, 6 | 7) {
         let probe = CLEANUP_PROBE.with(|probe| probe.borrow_mut().take().unwrap());
+        if inject_cont_esrch {
+            assert!(
+                !probe.inject_group_continue_esrch,
+                "CONT result injection was not reached: {probe:?}"
+            );
+            let (injected_at, member) = probe
+                .observations
+                .iter()
+                .enumerate()
+                .find_map(|(i, event)| match event {
+                    CleanupObservation::GroupContinueEsrchInjected(member) => Some((i, *member)),
+                    _ => None,
+                })
+                .expect("exact sibling CONT result must be injected");
+            let waited_at = probe
+                .observations
+                .iter()
+                .position(|event| *event == CleanupObservation::GroupTerminalAwaited(member))
+                .unwrap();
+            let terminal_at = probe.observations.iter().position(|event| matches!(event, CleanupObservation::TerminalValidated(pid, 0, _) if *pid == member)).unwrap();
+            assert!(
+                injected_at < waited_at && waited_at < terminal_at,
+                "ESRCH must precede real terminal validation: {probe:?}"
+            );
+        }
         let terminals = probe
             .observations
             .iter()
@@ -542,6 +603,14 @@ fn ordinary_group_exit_with_parked_siblings_reaches_terminal_validation() {
         // actual terminal waits for the entire normally exiting thread group.
         hostile_race(6, "Z3 descendant was not observed");
         hostile_race(7, "Z3 descendant was not observed");
+    }
+}
+
+#[test]
+fn group_exit_cont_esrch_retains_sibling_until_genuine_matching_terminal_wait() {
+    for _ in 0..4 {
+        hostile_race_with_continue_error(6, "Z3 descendant was not observed", true);
+        hostile_race_with_continue_error(7, "Z3 descendant was not observed", true);
     }
 }
 

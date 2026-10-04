@@ -1119,9 +1119,14 @@ fn ptrace(
     process: i32,
     data: usize,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    ptrace_result(request, process, data)
+        .map_err(|error| process_failure(format!("operate on traced proof process: {error}")))
+}
+
+fn ptrace_result(request: u32, process: i32, data: usize) -> io::Result<()> {
     // SAFETY: ptrace interprets null address and the scalar data according to the request.
     if unsafe { linux_ptrace(request, process, std::ptr::null_mut(), data as *mut c_void) } < 0 {
-        Err(io_process_failure("operate on traced proof process"))
+        Err(io::Error::last_os_error())
     } else {
         Ok(())
     }

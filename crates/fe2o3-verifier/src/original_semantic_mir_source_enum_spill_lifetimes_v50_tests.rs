@@ -364,7 +364,7 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                                         .unwrap_or_else(|| panic!("{mode:?}, root {root}: saved tag local {local} missing"))
                                         .1.split_once(" })").unwrap().0;
                                     assert!(
-                                        scalar.contains("byte_scalar_value_typed_v57(actual, "),
+                                        scalar.contains("byte_scalar_type_v57(actual, "),
                                         "{mode:?}, root {root}: saved tag type"
                                     );
                                     assert!(scalar.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"), "{mode:?}, root {root}: saved tag equality");
