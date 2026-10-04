@@ -12,8 +12,8 @@ import subprocess
 import tempfile
 import time
 
-HEAD = "82089b5ace3179dfc27f3911349c64ef8d710f79"
-TREE = "43b41ca94539932e5dc0eabe95b9c6d16fc8b3d2"
+HEAD = "25d64f0dccd8fe6d02ea3804a4dd7365f1e283bd"
+TREE = "6bba98c6c396485d1249cf8643f3a70e911bc631"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
@@ -219,7 +219,7 @@ sysroot_files, sysroot_pins = [], None
 ordinary_coverage = None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "7081a4c2af4b0189bb7f863dd500e260bf368aee314fbe62d7cb94794b330f0b"
+    assert before["roster_sha256"] == "1e5a8daea20832d168443a9da89f469018032dee93c16552bac8a3a942dc1437"
     roster = json.loads(ROSTER.read_text())
     assert roster["head"] == HEAD and roster["package"] == "rustc-codegen-fe2o3"
     parents = roster["parents"]
