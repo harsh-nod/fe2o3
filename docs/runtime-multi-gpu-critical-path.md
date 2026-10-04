@@ -234,7 +234,17 @@ ownership are still required before ordinary application admission.
    Seal compiler registration and gate together in one private application route;
    do not accept independently supplied gates. A gate failure must also clean up
    the bound issuer, not rely solely on root's application containment.
-   Host must perform the handshake after local admission and before Cargo ACK.
+   The [application bootstrap checkpoint](evidence/dev-application-bootstrap-2026-10-04/README.md)
+   implements the consuming client Hello/Challenge/Accept/Ready API and a shared
+   poll-only received-root pidfd owner. It authenticates actual per-message root
+   credentials, the original pidfd target, complete local inputs, exact app/Cargo
+   identities, endpoint coordinates/object and both fresh nonces. All phases use
+   one absolute deadline; failed admission closes the original endpoint. Broker
+   and application now share the strict target/procfs parsers, with broker waitid
+   and signal-interruption semantics preserved. No application syscall is added.
+   The API remains inactive: host must call it after local admission and before
+   Cargo ACK, only after the supervisor route is activated. Preserve the original
+   startup deadline and recheck publication currentness after Ready, before ACK.
    Authenticate socket creator, reverse addresses and distinct per-message sender
    credentials against original pidfds. Commit observation before either readiness
    response. The new readiness pipe is not Cargo's ACK pipe: temporary ACK writer
@@ -245,8 +255,14 @@ ownership are still required before ordinary application admission.
    One stalled app must not block the registry, and ACK EOF must remain observable.
    Then deploy fixed keyless proof custody and implement the consuming native join.
 
-App-side root bootstrap must not reuse helpers requiring sandbox-forbidden waitid
-or socket shutdown. No new publication recovery or lock acquisition belongs in
+The bootstrap uses no sandbox-forbidden waitid, pidfd reopening or socket shutdown.
+Its root/UID1000 campaign includes live separate-root success, queued Challenge
+and Ready from an already-reaped root with a retained peer alias, foreign Ready
+senders, wrong pidfds/inputs, exact endpoint substitutions, malformed packets and
+timeout. Helpers install a focused process/socket syscall denylist after libtest
+startup; this is not qualification of Cargo's full inherited pre-exec allowlist.
+That static application qualification still belongs in the production startup join.
+No new publication recovery or lock acquisition belongs in
 registration. Root process identity alone does not measure the fixed custodian.
 Application exit, EOF and containment remain distinct from GPU settlement.
 The application must send the first authenticated Hello after claiming slot 4:
