@@ -9,6 +9,7 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-proof-custodian requires Linux x86-64");
 
+mod application;
 mod cgroup;
 mod deployment;
 mod launch;
@@ -16,10 +17,15 @@ mod wire;
 #[allow(unsafe_code)]
 mod worker;
 
-pub use deployment::{ProductionProofCustodianDeploymentV1, ProofCustodianDeploymentV1};
+pub use application::run_inherited_application_proof_controller_v1;
+pub use deployment::{
+    ProductionApplicationProofCustodianDeploymentV1, ProductionProofCustodianDeploymentV1,
+    ProofCustodianDeploymentV1,
+};
 pub use launch::{
-    PendingRootConditionalFillProofV1, PendingRootProofControllerLaunchV1,
-    RootManagedProofControllerV1, RootRetainedConditionalFillProofV1,
+    PendingRootApplicationProofControllerV1, PendingRootConditionalFillProofV1,
+    PendingRootProofControllerLaunchV1, RootManagedProofControllerV1,
+    RootRetainedConditionalFillProofV1, RootStagedApplicationProofControllerV1,
 };
 pub use worker::run_inherited_conditional_fill_proof_controller_v1;
 

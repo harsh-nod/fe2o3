@@ -18,8 +18,18 @@ fn path(name: &str) -> PathBuf {
 #[test]
 #[ignore = "requires private pinned runtime, fixed installed worker/controller and an explicit fresh output path"]
 fn prepare_fixed_deployment() {
+    prepare_deployment(CONTROLLER_PATH);
+}
+
+#[test]
+#[ignore = "requires private pinned runtime and installed application controller"]
+fn prepare_application_deployment() {
+    prepare_deployment(crate::deployment::APPLICATION_CONTROLLER_PATH);
+}
+
+fn prepare_deployment(controller_path: &str) {
     assert!(!rustix::process::getuid().is_root());
-    let controller = fs::read(CONTROLLER_PATH).unwrap();
+    let controller = fs::read(controller_path).unwrap();
     let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
         Duration::from_secs(60),
         1024 * 1024,

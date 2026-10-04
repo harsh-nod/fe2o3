@@ -11,12 +11,17 @@ use fe2o3_protected_service_spawn::{
 };
 use std::{
     io,
-    os::fd::{AsFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     time::{Duration, Instant},
 };
 
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(300);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+mod application;
+pub use application::{
+    PendingRootApplicationProofControllerV1, RootStagedApplicationProofControllerV1,
+};
 
 fn check_deadline(deadline: Instant) -> io::Result<()> {
     if Instant::now() < deadline {
@@ -47,6 +52,24 @@ enum LaunchPhase {
     Ready,
 }
 
+struct ExpectedReady {
+    bytes: [u8; fe2o3_runtime_protocol::WORKER_V3_APPLICATION_PROOF_SESSION_BYTES_V1],
+    len: usize,
+}
+impl ExpectedReady {
+    fn new(bytes: &[u8]) -> Self {
+        let mut value = Self {
+            bytes: [0; fe2o3_runtime_protocol::WORKER_V3_APPLICATION_PROOF_SESSION_BYTES_V1],
+            len: bytes.len(),
+        };
+        value.bytes[..bytes.len()].copy_from_slice(bytes);
+        value
+    }
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
 /// Borrowed polling keeps original custody on every error. Call `poll_cancel`
 /// until complete before discarding a failed reactor session. Drop is a blocking
 /// containment backstop, not a reactor operation. Admission and bounded filesystem
@@ -63,6 +86,7 @@ pub struct PendingRootProofControllerLaunchV1 {
     gate_write: Option<OwnedFd>,
     status_read: OwnedFd,
     phase: LaunchPhase,
+    expected_ready: ExpectedReady,
 }
 
 #[cfg(test)]
@@ -133,10 +157,25 @@ impl ProductionProofCustodianDeploymentV1 {
             payload: (wire::digest(payload), payload.len() as u64),
         };
         wire::Request::decode(&request.encode())?;
-        let config = wire::seal(self.config.canonical_bytes())?;
         let request_file = wire::seal(&request.encode())?;
         let envelope = wire::seal(envelope)?;
         let payload = wire::seal(payload)?;
+        self.begin_descriptor_launch(
+            request.nonce,
+            request_file.as_fd(),
+            &[envelope.as_fd(), payload.as_fd()],
+            deadline,
+        )
+    }
+    fn begin_descriptor_launch(
+        self,
+        nonce: [u8; 32],
+        request: BorrowedFd<'_>,
+        inputs: &[BorrowedFd<'_>],
+        deadline: Instant,
+    ) -> io::Result<PendingRootProofControllerLaunchV1> {
+        self.revalidate()?;
+        let config = wire::seal(self.config.canonical_bytes())?;
         let image = self.executable.try_clone_for_exec().map_err(other)?;
         let (parent, child_end) = wire::control_pair()?;
         let parent = wire::ControlEndpoint::admit(parent)?;
@@ -153,16 +192,13 @@ impl ProductionProofCustodianDeploymentV1 {
             let flags = rustix::fs::fcntl_getfl(fd)?;
             rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK)?;
         }
-        let bindings = [
-            (config.as_fd(), 3),
-            (request_file.as_fd(), 4),
-            (envelope.as_fd(), 5),
-            (payload.as_fd(), 6),
-            (child_end.as_fd(), 7),
-        ]
-        .map(|(fd, slot)| ProtectedServiceDescriptorBindingV1::new(fd, slot).map_err(other))
-        .into_iter()
-        .collect::<io::Result<Vec<_>>>()?;
+        let bindings = [config.as_fd(), request]
+            .into_iter()
+            .chain(inputs.iter().copied())
+            .chain([child_end.as_fd()])
+            .zip(3..)
+            .map(|(fd, slot)| ProtectedServiceDescriptorBindingV1::new(fd, slot).map_err(other))
+            .collect::<io::Result<Vec<_>>>()?;
         let staged = StagedProofControllerExecV1::new(
             &image,
             &bindings,
@@ -172,6 +208,7 @@ impl ProductionProofCustodianDeploymentV1 {
         )
         .map_err(other)?;
         let credentials = self.config.credentials()?;
+        let expected_ready = ExpectedReady::new(&self.config.identity());
         let mut contained = ContainedChild::new(Scope::create()?);
         self.revalidate()?;
         contained.install(staged.spawn(credentials).map_err(other)?);
@@ -181,7 +218,7 @@ impl ProductionProofCustodianDeploymentV1 {
             contained,
             deployment: self,
             control: parent,
-            nonce: request.nonce,
+            nonce,
             pid,
             deadline,
             poisoned: false,
@@ -192,6 +229,7 @@ impl ProductionProofCustodianDeploymentV1 {
             gate_write: Some(gate_write),
             status_read,
             phase: LaunchPhase::Profile,
+            expected_ready,
         })
     }
 }
@@ -256,7 +294,7 @@ impl PendingRootProofControllerLaunchV1 {
                     return Ok(false);
                 };
                 require(
-                    kind == wire::READY && body == controller.deployment.config.identity(),
+                    kind == wire::READY && body == self.expected_ready.as_bytes(),
                     "controller resources not ready",
                 )?;
                 self.phase = LaunchPhase::Ready;

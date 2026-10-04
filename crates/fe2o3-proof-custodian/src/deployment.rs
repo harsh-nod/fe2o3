@@ -26,6 +26,10 @@ pub(crate) const DEPLOYMENT_BYTES: usize = 280;
 pub(crate) const CONFIG_PATH: &str = "/etc/fe2o3/proof-custodian/deployment-v1";
 pub(crate) const CONTROLLER_PATH: &str =
     "/usr/libexec/fe2o3/fe2o3-conditional-fill-proof-controller";
+pub(crate) const APPLICATION_CONFIG_PATH: &str =
+    "/etc/fe2o3/proof-custodian/application-deployment-v1";
+pub(crate) const APPLICATION_CONTROLLER_PATH: &str =
+    "/usr/libexec/fe2o3/fe2o3-application-proof-controller";
 pub(crate) const WORKER_PATH: &str = "/usr/libexec/fe2o3/fe2o3-llvm-link-worker";
 pub(crate) const RUNTIME_PATH: &str =
     "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
@@ -177,17 +181,20 @@ pub struct ProductionProofCustodianDeploymentV1 {
 impl ProductionProofCustodianDeploymentV1 {
     /// Opens the sole root-owned configuration and controller at their fixed paths.
     pub fn open() -> io::Result<Self> {
+        Self::open_fixed(CONFIG_PATH, CONTROLLER_PATH)
+    }
+    fn open_fixed(config_path: &'static str, controller_path: &'static str) -> io::Result<Self> {
         require_exact_root_identity_v1().map_err(other)?;
         require_proof_controller_parent_v1().map_err(other)?;
         let namespaces = ProtectedServiceNamespaceSetV1::capture_current_thread().map_err(other)?;
         let procfs = open_procfs()?;
         check_maps(&procfs)?;
-        let config_tree = InstalledFile::open(CONFIG_PATH, 0o444, DEPLOYMENT_BYTES as u64)?;
+        let config_tree = InstalledFile::open(config_path, 0o444, DEPLOYMENT_BYTES as u64)?;
         let mut bytes = [0; DEPLOYMENT_BYTES];
         config_tree.leaf().read_exact_at(&mut bytes, 0)?;
         let config = ProofCustodianDeploymentV1::decode(&bytes)?;
         let measurement = config.controller_measurement()?;
-        let controller_tree = InstalledFile::open(CONTROLLER_PATH, 0o555, measurement.byte_len())?;
+        let controller_tree = InstalledFile::open(controller_path, 0o555, measurement.byte_len())?;
         let executable = ProtectedStaticExecutableV1::seal_source_for_owner(
             controller_tree.leaf().try_clone()?,
             measurement,
@@ -244,6 +251,27 @@ impl ProductionProofCustodianDeploymentV1 {
         self.executable.revalidate().map_err(other)?;
         self.config_tree.revalidate()?;
         self.controller_tree.revalidate()
+    }
+}
+
+/// Independently installed application-controller image, distinct from the root-only producer.
+/// This root-owned admission is neither application registration nor a remote GPU proof lease.
+pub struct ProductionApplicationProofCustodianDeploymentV1(
+    pub(crate) ProductionProofCustodianDeploymentV1,
+);
+impl ProductionApplicationProofCustodianDeploymentV1 {
+    pub fn open() -> io::Result<Self> {
+        ProductionProofCustodianDeploymentV1::open_fixed(
+            APPLICATION_CONFIG_PATH,
+            APPLICATION_CONTROLLER_PATH,
+        )
+        .map(Self)
+    }
+    pub fn deployment(&self) -> &ProofCustodianDeploymentV1 {
+        self.0.deployment()
+    }
+    pub fn revalidate(&self) -> io::Result<()> {
+        self.0.revalidate()
     }
 }
 

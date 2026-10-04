@@ -103,6 +103,7 @@ fn multi_open_all_public_constructors_reject_invalid_rosters_before_native_admis
                 .collect()
         };
         for result in [
+            KfdMultiDeviceRuntimeBackendV1::open_worker_v3_generated_only_with_native_peer_copy_v1(ids.clone()),
             KfdMultiDeviceRuntimeBackendV1::open_default(production()),
             KfdMultiDeviceRuntimeBackendV1::open_default_with_native_peer_copy_v1(production()),
             KfdMultiDeviceRuntimeBackendV1::open_default_with_semantic_authorities_v1(semantic()),
@@ -124,6 +125,54 @@ fn multi_open_all_public_constructors_reject_invalid_rosters_before_native_admis
             KfdRuntimeBackendErrorKindV1::InvalidLaunch
         );
     }
+}
+
+#[test]
+fn multi_open_generated_only_peer_policy_preserves_closed_launch_gates() {
+    let mut backend = open_with_v1(
+        generated_only_gates(vec![30, 10]).unwrap(),
+        true,
+        Ok,
+        child,
+        |source, destination| {
+            assert!(!source.peer_visible_device_allocations);
+            assert!(!destination.peer_visible_device_allocations);
+            assert!(matches!(
+                source.launch_gate,
+                KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly
+            ));
+            Ok(scripted_route())
+        },
+    )
+    .unwrap();
+    assert_eq!(backend.compute_xgmi_routes.len(), 2);
+    for child in &backend.children {
+        assert!(child.peer_visible_device_allocations);
+        assert!(matches!(
+            child.launch_gate,
+            KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly
+        ));
+        assert!(!child.launch_gate.advertises_generic_compute_v1());
+        assert!(!child.launch_gate.advertises_atomics_v1());
+        assert!(!child.launch_gate.advertises_collectives_v1());
+        assert!(child.queue.is_none() && child.allocations.is_empty());
+    }
+    backend.shutdown_native_v1().unwrap();
+
+    let error = open_with_v1(
+        generated_only_gates(vec![30, 10]).unwrap(),
+        true,
+        Ok,
+        child,
+        |_, _| {
+            Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "missing generated-only native peer route",
+            ))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Unsupported);
 }
 
 #[test]

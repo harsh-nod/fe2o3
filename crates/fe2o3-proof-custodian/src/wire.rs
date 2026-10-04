@@ -27,6 +27,9 @@ pub(crate) const RETAINED: u8 = 5;
 pub(crate) const RELEASE: u8 = 6;
 pub(crate) const RELEASED: u8 = 7;
 pub(crate) const REJECTED: u8 = 8;
+pub(crate) const ACTIVATE: u8 = 9;
+pub(crate) const ACTIVATED: u8 = 10;
+pub(crate) const QUARANTINED: u8 = 11;
 pub(crate) const REQUEST_BYTES: usize = 168;
 
 pub(crate) fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -154,7 +157,7 @@ pub(crate) fn try_send(
     body: &[u8],
 ) -> io::Result<bool> {
     require(
-        (READY..=REJECTED).contains(&kind) && nonce != [0; 32] && body.len() <= MAX_BODY,
+        (READY..=QUARANTINED).contains(&kind) && nonce != [0; 32] && body.len() <= MAX_BODY,
         "invalid outgoing controller frame",
     )?;
     let mut bytes = vec![0; HEADER + body.len()];
@@ -184,7 +187,7 @@ fn decode(bytes: &[u8], nonce: [u8; 32]) -> io::Result<(u8, Vec<u8>)> {
     )?;
     require(
         &bytes[..8] == b"F3PCMS1\0"
-            && (READY..=REJECTED).contains(&bytes[8])
+            && (READY..=QUARANTINED).contains(&bytes[8])
             && bytes[9..16] == [0; 7]
             && bytes[16..48] == nonce
             && bytes[48..52] == ((bytes.len() - HEADER) as u32).to_le_bytes()
@@ -289,17 +292,33 @@ pub(crate) fn control_pair() -> io::Result<(OwnedFd, OwnedFd)> {
 
 pub(crate) struct ControlEndpoint {
     fd: OwnedFd,
-    identity: (u64, u64),
+    identity: (u64, u64, u32),
     creator: (i32, u32, u32),
     addresses: (net::SocketAddrUnix, net::SocketAddrUnix),
 }
 impl ControlEndpoint {
+    pub(crate) fn fingerprint(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(b"FE2O3/PROOF-CONTROLLER-ENDPOINT/V1\0");
+        hash.update(self.identity.0.to_le_bytes());
+        hash.update(self.identity.1.to_le_bytes());
+        hash.update(self.identity.2.to_le_bytes());
+        hash.update(self.creator.0.to_le_bytes());
+        hash.update(self.creator.1.to_le_bytes());
+        hash.update(self.creator.2.to_le_bytes());
+        for address in [&self.addresses.0, &self.addresses.1] {
+            let bytes = address.abstract_name().expect("admitted abstract address");
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
+        hash.finalize().into()
+    }
     pub(crate) fn admit(fd: OwnedFd) -> io::Result<Self> {
         let stat = rustix::fs::fstat(&fd)?;
         let creator = net::sockopt::socket_peercred(&fd)?;
         let value = Self {
             addresses: control_addresses(fd.as_fd())?,
-            identity: (stat.st_dev, stat.st_ino),
+            identity: (stat.st_dev, stat.st_ino, stat.st_mode),
             creator: (
                 creator.pid.as_raw_pid(),
                 creator.uid.as_raw(),
@@ -314,7 +333,7 @@ impl ControlEndpoint {
         let stat = rustix::fs::fstat(&self.fd)?;
         let creator = net::sockopt::socket_peercred(&self.fd)?;
         require(
-            (stat.st_dev, stat.st_ino) == self.identity
+            (stat.st_dev, stat.st_ino, stat.st_mode) == self.identity
                 && (
                     creator.pid.as_raw_pid(),
                     creator.uid.as_raw(),
@@ -350,12 +369,39 @@ pub(crate) fn seal(bytes: &[u8]) -> io::Result<File> {
 }
 
 pub(crate) fn read_sealed(file: &File, maximum: usize) -> io::Result<Box<[u8]>> {
+    read_sealed_for_owner(file, maximum, (0, 0))
+}
+
+pub(crate) fn read_application_sealed(
+    file: &File,
+    owner: (u32, u32),
+    expected: ([u8; 32], u64),
+    maximum: usize,
+) -> io::Result<Box<[u8]>> {
+    require(
+        owner.0 > 0 && owner.1 > 0 && expected.1 > 0 && expected.1 <= maximum as u64,
+        "application input owner or bounds",
+    )?;
+    require(
+        rustix::io::fcntl_getfd(file)? == rustix::io::FdFlags::CLOEXEC
+            && file.metadata()?.len() == expected.1,
+        "application input flags or declared length",
+    )?;
+    let bytes = read_sealed_for_owner(file, maximum, owner)?;
+    require(
+        digest(&bytes) == expected.0
+            && rustix::io::fcntl_getfd(file)? == rustix::io::FdFlags::CLOEXEC,
+        "application input hash or flags changed",
+    )?;
+    Ok(bytes)
+}
+
+fn read_sealed_for_owner(file: &File, maximum: usize, owner: (u32, u32)) -> io::Result<Box<[u8]>> {
     let before = file.metadata()?;
     require(
         before.is_file()
             && before.nlink() == 0
-            && before.uid() == 0
-            && before.gid() == 0
+            && (before.uid(), before.gid()) == owner
             && before.mode() & 0o7777 == 0o400
             && before.len() > 0
             && before.len() <= maximum as u64,
@@ -418,6 +464,123 @@ mod tests {
     use super::*;
     use std::io::IoSlice;
     use std::os::fd::AsFd;
+
+    fn application_input(bytes: &[u8]) -> (File, (u32, u32)) {
+        let file = seal(bytes).unwrap();
+        let owner = if rustix::process::getuid().is_root() {
+            (1000, 1000)
+        } else {
+            (
+                rustix::process::getuid().as_raw(),
+                rustix::process::getgid().as_raw(),
+            )
+        };
+        if rustix::process::getuid().is_root() {
+            rustix::fs::fchown(
+                &file,
+                Some(rustix::process::Uid::from_raw(owner.0)),
+                Some(rustix::process::Gid::from_raw(owner.1)),
+            )
+            .unwrap();
+        }
+        (file, owner)
+    }
+
+    #[test]
+    fn application_sealed_reader_preserves_original_and_separates_root_ownership() {
+        let bytes = b"exact application-owned input";
+        let (file, owner) = application_input(bytes);
+        let expected = (digest(bytes), bytes.len() as u64);
+        let duplicate = file.try_clone().unwrap();
+        assert_eq!(
+            read_application_sealed(&file, owner, expected, 128)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+        assert_eq!(
+            read_application_sealed(&duplicate, owner, expected, 128)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+        assert!(read_sealed(&file, 128).is_err());
+        for owner in [(0, 0), (owner.0 ^ 1, owner.1), (owner.0, owner.1 ^ 1)] {
+            assert!(read_application_sealed(&file, owner, expected, 128).is_err());
+        }
+        for expected in [
+            (digest(b"different"), expected.1),
+            (expected.0, expected.1 + 1),
+            (expected.0, 0),
+        ] {
+            assert!(read_application_sealed(&file, owner, expected, 128).is_err());
+        }
+        assert!(read_application_sealed(&file, owner, expected, bytes.len() - 1).is_err());
+    }
+
+    #[test]
+    fn application_sealed_reader_rejects_mutated_flags_permissions_and_unsealed_inputs() {
+        let bytes = b"input";
+        let (file, owner) = application_input(bytes);
+        let expected = (digest(bytes), bytes.len() as u64);
+        rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty()).unwrap();
+        assert!(read_application_sealed(&file, owner, expected, 128).is_err());
+        rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::CLOEXEC).unwrap();
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        assert!(read_application_sealed(&file, owner, expected, 128).is_err());
+        file.set_permissions(std::fs::Permissions::from_mode(0o400))
+            .unwrap();
+        let writable = File::from(
+            rustix::fs::memfd_create(
+                c"unsealed-application-test",
+                rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap(),
+        );
+        writable.write_all_at(bytes, 0).unwrap();
+        if rustix::process::getuid().is_root() {
+            rustix::fs::fchown(
+                &writable,
+                Some(rustix::process::Uid::from_raw(owner.0)),
+                Some(rustix::process::Gid::from_raw(owner.1)),
+            )
+            .unwrap();
+        }
+        writable
+            .set_permissions(std::fs::Permissions::from_mode(0o400))
+            .unwrap();
+        assert!(read_application_sealed(&writable, owner, expected, 128).is_err());
+        let readonly = File::from(
+            rustix::fs::open(
+                format!("/proc/self/fd/{}", writable.as_raw_fd()),
+                OFlags::RDONLY | OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .unwrap(),
+        );
+        assert!(read_application_sealed(&readonly, owner, expected, 128).is_err());
+        assert_eq!(
+            read_application_sealed(&file, owner, expected, 128)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn endpoint_fingerprint_distinguishes_same_creator_pairs_and_endpoint_sides() {
+        let (a, b) = control_pair().unwrap();
+        let (c, _d) = control_pair().unwrap();
+        let duplicate =
+            ControlEndpoint::admit(rustix::io::fcntl_dupfd_cloexec(&a, 0).unwrap()).unwrap();
+        let a = ControlEndpoint::admit(a).unwrap();
+        let b = ControlEndpoint::admit(b).unwrap();
+        let c = ControlEndpoint::admit(c).unwrap();
+        assert_eq!(a.fingerprint(), duplicate.fingerprint());
+        assert_ne!(a.fingerprint(), b.fingerprint());
+        assert_ne!(a.fingerprint(), c.fingerprint());
+    }
     #[test]
     fn exact_nonce_credentials_and_ancillary_are_required() {
         let (a, b) = control_pair().unwrap();

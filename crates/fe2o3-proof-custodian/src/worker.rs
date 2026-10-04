@@ -136,25 +136,11 @@ fn execute(
         "controller input hashes differ",
     )?;
     let input_pointers = (envelope.as_ptr(), payload.as_ptr());
-    let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
-        Duration::from_secs(60),
-        1024 * 1024,
-        16384,
-    )
-    .map_err(other)?;
-    let worker = AuthenticatedPhysicalMachineEffectWorkerV1::open(
-        WORKER_PATH,
-        config.analyzer_policy()?,
-        limits,
-    )
-    .map_err(other)?;
-    let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(RUNTIME_PATH).map_err(other)?;
-    require(
-        runtime.identity().as_bytes() == config.verus_identity(),
-        "protected Verus runtime identity differs",
-    )?;
-    profile.revalidate_current().map_err(other)?;
-    runtime.revalidate().map_err(other)?;
+    let Resources {
+        worker,
+        runtime,
+        profile,
+    } = Resources::open(&config, profile)?;
     wire::send(
         control.as_fd(),
         request.nonce,
@@ -233,6 +219,47 @@ fn execute(
     )
 }
 
+pub(crate) struct Resources {
+    pub(crate) worker: AuthenticatedPhysicalMachineEffectWorkerV1,
+    pub(crate) runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    pub(crate) profile: ProofControllerProcessProfileV1,
+}
+impl Resources {
+    pub(crate) fn open(
+        config: &ProofCustodianDeploymentV1,
+        profile: ProofControllerProcessProfileV1,
+    ) -> io::Result<Self> {
+        let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+            Duration::from_secs(60),
+            1024 * 1024,
+            16384,
+        )
+        .map_err(other)?;
+        let worker = AuthenticatedPhysicalMachineEffectWorkerV1::open(
+            WORKER_PATH,
+            config.analyzer_policy()?,
+            limits,
+        )
+        .map_err(other)?;
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(RUNTIME_PATH).map_err(other)?;
+        require(
+            runtime.identity().as_bytes() == config.verus_identity(),
+            "protected Verus runtime identity differs",
+        )?;
+        profile.revalidate_current().map_err(other)?;
+        runtime.revalidate().map_err(other)?;
+        Ok(Self {
+            worker,
+            runtime,
+            profile,
+        })
+    }
+    pub(crate) fn revalidate(&self) -> io::Result<()> {
+        self.profile.revalidate_current().map_err(other)?;
+        self.runtime.revalidate().map_err(other)
+    }
+}
+
 fn reject_and_retain(
     error: &io::Error,
     request: &wire::Request,
@@ -285,7 +312,7 @@ fn serve_retained(
     }
 }
 
-fn evidence(proof: &RetainedWorkerV3ConditionalFillProofV1) -> io::Result<Vec<u8>> {
+pub(crate) fn evidence(proof: &RetainedWorkerV3ConditionalFillProofV1) -> io::Result<Vec<u8>> {
     let refinement = proof.refinement();
     let closure = check_worker_v3_compiler_closure_v1(
         proof.exact_canonical_envelope_bytes(),

@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
+mod application_proof_v1;
 mod application_registration_v1;
 mod static_application;
 mod worker_v3_load_envelope;
@@ -23,6 +24,13 @@ pub use application_handoff_v3::{
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
     WorkerV3ApplicationOccurrenceIdentityV1, WorkerV3ApplicationOccurrenceV1,
     WorkerV3LoadEnvelopeIdentityV1,
+};
+pub use application_proof_v1::{
+    WORKER_V3_APPLICATION_PROOF_MAX_PACKET_BYTES_V1,
+    WORKER_V3_APPLICATION_PROOF_MAX_PAYLOAD_BYTES_V1, WORKER_V3_APPLICATION_PROOF_SESSION_BYTES_V1,
+    WorkerV3ApplicationProofInputsV1, WorkerV3ApplicationProofKindV1,
+    WorkerV3ApplicationProofMessageV1, WorkerV3ApplicationProofProtocolErrorV1,
+    WorkerV3ApplicationProofSessionV1,
 };
 pub use application_registration_v1::{
     WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1,

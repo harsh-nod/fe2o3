@@ -28,6 +28,16 @@ handoff. Next implement one staged application session in the independent manage
 then the remote conditional owner and existing per-device native invocation join.
 Keep general performance work and additional GPU counts out of this critical path.
 
+The [staged application controller](runtime-application-proof-controller-v1.md)
+now implements resource Ready, exact root activation, two-FD application requests,
+retained proof probing and quarantine. This is the controller component, not yet
+the independently deployed manager or authenticated registration handoff. Its root
+staging primitive must be joined to the broker's typed original occurrence owner;
+the staged capsule alone cannot authenticate that observation. The generated-only
+multi-device native-peer constructor is also implemented without granting generic
+compute authority. Next priorities are, in order: manager/registered-owner handoff,
+remote conditional native-invocation join and two-GPU application qualification.
+
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
    request. The native current-publication audit passes, including substitution
@@ -134,7 +144,8 @@ Provide an independently approved fixed unfiltered launch boundary and an actual
 resource opener/launcher; an identity-only deployment manifest is insufficient.
 Only root sends Ready. After successful Ready delivery, activate the custodian
 and retire root's peer alias; proof packets then require that custodian's exact
-per-message credentials and fresh nonce. This design is not yet implemented.
+per-message credentials and fresh nonce. The staged controller protocol is now
+implemented; the authenticated coordinator/manager/client handoff is still pending.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped

@@ -3,6 +3,19 @@
 use super::*;
 
 impl KfdMultiDeviceRuntimeBackendV1 {
+    /// Opens the selected devices for admitted Worker V3 invocations and native peer copies.
+    ///
+    /// Reuses the complete device and directed-route admission of
+    /// [`Self::open_default_with_native_peer_copy_v1`], including PUBLIC device storage.
+    /// Generic kernel, atomic and collective launch authority remains disabled on
+    /// every child. Compiler proof and per-invocation admission are still required;
+    /// peer visibility does not discharge either obligation.
+    pub fn open_worker_v3_generated_only_with_native_peer_copy_v1(
+        devices: Vec<u64>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::open_default_with_gate_policy_v1(generated_only_gates(devices)?, true)
+    }
+
     /// Opens fresh devices with caller-authorized compute and native peer copies.
     ///
     /// The complete bounded UID roster is validated before native admission, and
@@ -74,6 +87,24 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             compute_xgmi::admit_native_route_v1,
         )
     }
+}
+
+fn generated_only_gates(
+    devices: Vec<u64>,
+) -> Result<Vec<(u64, KfdRuntimeLaunchGateV1)>, KfdRuntimeBackendErrorV1> {
+    let mut gates = Vec::new();
+    gates.try_reserve_exact(devices.len()).map_err(|_| {
+        KfdRuntimeBackendErrorV1::new(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "multi-device generated-only roster allocation failed",
+        )
+    })?;
+    gates.extend(
+        devices
+            .into_iter()
+            .map(|uid| (uid, KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly)),
+    );
+    Ok(gates)
 }
 
 // The checked-device and route operations are injected here so CPU tests exercise
