@@ -1,6 +1,6 @@
 {
-  "head": "2b0c56199e4aa458bf44359c7c61061483ec96de",
-  "tree": "85ca1c058e4a165559a81b00e720cf8ea0121e21",
+  "head": "019234a5ee7ba5f6f963197186125a4c167f3368",
+  "tree": "ab2d7ce89e176f9429b5e4490f014d98d5623365",
   "package": "fe2o3-lower-mir-kernel",
   "filters": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
@@ -1339,7 +1339,7 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_writes_v87_tests.rs",
-      "sha256": "1de781b54d098fdf0163129bac865175b4cc74b052ba1ba8dcac1cf10d2fb6d9"
+      "sha256": "d869fa15431408355203cdc7087f15635baeb583028e7df613a14c2cc238778a"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_writes_v87.rs",
