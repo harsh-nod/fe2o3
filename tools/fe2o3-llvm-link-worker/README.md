@@ -123,6 +123,18 @@ cmake --build /tmp/fe2o3-worker-build -j2
 ctest --test-dir /tmp/fe2o3-worker-build --output-on-failure
 ```
 
+The gfx950 provider defaults to the exact ROCm 7.2.1 closure. An explicit
+`-DFE2O3_GFX950_DEVICE_LIB_PROFILE=rocm-7.2.4` selects the complete checked-in
+ROCm 7.2.4 manifest and requires LLVM `22.0.0git`. Unknown profiles fail
+configuration. Missing or mismatched device files disable the provider; a
+different profile's per-file digest is never an alternative accepted digest.
+The selected profile, manifest identity, directory, and all nine digests enter
+the worker build identity, and the same generated digest tuple is checked by
+the C++ loader. Changing profiles in an existing CMake cache also requires
+setting `FE2O3_GFX950_DEVICE_LIB_DIR` to that profile's canonical directory, or
+using a fresh build directory. The gfx942 policy is unchanged. These build
+identities remain observations, not approved deployment profiles or proof.
+
 LLD inputs are written only beneath a fresh private temporary directory and are
 removed when the request completes. Diagnostics are bounded and canonicalized;
 successful output remains inert until the Rust admission/publication pipeline
