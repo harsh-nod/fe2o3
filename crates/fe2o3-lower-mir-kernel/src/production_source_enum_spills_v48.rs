@@ -301,7 +301,7 @@ impl ProductionSourceEnumSpillV48<'_, '_> {
                 &inventory.owner().module().storage_layouts,
                 budget,
             )
-            .map_err(immutable_memory_error_v29)?;
+            .map_err(source_emission_error_v18)?;
             if actual.results != (definition..definition_end)
                 || *alignment != row.origin.alignment
                 || pointer.address_space != AddressSpace::Private
@@ -312,7 +312,7 @@ impl ProductionSourceEnumSpillV48<'_, '_> {
                     element,
                     budget,
                 )
-                .map_err(immutable_memory_error_v29)?
+                .map_err(source_emission_error_v18)?
                 || !call_types_equal_v1(&pointer.pointee, element, budget)?
             {
                 return self
