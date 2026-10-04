@@ -1475,6 +1475,7 @@ fn lower_compiler_module_with_physical_context_v2(
         &helper_lowerers,
         &declarations,
         target,
+        semantic_anchor_identity,
     )
 }
 
@@ -2739,6 +2740,7 @@ fn emit_compiler_module(
     helpers: &[FunctionLowerer<'_>],
     declarations: &[&Function],
     target: LoweringTarget,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
 ) -> Result<String, LoweringErrors> {
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers))?;
     let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers))?;
@@ -2768,11 +2770,14 @@ fn emit_compiler_module(
         CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?
     };
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
-    // Closed V16/V17 target paths emit directly for the pinned LLVM22 worker.
+    // Closed V16/V17/V18 target paths emit directly for the pinned LLVM22 worker.
     // The older renderer intentionally retains the Rust/frontend layout. Select
     // the existing reviewed worker profile here, before any module text exists;
     // never edit captured LLVM or relax the worker's exact layout validation.
-    let data_layout = if kernels.iter().any(|lowerer| {
+    let data_layout = if matches!(
+        semantic_anchor_identity,
+        Some(SemanticAnchorInputV1::NativeV18(_))
+    ) || kernels.iter().any(|lowerer| {
         lowerer.ordered_region_v16
             || lowerer.ordered_program_v17
             || lowerer.ordered_composition_v1.is_some()

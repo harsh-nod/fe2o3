@@ -194,3 +194,7 @@ pub(crate) fn retain_text(
         Ok((module, retained))
     })
 }
+
+#[cfg(test)]
+#[path = "kernel_ir_codegen_mixed_layout_v60_tests.rs"]
+mod layout_tests;
