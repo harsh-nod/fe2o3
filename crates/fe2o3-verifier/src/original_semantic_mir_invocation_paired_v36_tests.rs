@@ -328,6 +328,16 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
             assert!(consequence.contains(&format!(
                 "invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid"
             )));
+            assert!(readiness.contains(
+                "let entered_memory = ByteMemoryV30 { view_contracts: invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36()), ..external };"
+            ));
+            assert!(readiness.contains(&format!(
+                "invocation_native_initial_memory_invariants_v77(entered_memory, arguments, byte_root_frame_with_execution_v37({}, execution));",
+                paired.roots[root].owner
+            )));
+            for forbidden in ["assume(", "admit(", "external_body", "valid: true"] {
+                assert!(!readiness.contains(forbidden));
+            }
             let initial = out.text.split(&format!(
                 "spec fn invocation_paired_raw_initial_{root}_v36("
             )).nth(1).unwrap().split("spec fn").next().unwrap();
