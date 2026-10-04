@@ -11,6 +11,39 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 formal diagnostics — 2026-10-04
+
+The intact private owner can now lend its retained executable module to the
+unchanged formal memory analyzer after a fresh full source/report replay.
+The diagnostic borrows the actual analysis result, preserves exact incomplete
+reasons or engine errors, and drops its analysis and owner before the original
+account postflight. It does not create a detached formal receipt or admit
+ordinary compilation.
+
+Fresh Identity and swapped-input frontend sessions in both debug and release
+reported the same result: three allocations, nine accesses, one bounds obligation,
+two alias obligations, no conflicts, and exactly eight
+`GuardedAccessRequiresRankedProof` reasons. Identity locations were blocks 0/10,
+operations 41/64/87/110; swapped-input locations were blocks 2/7 at the same
+operation indices. Neither result reported `CallEffectsUnavailable`. This is
+a precise next implementation target, not a waiver of those eight missing proofs.
+
+The exact source passed 3,931 compiler library tests (228 ignored), 73 extractor
+tests and two API tests in both debug and release, plus 2,069 lowerer tests in
+each mode and a fresh release product build. Seven separately qualified parent
+controls cover diagnostic framing and refusal. The fresh diagnostic sessions
+explicitly reuse historical source preparation while binding their own current
+binary and source; they are not a new thirteen-process candidate qualification.
+
+The original account prepays the selected fixed diagnostic frame and output
+visits. Inherited formal graph/vector allocation, public-verifier traversal and
+formatting are outside that accounting claim; finite process and output limits
+remain required. Unstable target-feature warnings are preserved.
+
+Formal/geometry admission, ordinary compilation, LLVM emission and GPU execution
+remain disabled. No milestone or tutorial is completed here. Accepted exits
+remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Intact private BF16 lowerer attachment — 2026-10-04
 
 The private BF16 module receipt now remains inside an intact attached owner

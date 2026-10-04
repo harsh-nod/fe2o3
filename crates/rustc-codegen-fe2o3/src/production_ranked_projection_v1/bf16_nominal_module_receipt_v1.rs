@@ -876,3 +876,275 @@ pub(super) fn refuse_attached_observation_conversion_fixture_v1(
     };
     attached_observation::consume_module_and_observe(module, [0, 1, 2, 3])
 }
+
+#[cfg(test)]
+mod formal_diagnostic {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        FormalMemoryIncompleteReason as Reason, FormalMemoryObligationAnalysis as Analysis,
+        FormalMemoryObligationError as FormalError,
+    };
+    use fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1 as LowerError;
+
+    // Selected row/field visits and variable text bytes are prepaid before
+    // formatting. Standard stderr/formatting machinery is the same inherited
+    // harness exclusion; outer byte/process/deadline limits remain mandatory.
+    // No report vectors are cloned and no full obligations dump is emitted.
+    fn prepay_text(budget: &mut Budget<'_>, bytes: usize) -> Result<(), LowerError> {
+        budget.check_prior_denials_v1()?;
+        budget.charge_work(bytes)?;
+        Ok(())
+    }
+
+    fn prepay_reason(budget: &mut Budget<'_>, reason: &Reason) -> Result<(), LowerError> {
+        budget.check_prior_denials_v1()?;
+        budget.charge_work(32)?;
+        // All other reason payloads are fixed-size indices/locations/enums.
+        if let Reason::CallEffectsUnavailable { callee, .. } = reason {
+            prepay_text(budget, callee.as_str().len())?;
+        }
+        Ok(())
+    }
+
+    fn emit_attempt(
+        attempt: &Result<Analysis, FormalError>,
+        budget: &mut Budget<'_>,
+        requested: [u8; 4],
+    ) -> Result<(), LowerError> {
+        budget.check_prior_denials_v1()?;
+        budget.charge_work(32)?;
+        match attempt {
+            Ok(analysis) => {
+                let obligations = analysis.obligations();
+                let reasons = analysis.incomplete_reasons();
+                // Charge the known row count before the first traversal.
+                budget.charge_work(reasons.len())?;
+                eprintln!(
+                    "fe2o3-bf16-private-formal-summary-v1 analysis={} basis=compiler_ir_unauthenticated_launch allocations={} accesses={} bounds={} aliases={} conflicts={} incomplete_reasons={} formal_admission=false",
+                    if analysis.is_complete() {
+                        "complete"
+                    } else {
+                        "incomplete"
+                    },
+                    obligations.allocations().len(),
+                    obligations.accesses().len(),
+                    obligations.bounds_requirements().len(),
+                    obligations.runtime_alias_requirements().len(),
+                    obligations.inter_invocation_conflicts().len(),
+                    reasons.len(),
+                );
+                for (ordinal, reason) in reasons.iter().enumerate() {
+                    prepay_reason(budget, reason)?;
+                    // Debug prints the exact enum payload, including the actual
+                    // source operation/callee. String escaping keeps one row.
+                    eprintln!(
+                        "fe2o3-bf16-private-formal-reason-v1 ordinal={} value={:?}",
+                        ordinal, reason,
+                    );
+                }
+            }
+            Err(FormalError::InvalidModule(errors)) => {
+                budget.charge_work(errors.diagnostics().len())?;
+                eprintln!(
+                    "fe2o3-bf16-private-formal-error-v1 kind=InvalidModule diagnostics={}",
+                    errors.diagnostics().len(),
+                );
+                for (ordinal, diagnostic) in errors.diagnostics().iter().enumerate() {
+                    budget.charge_work(32)?;
+                    prepay_text(budget, diagnostic.location.module.as_str().len())?;
+                    if let Some(function) = &diagnostic.location.function {
+                        prepay_text(budget, function.as_str().len())?;
+                    }
+                    if let Some(kernel) = &diagnostic.location.kernel {
+                        prepay_text(budget, kernel.as_str().len())?;
+                    }
+                    prepay_text(budget, diagnostic.message.len())?;
+                    eprintln!(
+                        "fe2o3-bf16-private-formal-verifier-row-v1 ordinal={} value={:?}",
+                        ordinal, diagnostic,
+                    );
+                }
+            }
+            Err(FormalError::MissingKernel { kernel }) => {
+                prepay_text(budget, kernel.as_str().len())?;
+                eprintln!(
+                    "fe2o3-bf16-private-formal-error-v1 kind=MissingKernel value={:?}",
+                    kernel,
+                );
+            }
+            Err(FormalError::InvalidInvocationRange(error)) => {
+                // RegionValidationError contains only fixed numeric/enum data.
+                eprintln!(
+                    "fe2o3-bf16-private-formal-error-v1 kind=InvalidInvocationRange value={:?}",
+                    error,
+                );
+            }
+            Err(FormalError::GuardedResource(error)) => {
+                eprintln!(
+                    "fe2o3-bf16-private-formal-error-v1 kind=GuardedResource value={:?}",
+                    error,
+                );
+            }
+        }
+        budget.check_prior_denials_v1()?;
+        // This borrowed callback has not yet dropped the attempt or its intact
+        // owner. Only the later outer owning-entry marker confirms cleanup and
+        // materialization postflight. Even Complete is not formal acceptance.
+        eprintln!(
+            "fe2o3-bf16-private-formal-collected-v1 collection_complete=true permutation={} work={} storage={} peak={} same_account=true source_join=true fresh_full_replay=true intact_owner=true cleanup_pending=true formal_admission=false normal_admission=false launch_authenticated=false",
+            if requested == [0, 1, 2, 3] {
+                "identity"
+            } else {
+                "swap01"
+            },
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+        );
+        Ok(())
+    }
+
+    impl ProductionRankedSemanticProgramV1 {
+        /// Distinct diagnostic-only continuation. No account-paid observation
+        /// survives either consuming conversion, and no formal report escapes.
+        pub(crate) fn observe_private_nominal_formal_for_test_v1(
+            self,
+            requested: [u8; 4],
+        ) -> Result<(), E> {
+            let mut roster = self.into_verified_roster_receipt()?;
+            roster.phase.require_clean_v1()?;
+            let materialized = &roster.materialized;
+            let roots = &roster.source_order_roots;
+            roster.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(32 + 32 + 4 + 8).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata(
+                        "formal diagnostic requires one actual root",
+                    ));
+                };
+                let emission =
+                    materialized
+                        .bf16_call_instance_emission_v1()
+                        .ok_or(E::RosterMetadata(
+                            "formal diagnostic has no actual nominal emission",
+                        ))?;
+                if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3])
+                    || !std::ptr::eq(emission.owner(), materialized)
+                    || emission.root() != root.semantic_root
+                    || emission.return_permutation() != requested
+                    || root.access_sources.len() != 3
+                    || !root.executable_effect_sources.is_empty()
+                    || root.ranked_ir.is_empty()
+                {
+                    return Err(E::RosterMetadata(
+                        "formal diagnostic actual source/maps/Return differ",
+                    ));
+                }
+                Ok(())
+            })?;
+            let module = roster.into_private_bf16_module_verified_receipt_v1()?;
+            let mut paired = module.into_private_bf16_attached_ranked_v1()?;
+            paired.verification.phase.require_clean_v1()?;
+            let owner = &paired.owner;
+            let roots = &paired.verification.roots;
+            paired.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(2).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata(
+                        "formal diagnostic owning pair changed roots",
+                    ));
+                };
+                if owner.root_count() != 1 {
+                    return Err(E::RosterMetadata(
+                        "formal diagnostic owning pair changed identity",
+                    ));
+                }
+                owner
+                    .with_private_bf16_formal_diagnostic_v1(
+                        root.semantic_root,
+                        requested,
+                        budget,
+                        |attempt, budget| emit_attempt(attempt, budget, requested),
+                    )
+                    .map_err(E::Custody)
+            })?;
+            paired.verification.phase.require_clean_v1()?;
+            // Source/report first, original projection phase last; caller still
+            // retains the separate original materialization account.
+            drop(paired);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn formal_reason_fixed_work_exact_and_one_short_preserve_denial() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        for limit in [31, 32] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            let result = prepay_reason(&mut budget, &Reason::LaunchExtentUnknown);
+            assert_eq!(result.is_ok(), limit == 32);
+            assert_eq!(budget.work(), if limit == 32 { 32 } else { 0 });
+            assert_eq!((budget.storage(), budget.peak_storage()), (0, 0));
+            if limit == 31 {
+                let first = budget.failed_work();
+                assert!(matches!(
+                    result,
+                    Err(LowerError::ArgumentCorrespondenceResource(Resource::Work(
+                        _
+                    )))
+                ));
+                assert!(prepay_text(&mut budget, 0).is_err());
+                assert_eq!(budget.failed_work(), first);
+                assert_eq!(budget.work(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn formal_text_visits_exact_and_one_short_do_not_copy_payload() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        for limit in [4, 5] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            assert_eq!(
+                prepay_text(&mut budget, "a\nb\\c".len()).is_ok(),
+                limit == 5
+            );
+            assert_eq!(budget.work(), if limit == 5 { 5 } else { 0 });
+            assert_eq!((budget.storage(), budget.peak_storage()), (0, 0));
+        }
+    }
+
+    #[test]
+    fn formal_callee_bytes_are_prepaid_without_losing_exact_reason() {
+        use fe2o3_kernel_ir::{
+            BlockId, CanonicalKernelIrWorkBudgetV1 as Work, FunctionId, FunctionOperationLocation,
+        };
+        let reason = Reason::CallEffectsUnavailable {
+            location: FunctionOperationLocation::new(BlockId(7), 11),
+            callee: FunctionId::new("a\nb\\c"),
+        };
+        for limit in [36, 37] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            let result = prepay_reason(&mut budget, &reason);
+            assert_eq!(result.is_ok(), limit == 37);
+            assert_eq!(budget.work(), if limit == 37 { 37 } else { 32 });
+            assert_eq!((budget.storage(), budget.peak_storage()), (0, 0));
+            if limit == 36 {
+                let first = budget.failed_work();
+                assert!(prepay_reason(&mut budget, &reason).is_err());
+                assert_eq!(budget.failed_work(), first);
+                assert_eq!(budget.work(), 32);
+            }
+        }
+        assert!(
+            matches!(&reason, Reason::CallEffectsUnavailable { location, callee }
+            if location.block == BlockId(7) && location.operation_index == 11
+                && callee.as_str() == "a\nb\\c")
+        );
+    }
+}

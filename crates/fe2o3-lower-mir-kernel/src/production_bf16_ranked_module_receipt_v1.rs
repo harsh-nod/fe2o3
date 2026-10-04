@@ -607,3 +607,336 @@ impl ProductionPrivateBf16AttachedRankedOwnerV1 {
         )
     }
 }
+
+type PrivateBf16FormalAttemptV1 = Result<
+    fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+    fe2o3_kernel_ir::FormalMemoryObligationError,
+>;
+
+fn private_bf16_formal_frame_storage_v1<F, I>(
+    _: &F,
+    _: &I,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    std::mem::size_of::<PrivateBf16FormalAttemptV1>()
+        .checked_add(std::mem::size_of::<F>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<I>()))
+        .ok_or_else(|| ArgumentResourceV1::Arithmetic.into())
+}
+
+fn with_private_bf16_formal_frame_v1<'work, F, I>(
+    budget: &mut ArgumentBudgetV1<'work>,
+    make: F,
+    inspect: I,
+) -> Result<(), ProductionSemanticKirErrorV1>
+where
+    F: FnOnce() -> PrivateBf16FormalAttemptV1,
+    I: FnOnce(
+        &PrivateBf16FormalAttemptV1,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+{
+    budget.check_prior_denials_v1()?;
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = budget as *const _ as usize;
+    let header = private_bf16_formal_frame_storage_v1(&make, &inspect)?;
+    let protected = floor
+        .checked_add(header)
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
+    budget.charge_work(1)?;
+    budget.reserve_storage(header)?;
+    // This fixed frame is selected accounting only. Formal extraction's legacy
+    // vector/graph/verification work and payload retain their existing domain.
+    // The entry returns no owned analysis/report/error payload. The callback
+    // is diagnostic only; observations cannot grant source or launch authority.
+    let attempt = make();
+    let inspected = inspect(&attempt, budget);
+    drop(attempt);
+    if budget as *const _ as usize != slot
+        || budget.work_ledger_identity_v1() != ledger
+        || budget.storage() != protected
+    {
+        // Never repair callback-owned surplus or an invalid floor by subtraction.
+        // Preserve original sticky refusal before inventing another diagnosis.
+        budget.check_prior_denials_v1()?;
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    budget.release_storage(header)?;
+    budget.check_prior_denials_v1()?;
+    inspected
+}
+
+impl ProductionPrivateBf16AttachedRankedOwnerV1 {
+    /// Borrows a fresh formal-memory analysis attempt from this INTACT nominal
+    /// owner, on its original projection account, without granting admission.
+    ///
+    /// A fresh full nominal replay precedes extraction. The kernel is the actual
+    /// singleton executable root; production witness extents and Bits64 remain
+    /// descriptive analysis inputs, not authenticated runtime launch facts.
+    /// The callback observes Complete, Incomplete, or the exact engine error.
+    /// Returning Ok means only that diagnostic collection completed.
+    ///
+    /// The same original ledger prepays only this new fixed Result/callback
+    /// frame. Formal extraction, public verification, graph reconstruction and
+    /// their legacy allocations remain excluded, as in existing bounded-
+    /// translation formal admission. Existing guarded/effect/CFG limits are
+    /// unchanged. This is not a whole-analysis or allocator/RSS bound.
+    ///
+    /// On ordinary Result paths the actual attempt dies before exact frame
+    /// refund. On unwind its locals die but accepted credit is conservatively
+    /// retained; the caller's original owning-phase panic/drop guard is required.
+    /// No source, report, receipt token or paid observation is returned.
+    #[doc(hidden)]
+    pub fn with_private_bf16_formal_diagnostic_v1<'work, I>(
+        &self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'work>,
+        inspect: I,
+    ) -> Result<(), ProductionSemanticKirErrorV1>
+    where
+        I: FnOnce(
+            &Result<
+                fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+                fe2o3_kernel_ir::FormalMemoryObligationError,
+            >,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    {
+        self.verify_private_bf16_attached_retained_source_with_budget_v1(
+            expected_root,
+            expected_return,
+            budget,
+        )?;
+        budget.check_prior_denials_v1()?;
+        // Singleton selection and at most three witness-axis visits.
+        budget.charge_work(8)?;
+        let module = self.receipt.materialized.executable.module();
+        let [kernel] = module.kernels.as_slice() else {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        };
+        let witness = fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+            rank: kernel.domain.rank(),
+            extents: crate::production_formal_memory_v1::witness_extents(&kernel.domain),
+        };
+        with_private_bf16_formal_frame_v1(
+            budget,
+            move || {
+                fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+                    module,
+                    &kernel.id,
+                    witness,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+                )
+            },
+            inspect,
+        )
+    }
+}
+
+#[cfg(test)]
+mod private_formal_diagnostic_resource_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work, FormalGuardedMemoryResourceErrorV1 as GuardError,
+        FormalMemoryObligationError as FormalError,
+    };
+
+    fn engine_error() -> PrivateBf16FormalAttemptV1 {
+        Err(FormalError::GuardedResource(GuardError::Accounting))
+    }
+    fn observe_engine_error(
+        attempt: &PrivateBf16FormalAttemptV1,
+        _: &mut Budget<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        assert!(matches!(
+            attempt,
+            Err(FormalError::GuardedResource(GuardError::Accounting))
+        ));
+        Ok(())
+    }
+    fn observer_refusal(
+        _: &PrivateBf16FormalAttemptV1,
+        _: &mut Budget<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+    }
+
+    #[test]
+    fn formal_diagnostic_fixed_frame_exact_and_one_short() {
+        let make = engine_error;
+        let inspect = observe_engine_error;
+        let header = private_bf16_formal_frame_storage_v1(&make, &inspect).unwrap();
+        for (work_limit, storage_limit, accepted) in [
+            (1, 7 + header, true),
+            (0, 7 + header, false),
+            (1, 7 + header - 1, false),
+        ] {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = with_private_bf16_formal_frame_v1(&mut budget, make, inspect);
+            assert_eq!(result.is_ok(), accepted);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage(), 7);
+            if accepted {
+                assert_eq!((budget.work(), budget.peak_storage()), (1, 7 + header));
+            } else if work_limit == 0 {
+                assert!(matches!(
+                    result,
+                    Err(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            Resource::Work(_)
+                        )
+                    )
+                ));
+                assert_eq!((budget.work(), budget.peak_storage()), (0, 7));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            Resource::Storage(_)
+                        )
+                    )
+                ));
+                assert_eq!((budget.work(), budget.peak_storage()), (1, 7));
+            }
+        }
+    }
+
+    #[test]
+    fn formal_diagnostic_callback_refusal_refunds_only_dead_frame() {
+        let mut work = Work::new(10);
+        let mut budget = Budget::new(&mut work, 10_000);
+        budget.reserve_storage(7).unwrap();
+        let header =
+            private_bf16_formal_frame_storage_v1(&engine_error, &observer_refusal).unwrap();
+        assert!(matches!(
+            with_private_bf16_formal_frame_v1(&mut budget, engine_error, observer_refusal,),
+            Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+        ));
+        assert_eq!(
+            (budget.work(), budget.storage(), budget.peak_storage()),
+            (1, 7, 7 + header)
+        );
+        assert!(budget.check_prior_denials_v1().is_ok());
+    }
+
+    #[test]
+    fn formal_diagnostic_prior_denial_precedes_new_frame_work() {
+        for storage in [false, true] {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            let original = if storage {
+                budget.reserve_storage(1).unwrap_err()
+            } else {
+                budget.charge_work(4).unwrap_err()
+            };
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(matches!(with_private_bf16_formal_frame_v1(
+                    &mut budget, engine_error, observe_engine_error,
+                ), Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                    if error == original));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn formal_diagnostic_never_refunds_callback_surplus_or_accepts_changed_floor() {
+        for release in [false, true] {
+            let mut work = Work::new(10);
+            let mut budget = Budget::new(&mut work, 10_000);
+            budget.reserve_storage(7).unwrap();
+            let inspect = |_: &PrivateBf16FormalAttemptV1, budget: &mut Budget<'_>| {
+                if release {
+                    budget.release_storage(1)?;
+                } else {
+                    budget.reserve_storage(1)?;
+                }
+                Ok(())
+            };
+            let header = private_bf16_formal_frame_storage_v1(&engine_error, &inspect).unwrap();
+            assert!(matches!(
+                with_private_bf16_formal_frame_v1(&mut budget, engine_error, inspect,),
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        Resource::Accounting
+                    )
+                )
+            ));
+            assert_eq!(
+                budget.storage(),
+                if release {
+                    7 + header - 1
+                } else {
+                    7 + header + 1
+                }
+            );
+            assert!(budget.check_prior_denials_v1().is_ok());
+        }
+    }
+
+    #[test]
+    fn formal_diagnostic_panic_cannot_publish_completion_or_broadly_refund() {
+        let mut work = Work::new(10);
+        let mut budget = Budget::new(&mut work, 10_000);
+        budget.reserve_storage(7).unwrap();
+        let inspect = |_: &PrivateBf16FormalAttemptV1,
+                       _: &mut Budget<'_>|
+         -> Result<(), ProductionSemanticKirErrorV1> {
+            panic!("diagnostic callback");
+        };
+        let header = private_bf16_formal_frame_storage_v1(&engine_error, &inspect).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_private_bf16_formal_frame_v1(&mut budget, engine_error, inspect)
+        }));
+        assert!(result.is_err());
+        assert_eq!((budget.work(), budget.storage()), (1, 7 + header));
+        // This isolated frame-control test owns the exact dead frame credit.
+        // The genuine caller instead drops its poisoned owning phase.
+        budget.release_storage(header).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn formal_diagnostic_engine_panic_retains_only_accepted_frame_credit() {
+        let mut work = Work::new(10);
+        let mut budget = Budget::new(&mut work, 10_000);
+        budget.reserve_storage(7).unwrap();
+        let make = || -> PrivateBf16FormalAttemptV1 {
+            panic!("formal engine");
+        };
+        let header = private_bf16_formal_frame_storage_v1(&make, &observe_engine_error).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_private_bf16_formal_frame_v1(&mut budget, make, observe_engine_error)
+        }));
+        assert!(result.is_err());
+        assert_eq!((budget.work(), budget.storage()), (1, 7 + header));
+        assert!(budget.check_prior_denials_v1().is_ok());
+        budget.release_storage(header).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+}
