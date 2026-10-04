@@ -128,11 +128,78 @@ fn source_enum_spill_components_v55(
     Ok(Some(result))
 }
 
+fn source_enum_spill_storage_v57(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    ty: SemanticTypeIdV1,
+    payload: &Type,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Option<CompilerEnumPointerStorageV57>, ProductionSemanticKirErrorV1> {
+    plan.check_owner(plan.instances, budget)?;
+    plan.charge(12, budget)?;
+    let Type::Pointer(actual) = payload else {
+        return Ok(None);
+    };
+    let Type::StorageObject(pointee) = actual.pointee.as_ref() else {
+        return Ok(None);
+    };
+    source_reference_owned_prepay_v29::<(
+        CompilerEnumPointerStorageV57,
+        source_storage_v29::SourceStorageSelectionV29<'_>,
+        [&(); 6],
+    )>(plan, budget)?;
+    let owner = plan.instances.owner();
+    let declaration = owner
+        .source_semantic()
+        .types()
+        .get(ty.index() as usize)
+        .ok_or_else(source_enum_tag_error_v55)?;
+    let SemanticTypeShapeV1::Pointer(original) = declaration.shape() else {
+        return Err(source_enum_tag_error_v55());
+    };
+    if !source_object_reference_field_v44(declaration)
+        || actual.address_space != AddressSpace::Private
+    {
+        return Err(source_enum_tag_error_v55());
+    }
+    let layouts = plan
+        .storage_root
+        .as_ref()
+        .ok_or_else(source_enum_tag_error_v55)?
+        .source_layouts(plan.instances, budget)?;
+    // Selecting a holder row does not create a source cell or a loan. The
+    // referent must already have the exact selected schema of its source type.
+    layouts.check_selected_schema(owner, original.pointee(), *pointee, budget)?;
+    let schema = layouts.select_schema(
+        owner,
+        ty,
+        source_storage_v29::SourceStorageSelectionV29::Pointer {
+            pointee: *pointee,
+            value_space: actual.address_space,
+            access: actual.access,
+        },
+        budget,
+    )?;
+    let rows = layouts.rows(owner, budget)?;
+    let row = rows
+        .get(schema.0 as usize)
+        .ok_or_else(source_enum_tag_error_v55)?;
+    let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = row.kind else {
+        return Err(source_enum_tag_error_v55());
+    };
+    Ok(Some(CompilerEnumPointerStorageV57 {
+        schema,
+        pointer,
+        size: row.size,
+        alignment: row.alignment,
+    }))
+}
+
 struct PreparedSourceEnumPayloadV55 {
     field: u32,
     value: ValueDef,
     pointer: ValueId,
     alignment: u32,
+    storage: Option<CompilerEnumPointerStorageV57>,
     source: Option<ScopedMemoryStoreSourceV29>,
 }
 
@@ -186,13 +253,21 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         let site = execution_site_v29(block, statement);
         for field in prepared {
             let position = operations.len();
-            self.push_memory_store_v1(
-                operations,
-                field.pointer,
-                field.value.id,
-                MemoryAccess::new(AddressSpace::Private, field.alignment),
-                None,
-            )?;
+            let access = MemoryAccess::new(AddressSpace::Private, field.alignment);
+            if field.storage.is_some() {
+                self.push_operation(operations, || {
+                    Operation::new(
+                        Vec::new(),
+                        OperationKind::Storage(ScopedObjectOperationV29::WriteValue {
+                            address: field.pointer,
+                            value: field.value.id,
+                            access,
+                        }),
+                    )
+                })?;
+            } else {
+                self.push_memory_store_v1(operations, field.pointer, field.value.id, access, None)?;
+            }
             self.record_scoped_enum_spill_store_v55(
                 site,
                 local,
@@ -377,6 +452,13 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         )?;
                         source_reference_validate_binding_v29(plan, binding, budget)?;
                         source_object_reference_same_v44(plan, binding, original, budget)?;
+                        if let Some(storage) = component.storage {
+                            budget.source_object_reference_value_v44(
+                                plan,
+                                binding,
+                                storage.schema,
+                            )?;
+                        }
                         let [actual] = binding.values.as_slice() else {
                             return Err(source_enum_tag_error_v55());
                         };
@@ -442,6 +524,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     value: actual,
                     pointer: component.pointer,
                     alignment: component.alignment,
+                    storage: component.storage,
                     source: matches!(binding, SemanticValueBindingV1::SourceReference(_))
                         .then_some(ScopedMemoryStoreSourceV29::Operand {
                             site,

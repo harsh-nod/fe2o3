@@ -94,7 +94,7 @@ pub(super) fn test_compiler_enum_closed_mutations_v55(
         }
         let floor = budget.storage();
         let result = with_canonical_call_scratch_v1(budget, |budget| {
-            check_compiler_enum_closed_memory_v55(&function, &pending, budget).map(|_| ())
+            check_compiler_enum_closed_memory_v55(&function, &[], &pending, budget).map(|_| ())
         });
         assert_eq!(
             budget.storage(),

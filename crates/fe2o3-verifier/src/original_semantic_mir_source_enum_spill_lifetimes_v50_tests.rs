@@ -192,6 +192,32 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                                 2,
                                 "each helper's dynamic pointer field needs an authenticated spill"
                             );
+                            for ordinal in 0..2 {
+                                let receipt = relation.enum_spill_v48(root, ordinal, out.budget)?;
+                                let (definition, operation) = receipt.allocation(out.budget)?;
+                                let inventory = relation.inventory(out.budget)?;
+                                let allocation = &inventory.operations()[operation];
+                                let fe2o3_kernel_ir::OperationKind::Alloca {
+                                    element: fe2o3_kernel_ir::Type::StorageObject(schema),
+                                    ..
+                                } = allocation.operation.kind
+                                else {
+                                    panic!(
+                                        "pointer spill must allocate its explicit holder layout"
+                                    );
+                                };
+                                assert!(matches!(
+                                    inventory.owner().module().storage_layouts[schema.0 as usize]
+                                        .kind,
+                                    fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(_)
+                                ));
+                                let pointer = inventory.definitions()[definition].value.unwrap();
+                                assert!(inventory.operations().iter().any(|row|
+                                    row.coordinate.block.function == allocation.coordinate.block.function
+                                    && matches!(row.operation.kind,
+                                        fe2o3_kernel_ir::OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::WriteValue { address, .. })
+                                            if address == pointer)), "exact holder needs its typed constructor store");
+                            }
                             for instance in 0..plan.root(root, out)?.instances.len() {
                                 let row = plan.instance(root, instance, out)?;
                                 if !row.active || instance == 0 {
@@ -346,7 +372,9 @@ fn original_enum_spill_cannot_keep_a_reference_current_across_referent_restart()
         "invalid original lifetime must fail before publication"
     );
     assert!(
-        format!("{error:?}").contains("source reference referent is dead or replaced"),
+        // This fixture deliberately preserves local 9's loan when local 8 dies.
+        // The source storage cut is therefore invalid before its later use.
+        format!("{error:?}").contains("source reference referent storage dies with a live loan"),
         "wrong source lifetime refusal: {error:?}"
     );
 }

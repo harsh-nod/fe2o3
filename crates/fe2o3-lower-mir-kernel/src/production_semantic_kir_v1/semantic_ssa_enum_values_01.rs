@@ -659,6 +659,7 @@ fn propagate_promoted_enum_facts_v1(
 #[derive(Clone, Debug)]
 struct SemanticEnumPayloadComponentStorageV1 {
     pointer: ValueId,
+    storage: Option<CompilerEnumPointerStorageV57>,
     kernel_type: Type,
     alignment: u32,
 }

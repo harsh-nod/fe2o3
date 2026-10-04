@@ -204,6 +204,7 @@ fn capture_compiler_spills_v55(
                 emitted_block: original.emitted_block,
                 emitted_operation: original.emitted_operation,
                 pointer: original.pointer,
+                storage: original.storage,
                 element: emission_binding_clone_type_v1(&original.element, budget)?,
                 alignment: original.alignment,
             };
@@ -271,6 +272,7 @@ fn compiler_spills_match_v55(
                 b.pointer,
                 b.alignment,
             )
+            || a.storage != b.storage
             || !enum_spill_types_equal_v48(&a.element, &b.element, budget)?
         {
             return Ok(false);

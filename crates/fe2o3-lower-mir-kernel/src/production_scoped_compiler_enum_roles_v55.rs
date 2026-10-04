@@ -137,19 +137,7 @@ fn check_scoped_compiler_enum_access_v55<'a>(
         // A matching private allocation alone cannot establish that relation.
         return Err(scoped_compiler_enum_error_v55());
     };
-    let OperationKind::Store {
-        pointer,
-        value: actual,
-        access,
-    } = operation.kind
-    else {
-        return Err(scoped_compiler_enum_error_v55());
-    };
-    if pointer != record.pointer
-        || actual != value
-        || access != MemoryAccess::new(AddressSpace::Private, spill.alignment)
-        || !operation.results.is_empty()
-    {
+    if spill.pointer != record.pointer || !enum_spill_store_matches_v57(spill, operation, value) {
         return Err(scoped_compiler_enum_error_v55());
     }
     let binding = match site {
@@ -336,6 +324,60 @@ fn check_scoped_compiler_enum_scalar_value_v55(
 }
 
 impl SemanticFunctionLoweringV1<'_, '_> {
+    fn record_scoped_compiler_enum_typed_write_v57(
+        &mut self,
+        position: usize,
+        operation: ScopedObjectOperationV29,
+        results: &[ValueDef],
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        let ScopedObjectOperationV29::WriteValue {
+            address, access, ..
+        } = operation
+        else {
+            return Ok(false);
+        };
+        self.with_emission_budget_v1(|this, budget| {
+            let mut selected = None;
+            for field in this.enum_payload_storage.values() {
+                budget.charge_work(1)?;
+                for component in field.components.iter() {
+                    budget.charge_work(2)?;
+                    if component.pointer == address {
+                        if selected.is_some() || component.storage.is_none() {
+                            return Err(scoped_compiler_enum_error_v55());
+                        }
+                        selected = Some(component.alignment);
+                    }
+                }
+            }
+            let Some(alignment) = selected else {
+                return Ok(false);
+            };
+            if !results.is_empty() || access != MemoryAccess::new(AddressSpace::Private, alignment)
+            {
+                return Err(scoped_compiler_enum_error_v55());
+            }
+            let recorder = this
+                .scoped_memory
+                .as_mut()
+                .ok_or_else(scoped_compiler_enum_error_v55)?;
+            if recorder.anchors.subject.ledger != budget.work_ledger_identity_v1() {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+            let row = ScopedMemoryAnchorV29 {
+                block: recorder.block.ok_or_else(scoped_compiler_enum_error_v55)?,
+                position,
+                source: recorder.frame,
+                kind: ScopedMemoryAnchorKindV29::Access {
+                    pointer: address,
+                    payload: None,
+                },
+            };
+            emission_push_v1(&mut recorder.anchors.rows, row, budget)?;
+            Ok(true)
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn record_scoped_enum_spill_store_v55(
         &mut self,

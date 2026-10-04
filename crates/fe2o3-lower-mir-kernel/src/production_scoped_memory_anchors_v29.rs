@@ -248,6 +248,37 @@ fn check_scoped_memory_anchors_v29(
             {
                 budget.charge_work(4)?;
                 let row = anchors.rows.get(next).ok_or_else(scoped_object_error_v29)?;
+                if matches!(
+                    row.kind,
+                    ScopedMemoryAnchorKindV29::Access { payload: None, .. }
+                ) {
+                    if row.block != block.id || row.position != position {
+                        return Err(scoped_compiler_enum_error_v55());
+                    }
+                    charge_execution_cfg_lookup_v29(anchors.compiler_enum.len(), budget)?;
+                    let index = anchors
+                        .compiler_enum
+                        .binary_search_by_key(&next, |row| row.anchor)
+                        .map_err(|_| scoped_compiler_enum_error_v55())?;
+                    let archive = lowered
+                        .execution_observation
+                        .as_ref()
+                        .ok_or_else(scoped_compiler_enum_error_v55)?;
+                    let checked = check_scoped_compiler_enum_access_v55(
+                        instances,
+                        instance.instance,
+                        anchors,
+                        archive,
+                        &anchors.compiler_enum[index],
+                        operation,
+                        budget,
+                    )?;
+                    if checked.spill.storage.is_none() {
+                        return Err(scoped_compiler_enum_error_v55());
+                    }
+                    next = argument_sum_v1(&[next, 1])?;
+                    continue;
+                }
                 if row.block != block.id
                     || row.position != position
                     || row.kind != ScopedMemoryAnchorKindV29::Object(next_object)
@@ -1242,6 +1273,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         results: &[ValueDef],
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         if let OperationKind::Storage(operation) = *kind {
+            if self.record_scoped_compiler_enum_typed_write_v57(position, operation, results)? {
+                return Ok(());
+            }
             // Typed operations never inherit the legacy unrecorded scalar path.
             return self.record_scoped_object_v29(position, operation, results);
         }

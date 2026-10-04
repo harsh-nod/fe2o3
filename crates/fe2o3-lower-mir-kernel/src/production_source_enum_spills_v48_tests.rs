@@ -402,6 +402,12 @@ fn single_block_known_enum_carriers_do_not_require_compiler_spills() {
 
 #[test]
 fn compiler_enum_spill_headers_and_type_comparison_have_independent_oracles() {
+    type PointerStorage = (
+        fe2o3_kernel_ir::StorageLayoutIdV1,
+        fe2o3_kernel_ir::StoragePointerV1,
+        u64,
+        u32,
+    );
     type Fields = (
         u32,
         SemanticTypeIdV1,
@@ -412,8 +418,13 @@ fn compiler_enum_spill_headers_and_type_comparison_have_independent_oracles() {
         BlockId,
         usize,
         ValueId,
+        Option<PointerStorage>,
         Type,
         u32,
+    );
+    assert_eq!(
+        size_of::<Option<PointerStorage>>(),
+        size_of::<Option<CompilerEnumPointerStorageV57>>()
     );
     type OwnedFields = (
         ExecutionCallSourceV29,

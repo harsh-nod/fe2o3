@@ -417,6 +417,76 @@ pub(super) fn visit_optimized_source_objects_v18(
                     }
                 }
             }
+            // Compiler holders are disjoint from source objects. Their exact
+            // source-owned role and closed operand census must account for
+            // typed stores before the complete operation census below.
+            if let Some(pending) = &root_row.source_slots.pending_memory {
+                if pending
+                    .compiler_enum
+                    .has_typed_allocations_v57(budget)
+                    .map_err(immutable_memory_error_v29)?
+                {
+                    let compiler = immutable_compiler_enum_memory_v55(
+                        original,
+                        root,
+                        &pending.compiler_enum,
+                        budget,
+                    )?;
+                    check_compiler_enum_closed_memory_v55(
+                        input.function,
+                        &original.inventory.owner().module().storage_layouts,
+                        &compiler,
+                        budget,
+                    )
+                    .map_err(immutable_memory_error_v29)?;
+                    let mapped =
+                        map_compiler_enum_memory_v57(original, root, &compiler, optimized, budget)?;
+                    let inventory = optimized.output_inventory(budget)?;
+                    check_compiler_enum_closed_memory_v55(
+                        output.function,
+                        &inventory.owner().module().storage_layouts,
+                        &mapped,
+                        budget,
+                    )
+                    .map_err(immutable_memory_error_v29)?;
+                    for (inventory, function, memory, marks) in [
+                        (
+                            original.inventory,
+                            input,
+                            &compiler,
+                            input_seen.as_mut_slice(),
+                        ),
+                        (inventory, output, &mapped, output_seen.as_mut_slice()),
+                    ] {
+                        for access in &memory.accesses {
+                            budget.charge_work(1)?;
+                            let allocation = memory
+                                .allocation(access.record.pointer, budget)
+                                .map_err(immutable_memory_error_v29)?
+                                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                    "typed compiler holder missing",
+                                ))?;
+                            if allocation.origin.storage.is_none() {
+                                continue;
+                            }
+                            let block = inventory
+                                .block_for_id(function.coordinate, access.block, budget)
+                                .map_err(source_pointer_inventory_error_v18)?
+                                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                    "typed compiler block missing",
+                                ))?;
+                            let coordinate = fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+                                block: block.coordinate,
+                                operation: u32::try_from(access.operation)
+                                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                            };
+                            mark_source_object_operation_v18(
+                                inventory, function, coordinate, marks, budget,
+                            )?;
+                        }
+                    }
+                }
+            }
             for (inventory, function, marks) in [
                 (original.inventory, input, input_seen.as_slice()),
                 (

@@ -39,12 +39,36 @@ fn refused() -> Error {
     Error::Statement("original enum payload needs its exact SSA or compiler spill correspondence")
 }
 
+pub(super) fn spill_pointer_v57(
+    element: &PhysicalType,
+    layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<fe2o3_kernel_ir::StoragePointerV1>> {
+    out.budget.charge_work(8)?;
+    let PhysicalType::StorageObject(schema) = element else {
+        return Ok(None);
+    };
+    let row = layouts.get(schema.0 as usize).ok_or_else(refused)?;
+    let fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) = row.kind else {
+        return Err(refused());
+    };
+    if pointer.value_space != AddressSpace::Private
+        || row.size.checked_mul(8) != Some(u64::from(pointer.stored_bits))
+        || row.alignment == 0
+        || layouts.get(pointer.pointee.0 as usize).is_none()
+    {
+        return Err(refused());
+    }
+    Ok(Some(pointer))
+}
+
 fn field_type_matches(
     types: &[super::super::super::Type],
     layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
     ty: TypeId,
     kind: EnumFieldV47,
     physical: &PhysicalType,
+    storage: Option<fe2o3_kernel_ir::StoragePointerV1>,
     width: FormalIndexWidth,
 ) -> bool {
     let Some(original) = types.get(ty.index() as usize) else {
@@ -57,10 +81,34 @@ fn field_type_matches(
         EnumFieldV47::Reference {
             scalar, mutable, ..
         } => {
-            let (Shape::Pointer(source), PhysicalType::Pointer(actual)) =
-                (original.shape(), physical)
-            else {
+            let Shape::Pointer(source) = original.shape() else {
                 return false;
+            };
+            let stored_pointee;
+            let (actual_pointee, address_space, access) = match (physical, storage) {
+                (PhysicalType::Pointer(actual), None) => {
+                    (actual.pointee.as_ref(), actual.address_space, actual.access)
+                }
+                (PhysicalType::StorageObject(schema), Some(pointer)) => {
+                    let Some(row) = layouts.get(schema.0 as usize) else {
+                        return false;
+                    };
+                    let encoded = match source.address_space() {
+                        0 => AddressSpace::Generic,
+                        5 => AddressSpace::Private,
+                        _ => return false,
+                    };
+                    if pointer.stored_bits != source.pointer_width_bits()
+                        || pointer.encoded_space != encoded
+                        || original.layout().size_bytes() != Some(row.size)
+                        || original.layout().alignment_bytes() != u64::from(row.alignment)
+                    {
+                        return false;
+                    }
+                    stored_pointee = PhysicalType::StorageObject(pointer.pointee);
+                    (&stored_pointee, pointer.value_space, pointer.access)
+                }
+                _ => return false,
             };
             let Some(pointee) = types.get(source.pointee().index() as usize) else {
                 return false;
@@ -68,7 +116,7 @@ fn field_type_matches(
             // Source/loan custody is supplied by the original endpoint or
             // checked compiler spill. This query checks only scalar geometry.
             let storage_scalar;
-            let actual_pointee = match actual.pointee.as_ref() {
+            let actual_pointee = match actual_pointee {
                 PhysicalType::StorageObject(schema) => {
                     let Some(layout) = layouts.get(schema.0 as usize) else {
                         return false;
@@ -76,7 +124,7 @@ fn field_type_matches(
                     let fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(value) = layout.kind else {
                         return false;
                     };
-                    if actual.address_space != AddressSpace::Private
+                    if address_space != AddressSpace::Private
                         || pointee.layout().size_bytes() != Some(layout.size)
                         || pointee.layout().alignment_bytes() != u64::from(layout.alignment)
                     {
@@ -87,14 +135,14 @@ fn field_type_matches(
                 }
                 other => other,
             };
-            actual.access
+            access
                 == if mutable {
                     AccessMode::ReadWrite
                 } else {
                     AccessMode::ReadOnly
                 }
                 && matches!(
-                    actual.address_space,
+                    address_space,
                     AddressSpace::Private | AddressSpace::Global | AddressSpace::Generic
                 )
                 && aggregate_bindings::scalar_matches(
@@ -266,6 +314,7 @@ impl PairedInvocations<'_, '_, '_> {
                             ty,
                             kind,
                             actual,
+                            None,
                             self.width,
                         )
                     {
@@ -312,6 +361,11 @@ impl PairedInvocations<'_, '_, '_> {
                         EnumFieldV47::Scalar(scalar) => u64::from(scalar.width() / 8),
                         EnumFieldV47::Reference { .. } => 8,
                     };
+                    let storage = spill_pointer_v57(
+                        element,
+                        &inventory.owner().module().storage_layouts,
+                        out,
+                    )?;
                     out.budget.charge_work(10)?;
                     if spill.origin.source_type != source_type
                         || spill.origin.field_type != ty
@@ -322,6 +376,7 @@ impl PairedInvocations<'_, '_, '_> {
                             ty,
                             kind,
                             element,
+                            storage,
                             self.width,
                         )
                         || bytes == 0

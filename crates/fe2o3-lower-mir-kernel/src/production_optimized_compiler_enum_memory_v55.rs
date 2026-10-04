@@ -3,20 +3,34 @@ fn optimized_compiler_enum_memory_v55(
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<PendingCompilerEnumMemoryV55> {
+    original.check(budget)?;
+    map_compiler_enum_memory_v57(
+        original.correspondence,
+        original.root,
+        &original.pending.compiler_enum,
+        optimized,
+        budget,
+    )
+}
+
+fn map_compiler_enum_memory_v57(
+    relation: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    pending: &PendingCompilerEnumMemoryV55,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<PendingCompilerEnumMemoryV55> {
     use fe2o3_kernel_ir::{
         CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirUseCoordinateV1 as Usage,
     };
-    original.check(budget)?;
-    let relation = original.correspondence;
     optimized_source_endpoints_v18(relation, optimized, budget)?;
-    let owner = relation.source.root_row(original.root)?;
+    let owner = relation.source.root_row(root)?;
     let input_function = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
         u32::try_from(owner.function_ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?,
     );
     let output_function =
-        optimized_source_root_function_v18(relation, optimized, original.root, budget)?.coordinate;
+        optimized_source_root_function_v18(relation, optimized, root, budget)?.coordinate;
     let output = optimized.output_inventory(budget)?;
-    let pending = &original.pending.compiler_enum;
     let mut mapped = PendingCompilerEnumMemoryV55 {
         allocations: emission_vec_v1(pending.allocations.len(), budget)
             .map_err(immutable_memory_error_v29)?,
@@ -102,8 +116,7 @@ fn optimized_compiler_enum_memory_v55(
         .map_err(immutable_memory_error_v29)?;
     }
     for row in &pending.accesses {
-        let input =
-            source_input_operation_v18(relation, original.root, row.block, row.operation, budget)?;
+        let input = source_input_operation_v18(relation, root, row.block, row.operation, budget)?;
         let at = match optimized.operation(input, budget)? {
             ProductionOptimizedSourceOperationV18::Retained { output, .. } => output,
             ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => continue,

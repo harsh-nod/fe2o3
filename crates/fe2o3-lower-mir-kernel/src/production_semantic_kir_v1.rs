@@ -13974,8 +13974,12 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             .flat_map(|field| field.components.iter().cloned())
             .collect::<Vec<_>>();
         for component in components {
+            let element = match component.storage {
+                Some(storage) => Type::StorageObject(storage.schema),
+                None => component.kernel_type,
+            };
             let pointer_type = Type::pointer(
-                component.kernel_type.clone(),
+                element.clone(),
                 AddressSpace::Private,
                 AccessMode::ReadWrite,
             );
@@ -13983,7 +13987,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 Operation::effect_free(
                     ValueDef::new(component.pointer, pointer_type),
                     OperationKind::Alloca {
-                        element: component.kernel_type,
+                        element,
                         count: None,
                         address_space: AddressSpace::Private,
                         alignment: component.alignment,
@@ -24408,8 +24412,26 @@ fn plan_enum_payload_storage_v1<'work>(
                     *next_value = next_value.checked_add(1).ok_or_else(|| {
                         unsupported(0, None, None, "enum payload SSA identity overflow")
                     })?;
+                    let storage = if matches!(
+                        promoted.transport,
+                        SemanticPromotedTransportV1::SourceEnumTag
+                    ) {
+                        let cursor = execution.ok_or(ArgumentResourceV1::Accounting)?;
+                        let references = cursor.references.ok_or_else(source_enum_tag_error_v55)?;
+                        budget
+                            .as_deref_mut()
+                            .ok_or(ArgumentResourceV1::Accounting)?
+                            .source_enum_spill_storage_v57(
+                                references.plan,
+                                component_type,
+                                &kernel_type,
+                            )?
+                    } else {
+                        None
+                    };
                     components.push(SemanticEnumPayloadComponentStorageV1 {
                         pointer,
+                        storage,
                         kernel_type,
                         alignment,
                     });

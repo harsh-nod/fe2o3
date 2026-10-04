@@ -81,6 +81,7 @@ fn retain_source_enum_spill_v48(
             emitted_block: origin.emitted_block,
             emitted_operation: origin.emitted_operation,
             pointer: origin.pointer,
+            storage: origin.storage,
             element: emission_binding_clone_type_v1(&origin.element, budget)?,
             alignment: origin.alignment,
         },
@@ -111,6 +112,7 @@ fn source_enum_spills_equal_v48(
             || x.emitted_operation != y.emitted_operation
             || x.pointer != y.pointer
             || x.alignment != y.alignment
+            || x.storage != y.storage
             || !enum_spill_types_equal_v48(&x.element, &y.element, budget)?
         {
             return Ok(false);
@@ -294,11 +296,23 @@ impl ProductionSourceEnumSpillV48<'_, '_> {
             let definition_end = definition
                 .checked_add(1)
                 .ok_or(ArgumentResourceV1::Arithmetic)?;
+            check_enum_spill_layout_v57(
+                &row.origin,
+                &inventory.owner().module().storage_layouts,
+                budget,
+            )
+            .map_err(immutable_memory_error_v29)?;
             if actual.results != (definition..definition_end)
                 || *alignment != row.origin.alignment
                 || pointer.address_space != AddressSpace::Private
                 || pointer.access != AccessMode::ReadWrite
-                || !call_types_equal_v1(element, &row.origin.element, budget)?
+                || !enum_spill_allocation_element_matches_v57(
+                    row.origin.storage,
+                    &row.origin.element,
+                    element,
+                    budget,
+                )
+                .map_err(immutable_memory_error_v29)?
                 || !call_types_equal_v1(&pointer.pointee, element, budget)?
             {
                 return self

@@ -11,8 +11,96 @@ struct ExecutionEnumSpillV48 {
     emitted_block: BlockId,
     emitted_operation: usize,
     pointer: ValueId,
+    storage: Option<CompilerEnumPointerStorageV57>,
     element: Type,
     alignment: u32,
+}
+
+// The holder layout is distinct from the pointer value stored in it. This
+// source-selected row is retained verbatim for final and optimized replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompilerEnumPointerStorageV57 {
+    schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    pointer: fe2o3_kernel_ir::StoragePointerV1,
+    size: u64,
+    alignment: u32,
+}
+
+fn enum_spill_allocation_element_matches_v57(
+    storage: Option<CompilerEnumPointerStorageV57>,
+    payload: &Type,
+    actual: &Type,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    budget.charge_work(1)?;
+    if let Some(storage) = storage {
+        Ok(matches!(actual, Type::StorageObject(schema) if *schema == storage.schema))
+    } else {
+        enum_spill_types_equal_v48(payload, actual, budget)
+    }
+}
+
+fn enum_spill_store_matches_v57(
+    spill: &ExecutionEnumSpillV48,
+    operation: &Operation,
+    value: ValueId,
+) -> bool {
+    let access = MemoryAccess::new(AddressSpace::Private, spill.alignment);
+    operation.results.is_empty()
+        && match (spill.storage, &operation.kind) {
+            (
+                None,
+                OperationKind::Store {
+                    pointer,
+                    value: actual,
+                    access: actual_access,
+                },
+            ) => *pointer == spill.pointer && *actual == value && *actual_access == access,
+            (
+                Some(_),
+                OperationKind::Storage(ScopedObjectOperationV29::WriteValue {
+                    address,
+                    value: actual,
+                    access: actual_access,
+                }),
+            ) => *address == spill.pointer && *actual == value && *actual_access == access,
+            _ => false,
+        }
+}
+
+fn check_enum_spill_layout_v57(
+    spill: &ExecutionEnumSpillV48,
+    layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(10)?;
+    let Some(storage) = spill.storage else {
+        if matches!(&spill.element, Type::Pointer(pointer)
+            if matches!(pointer.pointee.as_ref(), Type::StorageObject(_)))
+        {
+            return Err(execution_archive_error_v29());
+        }
+        return Ok(());
+    };
+    let row = layouts
+        .get(storage.schema.0 as usize)
+        .ok_or_else(execution_archive_error_v29)?;
+    let Type::Pointer(value) = &spill.element else {
+        return Err(execution_archive_error_v29());
+    };
+    if row.kind != fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(storage.pointer)
+        || row.size != storage.size
+        || row.alignment != storage.alignment
+        || storage.alignment != spill.alignment
+        || storage.pointer.value_space != value.address_space
+        || storage.pointer.access != value.access
+        || value.pointee.as_ref() != &Type::StorageObject(storage.pointer.pointee)
+        || row.size.checked_mul(8) != Some(u64::from(storage.pointer.stored_bits))
+        || layouts.get(storage.pointer.pointee.0 as usize).is_none()
+    {
+        return Err(execution_archive_error_v29());
+    }
+    Ok(())
 }
 
 type ExecutionEnumSpillFrameV48<'a> = (
@@ -86,7 +174,12 @@ fn check_enum_spill_alloca_v55(
         || *alignment != spill.alignment
         || pointer.address_space != AddressSpace::Private
         || pointer.access != AccessMode::ReadWrite
-        || !enum_spill_types_equal_v48(element, &spill.element, budget)?
+        || !enum_spill_allocation_element_matches_v57(
+            spill.storage,
+            &spill.element,
+            element,
+            budget,
+        )?
         || !enum_spill_types_equal_v48(&pointer.pointee, element, budget)?
     {
         return Err(execution_archive_error_v29());
@@ -198,7 +291,12 @@ fn capture_execution_enum_spills_v48(
                 || *alignment != storage.alignment
                 || pointer.address_space != AddressSpace::Private
                 || pointer.access != AccessMode::ReadWrite
-                || !enum_spill_types_equal_v48(element, &storage.kernel_type, budget)?
+                || !enum_spill_allocation_element_matches_v57(
+                    storage.storage,
+                    &storage.kernel_type,
+                    element,
+                    budget,
+                )?
                 || !enum_spill_types_equal_v48(&pointer.pointee, element, budget)?
             {
                 return Err(execution_archive_error_v29());
@@ -216,7 +314,8 @@ fn capture_execution_enum_spills_v48(
                 emitted_block: block.id,
                 emitted_operation,
                 pointer: result.id,
-                element: emission_binding_clone_type_v1(element, budget)?,
+                storage: storage.storage,
+                element: emission_binding_clone_type_v1(&storage.kernel_type, budget)?,
                 alignment: *alignment,
             });
         }
