@@ -332,10 +332,8 @@ fn original_object_runtime_authenticates_bindings_and_restarts_dynamic_generatio
     assert!(!allocate.contains("generation: slot.source_generation"));
     let frames = super::super::source_frames::SOURCE_FRAMES_V36;
     assert!(frames.contains("objects: Map::new("));
-    assert!(frames.contains("|local: int| source.objects.contains_key(local)"));
-    assert!(frames.contains(
-        "!byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame)"
-    ));
+    assert!(frames.contains("source.objects.dom().filter(|local: int|\n                            !byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame))"));
+    assert!(frames.contains("|local: int| source.objects[local]"));
     let laws = include_str!("original_semantic_mir_source_object_lifetime_laws_v40.vrs");
     assert_eq!(laws.matches("proof fn original_object_").count(), 5);
     assert!(!laws.contains("assume("));

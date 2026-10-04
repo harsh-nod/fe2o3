@@ -14,7 +14,7 @@ pub(super) struct FloatCensus {
 
 fn root_events(source: &str, root: usize) -> Option<&str> {
     let header = format!(
-        "open spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n"
+        "spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n"
     );
     let mut matches = source.match_indices(&header);
     let (offset, _) = matches.next()?;
@@ -137,7 +137,7 @@ pub(super) fn observe_floats(
 fn original_float_event_census_requires_exact_roots_sites_width_and_opcode() {
     let definition = |root, instance, bits| {
         format!(
-            "open spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::ScalarOperands(InvocationSourceScalarOperandsV48 {{ destination: d, operation: 11int, input_bits: {bits}int, input_signed: false, output_bits: {bits}int }})) }} else {{ None }}\n}}\n"
+            "spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::ScalarOperands(InvocationSourceScalarOperandsV48 {{ destination: d, operation: 11int, input_bits: {bits}int, input_signed: false, output_bits: {bits}int }})) }} else {{ None }}\n}}\n"
         )
     };
     for bits in [32, 64] {

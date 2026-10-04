@@ -103,9 +103,17 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
             assert!(!controls.is_empty());
             for control in controls {
                 let gate = "|| !(byte_target_view_contracts_match_1_v38(done.memory, true) || byte_target_view_contracts_match_1_v38(done.memory, false))";
-                let refused = "state: MemoryStateV30 { valid: false, ..done }";
+                let refused = "byte_block_refused_v58(done, observations)";
                 assert!(control.find(gate).unwrap() < control.find(refused).unwrap());
             }
+            let refused = text
+                .split_once("spec fn byte_block_refused_v58(")
+                .unwrap()
+                .1
+                .split_once("\n}\n")
+                .unwrap()
+                .0;
+            assert!(refused.contains("MemoryBlockResultV30 {\n        state: MemoryStateV30 { valid: false, ..state },\n        observations, returned: Seq::empty(),\n    }"));
             assert!(text.contains("invocation_view_registries_related_v40(source, target)"));
             assert!(text.contains("invocation_guard_pair_never_refreshes_stale_source_v40"));
             assert!(!text.contains("assume("));

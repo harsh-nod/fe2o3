@@ -58,7 +58,7 @@ struct OriginalObservation {
 fn original_witness_event_protocol(source: &str, roots: usize) -> [bool; 3] {
     let mut found = vec![[false; 3]; roots];
     for definition in source
-        .split("open spec fn invocation_source_byte_event_")
+        .split("spec fn invocation_source_byte_event_")
         .skip(1)
     {
         let Some((name, body)) = definition
@@ -98,11 +98,11 @@ fn original_witness_event_protocol(source: &str, roots: usize) -> [bool; 3] {
 
 #[test]
 fn original_witness_event_oracle_requires_actual_rows_in_every_root() {
-    let helper = "open spec fn generic_dispatch(event: Option<InvocationSourceByteEventV36>) {\n match event { Some(InvocationSourceByteEventV36::WitnessBorrow { destination, .. }) => destination, Some(InvocationSourceByteEventV36::WitnessTransfer { reference: false, moved: true, .. }) => 0, _ => 1 }\n}\n";
+    let helper = "spec fn generic_dispatch(event: Option<InvocationSourceByteEventV36>) {\n match event { Some(InvocationSourceByteEventV36::WitnessBorrow { destination, .. }) => destination, Some(InvocationSourceByteEventV36::WitnessTransfer { reference: false, moved: true, .. }) => 0, _ => 1 }\n}\n";
     assert_eq!(original_witness_event_protocol(helper, 2), [false; 3]);
     let root = |root| {
         format!(
-            "open spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 0 && statement == 0 {{ Some(InvocationSourceByteEventV36::WitnessBorrow {{ destination: 1 }}) }} else if block == 0 && statement == 1 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 2, reference: false, moved: true }}) }} else if block == 0 && statement == 2 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 3, reference: true, moved: false }}) }} else {{ None }}\n}}\n"
+            "spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 0 && statement == 0 {{ Some(InvocationSourceByteEventV36::WitnessBorrow {{ destination: 1 }}) }} else if block == 0 && statement == 1 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 2, reference: false, moved: true }}) }} else if block == 0 && statement == 2 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 3, reference: true, moved: false }}) }} else {{ None }}\n}}\n"
         )
     };
     let first = format!("{helper}{}", root(0));
@@ -143,7 +143,7 @@ fn original_observe(
         assert!(source.contains(&format!("invocation_paired_step_{root}_v36")));
         assert!(source.contains(&format!("invocation_paired_initial_trace_{root}_v36")));
         assert!(source.contains(&format!(
-            "open spec fn invocation_paired_native_inputs_{root}_v38"
+            "spec fn invocation_paired_native_inputs_{root}_v38"
         )));
         let readiness = source
             .split(&format!(
@@ -151,7 +151,7 @@ fn original_observe(
             ))
             .nth(1)
             .unwrap()
-            .split("open spec fn")
+            .split("spec fn")
             .next()
             .unwrap();
         let required = readiness.split(" requires ").nth(1).unwrap();
@@ -237,9 +237,49 @@ struct OriginalCallbacks {
 // The on-account API retains root-phase charges until its enclosing transaction
 // ends. Call this only after its continuation and all original bindings are gone.
 fn finish_original_root_phase(budget: &mut Budget<'_>) {
+    let ledger = budget.work_ledger_identity_v1();
+    let history = (
+        budget.work(),
+        budget.peak_storage(),
+        budget.failed_work(),
+        budget.failed_storage(),
+    );
     let retained = budget.storage().checked_sub(41).unwrap();
     budget.release_storage(retained).unwrap();
     assert_eq!(budget.storage(), 41);
+    assert_eq!(
+        (
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        ),
+        history,
+        "ending a root phase releases storage, never cumulative work or denial history"
+    );
+    assert!(budget.work_ledger_identity_v1() == ledger);
+}
+
+#[test]
+fn original_root_phase_cleanup_preserves_cumulative_work_and_denials() {
+    let mut work = Work::new(10);
+    let mut budget = Budget::new(&mut work, 60);
+    budget.reserve_storage(41).unwrap();
+    budget.charge_work(7).unwrap();
+    budget.reserve_storage(12).unwrap();
+    let work_denial = budget.charge_work(4).unwrap_err();
+    let storage_denial = budget.reserve_storage(8).unwrap_err();
+    assert_eq!(budget.failed_work(), Some(11));
+    assert_eq!(budget.failed_storage(), Some(61));
+    finish_original_root_phase(&mut budget);
+    assert_eq!(
+        (budget.work(), budget.storage(), budget.peak_storage()),
+        (7, 41, 53)
+    );
+    assert_eq!(budget.check_prior_denials_v1(), Err(work_denial));
+    assert!(
+        matches!(storage_denial, Resource::Storage(error) if error.actual() == 61 && error.limit() == 60)
+    );
 }
 
 impl Callbacks for OriginalCallbacks {
@@ -346,33 +386,69 @@ impl Callbacks for OriginalCallbacks {
                 "outer original MIR custody refusal: {:?}",
                 foreign.as_ref().err()
             );
+            // These are independent public transactions. Releasing the first
+            // root phase does not replenish its cumulative work account.
+            {
+                let mut work = Work::new(500_000_000);
+                let mut budget = Budget::new(&mut work, 64_000_000);
+                budget.reserve_storage(41).unwrap();
+                let ledger = budget.work_ledger_identity_v1();
+                let mut entered = 0;
+                let selected = transaction()?
+                    .with_original_source_mixed_publication_on_account_v28::<(), _>(
+                        &mut budget,
+                        |_, _| {
+                            entered += 1;
+                            Err(Error::Unsupported("original MIR consumer refusal"))
+                        },
+                    );
+                assert!(
+                    matches!(
+                        selected,
+                        Err(Error::Unsupported("original MIR consumer refusal"))
+                    ),
+                    "original MIR selected-error transaction: entered={entered}, error={:?}, work={}, failed_work={:?}, failed_storage={:?}",
+                    selected.as_ref().err(),
+                    budget.work(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                );
+                assert_eq!(entered, 1);
+                drop(selected);
+                finish_original_root_phase(&mut budget);
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                assert_eq!(budget.check_prior_denials_v1(), Ok(()));
+            }
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 64_000_000);
             budget.reserve_storage(41).unwrap();
-            let selected = transaction()?
-                .with_original_source_mixed_publication_on_account_v28::<(), _>(
-                    &mut budget,
-                    |_, _| Err(Error::Unsupported("original MIR consumer refusal")),
-                );
-            assert!(matches!(
-                selected,
-                Err(Error::Unsupported("original MIR consumer refusal"))
-            ));
-            drop(selected);
-            finish_original_root_phase(&mut budget);
+            let ledger = budget.work_ledger_identity_v1();
+            let mut entered = 0;
             let pending = transaction()?;
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 pending.with_original_source_mixed_publication_on_account_v28::<(), _>(
                     &mut budget,
-                    |_, _| std::panic::panic_any(930u32),
+                    |_, _| {
+                        entered += 1;
+                        std::panic::panic_any(930u32)
+                    },
                 )
             }));
             let payload = match unwind {
                 Err(payload) => payload,
-                Ok(_) => panic!("original MIR consumer unwind was swallowed"),
+                Ok(result) => panic!(
+                    "original MIR unwind transaction returned: entered={entered}, error={:?}, work={}, failed_work={:?}, failed_storage={:?}",
+                    result.as_ref().err(),
+                    budget.work(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
             };
+            assert_eq!(entered, 1, "the exact consumer must initiate the unwind");
             assert_eq!(*payload.downcast::<u32>().unwrap(), 930);
             finish_original_root_phase(&mut budget);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.check_prior_denials_v1(), Ok(()));
             measured.work = exact_work;
             measured.peak = peak;
             Ok(measured)

@@ -54,7 +54,7 @@ fn enum_type(source: &AdmittedInertSemanticMirV1, ty: SemanticTypeIdV1) -> bool 
 
 fn root_events(source: &str, root: usize) -> Option<&str> {
     let header = format!(
-        "open spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n"
+        "spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n"
     );
     let mut definitions = source.match_indices(&header);
     let (offset, _) = definitions.next()?;
@@ -98,7 +98,7 @@ fn exact_enum_event(body: Option<&str>, block: usize, statement: usize, kind: us
 fn original_logical_enum_census_preserves_exact_root_site_and_event_kind() {
     let definition = |root, instance| {
         format!(
-            "open spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 1 && statement == 2 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 0 }})) }} else if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 1 }})) }} else if block == 4 && statement == 5 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Discriminant {{ source: 4 }})) }} else {{ None }}\n}}\n"
+            "spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 1 && statement == 2 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 0 }})) }} else if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 1 }})) }} else if block == 4 && statement == 5 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Discriminant {{ source: 4 }})) }} else {{ None }}\n}}\n"
         )
     };
     let complete = |source: &str| {
@@ -281,7 +281,7 @@ fn complete_reference_enum_census(census: &ReferenceEnumCensus, mutable: bool) -
 fn original_reference_enum_event_census_requires_exact_root_instance_and_statement() {
     let definition = |root, instance| {
         format!(
-            "open spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 1 && statement == 2 {{ Some(InvocationSourceByteEventV36::EnumConstruct(empty)) }} else if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::EnumConstruct(reference)) }} else if block == 4 && statement == 5 {{ Some(InvocationSourceByteEventV36::Discriminant(read)) }} else {{ None }}\n}}\n"
+            "spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 1 && statement == 2 {{ Some(InvocationSourceByteEventV36::EnumConstruct(empty)) }} else if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::EnumConstruct(reference)) }} else if block == 4 && statement == 5 {{ Some(InvocationSourceByteEventV36::Discriminant(read)) }} else {{ None }}\n}}\n"
         )
     };
     let complete = |source: &str| {
@@ -308,7 +308,7 @@ fn original_reference_enum_event_census_requires_exact_root_instance_and_stateme
         "Some(InvocationSourceByteEventV36::Discriminant(read))",
         "Some(InvocationSourceByteEventV36::Pure)",
     )));
-    let helper = "open spec fn generic_enum_helper() {\n Some(InvocationSourceByteEventV36::EnumConstruct(reference)); Some(InvocationSourceByteEventV36::Discriminant(read));\n}\n";
+    let helper = "spec fn generic_enum_helper() {\n Some(InvocationSourceByteEventV36::EnumConstruct(reference)); Some(InvocationSourceByteEventV36::Discriminant(read));\n}\n";
     assert!(!complete(helper));
     assert!(!complete(&format!("{first}{helper}")));
     let duplicated_row = both.replace(

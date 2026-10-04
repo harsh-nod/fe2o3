@@ -912,7 +912,8 @@ mod tests {
         );
         assert!(text.contains("memory.live[allocation].relocations[at].pointer.allocation, frame"));
         assert!(text.contains("!byte_allocation_in_frame_v30(allocation, frame)"));
-        assert!(text.contains("source.slots.contains_key(descriptor)\n                            && !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame)"));
+        assert!(text.contains("source.slots.dom().filter(|descriptor: int|\n                            !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame))"));
+        assert!(text.contains("|descriptor: int| source.slots[descriptor]"));
         assert!(text.contains("generations: source.machine.generations"));
         assert!(text.contains("byte_end_frame_v30(source.machine.memory, frame)"));
         assert!(text.contains("byte_pop_frame_v30(source.machine.frames)"));

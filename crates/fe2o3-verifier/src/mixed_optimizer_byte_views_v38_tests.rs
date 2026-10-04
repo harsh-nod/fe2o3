@@ -53,7 +53,7 @@ fn byte_view_all_writes_stamp_destination_epochs_and_preserve_contracts() {
     assert!(!stamp.contains("previous.bytes"));
     assert!(
         view_spec_body_v38("byte_write_clock_v38")
-            .contains("previous.write_clock + if 0 < width { 1 } else { 0 }")
+            .contains("previous.write_clock + if 0 < width { 1int } else { 0int }")
     );
 }
 
@@ -87,7 +87,7 @@ fn byte_copy_snapshot_keeps_complete_cell_containment_and_partial_fragment_polic
         "snapshot.relocations.contains_key(copied(at))",
         "copied(at) + snapshot.relocations[copied(at)].width <= source_offset + width",
         "byte_relocations_without_overlap_v37(previous.relocations, destination.byte_offset, width)",
-        "retained.contains_key(at) || complete(at)",
+        "retained.dom().union(snapshot.relocations.dom()\n            .map(|at: int| destination.byte_offset + at - source_offset)\n            .filter(complete))",
         "if complete(at) { snapshot.relocations[copied(at)] } else { retained[at] }",
     ] {
         assert!(body.contains(required), "{required}");

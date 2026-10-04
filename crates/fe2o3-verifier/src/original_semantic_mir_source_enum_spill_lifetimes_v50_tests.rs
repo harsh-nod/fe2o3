@@ -199,6 +199,8 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                     |slots, out| {
                         let relation = slots.correspondence(out)?;
                         let mut lifetimes = [[0usize; 2]; 2];
+                        let mut joins = [[None; 2]; 2];
+                        let mut discriminants = [0usize; 2];
                         // Moving the field leaves only the saved scalar tag live at the join.
                         let joins_enum = mode != EndPayload::MoveField;
                         let expected_spills = if joins_enum { 2 } else { 0 };
@@ -257,6 +259,8 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                                     !joins_enum,
                                     "{mode:?}: only the pre-move scalar discriminant crosses the join"
                                 );
+                                *joins[root].iter_mut().find(|row| row.is_none()).unwrap() =
+                                    Some((row.blocks.start + 3, row.locals.start + 5));
                                 let body =
                                     SourceByteBody::derive(plan, slots, root, instance, out)?;
                                 let context = body.context(out)?;
@@ -267,6 +271,15 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                                 {
                                     for (statement, _) in original.statements().iter().enumerate() {
                                         match body.event_at(block, statement, out)? {
+                                            Event::LogicalEnum(LogicalEvent::Discriminant {
+                                                destination,
+                                                input,
+                                                ..
+                                            }) if destination == row.locals.start + 5
+                                                && input == row.locals.start + 4 =>
+                                            {
+                                                discriminants[root] += 1
+                                            }
                                             Event::ObjectLive { local, .. }
                                                 if local == row.locals.start + 8 =>
                                             {
@@ -286,7 +299,12 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                         assert_eq!(
                             lifetimes,
                             [[4, 4], [4, 4]],
-                            "two original lifetimes per helper"
+                            "{mode:?}: two original lifetimes per helper"
+                        );
+                        assert_eq!(
+                            discriminants,
+                            [if joins_enum { 2 } else { 4 }; 2],
+                            "{mode:?}: each helper reads its joined tag or both pre-move branch tags"
                         );
                         let mut source =
                             super::super::super::super::source_function::SourceByteProgram::derive(
@@ -308,10 +326,52 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
                         let start = out.text.len();
                         paired.emit(out)?;
                         let generated = &out.text[start..];
-                        assert!(generated.contains("value.fields.contains_key(0)"));
-                        assert!(generated.contains("value.variant == 0"));
-                        assert!(generated.contains("value.variant == 1"));
-                        assert!(!generated.contains("assume("));
+                        for root in 0..2 {
+                            let header = format!("spec fn invocation_paired_related_{root}_v36(");
+                            let related = generated
+                                .split_once(&header)
+                                .unwrap_or_else(|| {
+                                    panic!("{mode:?}, root {root}: paired relation missing")
+                                })
+                                .1
+                                .split_once("\n}\n")
+                                .unwrap()
+                                .0;
+                            if joins_enum {
+                                for guard in [
+                                    "value.fields.contains_key(0)",
+                                    "value.variant == 0",
+                                    "value.variant == 1",
+                                ] {
+                                    assert!(
+                                        related.contains(guard),
+                                        "{mode:?}, root {root}: {guard}"
+                                    );
+                                }
+                            } else {
+                                for join in joins[root] {
+                                    let (pc, local) = join.expect("two active helper joins");
+                                    let cut = related
+                                        .split_once(&format!(" if source.machine.pc == {pc} {{"))
+                                        .unwrap_or_else(|| {
+                                            panic!("{mode:?}, root {root}: join {pc} missing")
+                                        })
+                                        .1
+                                        .split_once(" } else\n")
+                                        .unwrap()
+                                        .0;
+                                    let scalar = cut.split_once(&format!("let original = source.machine.values[{local}]; "))
+                                        .unwrap_or_else(|| panic!("{mode:?}, root {root}: saved tag local {local} missing"))
+                                        .1.split_once(" })").unwrap().0;
+                                    assert!(
+                                        scalar.contains("byte_scalar_value_typed_v57(actual, "),
+                                        "{mode:?}, root {root}: saved tag type"
+                                    );
+                                    assert!(scalar.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"), "{mode:?}, root {root}: saved tag equality");
+                                }
+                            }
+                        }
+                        assert!(!generated.contains("assume("), "{mode:?}");
                         completed.set(true);
                         Ok(())
                     },
@@ -323,7 +383,7 @@ fn original_inactive_enum_spills_preserve_referent_storage_end_and_restart_cuts(
             .unwrap_or_else(|error| panic!("{mode:?}: {error:?}"));
         assert!(
             completed.get(),
-            "all genuine lifetime cuts and paired effects must be generated"
+            "{mode:?}: all genuine lifetime cuts and paired effects must be generated"
         );
     }
 }
