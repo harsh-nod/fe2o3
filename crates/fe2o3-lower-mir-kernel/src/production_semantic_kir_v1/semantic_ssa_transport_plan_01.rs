@@ -631,9 +631,13 @@ impl SemanticControlFlowSsaPlanV1 {
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             let reference =
                 execution.is_some_and(|cursor| cursor.cfg.reference_locals[local as usize]);
+            let source_enum =
+                execution.is_some_and(|cursor| cursor.cfg.source_enum_locals[local as usize]);
             let nominal = reference
                 || execution.is_some_and(|cursor| cursor.cfg.nominal_locals[local as usize] != 0);
-            let (transport_semantic_type, binding) = if nominal {
+            let (transport_semantic_type, binding) = if source_enum {
+                (declaration.ty(), SemanticPromotedTransportV1::SourceEnumTag)
+            } else if nominal {
                 (declaration.ty(), SemanticPromotedTransportV1::Execution)
             } else {
                 promoted_transport_descriptor_with_inputs_v1(
@@ -662,7 +666,9 @@ impl SemanticControlFlowSsaPlanV1 {
                     promoted.len(),
                     budget,
                 )?;
-                if reference {
+                if source_enum {
+                    source_reference_cfg_enum_tag_types_v55(execution.unwrap(), local, budget)?
+                } else if reference {
                     if let Some(carrier) = cfg_carriers.lookup(local, budget)? {
                         carrier.types(budget)?
                     } else {

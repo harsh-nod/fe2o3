@@ -13,6 +13,7 @@ struct SourceCarrierFrameV37<'a> {
 }
 
 include!("production_source_enum_carriers_v47.rs");
+include!("production_source_enum_tag_carriers_v55.rs");
 
 fn source_carrier_field_type_v37(
     shape: &SemanticTypeShapeV1,
@@ -116,6 +117,15 @@ fn retain_source_carrier_tree_v37(
                     start,
                     length: count,
                 }
+            } else if let Some(physical) = retain_source_enum_tag_carriers_v55(
+                instances,
+                references,
+                frame.ty,
+                frame.binding,
+                carriers,
+                budget,
+            )? {
+                physical
             } else if let Some(physical) = retain_source_enum_carriers_v47(
                 instances,
                 frame.ty,

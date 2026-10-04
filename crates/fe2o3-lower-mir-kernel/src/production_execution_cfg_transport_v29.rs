@@ -22,6 +22,7 @@ struct ExecutionCfgV29<'a> {
     has_nominal: bool,
     nominal_locals: Vec<usize>,
     reference_locals: Vec<bool>,
+    source_enum_locals: Vec<bool>,
     edges: Vec<ExecutionCfgEdgeV29>,
     incoming: Vec<usize>,
     arrived: Vec<usize>,
@@ -74,6 +75,9 @@ impl<'a> ExecutionCfgV29<'a> {
         let blocks = function.blocks().len();
         let mut nominal_locals = emission_vec_v1(function.locals().len(), budget)?;
         let mut reference_locals = emission_vec_v1(function.locals().len(), budget)?;
+        let mut source_enum_locals = emission_vec_v1(function.locals().len(), budget)?;
+        budget.charge_work(function.locals().len())?;
+        source_enum_locals.resize(function.locals().len(), false);
         let promoted = ssa.plan().promoted_variables();
         for (index, local) in function.locals().iter().enumerate() {
             nominal_locals.push(execution_cfg_nominal_count_v29(types, local.ty(), budget)?);
@@ -199,6 +203,17 @@ impl<'a> ExecutionCfgV29<'a> {
                         if references.plan.nodes[node].ty != function.locals()[local].ty() {
                             return Err(execution_cfg_error_v29());
                         }
+                        if matches!(references.plan.nodes[node].kind,
+                            SourceReferenceNodeKindV29::Enum { count, .. } if count > 1)
+                        {
+                            if function.locals()[local].role().is_entry_argument() {
+                                return Err(source_reference_error_v29(
+                                    "source enum argument requires checked spill-owner initialization",
+                                ));
+                            }
+                            source_enum_tag_type_v55(references.plan, node, budget)?;
+                            source_enum_locals[local] = true;
+                        }
                         Some(node)
                     } else {
                         None
@@ -230,6 +245,7 @@ impl<'a> ExecutionCfgV29<'a> {
             has_nominal,
             nominal_locals,
             reference_locals,
+            source_enum_locals,
             edges,
             incoming,
             arrived,
@@ -348,6 +364,7 @@ impl ExecutionAvailabilityV29<'_> {
         let arguments = plan.entry_arguments();
         for entry_index in self.cfg.ranges[target].clone() {
             let entry = &self.cfg.entries[entry_index];
+            let source_enum = self.cfg.source_enum_locals[entry.local as usize];
             let carrier = match entry.reference {
                 Some(node) => carriers.at(self, entry.local, node, budget)?,
                 None => None,
@@ -389,6 +406,17 @@ impl ExecutionAvailabilityV29<'_> {
             let mut leaves = self.cfg.leaves[entry.leaves.clone()].iter_mut();
             if let Some(carrier) = carrier {
                 merge_execution_cfg_carrier_v29(carrier, held, original, budget)?;
+            } else if source_enum {
+                if !entry.leaves.is_empty() {
+                    return Err(source_enum_tag_error_v55());
+                }
+                merge_source_enum_tag_v55(
+                    self.references.ok_or_else(source_enum_tag_error_v55)?,
+                    entry.reference.ok_or_else(source_enum_tag_error_v55)?,
+                    held,
+                    original,
+                    budget,
+                )?;
             } else if let Some(node) = entry.reference {
                 source_reference_merge_node_v29(
                     self.references.ok_or_else(execution_cfg_error_v29)?,
@@ -545,6 +573,7 @@ impl ExecutionAvailabilityV29<'_> {
         let range = self.cfg.ranges[target.index() as usize].clone();
         for entry_index in range {
             let entry = &self.cfg.entries[entry_index];
+            let source_enum = self.cfg.source_enum_locals[entry.local as usize];
             let carrier = match entry.reference {
                 Some(node) => carriers.at(self, entry.local, node, budget)?,
                 None => None,
@@ -582,6 +611,17 @@ impl ExecutionAvailabilityV29<'_> {
             let mut leaves = self.cfg.leaves[entry.leaves.clone()].iter_mut();
             if let Some(carrier) = carrier {
                 merge_execution_cfg_carrier_v29(carrier, held, original, budget)?;
+            } else if source_enum {
+                if !entry.leaves.is_empty() {
+                    return Err(source_enum_tag_error_v55());
+                }
+                merge_source_enum_tag_v55(
+                    self.references.ok_or_else(source_enum_tag_error_v55)?,
+                    entry.reference.ok_or_else(source_enum_tag_error_v55)?,
+                    held,
+                    original,
+                    budget,
+                )?;
             } else if let Some(node) = entry.reference {
                 source_reference_merge_node_v29(
                     self.references.ok_or_else(execution_cfg_error_v29)?,
@@ -700,6 +740,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 .ok_or_else(execution_cfg_error_v29)?;
             cursor.check_ledger(budget)?;
             for entry in &cursor.cfg.entries[cursor.cfg.ranges[block.index() as usize].clone()] {
+                let source_enum = cursor.cfg.source_enum_locals[entry.local as usize];
                 let source_value = entry.value.ok_or_else(execution_cfg_error_v29)?;
                 let carrier = match entry.reference {
                     Some(node) => {
@@ -710,6 +751,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     None => None,
                 };
                 let rebuild = |values: &[ValueDef], budget: &mut dyn SemanticEmissionBudgetV1| {
+                    if source_enum {
+                        if carrier.is_some() || !entry.leaves.is_empty() {
+                            return Err(source_enum_tag_error_v55());
+                        }
+                        return rebuild_source_enum_tag_v55(
+                            cursor.references.ok_or_else(source_enum_tag_error_v55)?,
+                            entry.reference.ok_or_else(source_enum_tag_error_v55)?,
+                            values,
+                            budget,
+                        );
+                    }
                     if let Some(carrier) = carrier {
                         if !entry.leaves.is_empty() {
                             return Err(execution_cfg_error_v29());
@@ -777,7 +829,15 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         .semantic_ssa_bindings
                         .get(&source_value)
                         .ok_or_else(execution_cfg_error_v29)?;
-                    if let Some(carrier) = carrier {
+                    if source_enum {
+                        let tag = source_enum_transport_tag_v55(
+                            cursor.references.ok_or_else(source_enum_tag_error_v55)?,
+                            entry.reference.ok_or_else(source_enum_tag_error_v55)?,
+                            original,
+                            budget,
+                        )?;
+                        rebuild(std::slice::from_ref(&tag), budget)?
+                    } else if let Some(carrier) = carrier {
                         with_execution_cfg_carrier_values_v29(carrier, original, budget, rebuild)?
                     } else {
                         with_execution_cfg_values_and_references_v29(

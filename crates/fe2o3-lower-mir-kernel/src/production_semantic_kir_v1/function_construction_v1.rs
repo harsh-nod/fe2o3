@@ -276,8 +276,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     .promoted
                     .get(local)
                     .expect("live-in local must be promoted");
-                let nominal = promoted.transport == SemanticPromotedTransportV1::Execution;
-                let destination_types = if nominal
+                let nominal = matches!(
+                    promoted.transport,
+                    SemanticPromotedTransportV1::Execution
+                        | SemanticPromotedTransportV1::SourceEnumTag
+                );
+                let destination_types = if promoted.transport
+                    == SemanticPromotedTransportV1::Execution
                     && execution.as_ref().is_some_and(|cursor| {
                         cursor.cfg.reference_locals[*local as usize] && cursor.references.is_some()
                     }) {
@@ -347,6 +352,8 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 &control_flow_ssa,
                 &enum_payload_sources,
                 &mut next_value,
+                execution.as_ref(),
+                emission_work.as_deref_mut(),
             )?;
         let pending_semantic_ssa_definitions = control_flow_ssa
             .definition_values

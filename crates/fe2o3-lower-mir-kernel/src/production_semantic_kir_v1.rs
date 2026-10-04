@@ -13684,7 +13684,10 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         }
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
-            if promoted.transport == SemanticPromotedTransportV1::Execution {
+            if matches!(
+                promoted.transport,
+                SemanticPromotedTransportV1::Execution | SemanticPromotedTransportV1::SourceEnumTag
+            ) {
                 self.with_emission_budget_v1(|_, budget| {
                     for value in parameters {
                         emission_push_shared_v1(&mut target.parameters, value, budget)?;
@@ -14027,6 +14030,11 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             return Ok(());
         };
         if !promoted.transport.uses_structural_enum_transport() {
+            return Ok(());
+        }
+        if promoted.transport == SemanticPromotedTransportV1::SourceEnumTag {
+            // A tag carrier can observe control, but only a checked selected
+            // payload consumer may restore source references from its spills.
             return Ok(());
         }
         let Some(declaration) = self.types.get(promoted.semantic_type.index() as usize) else {
@@ -14417,8 +14425,10 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     )?)
                 })?;
             }
-            let nominal = self.control_flow_ssa.promoted[&local].transport
-                == SemanticPromotedTransportV1::Execution;
+            let nominal = matches!(
+                self.control_flow_ssa.promoted[&local].transport,
+                SemanticPromotedTransportV1::Execution | SemanticPromotedTransportV1::SourceEnumTag
+            );
             let (values, expected_count) = if nominal {
                 self.with_emission_budget_v1(|this, budget| {
                     charge_execution_cfg_lookup_v29(this.semantic_ssa_bindings.len(), budget)?;
@@ -15248,6 +15258,21 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         id: discriminant,
                         ty: discriminant_ty,
                     }),
+                    SemanticValueBindingV1::SourceEnumTag(binding) => {
+                        self.with_emission_budget_v1(|this, budget| {
+                            let references = this
+                                .execution
+                                .as_ref()
+                                .and_then(|cursor| cursor.references)
+                                .ok_or_else(source_enum_tag_error_v55)?;
+                            references.check(budget)?;
+                            validate_source_enum_tag_v55(references.plan, &binding, budget)
+                        })?;
+                        Ok(SemanticValueBindingV1::Value {
+                            id: binding.tag.id,
+                            ty: binding.tag.ty,
+                        })
+                    }
                     SemanticValueBindingV1::OptionPointer { present, .. }
                     | SemanticValueBindingV1::OptionIndexWitness { present, .. }
                     | SemanticValueBindingV1::OptionComponentWitness { present, .. }
@@ -21380,6 +21405,16 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         value: &SemanticValueBindingV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.execution.as_ref().is_some_and(|cursor| {
+            cursor.cfg.source_enum_locals.get(local.index() as usize) == Some(&true)
+        }) {
+            return self.store_source_enum_payload_v55(block, statement, local, value, operations);
+        }
+        if matches!(value, SemanticValueBindingV1::SourceEnumTag(_)) {
+            return Err(source_reference_error_v29(
+                "source enum payload copy requires checked spill-owner transfer",
+            ));
+        }
         let SemanticValueBindingV1::Enum {
             variant, payloads, ..
         } = value
@@ -22466,6 +22501,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             | SemanticValueBindingV1::ExecutionReferent(_)
             | SemanticValueBindingV1::MovedExecution
             | SemanticValueBindingV1::SourceReference(_)
+            | SemanticValueBindingV1::SourceEnumTag(_)
             | SemanticValueBindingV1::SourceInactive(_)
             | SemanticValueBindingV1::Aggregate(_)
             | SemanticValueBindingV1::Enum { .. }
@@ -24220,6 +24256,8 @@ fn plan_enum_payload_storage_v1(
     control_flow_ssa: &SemanticControlFlowSsaPlanV1,
     sources: &BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
     next_value: &mut u32,
+    execution: Option<&ExecutionAvailabilityV29<'_>>,
+    mut budget: Option<&mut dyn SemanticEmissionBudgetV1>,
 ) -> Result<
     (
         BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
@@ -24259,69 +24297,90 @@ fn plan_enum_payload_storage_v1(
                             .copied()
                     })
                     .flatten();
-                let component_types = match exact_enum_variant {
-                    Some(exact_variant) => {
-                        lower_exact_enum_components_v1(types, semantic_type, exact_variant)
-                    }
-                    None => match compiler_issued_binding {
-                        Some(
-                            binding @ SemanticPromotedBindingV1::WorkgroupCollectiveScratch {
-                                ..
-                            },
-                        ) => {
-                            let semantic_components =
-                                lower_ssa_value_components_v1(types, semantic_type)?;
-                            let transport = binding.transport_types(types, semantic_type)?;
-                            if semantic_components.len() != transport.len() {
-                                return Err(unsupported(
-                                    0,
-                                    None,
-                                    None,
-                                    "compiler-issued enum payload transport arity changed",
-                                ));
-                            }
-                            Ok(semantic_components
-                                .into_iter()
-                                .zip(transport)
-                                .map(|((semantic_type, _), transport)| (semantic_type, transport))
-                                .collect())
+                let component_types = if promoted.transport
+                    == SemanticPromotedTransportV1::SourceEnumTag
+                {
+                    let Some(components) = source_enum_spill_components_v55(
+                        execution.ok_or_else(source_enum_tag_error_v55)?,
+                        *local,
+                        variant as u32,
+                        field as u32,
+                        semantic_type,
+                        budget
+                            .as_deref_mut()
+                            .ok_or(ArgumentResourceV1::Accounting)?,
+                    )?
+                    else {
+                        continue;
+                    };
+                    Ok(components)
+                } else {
+                    match exact_enum_variant {
+                        Some(exact_variant) => {
+                            lower_exact_enum_components_v1(types, semantic_type, exact_variant)
                         }
-                        Some(
-                            SemanticPromotedBindingV1::Ordinary
-                            | SemanticPromotedBindingV1::MatrixFragment { .. }
-                            | SemanticPromotedBindingV1::AccumulatorFragment { .. }
-                            | SemanticPromotedBindingV1::Gfx950LdsTransposeTile { .. },
-                        )
-                        | None => lower_ssa_value_components_v1(types, semantic_type),
-                        Some(
-                            SemanticPromotedBindingV1::DynamicLds { .. }
-                            | SemanticPromotedBindingV1::WorkgroupPipeline { .. },
-                        ) => Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "linear workgroup storage cannot be stored in a promoted enum payload",
-                        )),
-                        Some(
-                            SemanticPromotedBindingV1::MathContext
-                            | SemanticPromotedBindingV1::CollectiveContext
-                            | SemanticPromotedBindingV1::WorkgroupLdsScope
-                            | SemanticPromotedBindingV1::MatrixContext
-                            | SemanticPromotedBindingV1::WaveLane { .. }
-                            | SemanticPromotedBindingV1::IndexWitness { .. }
-                            | SemanticPromotedBindingV1::OptionIndexWitness { .. }
-                            | SemanticPromotedBindingV1::GridLeader { .. }
-                            | SemanticPromotedBindingV1::OptionGridLeader { .. }
-                            | SemanticPromotedBindingV1::ComponentWitness { .. }
-                            | SemanticPromotedBindingV1::OptionComponentWitness { .. }
-                            | SemanticPromotedBindingV1::OptionPointer { .. },
-                        ) => Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "compiler-issued authority cannot be reconstructed from an enum payload",
-                        )),
-                    },
+                        None => match compiler_issued_binding {
+                            Some(
+                                binding @ SemanticPromotedBindingV1::WorkgroupCollectiveScratch {
+                                    ..
+                                },
+                            ) => {
+                                let semantic_components =
+                                    lower_ssa_value_components_v1(types, semantic_type)?;
+                                let transport = binding.transport_types(types, semantic_type)?;
+                                if semantic_components.len() != transport.len() {
+                                    return Err(unsupported(
+                                        0,
+                                        None,
+                                        None,
+                                        "compiler-issued enum payload transport arity changed",
+                                    ));
+                                }
+                                Ok(semantic_components
+                                    .into_iter()
+                                    .zip(transport)
+                                    .map(|((semantic_type, _), transport)| {
+                                        (semantic_type, transport)
+                                    })
+                                    .collect())
+                            }
+                            Some(
+                                SemanticPromotedBindingV1::Ordinary
+                                | SemanticPromotedBindingV1::MatrixFragment { .. }
+                                | SemanticPromotedBindingV1::AccumulatorFragment { .. }
+                                | SemanticPromotedBindingV1::Gfx950LdsTransposeTile { .. },
+                            )
+                            | None => lower_ssa_value_components_v1(types, semantic_type),
+                            Some(
+                                SemanticPromotedBindingV1::DynamicLds { .. }
+                                | SemanticPromotedBindingV1::WorkgroupPipeline { .. },
+                            ) => Err(unsupported(
+                                0,
+                                None,
+                                None,
+                                "linear workgroup storage cannot be stored in a promoted enum payload",
+                            )),
+                            Some(
+                                SemanticPromotedBindingV1::MathContext
+                                | SemanticPromotedBindingV1::CollectiveContext
+                                | SemanticPromotedBindingV1::WorkgroupLdsScope
+                                | SemanticPromotedBindingV1::MatrixContext
+                                | SemanticPromotedBindingV1::WaveLane { .. }
+                                | SemanticPromotedBindingV1::IndexWitness { .. }
+                                | SemanticPromotedBindingV1::OptionIndexWitness { .. }
+                                | SemanticPromotedBindingV1::GridLeader { .. }
+                                | SemanticPromotedBindingV1::OptionGridLeader { .. }
+                                | SemanticPromotedBindingV1::ComponentWitness { .. }
+                                | SemanticPromotedBindingV1::OptionComponentWitness { .. }
+                                | SemanticPromotedBindingV1::OptionPointer { .. },
+                            ) => Err(unsupported(
+                                0,
+                                None,
+                                None,
+                                "compiler-issued authority cannot be reconstructed from an enum payload",
+                            )),
+                        },
+                    }
                 };
                 let component_types = match component_types {
                     Ok(components) => components,

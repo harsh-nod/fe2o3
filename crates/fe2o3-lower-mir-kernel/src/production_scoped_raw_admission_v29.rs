@@ -2145,7 +2145,8 @@ fn check_expanded_source_memory_inner_v29(
         return Err(source_raw_physical_error_v29());
     }
     let source_index = SourceAddressSourceIndexV29::new(instances, pending, budget)?;
-    let compiler_enum = pending_compiler_enum_memory_v55(instances, &source_index, budget)?;
+    let compiler_enum =
+        pending_compiler_enum_memory_v55(instances, references, slots, &source_index, budget)?;
     let checked_compiler =
         check_compiler_enum_closed_memory_v55(&pending.function, &compiler_enum, budget)?;
     // Validate every object payload even when no physical value access is
@@ -2839,7 +2840,7 @@ fn retain_pending_memory_v29(
         output.alternatives.len(),
     ));
     output.retained_storage = argument_sum_v1(&[
-        output.compiler_enum.retained_storage()?,
+        output.compiler_enum.retained_storage(budget)?,
         argument_product_v1(
             output.object_lifetimes.capacity(),
             std::mem::size_of::<PendingSourceObjectLifetimeV40>(),

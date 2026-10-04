@@ -60,6 +60,7 @@ struct SourceReferenceCellsV29 {
 }
 
 include!("production_source_physical_backing_v29.rs");
+include!("production_compiler_enum_reference_cells_v55.rs");
 
 fn source_reference_cell_scratch_v29<T>(
     capacity: usize,
@@ -1014,6 +1015,7 @@ fn pending_source_reference_cell_claims_v29<'plan, 'source, 'kir>(
         };
         proof.check_payloads(emitted, budget)?;
         proof.check_source_accesses(references, emitted, budget)?;
+        proof.check_compiler_enum_reference_stores_v55(references, emitted, budget)?;
         proof.selectors = source_reference_owned_vec_v29(
             references.plan,
             references.plan.selectors.len(),

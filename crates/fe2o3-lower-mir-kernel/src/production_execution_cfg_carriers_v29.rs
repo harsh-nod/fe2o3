@@ -590,6 +590,7 @@ fn execution_archive_needs_carrier_v29(
         | B::ExecutionReferent(_)
         | B::MovedExecution
         | B::SourceReference(_)
+        | B::SourceEnumTag(_)
         | B::SourceInactive(_)
         | B::Value { .. } => Ok(false),
     }
@@ -618,6 +619,9 @@ fn with_execution_cfg_local_values_v29<R>(
                 budget,
             )?
             .ok_or_else(execution_cfg_error_v29)?;
+        if cursor.cfg.source_enum_locals.get(local as usize) == Some(&true) {
+            return with_source_enum_transport_tag_v55(references, node, binding, budget, consume);
+        }
         if let Some(carrier) = carriers.at(cursor, local, node, budget)? {
             return with_execution_cfg_carrier_values_v29(carrier, binding, budget, consume);
         }

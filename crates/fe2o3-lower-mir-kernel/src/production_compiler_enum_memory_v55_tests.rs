@@ -23,6 +23,7 @@ pub(super) fn test_compiler_enum_closed_mutations_v55(
                 record: *record,
                 block: rows[record.anchor].block,
                 operation: rows[record.anchor].position,
+                reference: None,
             })
             .collect(),
     };

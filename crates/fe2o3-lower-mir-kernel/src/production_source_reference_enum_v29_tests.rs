@@ -3,6 +3,9 @@ use super::*;
 #[path = "production_source_enum_helper_abi_v55_tests.rs"]
 mod helper_abi_tests;
 
+#[path = "production_source_enum_tag_transport_v55_tests.rs"]
+mod tag_transport_tests;
+
 #[path = "production_source_reference_enum_resources_v29_tests.rs"]
 mod resource_tests;
 
@@ -153,6 +156,13 @@ fn enum_owner(case: EnumCase) -> ProductionSemanticSsaOwnerV1 {
 
 fn try_enum_owner(
     case: EnumCase,
+) -> Result<ProductionSemanticSsaOwnerV1, fe2o3_pliron::ProductionSemanticSsaErrorV1> {
+    try_enum_owner_transform(case, |_, _| {})
+}
+
+fn try_enum_owner_transform(
+    case: EnumCase,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
 ) -> Result<ProductionSemanticSsaOwnerV1, fe2o3_pliron::ProductionSemanticSsaErrorV1> {
     try_owner_with(Case::Shared, |types, functions| {
         assert_eq!(types.len(), ENUM.index() as usize);
@@ -376,6 +386,7 @@ fn try_enum_owner(
             ]
         };
         functions[2] = function(30, false, CAPTURE, locals, blocks);
+        transform(types, functions);
     })
 }
 

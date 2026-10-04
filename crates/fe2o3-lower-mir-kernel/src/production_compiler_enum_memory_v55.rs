@@ -13,6 +13,7 @@ struct PendingCompilerEnumAccessV55 {
     record: ScopedCompilerEnumAccessV55,
     block: BlockId,
     operation: usize,
+    reference: Option<SourceCompilerEnumReferenceV55>,
 }
 
 pub(super) struct CheckedCompilerEnumMemoryV55<'a> {
@@ -34,17 +35,69 @@ impl CheckedCompilerEnumMemoryV55<'_> {
             .allocation(pointer, budget)
             .map(|row| row.is_some())
     }
+
+    pub(super) fn reference_uses(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Vec<SourceCompilerEnumReferenceUseV55>, ProductionSemanticKirErrorV1> {
+        source_reference_emission_prepay_v29::<Vec<SourceCompilerEnumReferenceUseV55>>(budget)?;
+        source_reference_emission_prepay_v29::<SourceCompilerEnumReferenceUseV55>(budget)?;
+        let mut output = emission_vec_v1(self.pending.accesses.len(), budget)?;
+        for access in &self.pending.accesses {
+            budget.charge_work(3)?;
+            let Some(custody) = access.reference else {
+                continue;
+            };
+            let ScopedCompilerEnumRoleV55::Store { value, .. } = access.record.role else {
+                return Err(scoped_compiler_enum_error_v55());
+            };
+            output.push(SourceCompilerEnumReferenceUseV55 {
+                block: access.block,
+                operation: access.operation,
+                value,
+                custody,
+            });
+        }
+        Ok(output)
+    }
+}
+
+fn compiler_enum_element_owned_storage_v55(ty: &Type) -> Result<usize, ArgumentResourceV1> {
+    match ty {
+        Type::Scalar(_) | Type::Vector(_) => Ok(0),
+        Type::Pointer(pointer)
+            if matches!(
+                pointer.pointee.as_ref(),
+                Type::Scalar(_) | Type::StorageObject(_)
+            ) =>
+        {
+            Ok(size_of::<Type>())
+        }
+        _ => Err(ArgumentResourceV1::Accounting),
+    }
 }
 
 include!("production_optimized_compiler_enum_memory_v55.rs");
 #[cfg(test)]
 include!("production_compiler_enum_memory_v55_tests.rs");
+#[cfg(test)]
+include!("production_compiler_enum_reference_memory_v55_tests.rs");
 
 impl PendingCompilerEnumMemoryV55 {
-    fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
-        // Only scalar/vector allocation elements are admitted here. Their
-        // complete Type storage is inline in SourceEnumSpillRowV48.
+    fn retained_storage(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<usize, ArgumentResourceV1> {
+        let mut owned_types = 0;
+        for row in &self.allocations {
+            budget.charge_work(2)?;
+            owned_types = argument_sum_v1(&[
+                owned_types,
+                compiler_enum_element_owned_storage_v55(&row.origin.element)?,
+            ])?;
+        }
         argument_sum_v1(&[
+            owned_types,
             argument_product_v1(
                 self.allocations.capacity(),
                 size_of::<SourceEnumSpillRowV48>(),
@@ -104,11 +157,17 @@ fn compiler_enum_memory_equal_v55(
 
 pub(super) fn source_address_compiler_enum_access_v55(
     instances: &ExecutionInstancesV29<'_>,
+    references: &SourceReferenceEmissionV29<'_, '_>,
+    slots: &OwnedScopedSourceSlotsV29,
     source: &SourceAddressSourceIndexV29<'_>,
     instance: ProductionCallInstanceIdV1,
     anchor: usize,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<bool, ProductionSemanticKirErrorV1> {
+) -> Result<Option<Option<SourceCompilerEnumReferenceV55>>, ProductionSemanticKirErrorV1> {
+    references.check(budget)?;
+    if !std::ptr::eq(references.plan.instances, instances) {
+        return Err(scoped_compiler_enum_error_v55());
+    }
     let sidecar = source.sidecar(instance, budget)?;
     let anchors = sidecar
         .scoped_memory_anchors
@@ -119,7 +178,7 @@ pub(super) fn source_address_compiler_enum_access_v55(
         .compiler_enum
         .binary_search_by_key(&anchor, |row| row.anchor)
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let record = &anchors.compiler_enum[ordinal];
     let row = anchors
@@ -143,12 +202,18 @@ pub(super) fn source_address_compiler_enum_access_v55(
         row.position,
         budget,
     )?;
-    check_scoped_compiler_enum_scalar_value_v55(&checked, budget)?;
-    Ok(true)
+    let reference =
+        retain_compiler_enum_reference_v55(references, instance, archive, &checked, slots, budget)?;
+    if reference.is_none() {
+        check_scoped_compiler_enum_scalar_value_v55(&checked, budget)?;
+    }
+    Ok(Some(reference))
 }
 
 fn pending_compiler_enum_memory_v55(
     instances: &ExecutionInstancesV29<'_>,
+    references: &SourceReferenceEmissionV29<'_, '_>,
+    slots: &OwnedScopedSourceSlotsV29,
     source: &SourceAddressSourceIndexV29<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingCompilerEnumMemoryV55, ProductionSemanticKirErrorV1> {
@@ -189,11 +254,10 @@ fn pending_compiler_enum_memory_v55(
         for spill in &archive.enum_spills {
             budget.charge_work(4)?;
             let key = scoped_compiler_enum_key_v55(spill);
-            if previous.is_some_and(|old| old >= key)
-                || !matches!(spill.element, Type::Scalar(_) | Type::Vector(_))
-            {
+            if previous.is_some_and(|old| old >= key) {
                 return Err(scoped_compiler_enum_error_v55());
             }
+            compiler_enum_element_owned_storage_v55(&spill.element)?;
             previous = Some(key);
             retain_source_enum_spill_v48(instance.index(), spill, &mut output.allocations, budget)?;
         }
@@ -204,15 +268,16 @@ fn pending_compiler_enum_memory_v55(
                 return Err(scoped_compiler_enum_error_v55());
             }
             previous = Some(record.anchor);
-            if !source_address_compiler_enum_access_v55(
+            let reference = source_address_compiler_enum_access_v55(
                 instances,
+                references,
+                slots,
                 source,
                 instance,
                 record.anchor,
                 budget,
-            )? {
-                return Err(scoped_compiler_enum_error_v55());
-            }
+            )?
+            .ok_or_else(scoped_compiler_enum_error_v55)?;
             let row = anchors
                 .rows
                 .get(record.anchor)
@@ -234,6 +299,7 @@ fn pending_compiler_enum_memory_v55(
                 record: *record,
                 block,
                 operation: operation as usize,
+                reference,
             });
         }
     }
@@ -294,11 +360,10 @@ fn check_compiler_enum_closed_memory_v55<'a>(
                     return Err(scoped_compiler_enum_error_v55());
                 };
                 if let Some(row) = pending.allocation(result.id, budget)? {
-                    if body.blocks.first().map(|block| block.id) != Some(block.id)
-                        || !matches!(row.origin.element, Type::Scalar(_) | Type::Vector(_))
-                    {
+                    if body.blocks.first().map(|block| block.id) != Some(block.id) {
                         return Err(scoped_compiler_enum_error_v55());
                     }
+                    compiler_enum_element_owned_storage_v55(&row.origin.element)?;
                     check_enum_spill_alloca_v55(&row.origin, operation, budget)?;
                     allocations = argument_sum_v1(&[allocations, 1])?;
                 }
@@ -308,14 +373,34 @@ fn check_compiler_enum_closed_memory_v55<'a>(
                 let row = pending
                     .allocation(access.record.pointer, budget)?
                     .ok_or_else(scoped_compiler_enum_error_v55)?;
-                let ScopedCompilerEnumRoleV55::Store {
-                    value,
-                    source: None,
-                    ..
-                } = access.record.role
+                let ScopedCompilerEnumRoleV55::Store { value, source, .. } = access.record.role
                 else {
                     return Err(scoped_compiler_enum_error_v55());
                 };
+                match (access.reference, source, &row.origin.element) {
+                    (None, None, Type::Scalar(_) | Type::Vector(_)) => {}
+                    (
+                        Some(reference),
+                        Some(ScopedMemoryStoreSourceV29::Operand { .. }),
+                        Type::Pointer(pointer),
+                    ) => {
+                        let expected = match reference.backing {
+                            SourceCompilerEnumReferenceBackingV55::Scalar => {
+                                matches!(pointer.pointee.as_ref(), Type::Scalar(_))
+                            }
+                            SourceCompilerEnumReferenceBackingV55::Object(schema) => {
+                                pointer.pointee.as_ref() == &Type::StorageObject(schema)
+                            }
+                        };
+                        if !expected
+                            || reference.loan.carrier
+                                != ProductionSourceReferenceCarrierV38::MemoryPointer
+                        {
+                            return Err(scoped_compiler_enum_error_v55());
+                        }
+                    }
+                    _ => return Err(scoped_compiler_enum_error_v55()),
+                }
                 if row.instance != access.instance.index()
                     || scoped_compiler_enum_key_v55(&row.origin)
                         != (
