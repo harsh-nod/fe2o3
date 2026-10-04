@@ -1,0 +1,52 @@
+{
+  "head": "2193f899e345e885f61fb482641cdaae55570241",
+  "package": "rustc_codegen_fe2o3",
+  "parents": [
+    {
+      "label": "original-custody",
+      "parent": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::execution_v50_tests::reference_execution_v69_tests::actual_registered_scalar_reference_retains_exact_budget_and_custody_boundaries",
+      "tag": "REGISTERED_REFERENCE_EXISTING_CUSTODY_V69",
+      "cases": [
+        "fill"
+      ],
+      "child": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child",
+      "captures": 2
+    },
+    {
+      "label": "length-custody",
+      "parent": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::execution_v50_tests::reference_execution_v69_tests::actual_registered_scalar_reference_length_calls_retain_cumulative_custody",
+      "tag": "REGISTERED_REFERENCE_LENGTH_CUSTODY_V76",
+      "cases": [
+        "single_length",
+        "repeated_lengths"
+      ],
+      "child": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child",
+      "captures": 4
+    },
+    {
+      "label": "write-only-custody",
+      "parent": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::execution_v50_tests::reference_execution_v69_tests::actual_write_only_source_length_calls_retain_cumulative_custody",
+      "tag": "WRITE_ONLY_SOURCE_LENGTH_CUSTODY_V76",
+      "cases": [
+        "write_only_lengths"
+      ],
+      "child": "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child",
+      "captures": 2
+    }
+  ],
+  "source_files": [
+    {
+      "path": "crates/rustc-codegen-fe2o3/src/production_context_source_v29_tests.rs",
+      "sha256": "d7b3952539452520437e58dab2354c75760f51d1e47bd4a2ab3f92d5b73e9a6c"
+    },
+    {
+      "path": "crates/rustc-codegen-fe2o3/src/production_rustc_driver_source_reference_execution_v69_tests.rs",
+      "sha256": "b985a359c34d354f572c5185435aed27de2e82c27062f7b50a0b1b1bb6334469"
+    },
+    {
+      "path": "crates/rustc-codegen-fe2o3/src/production_rustc_driver_original_mir_v30_tests.rs",
+      "sha256": "789cef589590b74d57399a4c7df8203120672558c64fc0d81c381621bc481028"
+    }
+  ],
+  "scope": "Actual source and resource/custody owning parents only. No protected proof, kernel execution, publication authority or service qualification."
+}
