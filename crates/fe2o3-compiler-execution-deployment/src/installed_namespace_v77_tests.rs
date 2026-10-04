@@ -138,7 +138,7 @@ fn installed_namespace_refresh_keeps_original_content_mode_and_xattr_gates() {
             _ => {
                 rustix::fs::setxattr(&root, "user.namespace-v77", b"x", XattrFlags::empty())
                     .unwrap();
-                DeploymentVerificationErrorKindV1::InvalidMetadata
+                DeploymentVerificationErrorKindV1::ForbiddenAttributes
             }
         };
         assert_eq!(
