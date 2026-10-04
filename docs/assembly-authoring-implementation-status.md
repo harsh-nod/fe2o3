@@ -11,6 +11,27 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Checkpoint-site debugger diagnostics — 2026-10-04
+
+The [disabled physical-v7 package](../tools/rocgdb-one-stop-native-adapters-v1/physical-v7/README.md)
+adds sticky first-failure site labels to the existing checkpoint checks. All
+38 original Boolean predicates still evaluate once; their acceptance conditions
+and native execution gates are unchanged. The labels identify a guard, not the
+particular failing subexpression or a proven runtime repair.
+
+The exact 49-file package/README adoption passed repository-local qualification:
+64 Node controls, 12 native-result fixture checks, 56 strict checkpoint checks
+and the same 56 checks under UBSan. Source/API checks verified 63 selected files
+and 113 combined roles, and both forward and reverse patch checks passed.
+The C++ checks pin selected compiler tools but are not a hermetic proof of all
+system headers or shared runtime dependencies.
+
+A fresh private debugger build is being qualified separately. Public packaging
+does not establish its measured layout, startup, live capture or GPU correctness.
+The earlier native refusal remains preserved; all native admission gates remain
+closed. No milestone or tutorial is completed by this diagnostic checkpoint:
+accepted exits remain M1/M2/V1/V2/U1/U2/U3 (7/18).
+
 ## Genuine first BF16 roster and private debugger attempt — 2026-10-04
 
 Fresh Identity and swapped-input frontend sessions now pass the actual private

@@ -90,3 +90,7 @@ remains false; no target/debugger was invoked. See the [qualification record](..
 The additive [physical-V2 package](physical-v2/README.md) has its own source
 contract and protocol. This V1 package and its historical qualification remain
 unchanged. No activation, runtime binding or hardware acceptance is transferred.
+
+## Separate disabled checkpoint diagnostic successor
+
+The additive [physical-v7 package](physical-v7/README.md) labels first-failure checkpoint guards while preserving every original predicate and all disabled gates. It includes exact reversible source transforms and CPU controls. Physical-v6 and earlier packages remain unchanged; this source-only diagnostic is not a native-capture qualification or permission to ignore a refusal.
