@@ -60,6 +60,11 @@ adds actual typed packing, output backing and AQL extent checks with retained
 immutable owners. It is not device preparation or application admission.
 Prioritize dispatch-wide source/machine and memory/completion composition, then
 the protected conditional application provider and exact invocation binding.
+The [composed startup campaign](evidence/dev-composed-application-startup-2026-10-04/README.md)
+now passes strict registration under the application filter and fixes a real
+non-dumpable issuer namespace-check failure. The immediate implementation gates
+are retained keyless proof custody and its conditional native invocation join,
+not additional copy-only fixtures. Deployed compiler acquisition remains unqualified.
 Qualify admitted fill -> tracked upload -> native XGMI -> readback on
 two selected GPUs, lengths 64, 65 and 4097, in both directions.
 Broader fault recovery, all-device matrices and matched HIP/HSA performance are

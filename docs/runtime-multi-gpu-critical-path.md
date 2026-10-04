@@ -195,8 +195,14 @@ original proof to native invocation premises, and run the selected two-GPU pipel
 The registration design reuses the supervisor/root registry without another
 listener. The root registry, observation handshake and production
 Cargo/supervisor/host activation are now implemented as described below.
-Composed production startup qualification and remote proof ownership are still
-required before ordinary application admission.
+The [composed startup campaign](evidence/dev-composed-application-startup-2026-10-04/README.md)
+now passes descriptor, roster, delayed, clone3-fallback and preparation-cancellation
+cases under the actual application filter. It also fixes the empty-cap supervisor's
+inaccessible namespace inspection of its non-dumpable child: fixed pre-exec child
+code checks its own namespaces before readiness, preserving every other launch gate.
+This test-key/component fixture is not measured deployment or a genuine FD195 audit.
+Remote proof custody and its consuming native join are now the immediate implementation
+priority; deployed compiler acquisition remains a separate required qualification.
 
 1. Completed prerequisite: the inert canonical application binding is exactly 840 bytes
    containing the full compiler supervisor handoff, exact four-slot occurrence,
@@ -219,8 +225,9 @@ required before ordinary application admission.
    prepared pair. Supervisor admission validates both process tokens and direct
    parentage, retaining a candidate Cargo-created proof peer. It cannot independently
    establish the remote slot-4 counterpart: that still requires root observation.
-   Cargo and host now activate this profile; the composed production startup
-   qualification remains pending. Supervisor session dispatch classifies the
+   Cargo and host now activate this profile; their public APIs pass the composed
+   component campaign above. Measured deployment remains unqualified.
+   Supervisor session dispatch classifies the
    ordinary/application profiles atomically as described below.
    The accepted handoff alone is not
    authenticated root registration, application readiness, or GPU launch authority.
@@ -291,9 +298,9 @@ required before ordinary application admission.
 5. Qualify wrong slots/addresses/credentials, reordered and stale pidfds, wrong
    registration/profile, replay, capacity, backpressure, timeout and shutdown.
    One stalled app must not block the registry, and ACK EOF must remain observable.
-   Qualify the complete positive production-context startup under Cargo's actual
+   The positive production-context component startup now passes under Cargo's actual
    pre-exec filter, including delayed registration and immediate post-Ready exit.
-   Then deploy fixed keyless proof custody and implement the consuming native join.
+   Next deploy fixed keyless proof custody and implement the consuming native join.
 
 The bootstrap uses no sandbox-forbidden waitid, pidfd reopening or socket shutdown.
 Its root/UID1000 campaign includes live separate-root success, queued Challenge
@@ -302,8 +309,8 @@ senders, wrong pidfds/inputs, exact endpoint substitutions, malformed packets an
 timeout, plus retirement of a registered endpoint by a still-live root. Helpers
 install a focused process/socket syscall denylist after libtest
 startup; this is not qualification of Cargo's full inherited pre-exec allowlist.
-The strict static application negative and explicit envelope-only positives do
-not replace successful qualification of the composed production startup join.
+The earlier strict static negatives and explicit envelope-only positives do not
+replace the now-qualified composed startup campaign or remaining deployed audit.
 No new publication recovery or lock acquisition belongs in
 registration. Root process identity alone does not measure the fixed custodian.
 Application exit, EOF and containment remain distinct from GPU settlement.
