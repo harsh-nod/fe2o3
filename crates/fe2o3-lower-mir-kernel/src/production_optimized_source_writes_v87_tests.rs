@@ -30,8 +30,13 @@ pub(super) fn test_optimized_writes_v87(
                 let last = facts[expected - 1].unwrap();
                 assert_ne!(first.input[6], last.input[6]);
                 assert_ne!(first.output[6], last.output[6]);
-                assert_eq!(first.output[..6], last.output[..6], "pure write suffix is commoned; effects remain distinct");
-                assert!((0..6).all(|i| matches!(optimized.operation(last.input[i], budget).unwrap(),
+                // Address formation is outside the total-expression CSE whitelist.
+                assert_eq!(first.output[..5], last.output[..5], "total metadata producers are commoned");
+                assert_ne!(first.output[5], last.output[5]);
+                assert!(matches!(optimized.operation(last.input[5], budget).unwrap(),
+                    ProductionOptimizedSourceOperationV18::Retained { output, .. }
+                    if output == last.output[5]));
+                assert!((0..5).all(|i| matches!(optimized.operation(last.input[i], budget).unwrap(),
                     ProductionOptimizedSourceOperationV18::Rewritten { .. })));
             }
             let Some(fault) = fault else { reached.set(true); return Ok(()); };
