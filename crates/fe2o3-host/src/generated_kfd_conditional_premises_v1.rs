@@ -31,6 +31,9 @@ pub(crate) enum GeneratedConditionalPremiseErrorV1 {
     Resource(Resource),
     Contract(ConditionalInvocationWireErrorV1<Resource>),
     MixedContract(fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<Resource>),
+    PredicatedMixedContract(
+        fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>,
+    ),
     Descriptor(DescriptorWireErrorV4<Resource>),
     Binding(&'static str),
     Runtime(ConditionalDispatchErrorV1),
@@ -47,6 +50,7 @@ impl std::error::Error for GeneratedConditionalPremiseErrorV1 {
             Self::Resource(error) => Some(error),
             Self::Contract(error) => Some(error),
             Self::MixedContract(error) => Some(error),
+            Self::PredicatedMixedContract(error) => Some(error),
             Self::Descriptor(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::Packing(error) => Some(error),
@@ -88,6 +92,15 @@ impl From<fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<
         error: fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<Resource>,
     ) -> Self {
         Self::MixedContract(error)
+    }
+}
+impl From<fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>>
+    for GeneratedConditionalPremiseErrorV1
+{
+    fn from(
+        error: fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>,
+    ) -> Self {
+        Self::PredicatedMixedContract(error)
     }
 }
 pub(super) type Result<T> = std::result::Result<T, GeneratedConditionalPremiseErrorV1>;
