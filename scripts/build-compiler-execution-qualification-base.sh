@@ -265,8 +265,8 @@ printf 'passwd: files\ngroup: files\nshadow: files\nhosts: files dns\n' \
 printf 'fe2o3-qualification\n' >"${root}/etc/hostname"
 : >"${root}/etc/machine-id"
 : >"${root}/etc/fstab"
-chmod 0444 "${root}/etc/passwd" "${root}/etc/group" \
-  "${root}/etc/nsswitch.conf" "${root}/etc/hostname" \
+chmod 0644 "${root}/etc/passwd" "${root}/etc/group"
+chmod 0444 "${root}/etc/nsswitch.conf" "${root}/etc/hostname" \
   "${root}/etc/machine-id" "${root}/etc/fstab"
 chmod 0400 "${root}/etc/shadow" "${root}/etc/gshadow"
 

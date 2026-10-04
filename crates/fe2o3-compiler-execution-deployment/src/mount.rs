@@ -5,7 +5,7 @@ use std::os::fd::{AsFd, AsRawFd as _, OwnedFd};
 use fe2o3_loop_device::{ReadOnlyAutoclearLoopDeviceV1, attach_sealed_read_only_loop_device_v1};
 use rustix::fs::{
     AtFlags, Mode, OFlags, ResolveFlags, Statx, StatxFlags, fchmod, fgetxattr, flistxattr, fstat,
-    fstatfs, openat2, statx,
+    fstatfs, mkdirat, openat2, statat, statx,
 };
 use rustix::mount::{
     FsMountFlags, FsOpenFlags, MountAttrFlags, MountPropagationFlags, MoveMountFlags, UnmountFlags,
@@ -19,9 +19,9 @@ use super::install::verify_installed_projection;
 use super::qualification::revalidate_prepared_qualification_with_parent_children;
 use super::staging::StagedCompilerExecutionQualificationV1;
 use super::{
-    DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, QualificationFaultPointV1,
-    changed, io_error, lower_hex, snapshot, std_io_error, validate_directory_mode,
-    verify_directory_children,
+    DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, ObjectSnapshotV1,
+    QualificationFaultPointV1, changed, io_error, lower_hex, snapshot, std_io_error,
+    validate_directory_mode, verify_directory_children,
 };
 
 const SQUASHFS_MAGIC_V1: i64 = 0x7371_7368;
@@ -113,7 +113,7 @@ impl fmt::Debug for PrivateQualificationMountNamespaceV1 {
 }
 
 impl PrivateQualificationMountNamespaceV1 {
-    fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
+    pub(super) fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
         let retained = fstat(&self.namespace)
             .map_err(|source| io_error("inspect retained qualification mount namespace", source))?;
         if retained.st_dev != self.device || retained.st_ino != self.inode {
@@ -158,6 +158,7 @@ pub struct MountedCompilerExecutionQualificationV1 {
     mounted_base: Option<File>,
     mounted_root: Option<File>,
     overlay_work: Option<File>,
+    overlay_proc: Option<(File, ObjectSnapshotV1)>,
     base_identity: Option<QualificationMountIdentityV72>,
     root_identity: Option<QualificationMountIdentityV72>,
     base_attached: bool,
@@ -353,6 +354,7 @@ impl MountedCompilerExecutionQualificationV1 {
         }
         self.loop_device.take();
         self.overlay_work.take();
+        self.overlay_proc.take();
         defer_checkpoint(
             &mut deferred,
             hooks.checkpoint(QualificationFaultPointV1::LoopReleased),
@@ -551,6 +553,7 @@ pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
         mounted_base: None,
         mounted_root: None,
         overlay_work: None,
+        overlay_proc: None,
         base_identity: None,
         root_identity: None,
         base_attached: false,
@@ -668,6 +671,11 @@ fn attach_overlay(
         .expect("overlay attachment follows base attachment");
     let lowerdirs = overlay_lowerdirs(staged.prepared().installed().retained_root(), base);
     prepare_overlay_upper(staged.directory_descriptor("upper"), (0, 0))?;
+    validate_sealed_base_proc_target(base, staged.prepared().installed().retained_root())?;
+    mounted.overlay_proc = Some(prepare_overlay_proc_target(
+        staged.directory_descriptor("upper"),
+        (0, 0),
+    )?);
     let context = fsopen("overlay", FsOpenFlags::FSOPEN_CLOEXEC)
         .map_err(|source| io_error("open overlay mount context", source))?;
     configure_overlay_profile(&context)?;
@@ -770,7 +778,7 @@ fn validate_overlay_upper(
     )?;
     if matches!(state, MountedRootStateV1::Pristine) {
         super::require_no_xattrs(upper, "pristine qualification upper")?;
-        return verify_directory_children(upper, &[], "pristine qualification upper");
+        return verify_directory_children(upper, &["proc"], "pristine qualification upper");
     }
     // A completed copy-up marks its parent impure; no other backing xattr is admitted.
     const IMPURE: &[u8] = b"trusted.overlay.impure\0";
@@ -795,6 +803,173 @@ fn validate_overlay_upper(
         .map_err(|source| io_error("reinspect qualification upper xattr profile", source))?;
     if length != IMPURE.len() || names.as_slice() != IMPURE {
         return Err(changed("qualification upper backing xattrs changed"));
+    }
+    Ok(())
+}
+
+fn validate_sealed_base_proc_target(
+    base: &File,
+    installed: &File,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    require_filesystem(base, SQUASHFS_MAGIC_V1, "qualification SquashFS base")?;
+    if !rustix::fs::fstatvfs(base)
+        .map_err(|source| io_error("inspect sealed base mount flags", source))?
+        .f_flag
+        .contains(rustix::fs::StatVfsMountFlags::RDONLY)
+    {
+        return Err(changed("qualification base is no longer read-only"));
+    }
+    match statat(installed, "proc", AtFlags::SYMLINK_NOFOLLOW) {
+        Err(rustix::io::Errno::NOENT) => (),
+        Ok(_) => {
+            return Err(changed(
+                "installed deployment overrides the base proc target",
+            ));
+        }
+        Err(source) => return Err(io_error("inspect installed proc target absence", source)),
+    }
+    let target = super::open_beneath(base, "proc", true)?;
+    // This exact base was sealed only after its no-xattr-table image profile was checked.
+    // SquashFS reports EOPNOTSUPP for that profile. No xattr error is accepted here:
+    // the lower target is checked for shape, then a fresh inspectable upper target is made.
+    let expected = super::validate_directory_metadata(
+        &target,
+        Some((0, 0)),
+        COMPOSED_ROOT_MODE_V1,
+        "sealed base proc target",
+    )?;
+    verify_directory_children(&target, &[], "sealed base proc target")?;
+    let reopened = super::open_beneath(base, "proc", true)?;
+    if snapshot(&fstat(&reopened).map_err(|source| io_error("reinspect base proc target", source))?)
+        != expected
+    {
+        return Err(changed("sealed base proc target changed"));
+    }
+    Ok(())
+}
+
+fn prepare_overlay_proc_target(
+    upper: &File,
+    owner: (u32, u32),
+) -> Result<(File, ObjectSnapshotV1), DeploymentVerificationErrorV1> {
+    let (target, before) = prepare_overlay_proc_directory(upper, owner)?;
+    // The sealed lower proc is empty. Do not merge it or admit variable origin handles.
+    rustix::fs::fsetxattr(
+        &target,
+        "trusted.overlay.opaque",
+        b"y",
+        rustix::fs::XattrFlags::CREATE,
+    )
+    .map_err(|source| io_error("mark native preflight proc target opaque", source))?;
+    let after = super::validate_directory_metadata(
+        &target,
+        Some(owner),
+        COMPOSED_ROOT_MODE_V1,
+        "opaque preflight proc target",
+    )?;
+    let mut expected = before;
+    expected.changed_seconds = after.changed_seconds;
+    expected.changed_nanoseconds = after.changed_nanoseconds;
+    if expected != after {
+        return Err(changed(
+            "native proc identity changed during opaque marking",
+        ));
+    }
+    let retained = (target, after);
+    revalidate_overlay_proc_target(upper, &retained, owner, OverlayProcProfileV82::Opaque)?;
+    Ok(retained)
+}
+
+fn prepare_overlay_proc_directory(
+    upper: &File,
+    owner: (u32, u32),
+) -> Result<(File, ObjectSnapshotV1), DeploymentVerificationErrorV1> {
+    validate_directory_mode(upper, Some(owner), COMPOSED_ROOT_MODE_V1, "prepared upper")?;
+    verify_directory_children(upper, &[], "prepared upper")?;
+    // Create before OverlayFS attachment; never alter backing directories of a live overlay.
+    mkdirat(upper, "proc", Mode::from_raw_mode(COMPOSED_ROOT_MODE_V1))
+        .map_err(|source| io_error("create native preflight proc target", source))?;
+    let target = super::open_beneath(upper, "proc", true)?;
+    fchmod(&target, Mode::from_raw_mode(COMPOSED_ROOT_MODE_V1))
+        .map_err(|source| io_error("set native preflight proc target mode", source))?;
+    let expected = validate_directory_mode(
+        &target,
+        Some(owner),
+        COMPOSED_ROOT_MODE_V1,
+        "native preflight proc target",
+    )?;
+    verify_directory_children(&target, &[], "native preflight proc target")?;
+    let retained = (target, expected);
+    revalidate_overlay_proc_target(upper, &retained, owner, OverlayProcProfileV82::Unmarked)?;
+    Ok(retained)
+}
+
+#[derive(Clone, Copy)]
+enum OverlayProcProfileV82 {
+    Unmarked,
+    Opaque,
+}
+
+const PROC_OPAQUE_NAME_V82: &[u8] = b"trusted.overlay.opaque\0";
+
+fn proc_opaque_marker_is_exact(names: &[u8], value: &[u8]) -> bool {
+    names == PROC_OPAQUE_NAME_V82 && value == b"y"
+}
+
+fn require_proc_opaque_marker(target: &File) -> Result<(), DeploymentVerificationErrorV1> {
+    let refused = || {
+        super::invalid(
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes,
+            "native preflight proc target must carry only its exact opaque marker",
+        )
+    };
+    let mut names = [0u8; PROC_OPAQUE_NAME_V82.len()];
+    let length = match flistxattr(target, &mut names) {
+        Ok(length) if length == names.len() => length,
+        Ok(_) | Err(rustix::io::Errno::RANGE) => return Err(refused()),
+        Err(source) => return Err(io_error("inspect native proc xattr names", source)),
+    };
+    if names.as_slice() != PROC_OPAQUE_NAME_V82 {
+        return Err(refused());
+    }
+    let mut value = [0u8; 2];
+    let value_length = match fgetxattr(target, "trusted.overlay.opaque", &mut value) {
+        Ok(length) if length <= value.len() => length,
+        Ok(_) | Err(rustix::io::Errno::RANGE) => return Err(refused()),
+        Err(source) => return Err(io_error("inspect native proc opaque marker", source)),
+    };
+    if !proc_opaque_marker_is_exact(&names[..length], &value[..value_length]) {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+fn revalidate_overlay_proc_target(
+    upper: &File,
+    retained: &(File, ObjectSnapshotV1),
+    owner: (u32, u32),
+    profile: OverlayProcProfileV82,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let reopened = super::open_beneath(upper, "proc", true)?;
+    for target in [&retained.0, &reopened, &retained.0] {
+        let observed = super::validate_directory_metadata(
+            target,
+            Some(owner),
+            COMPOSED_ROOT_MODE_V1,
+            "retained native preflight proc target",
+        )?;
+        match profile {
+            OverlayProcProfileV82::Unmarked => {
+                super::require_no_xattrs(target, "unmarked native proc target")?;
+            }
+            OverlayProcProfileV82::Opaque => require_proc_opaque_marker(target)?,
+        }
+        if observed != retained.1 {
+            return Err(changed(
+                "native preflight proc target lost retained identity",
+            ));
+        }
+        verify_directory_children(target, &[], "retained native preflight proc target")?;
     }
     Ok(())
 }
@@ -895,6 +1070,15 @@ fn revalidate_mounted_qualification(
         verify_directory_children(directory, &[], "unmounted qualification staging directory")?;
     }
     validate_overlay_upper(staged.directory_descriptor("upper"), owner, state)?;
+    revalidate_overlay_proc_target(
+        staged.directory_descriptor("upper"),
+        mounted
+            .overlay_proc
+            .as_ref()
+            .ok_or_else(|| changed("native preflight proc target custody was released"))?,
+        owner,
+        OverlayProcProfileV82::Opaque,
+    )?;
     revalidate_overlay_work(
         staged.directory_descriptor("work"),
         mounted
@@ -1009,6 +1193,7 @@ mod tests {
     use super::*;
 
     include!("mount_overlay_state_v76_tests.rs");
+    include!("mount_proc_target_v81_tests.rs");
 
     #[test]
     fn overlay_state_backing_check_preserves_retained_descriptor() {

@@ -11,17 +11,23 @@ use std::time::Duration;
 
 use fe2o3_compiler_execution_deployment::{
     COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_PROVISIONING_PID1_COMMAND_V84,
     COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, CompilerExecutionInstallRecoveryV1,
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
+    compiler_execution_provisioning_pid1_error_v84,
+    compiler_execution_systemd_preflight_pid1_error_v80,
     create_compiler_execution_qualification_cgroup_v1,
+    execute_compiler_execution_provisioning_pid1_tool_v84,
     execute_compiler_execution_provisioning_tool_v1,
     execute_compiler_execution_systemd_machine_tool_v1,
+    execute_compiler_execution_systemd_preflight_pid1_tool_v79,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
     recover_compiler_execution_qualification_parent_v1,
@@ -83,8 +89,14 @@ fn main() {
         COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_preflight_tool(&arguments)
         }
+        COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79 if arguments.len() == 4 => {
+            run_systemd_preflight_pid1_tool(&arguments)
+        }
         COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1 if arguments.len() == 2 => {
             run_provisioning_tool()
+        }
+        COMPILER_EXECUTION_PROVISIONING_PID1_COMMAND_V84 if arguments.len() == 3 => {
+            run_provisioning_pid1_tool(&arguments)
         }
         COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_machine_tool(&arguments)
@@ -577,6 +589,32 @@ fn run_systemd_preflight_tool(arguments: &[std::ffi::OsString]) {
     }
 }
 
+fn run_systemd_preflight_pid1_tool(arguments: &[std::ffi::OsString]) {
+    let Some(stage) = arguments[2].to_str() else {
+        std::process::exit(1);
+    };
+    let Some(parent) = arguments[3].to_str().filter(|value| {
+        !value.is_empty()
+            && !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+    }) else {
+        std::process::exit(1);
+    };
+    let Ok(parent) = parent.parse::<u32>() else {
+        std::process::exit(1);
+    };
+    match execute_compiler_execution_systemd_preflight_pid1_tool_v79(stage, parent) {
+        Ok(never) => match never {},
+        Err(error) => {
+            // Stderr remains the authenticated parent pidfd at this boundary. A failure-only
+            // stdout record is collected only with the nonzero status, never as a tool result.
+            let diagnostic = compiler_execution_systemd_preflight_pid1_error_v80(stage, &error);
+            let _ = std::io::stdout().lock().write_all(diagnostic.as_bytes());
+            std::process::exit(1);
+        }
+    }
+}
+
 fn run_systemd_machine_tool(arguments: &[std::ffi::OsString]) {
     if let Err(error) =
         establish_exact_parent_boundary(COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1)
@@ -608,6 +646,28 @@ fn run_provisioning_tool() {
         Ok(never) => match never {},
         Err(error) => {
             eprintln!("compiler-execution provisioning helper failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_provisioning_pid1_tool(arguments: &[std::ffi::OsString]) {
+    let Some(parent) = arguments[2].to_str().filter(|value| {
+        !value.is_empty()
+            && !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+    }) else {
+        std::process::exit(1);
+    };
+    let Ok(parent) = parent.parse::<u32>() else {
+        std::process::exit(1);
+    };
+    match execute_compiler_execution_provisioning_pid1_tool_v84(parent) {
+        Ok(never) => match never {},
+        Err(error) => {
+            // Stderr is still the authenticated parent pidfd, not a diagnostic channel.
+            let diagnostic = compiler_execution_provisioning_pid1_error_v84(&error);
+            let _ = std::io::stdout().lock().write_all(diagnostic.as_bytes());
             std::process::exit(1);
         }
     }
