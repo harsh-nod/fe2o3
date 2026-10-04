@@ -17,7 +17,7 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Action {
     Project {
         result: usize,
@@ -52,7 +52,7 @@ pub(super) enum ViewGuard {
     UntaggedNoop,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct StorageViewByteOperationV39 {
     address: usize,
     space: usize,

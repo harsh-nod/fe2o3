@@ -11,6 +11,7 @@ pub(in super::super) struct EmittedByteFunctionsV55<'a, 'owner, R> {
     namespaces: Vec<Option<usize>>,
     sites: Vec<Option<ByteAllocationSiteV30>>,
     scalar_bodies: Vec<Option<CanonicalByteScalarBodyV55>>,
+    transition_bodies: Vec<Option<TransitionBodyV56<'a>>>,
     last_namespace: Option<usize>,
     emitted_bytes: usize,
     buffer: usize,
@@ -43,6 +44,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 + size_of::<Result<Self>>()
                 + size_of::<CanonicalByteScalarBodyV55>()
                 + size_of::<Result<CanonicalByteScalarBodyV55>>()
+                + 2 * size_of::<TransitionBodyV56<'a>>()
+                + size_of::<Option<TransitionBodyV56<'a>>>()
+                + size_of::<Result<Option<TransitionBodyV56<'a>>>>()
                 + size_of::<([&(); 6], [usize; 4], [Result<()>; 2])>(),
         )?;
         let mut namespaces = vector(inventory.functions().len(), out)?;
@@ -54,6 +58,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         let mut scalar_bodies = vector(inventory.operations().len(), out)?;
         out.budget.charge_work(inventory.operations().len())?;
         scalar_bodies.resize(inventory.operations().len(), None);
+        let mut transition_bodies = vector(inventory.operations().len(), out)?;
+        out.budget.charge_work(inventory.operations().len())?;
+        transition_bodies.resize(inventory.operations().len(), None);
         Ok(Self {
             inventory,
             physical,
@@ -62,6 +69,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             namespaces,
             sites,
             scalar_bodies,
+            transition_bodies,
             last_namespace: None,
             emitted_bytes: out.text.len(),
             buffer: out.text.as_ptr() as usize,
@@ -123,7 +131,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
 
     pub(in super::super) fn emit(
         &mut self,
-        model: &ByteFunctionV30<'_, '_, R>,
+        model: &ByteFunctionV30<'a, 'owner, R>,
         namespace: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
@@ -137,7 +145,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             {
                 return Err(emitted_mismatch());
             }
-            model.emit_with_scalar_bodies(namespace, ScalarBodiesV55::Define, out)?;
+            model.emit_with_bodies_v56(namespace, ByteBodiesV56::Define, out)?;
             let row = &self.inventory.functions()[function];
             for (operation, plan) in row.operations.clone().zip(&model.operations) {
                 out.budget.charge_work(1)?;
@@ -149,6 +157,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                     ByteOperationV30::Scalar(scalar) => Some(scalar.body_descriptor_v55(out)?),
                     _ => None,
                 };
+                self.transition_bodies[operation] = TransitionBodyV56::capture(plan, out)?;
             }
             self.namespaces[function] = Some(namespace);
             self.last_namespace = Some(namespace);
@@ -158,9 +167,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         self.retain(result)
     }
 
-    // Reuse only the total scalar transition, never the input owner's registry
+    // Reuse only an exact total transition, never the input owner's registry
     // predicate. The output keeps its own PC, input checks and refusal path.
-    pub(in super::super) fn emit_output_reusing_scalar_bodies<S: ByteAllocationResolverV30>(
+    pub(in super::super) fn emit_output_reusing_bodies_v56<S: ByteAllocationResolverV30>(
         &self,
         model: &ByteFunctionV30<'_, '_, S>,
         namespace: usize,
@@ -209,22 +218,44 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 {
                     return Err(emitted_mismatch());
                 }
+                let scalar = matches!(plan, ByteOperationV30::Scalar(_));
                 let shared = if let (Some(original), ByteOperationV30::Scalar(scalar)) =
                     (self.scalar_bodies[operation], plan)
                 {
                     original == scalar.body_descriptor_v55(out)?
+                } else if let (Some(original), Some(current)) = (
+                    self.transition_bodies[operation],
+                    TransitionBodyV56::capture(plan, out)?,
+                ) {
+                    (!original.requires_same_interpretation()
+                        || self.interpretation.same_descriptor(&model.interpretation))
+                        && original.same(current, out)?
                 } else {
                     false
                 };
+                if shared && let ByteOperationV30::Alloca(alloca) = plan {
+                    let site = alloca.allocation_site();
+                    if self.sites[operation] != Some(site)
+                        || self.allocations.site(left.coordinate, out)? != site
+                        || model.allocations.site(right.coordinate, out)? != site
+                    {
+                        return Err(emitted_mismatch());
+                    }
+                }
                 reuse.push(shared);
                 if shared {
+                    let (name, version) = if scalar {
+                        ("byte_scalar_body", 55)
+                    } else {
+                        ("byte_transition_body", 56)
+                    };
                     emit!(
                         out,
-                        "use super::byte_scalar_body_{source}_{operation}_v55 as byte_scalar_body_{namespace}_{operation}_v55;\n"
+                        "use super::{name}_{source}_{operation}_v{version} as {name}_{namespace}_{operation}_v{version};\n"
                     );
                 }
             }
-            model.emit_with_scalar_bodies(namespace, ScalarBodiesV55::Reuse(&reuse), out)?;
+            model.emit_with_bodies_v56(namespace, ByteBodiesV56::Reuse(&reuse), out)?;
             drop(reuse);
             out.budget.release_storage(
                 out.budget

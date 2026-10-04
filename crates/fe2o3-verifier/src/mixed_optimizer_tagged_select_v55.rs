@@ -12,6 +12,19 @@ pub(super) struct TaggedSelectV55<'a> {
 }
 
 impl<'a> TaggedSelectV55<'a> {
+    pub(super) fn same_body_v56(
+        &self,
+        other: &TaggedSelectV55<'_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        out.budget.charge_work(6)?;
+        Ok(self.inputs == other.inputs
+            && self.result == other.result
+            && self.width == other.width
+            && super::super::congruence_v27::compare_type(self.ty, other.ty, out)?
+                == std::cmp::Ordering::Equal)
+    }
+
     pub(super) fn derive(
         inventory: &'a Inventory<'_>,
         operation: usize,

@@ -18,7 +18,7 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum Payload {
     Scalar {
         boolean: bool,
@@ -33,7 +33,7 @@ enum Payload {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum Action {
     Value {
         address: usize,
@@ -59,7 +59,7 @@ enum Action {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct StorageByteOperationV37 {
     action: Action,
 }

@@ -27,6 +27,7 @@ include!("mixed_optimizer_tagged_select_v55_tests.rs");
 include!("mixed_optimizer_byte_trap_v40_tests.rs");
 include!("mixed_optimizer_byte_source_sharing_v55_tests.rs");
 include!("mixed_optimizer_emitted_byte_functions_v55_tests.rs");
+include!("mixed_optimizer_transition_body_v56_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {

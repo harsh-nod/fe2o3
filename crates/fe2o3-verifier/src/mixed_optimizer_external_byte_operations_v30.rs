@@ -82,7 +82,7 @@ pub(super) enum PointerByteEffectV30 {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum Action {
     Slice {
         input: usize,
@@ -118,7 +118,7 @@ enum Action {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct PointerByteOperationV30 {
     action: Action,
 }

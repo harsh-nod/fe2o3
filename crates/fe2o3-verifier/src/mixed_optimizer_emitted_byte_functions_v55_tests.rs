@@ -142,7 +142,7 @@ fn emitted_scalar_bodies_keep_output_predicates_and_exact_changed_operations() {
                                 &output_allocations,
                                 out,
                             )?;
-                            emitted.emit_output_reusing_scalar_bodies(
+                            emitted.emit_output_reusing_bodies_v56(
                                 &model,
                                 function as usize * 2 + 1,
                                 out,
@@ -222,7 +222,7 @@ fn emitted_scalar_bodies_refuse_missing_width_and_sticky_foreign_ledger() {
                     out,
                 )?;
                 assert!(matches!(
-                    emitted.emit_output_reusing_scalar_bodies(&model, 1, out),
+                    emitted.emit_output_reusing_bodies_v56(&model, 1, out),
                     Err(Error::Statement(_))
                 ));
                 assert!(out.text.is_empty());
@@ -237,7 +237,7 @@ fn emitted_scalar_bodies_refuse_missing_width_and_sticky_foreign_ledger() {
                 )?;
                 let bytes = out.text.len();
                 assert!(matches!(
-                    emitted.emit_output_reusing_scalar_bodies(&wrong_width, 1, out),
+                    emitted.emit_output_reusing_bodies_v56(&wrong_width, 1, out),
                     Err(Error::Statement(_))
                 ));
                 assert_eq!(out.text.len(), bytes);
@@ -246,14 +246,14 @@ fn emitted_scalar_bodies_refuse_missing_width_and_sticky_foreign_ledger() {
                 budget.reserve_storage(out.budget.storage())?;
                 let mut foreign = Writer::new(&mut budget)?;
                 assert!(matches!(
-                    emitted.emit_output_reusing_scalar_bodies(&model, 1, &mut foreign),
+                    emitted.emit_output_reusing_bodies_v56(&model, 1, &mut foreign),
                     Err(Error::Resource(Resource::Accounting))
                 ));
                 assert_eq!(foreign.budget.work(), 0);
                 assert!(foreign.text.is_empty());
                 let work = out.budget.work();
                 assert!(matches!(
-                    emitted.emit_output_reusing_scalar_bodies(&model, 1, out),
+                    emitted.emit_output_reusing_bodies_v56(&model, 1, out),
                     Err(Error::Resource(Resource::Accounting))
                 ));
                 assert_eq!(out.budget.work(), work);
