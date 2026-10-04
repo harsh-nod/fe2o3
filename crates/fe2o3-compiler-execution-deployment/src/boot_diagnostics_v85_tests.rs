@@ -163,7 +163,15 @@ fn machine_live_child_output_overflow_refuses_and_drop_reaps() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(machine.stderr.bytes.len(), MAX_BYTES);
+    assert!(machine.stderr.bytes.len() <= MAX_BYTES);
+    assert!(machine.stderr.refused);
+    assert!(
+        machine
+            .try_wait()
+            .unwrap_err()
+            .to_string()
+            .contains("64KiB")
+    );
     drop(machine);
     assert_eq!(
         rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).err(),
