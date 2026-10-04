@@ -425,12 +425,16 @@ mod mixed_cfg_v27;
 pub(crate) mod mixed_fixedpoint_licm_v29;
 #[path = "production_pipeline_source_mixed_licm_v28.rs"]
 mod mixed_licm_v28;
+#[path = "production_pipeline_source_predicated_licm_v90.rs"]
+pub(crate) mod predicated_licm_v90;
 
 #[path = "production_pipeline_source_mixed_relocation_v28.rs"]
 mod mixed_relocation_v28;
 
 #[path = "production_pipeline_source_mixed_worker_v28.rs"]
 pub(crate) mod mixed_worker_v28;
+#[path = "production_pipeline_source_predicated_worker_v90.rs"]
+pub(crate) mod predicated_worker_v90;
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.

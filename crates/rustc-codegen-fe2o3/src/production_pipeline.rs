@@ -3642,7 +3642,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         compiler_execution: AdmittedProtectedCompilerExecutionV1,
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
-        self.publish_mixed_worker_handoff_v53(target_budget, compiler_execution)
+        self.publish_predicated_worker_handoff_v90(target_budget, compiler_execution)
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -4553,8 +4553,9 @@ mod tests {
             .0;
         assert!(publication.contains("compiler_execution: AdmittedProtectedCompilerExecutionV1"));
         assert!(
-            publication
-                .contains(".publish_mixed_worker_handoff_v53(target_budget, compiler_execution)")
+            publication.contains(
+                ".publish_predicated_worker_handoff_v90(target_budget, compiler_execution)"
+            )
         );
         assert!(!publication.contains("lower_production_target("));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));

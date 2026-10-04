@@ -3,6 +3,8 @@
 use super::*;
 use fe2o3_lower_mir_kernel::{
     ProductionConditionalMixedLicmOutputHandoffV28 as LicmHandoff,
+    ProductionConditionalPredicatedLicmOutputHandoffV90 as PredicatedHandoff,
+    ProductionContinuationOccurrenceV90 as Occurrence,
     ProductionMixedPrefixOwnerV29 as PrefixOwner,
 };
 
@@ -24,12 +26,16 @@ pub(crate) type ConditionalMixedTargetLlvmV26<
     H = MixedHandoff<'view, 'source>,
 > = TargetLlvmV29<'handoff, 'view, 'source, H>;
 mixed_target_contract_v29!([<'v, 's, P: PrefixOwner<'v, 's>>] LicmHandoff<'_, '_, 'v, 's, P>);
+mixed_target_contract_v29!([] PredicatedHandoff<'_, '_, '_, '_>, emit_predicated_contract_v90,
+    fe2o3_kernel_descriptor::mixed_conditional_v86::MAX_MIXED_CONTRACT_BYTES_V86);
 
-impl<'v, 's, P: PrefixOwner<'v, 's>> target_handoff_sealed::Sealed
-    for LicmHandoff<'_, '_, 'v, 's, P>
+impl<'v, 's, R: Occurrence, P: PrefixOwner<'v, 's, R>> target_handoff_sealed::Sealed
+    for LicmHandoff<'_, '_, 'v, 's, P, R>
 {
 }
-impl<'v, 's, P: PrefixOwner<'v, 's>> TargetOutputHandoffV29 for LicmHandoff<'_, '_, 'v, 's, P> {
+impl<'v, 's, R: Occurrence, P: PrefixOwner<'v, 's, R>> TargetOutputHandoffV29
+    for LicmHandoff<'_, '_, 'v, 's, P, R>
+{
     fn check_original(
         &self,
         source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
@@ -107,10 +113,11 @@ pub(crate) fn check_and_lower_mixed_target_llvm_v26<
     'handoff,
     'view,
     'source,
-    P: PrefixOwner<'view, 'source>,
+    P: PrefixOwner<'view, 'source, R>,
+    R: Occurrence,
 >(
     source: &'view Source<'source>,
-    handoff: &'handoff LicmHandoff<'view, 'view, 'view, 'source, P>,
+    handoff: &'handoff LicmHandoff<'view, 'view, 'view, 'source, P, R>,
     target: TargetProfile,
     budget: &mut Budget<'_>,
 ) -> Result<
@@ -118,7 +125,7 @@ pub(crate) fn check_and_lower_mixed_target_llvm_v26<
         'handoff,
         'view,
         'source,
-        LicmHandoff<'view, 'view, 'view, 'source, P>,
+        LicmHandoff<'view, 'view, 'view, 'source, P, R>,
     >,
     Error,
 > {

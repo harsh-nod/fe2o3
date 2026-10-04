@@ -3,7 +3,6 @@ use super::super::{Budget, MixedTargetOutputHandoffV29, Resource, TargetOutputHa
 use super::{ConditionalMixedTargetLlvmV26, SourceError};
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3, DeviceTargetV1,
-    mixed_conditional_v26::MAX_MIXED_CONTRACT_BYTES_V26,
 };
 use fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18 as Abi;
 use std::cell::Cell;
@@ -282,12 +281,12 @@ pub(crate) fn prepare_mixed_worker_input_v26<
             ));
         }
         let mut contracts = vector::<Vec<u8>>(abi.roots.len(), &accepted, budget)?;
-        let mut scratch = vector::<u8>(MAX_MIXED_CONTRACT_BYTES_V26, &accepted, budget)?;
-        scratch.resize(MAX_MIXED_CONTRACT_BYTES_V26, 0);
+        let mut scratch = vector::<u8>(H::MAX_CONTRACT_BYTES, &accepted, budget)?;
+        scratch.resize(H::MAX_CONTRACT_BYTES, 0);
         for (original_root, root) in abi.roots.iter().enumerate() {
             budget.charge_work(2)?;
             let ordinal = descriptor_ordinal(table, root.kernel_binding, budget)?;
-            let length = native.handoff.emit_mixed_contract_v26(
+            let length = native.handoff.emit_contract(
                 original_root,
                 Abi { roots: abi.roots },
                 table,

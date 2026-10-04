@@ -40,12 +40,13 @@ pub(crate) trait TargetOutputHandoffV29: target_handoff_sealed::Sealed {
 // Closed mixed handoffs add the original ABI and fresh contract operations.
 // Worker preparation remains generic over the exact retained handoff type.
 pub(crate) trait MixedTargetOutputHandoffV29: TargetOutputHandoffV29 {
+    const MAX_CONTRACT_BYTES: usize;
     fn check_original_argument_abi_v26(
         &self,
         abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
         budget: &mut Budget<'_>,
     ) -> Result<(), SourceError>;
-    fn emit_mixed_contract_v26(
+    fn emit_contract(
         &self,
         root: usize,
         abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
@@ -58,16 +59,23 @@ pub(crate) trait MixedTargetOutputHandoffV29: TargetOutputHandoffV29 {
 
 macro_rules! mixed_target_contract_v29 {
     ([$($generics:tt)*] $handoff:ty) => {
+        mixed_target_contract_v29!([
+            $($generics)*
+        ] $handoff, emit_mixed_contract_v26,
+          fe2o3_kernel_descriptor::mixed_conditional_v26::MAX_MIXED_CONTRACT_BYTES_V26);
+    };
+    ([$($generics:tt)*] $handoff:ty, $emit:ident, $maximum:path) => {
         impl $($generics)* MixedTargetOutputHandoffV29 for $handoff {
+            const MAX_CONTRACT_BYTES: usize = $maximum;
             fn check_original_argument_abi_v26(&self,
                 abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
                 budget: &mut Budget<'_>) -> Result<(), SourceError>
             { self.check_original_argument_abi_v26(abi, budget) }
-            fn emit_mixed_contract_v26(&self, root: usize,
+            fn emit_contract(&self, root: usize,
                 abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
                 table: &fe2o3_kernel_descriptor::DeviceDescriptorTableV3<'_>,
                 ordinal: usize, output: &mut [u8], budget: &mut Budget<'_>) -> Result<usize, SourceError>
-            { self.emit_mixed_contract_v26(root, abi, table, ordinal, output, budget) }
+            { self.$emit(root, abi, table, ordinal, output, budget) }
         }
     };
 }

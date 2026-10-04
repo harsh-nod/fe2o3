@@ -12,21 +12,25 @@ use fe2o3_kernel_descriptor::{
 use fe2o3_lower_mir_kernel::{
     ProductionConditionalMixedLicmOutputHandoffV28,
     ProductionConditionalMixedPureCseOutputHandoffV26 as Policy10,
-    ProductionMixedPrefixOwnerV29 as PrefixOwner, ProductionSourceOwnedViewErrorV18 as SourceError,
-    ProductionSourceOwnedViewV18 as Source,
+    ProductionContinuationOccurrenceV90 as Occurrence,
+    ProductionMixedPrefixOwnerV29 as PrefixOwner,
+    ProductionMixedRuntimeOccurrenceV26 as CfgOccurrence,
+    ProductionSourceOwnedViewErrorV18 as SourceError, ProductionSourceOwnedViewV18 as Source,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-type Native<'v, 's, P> = ProductionConditionalMixedLicmOutputHandoffV28<'v, 'v, 'v, 's, P>;
+type Native<'v, 's, P, R = CfgOccurrence> =
+    ProductionConditionalMixedLicmOutputHandoffV28<'v, 'v, 'v, 's, P, R>;
 
 #[must_use = "discard descriptor backing before the borrowed final-native owner"]
 pub(crate) struct MixedDescriptorWireV28<
     'handoff,
     'view,
     'source,
-    P: PrefixOwner<'view, 'source> = Policy10<'view, 'source>,
+    P: PrefixOwner<'view, 'source, R> = Policy10<'view, 'source>,
+    R: Occurrence = CfgOccurrence,
 > {
-    native: &'handoff Native<'view, 'source, P>,
+    native: &'handoff Native<'view, 'source, P, R>,
     source: &'view Source<'source>,
     wire: Vec<u8>,
     retained: usize,
@@ -49,10 +53,10 @@ fn owner_headers<T>() -> Result<usize, Resource> {
     ])
 }
 
-type Capture<'a, 'handoff, 'view, 'source, 'work, P> = (
+type Capture<'a, 'handoff, 'view, 'source, 'work, P, R> = (
     &'a [TypedDescriptorRootV1],
     &'view Source<'source>,
-    &'handoff Native<'view, 'source, P>,
+    &'handoff Native<'view, 'source, P, R>,
     Target,
     u16,
     &'a mut Budget<'work>,
@@ -70,7 +74,9 @@ fn construction_headers<C>() -> Result<usize, Resource> {
     ])
 }
 
-impl<'view, 'source, P: PrefixOwner<'view, 'source>> MixedDescriptorWireV28<'_, 'view, 'source, P> {
+impl<'view, 'source, R: Occurrence, P: PrefixOwner<'view, 'source, R>>
+    MixedDescriptorWireV28<'_, 'view, 'source, P, R>
+{
     fn check(&self, budget: &Budget<'_>) -> Result<(), SourceError> {
         self.native
             .observe_retained_storage_v28(self.required, budget)
@@ -105,26 +111,33 @@ impl<'view, 'source, P: PrefixOwner<'view, 'source>> MixedDescriptorWireV28<'_, 
 /// Encode only from retained rustc bindings, original semantic Rust and exact
 /// final-native canonical bytes. Every source root, including unused arguments,
 /// is projected through the existing nominal V3 type/layout replay.
-pub(crate) fn produce<'handoff, 'view, 'source, P: PrefixOwner<'view, 'source>>(
+pub(crate) fn produce<
+    'handoff,
+    'view,
+    'source,
+    P: PrefixOwner<'view, 'source, R>,
+    R: Occurrence,
+>(
     roots: &[TypedDescriptorRootV1],
     source: &'view Source<'source>,
-    native: &'handoff Native<'view, 'source, P>,
+    native: &'handoff Native<'view, 'source, P, R>,
     target: Target,
     pointer_width: u16,
     budget: &mut Budget<'_>,
-) -> Result<MixedDescriptorWireV28<'handoff, 'view, 'source, P>, Error> {
+) -> Result<MixedDescriptorWireV28<'handoff, 'view, 'source, P, R>, Error> {
     native.check_original_source(source.source_ssa(budget)?, budget)?;
     let floor = budget.storage();
-    let retained_headers = owner_headers::<MixedDescriptorWireV28<'handoff, 'view, 'source, P>>()?;
+    let retained_headers =
+        owner_headers::<MixedDescriptorWireV28<'handoff, 'view, 'source, P, R>>()?;
     budget
         .reserve_storage(sum(&[
             retained_headers,
-            construction_headers::<Capture<'_, 'handoff, 'view, 'source, '_, P>>()?,
+            construction_headers::<Capture<'_, 'handoff, 'view, 'source, '_, P, R>>()?,
         ])?)
         .map_err(|error| source.retain_query_resource_error_v18(error))?;
     // No caller runs within construction: after this closure unwinds, all row
     // backing is dead and the successful wire is the only escaping allocation.
-    let capture: Capture<'_, '_, 'view, 'source, '_, P> =
+    let capture: Capture<'_, '_, 'view, 'source, '_, P, R> =
         (roots, source, native, target, pointer_width, &mut *budget);
     let construct = move || -> Result<Vec<u8>, Error> {
         let (roots, source, native, target, width, budget) = std::convert::identity(capture);
@@ -188,11 +201,11 @@ pub(crate) fn produce<'handoff, 'view, 'source, P: PrefixOwner<'view, 'source>>(
     {
         assert_eq!(
             std::mem::size_of_val(&construct),
-            size_of::<Capture<'_, '_, 'view, 'source, '_, P>>()
+            size_of::<Capture<'_, '_, 'view, 'source, '_, P, R>>()
         );
         assert_eq!(
             std::mem::align_of_val(&construct),
-            align_of::<Capture<'_, '_, 'view, 'source, '_, P>>()
+            align_of::<Capture<'_, '_, 'view, 'source, '_, P, R>>()
         );
     }
     let selected = catch_unwind(AssertUnwindSafe(construct));

@@ -222,8 +222,9 @@ fn default_target_entry_keeps_conditional_mixed_continuations_outside_publicatio
         .unwrap()
         .0;
     assert!(
-        publish
-            .contains("self.publish_mixed_worker_handoff_v53(target_budget, compiler_execution)")
+        publish.contains(
+            "self.publish_predicated_worker_handoff_v90(target_budget, compiler_execution)"
+        )
     );
     for alternate in [
         "lower_production_target(",
@@ -238,14 +239,18 @@ fn default_target_entry_keeps_conditional_mixed_continuations_outside_publicatio
         );
     }
     assert!(!publish.contains("conditional_mixed"));
-    let typed = include_str!("production_pipeline_source_mixed_publish_v53.rs")
-        .split_once("pub(crate) fn publish_mixed_worker_handoff_v53(")
+    let wrapper = include_str!("production_pipeline_source_predicated_publish_v90.rs");
+    assert!(wrapper.contains("publish_predicated_worker_handoff_v90,"));
+    assert!(wrapper.contains("with_original_source_predicated_publication_on_account_v90,"));
+    assert!(wrapper.contains("replay_lineage_capsule_v90"));
+    let typed = include_str!("production_pipeline_source_mixed_publish_family.rs")
+        .split_once("pub(crate) fn $publish(")
         .unwrap()
         .1;
     let mut remaining = typed;
     for stage in [
-        "FunctionalRefinementVerusRuntimeLeaseV1::open(",
-        "self.with_original_source_mixed_publication_on_account_v28(",
+        "FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v3(",
+        "self.$on_account(",
         "prepared.into_protected(budget)?",
         "protected.with_executed_composition_v29(",
         "executed.with_strict_handoff_v53(",
