@@ -4,6 +4,9 @@ use crate::production_analysis::CanonicalRankedPolicyFailureV1 as Failure;
 use fe2o3_kernel_ir::{AddressSpace, CanonicalKirOperationCoordinateV1};
 use pliron::builtin::op_interfaces::OneRegionInterface;
 
+#[path = "kir_bridge_global_guarded_v87.rs"]
+mod guarded_v87;
+
 // These are exact correspondence candidates, not a scalar-memory grammar:
 // nonvolatile Global/Generic loads/stores, scalar-Global pointer producers, and slice
 // lengths (including non-Global slices). The source join separately admits its

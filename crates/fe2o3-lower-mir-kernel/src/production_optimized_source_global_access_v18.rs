@@ -2,6 +2,7 @@
 // bounds, alias, initialization and concurrency proofs remain independent.
 use fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1;
 include!("production_source_global_guard_v85.rs");
+include!("production_source_global_guard_v86.rs");
 include!("production_optimized_source_global_native_v18.rs");
 include!("production_optimized_source_global_read_conditions_v18.rs");
 #[cfg(test)]
