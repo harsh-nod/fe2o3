@@ -13,8 +13,14 @@ fn write_fixture(
 ) {
     assert!(!disjoint || !copied_index);
     indexed_fixture_kind(types, functions, callables, disjoint, None);
-    let boolean = TypeId::from_index(types.len() as u32);
-    types.push(Type::new(
+    // The transformed call no longer returns Option<&mut T>; replace that
+    // otherwise unreachable type instead of leaving it outside the root closure.
+    let boolean = functions[0].locals()[11].ty();
+    assert!(matches!(
+        types[boolean.index() as usize].shape(),
+        Shape::Enum { .. }
+    ));
+    types[boolean.index() as usize] = Type::new(
         SemanticTypeIdentityV1::from_sha256([219; 32]),
         SemanticLayoutIdentityV1::from_sha256([219; 32]),
         SemanticTypeLayoutV1::new_with_backend_repr(
@@ -28,7 +34,7 @@ fn write_fixture(
         )
         .unwrap(),
         Shape::Scalar(SemanticScalarTypeV1::Bool),
-    ));
+    );
     let mut writes = 0;
     for callable in callables.iter_mut() {
         let SemanticCallableDeclV1::CompilerIntrinsic {
