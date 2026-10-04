@@ -1578,7 +1578,16 @@ impl SourceReferenceEmissionV29<'_, '_> {
                 Some(SemanticStatementKindV1::Store(store)),
                 ExecutionOperandV29::StoreDestination,
             ) if store.atomic().is_none() => store.volatility() == SemanticVolatilityV1::Volatile,
-            _ => return Err(source_descriptor_error_v29()),
+            _ => {
+                // Ordinary operand evaluation also reads places in calls and
+                // store values. Rejoin the exact place, not just its role.
+                budget.charge_work(3)?;
+                match scoped_source_operand_v29(source, event.site(), event.operand()) {
+                    Some(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place))
+                        if place as *const SemanticPlaceV1 as usize == row.source => false,
+                    _ => return Err(source_descriptor_error_v29()),
+                }
+            }
         };
         let body = lowered
             .function

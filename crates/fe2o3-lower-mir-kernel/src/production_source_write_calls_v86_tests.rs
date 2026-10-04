@@ -1,4 +1,7 @@
 use super::*;
+#[path = "production_source_write_memory_payload_v88_tests.rs"]
+mod memory_payload_v88;
+
 use scoped_raw_admission_v29::issued_role_tests_v29::{
     copied_issued_rows_v18, issued_rows_v18, run_issued_role_owner_access_v86,
 };
