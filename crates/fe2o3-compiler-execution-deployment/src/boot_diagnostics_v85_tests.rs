@@ -109,14 +109,10 @@ fn machine_helper_error_formatter_bounds_hostile_display_work() {
 
 fn child(command: &str) -> RunningSystemdMachineV1 {
     let (stderr, writer) = MachineStderrV85::new().unwrap();
-    let mut child = Command::new("/bin/sh")
-        .args(["-c", command])
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(writer))
-        .spawn()
-        .unwrap();
+    let mut plan = Command::new("/bin/sh");
+    plan.args(["-c", command]).env_clear().stdin(Stdio::null());
+    connect_machine_output_v87(&mut plan, &writer).unwrap();
+    let mut child = plan.spawn().unwrap();
     let pidfd = match pidfd_open(Pid::from_child(&child), PidfdFlags::empty()) {
         Ok(fd) => fd,
         Err(error) => {
@@ -130,6 +126,67 @@ fn child(command: &str) -> RunningSystemdMachineV1 {
         pidfd,
         stderr,
     }
+}
+
+#[test]
+fn machine_console_and_stderr_share_real_bounded_capture() {
+    let mut machine = child("printf 'actual-console\\n'; printf 'actual-stderr\\n' >&2; exit 7");
+    let pid = Pid::from_child(machine.child.as_ref().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = machine.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    machine.child.take();
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(machine.stderr.bytes, b"actual-console\nactual-stderr\n");
+    let error = machine_exit_error("before readiness", status, &machine.stderr).to_string();
+    assert!(error.contains("output_prefix=actual-console\\nactual-stderr\\n"));
+    assert!(!error.contains('\n'));
+    assert_eq!(
+        rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).err(),
+        Some(Errno::CHILD)
+    );
+}
+
+#[test]
+fn machine_console_and_stderr_enforce_one_combined_limit() {
+    let mut machine = child(
+        "i=0; while [ \"$i\" -lt 4096 ]; do printf '12345678'; printf 'abcdefgh' >&2; i=$((i+1)); done; printf '!'",
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match machine.stderr.drain() {
+            Ok(()) => {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => {
+                assert!(error.to_string().contains("64KiB"));
+                break;
+            }
+        }
+    }
+    assert!(machine.stderr.bytes.len() <= MAX_BYTES);
+    assert!(machine.stderr.bytes.iter().any(|byte| *byte == b'1'));
+    assert!(machine.stderr.bytes.iter().any(|byte| *byte == b'a'));
+    assert!(
+        machine
+            .stderr
+            .drain()
+            .unwrap_err()
+            .to_string()
+            .contains("64KiB")
+    );
+    let pid = Pid::from_child(machine.child.as_ref().unwrap());
+    drop(machine);
+    assert_eq!(
+        rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).err(),
+        Some(Errno::CHILD)
+    );
 }
 
 #[test]

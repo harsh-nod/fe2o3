@@ -1,4 +1,5 @@
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
+use std::process::{Command, Stdio};
 
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::Errno;
@@ -10,6 +11,28 @@ use super::super::{
 
 const MAX_BYTES: usize = 64 * 1024;
 const PIPE_REQUEST_BYTES: usize = 4096;
+
+pub(super) fn connect_machine_output_v87(
+    command: &mut Command,
+    destination: impl AsFd,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let stdout = rustix::fs::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
+        io_error(
+            "duplicate bounded systemd machine console destination",
+            source,
+        )
+    })?;
+    let stderr = rustix::fs::fcntl_dupfd_cloexec(&destination, 3).map_err(|source| {
+        io_error(
+            "duplicate bounded systemd machine stderr destination",
+            source,
+        )
+    })?;
+    command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    Ok(())
+}
 
 pub(super) struct MachineStderrV85 {
     reader: OwnedFd,
@@ -99,7 +122,7 @@ impl MachineStderrV85 {
     pub(super) fn failure(&self, message: &'static str) -> DeploymentVerificationErrorV1 {
         invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-            format!("{message}; stderr_prefix={}", self.prefix()),
+            format!("{message}; output_prefix={}", self.prefix()),
         )
     }
 }
