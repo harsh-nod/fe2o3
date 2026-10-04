@@ -77,6 +77,13 @@ spec fn invocation_source_statement_observations_v39(
         invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
             observation.before, observation.after)
     } else { match observation.event {
+        Some(InvocationSourceByteEventV36::ThreadWrite(write)) => {
+            let result = invocation_source_thread_write_v88(observation.before, write,
+                observation.root, observation.instance, little_endian);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
         Some(InvocationSourceByteEventV36::ScalarOperands(event)) => {
             let result = invocation_source_scalar_operands_v48(observation.before, event,
                 observation.root, observation.instance, little_endian);

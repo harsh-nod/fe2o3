@@ -1690,6 +1690,7 @@ fn headers() -> usize {
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
+    include_str!("original_semantic_mir_source_thread_write_v88.vrs"),
     include_str!("original_semantic_mir_source_descriptor_indices_v52.vrs"),
     include_str!("original_semantic_mir_source_memory_values_v51.vrs"),
     include_str!("original_semantic_mir_source_memory_laws_v51.vrs"),
@@ -1821,6 +1822,7 @@ enum InvocationSourceByteEventV36 {
         instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Descriptor(InvocationSourceDescriptorEventV51),
+    ThreadWrite(InvocationSourceThreadWriteV88),
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
         value: InvocationSourceByteValueV36, bits: int },
@@ -2185,6 +2187,8 @@ spec fn invocation_source_byte_step_v36(
             invocation_source_aggregate_place_deinitialize_v42(source, place),
         InvocationSourceByteEventV36::AggregateReset { local } =>
             invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined),
+        InvocationSourceByteEventV36::ThreadWrite(write) =>
+            invocation_source_thread_write_v88(source, write, root, instance, little_endian).source,
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }

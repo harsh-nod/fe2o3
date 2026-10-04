@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "original_semantic_mir_thread_write_v88_tests.rs"]
+mod thread_write_v88_tests;
+
 fn pointer_type(tag: u8, pointee: TypeId, bytes: u64, alignment: u64) -> Type {
     Type::new(
         SemanticTypeIdentityV1::from_sha256([tag; 32]),
