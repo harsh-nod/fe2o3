@@ -550,6 +550,7 @@ fn actual_generated_source() {
 }
 
 struct OwningBody<'a> {
+    ranked_formal: bool,
     formal: bool,
     attached: bool,
     module: bool,
@@ -573,7 +574,27 @@ impl Callbacks for OwningBody<'_> {
             crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         ) {
             Ok(transaction) => {
-                let (result, phase) = if self.formal {
+                let (result, phase) = if self.ranked_formal {
+                    transaction.observe_bf16_owned_ranked_formal_for_test_v1(
+                        owning_requested_permutation(self.config.session)
+                            .expect("selected Identity/Swap01"),
+                        |source, emission, budget| {
+                            use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                            budget.charge_work(256)?;
+                            if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                                || super::lower_hex_v1(source.source().sha256())
+                                    != self.record.spec.source.sha256
+                                || Some(emission.return_permutation())
+                                    != owning_requested_permutation(self.config.session)
+                            {
+                                return Err(E::Unavailable(
+                                    "actual owning source/requested Return differs",
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                } else if self.formal {
                     transaction.observe_bf16_owned_formal_for_test_v1(
                         owning_requested_permutation(self.config.session)
                             .expect("selected Identity/Swap01"),
@@ -730,6 +751,7 @@ fn actual_generated_owning_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        ranked_formal: false,
         formal: false,
         attached: false,
         module: false,
@@ -865,6 +887,7 @@ fn actual_generated_roster_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        ranked_formal: false,
         formal: false,
         attached: false,
         module: false,
@@ -969,6 +992,7 @@ fn actual_generated_module_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        ranked_formal: false,
         formal: false,
         attached: false,
         module: true,
@@ -1076,6 +1100,7 @@ fn actual_generated_attached_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        ranked_formal: false,
         formal: false,
         attached: true,
         module: false,
@@ -1186,6 +1211,7 @@ fn actual_generated_formal_diagnostic_source() {
         .unwrap();
     copied_budget.charge_work(1_000_000).unwrap();
     let mut body = OwningBody {
+        ranked_formal: false,
         formal: true,
         attached: false,
         module: false,
@@ -1266,5 +1292,115 @@ fn actual_generated_formal_diagnostic_source() {
     assert!(
         collected && final_deadline,
         "formal diagnostic collection refused; analysis output is never qualification"
+    );
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 ranked guard proof only; root owns finite process/output supervision"]
+fn actual_generated_ranked_formal_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        ranked_formal: true,
+        formal: false,
+        attached: false,
+        module: false,
+        roster: false,
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // Success requires the actual fresh guard continuation and cleanup, with
+    // exact raw Incomplete reasons retained beside discharged proof evidence.
+    // No ordinary admission, source publication, authenticated launch or target output.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let collected = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-ranked-formal-observation-v1",
+        "session":config.session,
+        "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "ranked_formal_entry_completed":body.completed,
+        "ranked_formal_collection_completed":collected,
+        "exact_analysis_rows_in_stderr":body.completed,
+        "ranked_guard_discharge_completed":body.completed,
+        "raw_analysis_retained":body.completed,
+        "exact_discharge_rows_in_stderr":body.completed,
+        "phase":body.phase, "failure":body.failure,
+        "root_supervision_required":true, "qualification_accepted":false,
+        "formal_admission":false, "normal_qualified":false,
+        "legacy_connected":false, "lowerer_attached":false,
+        "hardware_observed":false, "numerical_cpu_qualified":false,
+        "launch_inputs_authenticated":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    });
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private ranked formal observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_RANKED_FORMAL_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        collected && final_deadline,
+        "ranked formal guard discharge refused; no ordinary or launch qualification"
     );
 }

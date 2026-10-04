@@ -18,6 +18,7 @@ enum NominalQueryProfileV1 {
     OwnedModule { requested_return: [u8; 4] },
     OwnedAttached { requested_return: [u8; 4] },
     OwnedFormal { requested_return: [u8; 4] },
+    OwnedRankedFormal { requested_return: [u8; 4] },
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -151,6 +152,22 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )
     }
 
+    /// Fresh actual-owner guard discharge, distinct from raw formal collection.
+    pub(crate) fn observe_bf16_owned_ranked_formal_for_test_v1(
+        self,
+        requested_return: [u8; 4],
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<(), Error>,
+    ) -> (Result<(), Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_for_test_v1(
+            NominalQueryProfileV1::OwnedRankedFormal { requested_return },
+            inspect,
+        )
+    }
+
     fn observe_bf16_call_source_profile_for_test_v1<R: Copy + 'static>(
         self,
         profile: NominalQueryProfileV1,
@@ -237,7 +254,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                              | NominalQueryProfileV1::OwnedRoster { .. }
                                              | NominalQueryProfileV1::OwnedModule { .. }
                                              | NominalQueryProfileV1::OwnedAttached { .. }
-                                             | NominalQueryProfileV1::OwnedFormal { .. } => Ok(()),
+                                             | NominalQueryProfileV1::OwnedFormal { .. }
+                                             | NominalQueryProfileV1::OwnedRankedFormal { .. } => Ok(()),
                                         },
                                     )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
@@ -330,7 +348,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                         ranked_roots,
                         bindings,
                     } = prepared;
-                    if matches!(profile, NominalQueryProfileV1::OwnedRoot | NominalQueryProfileV1::OwnedRoster { .. } | NominalQueryProfileV1::OwnedModule { .. } | NominalQueryProfileV1::OwnedAttached { .. } | NominalQueryProfileV1::OwnedFormal { .. }) {
+                    if matches!(profile, NominalQueryProfileV1::OwnedRoot | NominalQueryProfileV1::OwnedRoster { .. } | NominalQueryProfileV1::OwnedModule { .. } | NominalQueryProfileV1::OwnedAttached { .. } | NominalQueryProfileV1::OwnedFormal { .. } | NominalQueryProfileV1::OwnedRankedFormal { .. }) {
                         // The ORIGINAL materialization Box is still alive here.
                         // Projection acquires its own original Box before any
                         // inventory/facts/proof; both accounts keep old caps.
@@ -342,7 +360,20 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                         assert_eq!(budget.peak_storage(), before.phase_peak_storage);
                         budget.check_prior_denials_v1()
                             .map_err(materialization_resource_error_v29)?;
-                        if let NominalQueryProfileV1::OwnedFormal { requested_return } = profile {
+                        if let NominalQueryProfileV1::OwnedRankedFormal { requested_return } = profile {
+                            let RankedVerifiedProductionCompilation { ranked, bindings } = checked;
+                            ranked.observe_private_nominal_ranked_formal_for_test_v1(requested_return)
+                                .map_err(ProductionPipelineError::RankedVerification)
+                                .map_err(Box::new)?;
+                            drop(bindings);
+                            // Formal attempt and actual intact source/report/projection pair dropped.
+                            // The original materialization account is still retained.
+                            assert_eq!(budget.work(), before.work);
+                            assert_eq!(budget.storage(), before.final_storage);
+                            assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                            budget.check_prior_denials_v1()
+                                .map_err(materialization_resource_error_v29)?;
+                        } else if let NominalQueryProfileV1::OwnedFormal { requested_return } = profile {
                             let RankedVerifiedProductionCompilation { ranked, bindings } = checked;
                             ranked.observe_private_nominal_formal_for_test_v1(requested_return)
                                 .map_err(ProductionPipelineError::RankedVerification)

@@ -940,3 +940,318 @@ mod private_formal_diagnostic_resource_tests {
         assert_eq!(budget.storage(), 7);
     }
 }
+
+type PrivateBf16GuardedFormalResultV1 = Result<(), ProductionMemoryDischargeFailureV1>;
+
+// Move-only local carrier: exact typed details are lent, then dropped before refund.
+struct PrivateBf16GuardedFormalProofV1(PrivateBf16GuardedFormalResultV1);
+
+fn private_bf16_ranked_formal_frame_storage_v1<I>(
+    _: &I,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    std::mem::size_of::<Vec<FunctionOperationLocation>>()
+        .checked_add(std::mem::size_of::<PrivateBf16GuardedFormalProofV1>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<GuardedAddressProofBudgetV1>()))
+        .and_then(|n| n.checked_add(std::mem::size_of::<I>()))
+        .ok_or_else(|| ArgumentResourceV1::Arithmetic.into())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Borrow one fresh actual report and its unchanged owner/witness on the original account"
+)]
+fn with_private_bf16_ranked_formal_frame_v1<'work, I>(
+    module: &Module,
+    kernel: &Kernel,
+    witness: [u64; 3],
+    max_operations: usize,
+    selected_root: u32,
+    attempt: &PrivateBf16FormalAttemptV1,
+    budget: &mut ArgumentBudgetV1<'work>,
+    inspect: I,
+) -> Result<(), ProductionSemanticKirErrorV1>
+where
+    I: FnOnce(
+        &PrivateBf16FormalAttemptV1,
+        &PrivateBf16GuardedFormalResultV1,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+{
+    budget.check_prior_denials_v1()?;
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = budget as *const _ as usize;
+    budget.charge_work(4)?;
+    let count = attempt
+        .as_ref()
+        .map_or(0, |analysis| analysis.incomplete_reasons().len());
+    // An excessive reason roster refuses before allocating a location vector.
+    let capacity = if count <= max_operations { count } else { 0 };
+    let payload = capacity
+        .checked_mul(std::mem::size_of::<FunctionOperationLocation>())
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
+    let storage = private_bf16_ranked_formal_frame_storage_v1(&inspect)?
+        .checked_add(payload)
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
+    let protected = floor
+        .checked_add(storage)
+        .ok_or(ArgumentResourceV1::Arithmetic)?;
+    budget.reserve_storage(storage)?;
+    let mut locations = Vec::new();
+    let derived = (|| -> Result<PrivateBf16GuardedFormalResultV1, ProductionSemanticKirErrorV1> {
+        let analysis = match attempt {
+            Ok(analysis) => analysis,
+            Err(_) => {
+                return Ok(Err(ProductionMemoryDischargeFailureV1::stage(
+                    "private nominal formal extraction failed; exact error retained in fresh attempt",
+                )));
+            }
+        };
+        let report = analysis.obligations();
+        if !report.inter_invocation_conflicts().is_empty() {
+            return Ok(Err(ProductionMemoryDischargeFailureV1::stage(
+                "private nominal formal obligations retain inter-invocation conflicts",
+            )));
+        }
+        let reasons = analysis.incomplete_reasons();
+        if reasons.len() > max_operations {
+            return Ok(Err(ProductionMemoryDischargeFailureV1::stage(
+                "private nominal guarded reason roster exceeds the operation limit",
+            )));
+        }
+        budget.charge_work(reasons.len())?;
+        if reasons.iter().any(|reason| {
+            !matches!(
+                reason,
+                FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }
+            )
+        }) {
+            return Ok(Err(ProductionMemoryDischargeFailureV1::stage(
+                "private nominal formal analysis has an unrelated incomplete reason",
+            )));
+        }
+        if reasons.is_empty() {
+            return Ok(if analysis.is_complete() {
+                Ok(())
+            } else {
+                Err(ProductionMemoryDischargeFailureV1::stage(
+                    "private nominal incomplete analysis has no exact discharge reasons",
+                ))
+            });
+        }
+        // Requested payload was paid before allocation; allocator slack is not
+        // the logical storage domain. The original reason vector is untouched.
+        locations
+            .try_reserve_exact(capacity)
+            .map_err(|_| ArgumentResourceV1::Allocation)?;
+        budget.charge_work(reasons.len())?;
+        for reason in reasons {
+            let FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } =
+                reason
+            else {
+                unreachable!("closed reason roster checked before allocation")
+            };
+            locations.push(*location);
+        }
+        // Each pending reason must have exactly one actual fresh Read row.
+        // Prepay both known-length loops before either traversal begins.
+        let row_work = locations
+            .len()
+            .checked_mul(report.accesses().len())
+            .and_then(|n| n.checked_mul(3))
+            .and_then(|n| n.checked_add(locations.len()))
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        budget.charge_work(row_work)?;
+        for location in &locations {
+            let matches = report
+                .accesses()
+                .iter()
+                .filter(|row| {
+                    row.location() == *location && row.kind() == FormalMemoryAccessKind::Read
+                })
+                .count();
+            if matches != 1 {
+                return Ok(Err(ProductionMemoryDischargeFailureV1::access(
+                    *location,
+                    "private nominal pending guard lacks one exact fresh Read row",
+                )));
+            }
+        }
+        // One original-account debit buys the entire unchanged local allowance.
+        // It is not replenished per reason and unused work is never refunded.
+        // Legacy definition/tree construction and its allocations remain outside
+        // this selected-step allowance, exactly as for the existing guard engine.
+        let allowance = max_operations
+            .checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        budget.charge_work(allowance)?;
+        let mut proof_budget = match GuardedAddressProofBudgetV1::new(max_operations) {
+            Ok(proof_budget) => proof_budget,
+            Err(error) => return Ok(Err(error)),
+        };
+        let proof = guarded_accesses_have_structural_bounds_result(
+            module,
+            kernel,
+            report,
+            witness,
+            &locations,
+            max_operations,
+            &mut proof_budget,
+        );
+        drop(proof_budget);
+        Ok(proof)
+    })();
+    let (proved, inspected) = match derived {
+        Ok(proof) => {
+            let proof = PrivateBf16GuardedFormalProofV1(proof);
+            let proved = proof.0.is_ok();
+            let inspected = inspect(attempt, &proof.0, budget);
+            // No paid diagnostic/proof detail survives the exact frame refund.
+            drop(proof);
+            (proved, inspected)
+        }
+        Err(error) => {
+            // This uninvoked FnOnce is part of the paid frame too. Its captures
+            // must die before refund, including when derived work was denied.
+            drop(inspect);
+            (false, Err(error))
+        }
+    };
+    drop(locations);
+    if budget as *const _ as usize != slot
+        || budget.work_ledger_identity_v1() != ledger
+        || budget.storage() != protected
+    {
+        drop(inspected);
+        budget.check_prior_denials_v1()?;
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    budget.release_storage(storage)?;
+    budget.check_prior_denials_v1()?;
+    // Original typed resource errors and the callback's own refusal survive.
+    inspected?;
+    if !proved {
+        // Keep the public exhaustive error enum unchanged. The callback has
+        // already borrowed the exact typed guard failure and unchanged engine
+        // error/reason data; ignoring those cannot turn this refusal into Ok.
+        return Err(unsupported(
+            selected_root,
+            None,
+            None,
+            "private nominal ranked formal guard discharge refused",
+        ));
+    }
+    Ok(())
+}
+
+impl ProductionPrivateBf16AttachedRankedOwnerV1 {
+    /// Runs a fresh owner-bound nominal replay and formal analysis, then proves
+    /// every pending guarded-read reason against that same actual module/root.
+    ///
+    /// The callback borrows the unchanged raw attempt and exact typed discharge
+    /// result. Successful discharge keeps the original Incomplete reasons as
+    /// discharged records; it does not manufacture an engine Complete result.
+    /// All bounds/alias obligations remain unauthenticated runtime obligations.
+    /// The callback returns unit, exports no receipt, and cannot waive a refusal:
+    /// this entry returns Ok only after every guard and postflight succeeds.
+    ///
+    /// New fixed/location scratch and the existing 32*max_operations selected
+    /// guard allowance are prepaid on the original projection account. The
+    /// inherited formal/graph/tree/parameter-definition/formatter domains remain
+    /// excluded: this is not whole-analysis work, allocator, stack or RSS admission.
+    /// Panic leaves conservative accepted credit for the owning phase to drop.
+    /// Ordinary dispatch, legacy attachment and target/launch gates are unchanged.
+    #[doc(hidden)]
+    pub fn with_private_bf16_ranked_formal_v1<'work, I>(
+        &self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'work>,
+        inspect: I,
+    ) -> Result<(), ProductionSemanticKirErrorV1>
+    where
+        I: FnOnce(
+            &Result<
+                fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+                fe2o3_kernel_ir::FormalMemoryObligationError,
+            >,
+            &Result<(), ProductionMemoryDischargeFailureV1>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    {
+        // Only this existing owner method constructs the fresh attempt. No
+        // external report, reason list, source clone or digest token is accepted.
+        self.with_private_bf16_formal_diagnostic_v1(
+            expected_root,
+            expected_return,
+            budget,
+            |attempt, budget| {
+                budget.check_prior_denials_v1()?;
+                budget.charge_work(8)?;
+                let module = self.receipt.materialized.executable.module();
+                let [kernel] = module.kernels.as_slice() else {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                };
+                with_private_bf16_ranked_formal_frame_v1(
+                    module,
+                    kernel,
+                    crate::production_formal_memory_v1::witness_extents(&kernel.domain),
+                    self.receipt.materialized.limits.max_operations,
+                    expected_root.index(),
+                    attempt,
+                    budget,
+                    inspect,
+                )
+            },
+        )
+    }
+}
+
+// Test-only access for resource controls that reuse the parent's inert graphs.
+// Production helpers and their visibility remain unchanged.
+#[cfg(test)]
+pub(super) type PrivateBf16FormalAttemptForTestV1 = PrivateBf16FormalAttemptV1;
+
+#[cfg(test)]
+pub(super) type PrivateBf16GuardedFormalResultForTestV1 = PrivateBf16GuardedFormalResultV1;
+
+#[cfg(test)]
+pub(super) fn private_bf16_ranked_formal_frame_storage_for_test_v1<I>(
+    inspect: &I,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    private_bf16_ranked_formal_frame_storage_v1(inspect)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Test-only forwarding bridge to the unchanged private helper"
+)]
+pub(super) fn with_private_bf16_ranked_formal_frame_for_test_v1<'work, I>(
+    module: &Module,
+    kernel: &Kernel,
+    witness: [u64; 3],
+    max_operations: usize,
+    selected_root: u32,
+    attempt: &PrivateBf16FormalAttemptForTestV1,
+    budget: &mut ArgumentBudgetV1<'work>,
+    inspect: I,
+) -> Result<(), ProductionSemanticKirErrorV1>
+where
+    I: FnOnce(
+        &PrivateBf16FormalAttemptForTestV1,
+        &PrivateBf16GuardedFormalResultForTestV1,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+{
+    with_private_bf16_ranked_formal_frame_v1(
+        module,
+        kernel,
+        witness,
+        max_operations,
+        selected_root,
+        attempt,
+        budget,
+        inspect,
+    )
+}

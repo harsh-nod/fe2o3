@@ -30264,6 +30264,486 @@ mod resource_tests {
         ));
     }
 
+    use super::bf16_ranked_module_receipt_v1::{
+        PrivateBf16FormalAttemptForTestV1 as PrivateBf16FormalAttemptV1,
+        PrivateBf16GuardedFormalResultForTestV1 as PrivateBf16GuardedFormalResultV1,
+        private_bf16_ranked_formal_frame_storage_for_test_v1 as private_bf16_ranked_formal_frame_storage_v1,
+        with_private_bf16_ranked_formal_frame_for_test_v1 as with_private_bf16_ranked_formal_frame_v1,
+    };
+
+    // Inert graph/resource controls for the private continuation. Actual intact
+    // owner/source qualification remains a separate fresh frontend endpoint.
+    fn ranked_formal_fixture_attempt_v1(
+        fixture: &GuardedAddressFixture,
+    ) -> PrivateBf16FormalAttemptV1 {
+        fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+            &fixture.module,
+            &fixture.module.kernels[0].id,
+            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 1, 1],
+            },
+            FormalIndexWidth::Bits64,
+        )
+    }
+
+    fn observe_ranked_formal_success_v1(
+        attempt: &PrivateBf16FormalAttemptV1,
+        proof: &PrivateBf16GuardedFormalResultV1,
+        _: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        assert!(proof.is_ok());
+        assert!(
+            matches!(attempt, Ok(fe2o3_kernel_ir::FormalMemoryObligationAnalysis::Incomplete { reasons, .. }) if !reasons.is_empty())
+        );
+        Ok(())
+    }
+
+    fn ranked_formal_resource_trial_v1(
+        work_limit: usize,
+        storage_limit: usize,
+    ) -> (bool, usize, usize, Option<usize>, Option<usize>) {
+        let fixture = generated_matrix_tail_fixture(4);
+        let attempt = ranked_formal_fixture_attempt_v1(&fixture);
+        let original = attempt.clone();
+        let max = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
+            .operations
+            .len();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = with_private_bf16_ranked_formal_frame_v1(
+            &fixture.module,
+            &fixture.module.kernels[0],
+            [64, 1, 1],
+            max,
+            0,
+            &attempt,
+            &mut budget,
+            observe_ranked_formal_success_v1,
+        );
+        assert_eq!(
+            attempt, original,
+            "raw incomplete analysis/reasons must not be edited"
+        );
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), 7);
+        (
+            result.is_ok(),
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        )
+    }
+
+    #[test]
+    fn private_ranked_formal_frame_exact_and_one_short_preserve_raw_reasons() {
+        let (ok, work, peak, failed_work, failed_storage) =
+            ranked_formal_resource_trial_v1(100_000, 100_000);
+        assert!(ok);
+        assert_eq!((failed_work, failed_storage), (None, None));
+        assert_eq!(
+            ranked_formal_resource_trial_v1(work, peak),
+            (true, work, peak, None, None)
+        );
+        let short_work = ranked_formal_resource_trial_v1(work - 1, peak);
+        assert!(!short_work.0);
+        assert!(short_work.3.is_some());
+        let short_storage = ranked_formal_resource_trial_v1(work, peak - 1);
+        assert!(!short_storage.0);
+        assert!(short_storage.4.is_some());
+    }
+
+    #[test]
+    fn private_ranked_formal_altered_guard_slice_index_and_select_refuse() {
+        for mutation in 0..5 {
+            let mut fixture = generated_matrix_tail_fixture(1);
+            let operations = guarded_fixture_operations_mut(&mut fixture);
+            match mutation {
+                0 => {
+                    let true_value = operations[3].results[0].id;
+                    let OperationKind::Select { condition, .. } = &mut operations[9].kind else {
+                        panic!()
+                    };
+                    *condition = true_value;
+                    let OperationKind::GuardedLoad { predicate, .. } = &mut operations[11].kind
+                    else {
+                        panic!()
+                    };
+                    *predicate = true_value;
+                }
+                1 => {
+                    let OperationKind::SliceLength { slice } = &mut operations[1].kind else {
+                        panic!()
+                    };
+                    *slice = ValueId(1);
+                }
+                2 => {
+                    let OperationKind::Compare { lhs, .. } = &mut operations[7].kind else {
+                        panic!()
+                    };
+                    *lhs = ValueId(5);
+                }
+                3 => {
+                    let OperationKind::Compare { predicate, .. } = &mut operations[7].kind else {
+                        panic!()
+                    };
+                    *predicate = ComparePredicate::Equal;
+                }
+                4 => {
+                    let OperationKind::Select { false_value, .. } = &mut operations[9].kind else {
+                        panic!()
+                    };
+                    *false_value = ValueId(2);
+                }
+                _ => unreachable!(),
+            }
+            verify_module(&fixture.module).unwrap();
+            let attempt = ranked_formal_fixture_attempt_v1(&fixture);
+            assert!(
+                attempt.is_ok(),
+                "mutation remains valid formal-analysis input"
+            );
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+            budget.reserve_storage(7).unwrap();
+            let mut observed = false;
+            let result = with_private_bf16_ranked_formal_frame_v1(
+                &fixture.module,
+                &fixture.module.kernels[0],
+                [64, 1, 1],
+                12,
+                0,
+                &attempt,
+                &mut budget,
+                |_, proof, _| {
+                    observed = true;
+                    assert!(proof.is_err());
+                    Ok(()) // Deliberately ignoring refusal cannot authorize success.
+                },
+            );
+            assert!(observed);
+            assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "private nominal ranked formal guard discharge refused",
+                    ..
+                })
+            ));
+            assert_eq!(budget.storage(), 7);
+            assert!(budget.check_prior_denials_v1().is_ok());
+        }
+    }
+
+    #[test]
+    fn private_ranked_formal_pending_coverage_unrelated_reasons_and_witness_refuse() {
+        for mutation in 0..7 {
+            let fixture = generated_matrix_tail_fixture(2);
+            let mut attempt = ranked_formal_fixture_attempt_v1(&fixture);
+            let Ok(fe2o3_kernel_ir::FormalMemoryObligationAnalysis::Incomplete { reasons, .. }) =
+                &mut attempt
+            else {
+                panic!("fixture requires ranked discharge")
+            };
+            match mutation {
+                0 => {
+                    reasons.pop();
+                }
+                1 => {
+                    reasons.push(reasons[0].clone());
+                }
+                2 => {
+                    reasons[0] = FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                        location: FunctionOperationLocation::new(BlockId(999), 11),
+                    };
+                }
+                3 => {
+                    reasons[0] = FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                        location: FunctionOperationLocation::new(BlockId(0), 10),
+                    };
+                }
+                4 => {
+                    reasons.push(FormalMemoryIncompleteReason::LaunchExtentUnknown);
+                }
+                5 => {
+                    reasons.clear();
+                }
+                6 => {}
+                _ => unreachable!(),
+            }
+            let original = attempt.clone();
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+            budget.reserve_storage(7).unwrap();
+            let result = with_private_bf16_ranked_formal_frame_v1(
+                &fixture.module,
+                &fixture.module.kernels[0],
+                if mutation == 6 {
+                    [65, 1, 1]
+                } else {
+                    [64, 1, 1]
+                },
+                19,
+                0,
+                &attempt,
+                &mut budget,
+                |_, proof, _| {
+                    assert!(proof.is_err());
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(attempt, original);
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_ranked_formal_original_denials_precede_any_new_debit() {
+        let fixture = generated_matrix_tail_fixture(1);
+        let attempt = ranked_formal_fixture_attempt_v1(&fixture);
+        for storage in [false, true] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(5);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            let original = if storage {
+                budget.reserve_storage(1).unwrap_err()
+            } else {
+                budget.charge_work(4).unwrap_err()
+            };
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                let result = with_private_bf16_ranked_formal_frame_v1(
+                    &fixture.module,
+                    &fixture.module.kernels[0],
+                    [64, 1, 1],
+                    12,
+                    0,
+                    &attempt,
+                    &mut budget,
+                    |_, _, _| panic!("prior denial must precede callback"),
+                );
+                assert!(matches!(result,
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                        if error == original));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_ranked_formal_callback_refusal_surplus_and_panic_do_not_escape_cleanup() {
+        let fixture = generated_matrix_tail_fixture(1);
+        let attempt = ranked_formal_fixture_attempt_v1(&fixture);
+        for action in 0..4 {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+            budget.reserve_storage(7).unwrap();
+            let inspect = |_: &PrivateBf16FormalAttemptV1,
+                           proof: &PrivateBf16GuardedFormalResultV1,
+                           budget: &mut ArgumentBudgetV1<'_>| {
+                assert!(proof.is_ok());
+                match action {
+                    0 => Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+                    1 => {
+                        budget.reserve_storage(1)?;
+                        Ok(())
+                    }
+                    2 => {
+                        budget.release_storage(1)?;
+                        Ok(())
+                    }
+                    3 => panic!("private ranked proof callback"),
+                    _ => unreachable!(),
+                }
+            };
+            let scratch = private_bf16_ranked_formal_frame_storage_v1(&inspect).unwrap()
+                + std::mem::size_of::<FunctionOperationLocation>();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_private_bf16_ranked_formal_frame_v1(
+                    &fixture.module,
+                    &fixture.module.kernels[0],
+                    [64, 1, 1],
+                    12,
+                    0,
+                    &attempt,
+                    &mut budget,
+                    inspect,
+                )
+            }));
+            match action {
+                0 => {
+                    assert!(matches!(
+                        result,
+                        Ok(Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch))
+                    ));
+                    assert_eq!(budget.storage(), 7);
+                }
+                1 | 2 => {
+                    assert!(matches!(
+                        result,
+                        Ok(Err(
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                ArgumentResourceV1::Accounting
+                            )
+                        ))
+                    ));
+                    assert_eq!(
+                        budget.storage(),
+                        if action == 1 {
+                            7 + scratch + 1
+                        } else {
+                            7 + scratch - 1
+                        }
+                    );
+                }
+                3 => {
+                    assert!(result.is_err());
+                    assert_eq!(budget.storage(), 7 + scratch);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn private_ranked_formal_engine_foreign_report_conflicts_and_local_limits_refuse() {
+        for mutation in 0..6 {
+            let mut fixture = generated_matrix_tail_fixture(1);
+            if mutation == 2 {
+                append_guarded_output_store(&mut fixture);
+            }
+            let mut attempt = ranked_formal_fixture_attempt_v1(&fixture);
+            if mutation == 0 {
+                attempt = Err(
+                    fe2o3_kernel_ir::FormalMemoryObligationError::GuardedResource(
+                        fe2o3_kernel_ir::FormalGuardedMemoryResourceErrorV1::Accounting,
+                    ),
+                );
+            } else if mutation == 1 {
+                let mut foreign = generated_matrix_tail_fixture(1);
+                foreign.module.kernels[0].id =
+                    fe2o3_kernel_ir::KernelId::new("foreign-guard-report");
+                attempt = ranked_formal_fixture_attempt_v1(&foreign);
+            } else if mutation == 2 {
+                assert!(
+                    !attempt
+                        .as_ref()
+                        .unwrap()
+                        .obligations()
+                        .inter_invocation_conflicts()
+                        .is_empty()
+                );
+            }
+            let max = match mutation {
+                3 => 0,
+                4 => 1,
+                5 => usize::MAX,
+                _ => 100,
+            };
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+            budget.reserve_storage(7).unwrap();
+            let mut observed = false;
+            let result = with_private_bf16_ranked_formal_frame_v1(
+                &fixture.module,
+                &fixture.module.kernels[0],
+                [64, 1, 1],
+                max,
+                0,
+                &attempt,
+                &mut budget,
+                |_, proof, _| {
+                    observed = true;
+                    assert!(proof.is_err());
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(budget.storage(), 7);
+            assert_eq!(observed, mutation != 5);
+            if mutation == 5 {
+                assert!(matches!(
+                    result,
+                    Err(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Arithmetic
+                        )
+                    )
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn private_ranked_formal_early_resource_error_drops_callback_before_refund() {
+        struct PanicOnDrop<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for PanicOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+                panic!("uninvoked callback drop observer");
+            }
+        }
+        let fixture = generated_matrix_tail_fixture(1);
+        let attempt = ranked_formal_fixture_attempt_v1(&fixture);
+        let dropped = std::cell::Cell::new(false);
+        let probe = PanicOnDrop(&dropped);
+        let inspect = move |_: &PrivateBf16FormalAttemptV1,
+                            _: &PrivateBf16GuardedFormalResultV1,
+                            _: &mut ArgumentBudgetV1<'_>|
+              -> Result<(), ProductionSemanticKirErrorV1> {
+            let _keep_whole_capture = &probe;
+            panic!("derived work refusal must precede callback invocation");
+        };
+        let scratch = private_bf16_ranked_formal_frame_storage_v1(&inspect).unwrap()
+            + std::mem::size_of::<FunctionOperationLocation>();
+        // 4 header visits + two one-row passes + four Read-row visits succeed;
+        // the unchanged local guard allowance is denied before callback entry.
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+        budget.reserve_storage(7).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_private_bf16_ranked_formal_frame_v1(
+                &fixture.module,
+                &fixture.module.kernels[0],
+                [64, 1, 1],
+                12,
+                0,
+                &attempt,
+                &mut budget,
+                inspect,
+            )
+        }));
+        assert!(result.is_err());
+        assert!(dropped.get());
+        assert_eq!(budget.work(), 10);
+        assert_eq!(budget.failed_work(), Some(10 + 12 * 32));
+        assert_eq!(
+            budget.storage(),
+            7 + scratch,
+            "panicking callback destructor ran before any paid-frame refund"
+        );
+        assert_eq!(budget.peak_storage(), 7 + scratch);
+    }
+
     struct UnsupportedIndexCorrelationFixtureV1 {
         module: Module,
         correspondence: SemanticKirCorrespondenceV1,
