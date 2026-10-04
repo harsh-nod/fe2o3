@@ -363,6 +363,7 @@ fn source_enum_tag_refuses_cross_member_reference_tuples() {
         };
         *variant = Some(0);
         merge_source_enum_tag_v55(&references, joined, &binding, &binding, budget)?;
+        merge_source_enum_tag_plan_v59(plan, joined, &binding, &binding, budget)?;
         let mut forged = binding.clone();
         let SemanticValueBindingV1::Enum { payloads, .. } = &mut forged else {
             unreachable!()
@@ -379,9 +380,144 @@ fn source_enum_tag_refuses_cross_member_reference_tuples() {
         assert_ne!(left.origin, right.origin);
         fields[1] = fields[0].clone();
         assert!(merge_source_enum_tag_v55(&references, joined, &forged, &forged, budget).is_err());
+        assert!(merge_source_enum_tag_plan_v59(plan, joined, &forged, &forged, budget).is_err());
         reached.set(true);
         Ok(())
     })
     .unwrap();
     assert!(reached.get());
+}
+
+#[test]
+fn source_enum_plan_merge_refuses_foreign_ledger_before_debit_and_preserves_sticky_error() {
+    let reached = std::cell::Cell::new(false);
+    let result = run_enum(EnumCase::CorrelatedLoans, |plan, budget| {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut foreign = ArgumentBudgetV1::new(&mut work, usize::MAX);
+        foreign.reserve_storage(budget.storage())?;
+        let before = (
+            foreign.work(),
+            foreign.storage(),
+            budget.work(),
+            budget.storage(),
+        );
+        let mut no_leaves = [];
+        let result = source_reference_merge_node_plan_v59(
+            plan,
+            usize::MAX,
+            &SemanticValueBindingV1::Unit,
+            &SemanticValueBindingV1::Unit,
+            &mut no_leaves.iter_mut(),
+            &mut 0,
+            &mut foreign,
+        );
+        assert!(matches!(
+            result,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        assert_eq!(
+            (
+                foreign.work(),
+                foreign.storage(),
+                budget.work(),
+                budget.storage()
+            ),
+            before
+        );
+        let sticky = source_reference_merge_node_plan_v59(
+            plan,
+            usize::MAX,
+            &SemanticValueBindingV1::Unit,
+            &SemanticValueBindingV1::Unit,
+            &mut no_leaves.iter_mut(),
+            &mut 0,
+            budget,
+        );
+        assert!(matches!(
+            sticky,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        assert_eq!(
+            (
+                foreign.work(),
+                foreign.storage(),
+                budget.work(),
+                budget.storage()
+            ),
+            before
+        );
+        reached.set(true);
+        sticky
+    });
+    assert!(matches!(
+        result,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Accounting
+            )
+        )
+    ));
+    assert!(reached.get());
+}
+
+#[test]
+fn source_enum_plan_factoring_keeps_emission_merge_and_values_floor_checks() {
+    for values in [false, true] {
+        let reached = std::cell::Cell::new(false);
+        let result = run_enum(EnumCase::CorrelatedLoans, |plan, budget| {
+            let references = SourceReferenceEmissionV29::new(plan, budget)?;
+            assert!(references.floor > plan.retained_floor);
+            let refund = budget.storage() - references.floor + 1;
+            budget.release_storage(refund)?;
+            let mut no_leaves = [];
+            let mut output = Vec::new();
+            let result = if values {
+                source_reference_values_v29(
+                    &references,
+                    &SemanticValueBindingV1::Unit,
+                    &mut output,
+                    &mut 0,
+                    budget,
+                )
+            } else {
+                source_reference_merge_node_v29(
+                    &references,
+                    usize::MAX,
+                    &SemanticValueBindingV1::Unit,
+                    &SemanticValueBindingV1::Unit,
+                    &mut no_leaves.iter_mut(),
+                    &mut 0,
+                    budget,
+                )
+            };
+            assert!(matches!(
+                result,
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting
+                    )
+                )
+            ));
+            assert!(output.is_empty());
+            reached.set(true);
+            result
+        });
+        assert!(matches!(
+            result,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        assert!(reached.get());
+    }
 }

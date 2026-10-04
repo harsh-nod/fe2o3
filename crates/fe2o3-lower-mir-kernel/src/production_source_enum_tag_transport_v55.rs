@@ -305,8 +305,8 @@ fn merge_source_enum_tag_plan_v59(
             let child = plan.children[argument_sum_v1(&[alternative.first, field])?];
             let mut no_leaf_storage: [Option<ExecutionCfgLeafV29>; 0] = [];
             let mut no_leaves = no_leaf_storage.iter_mut();
-            match source_reference_merge_node_v29(
-                references,
+            match source_reference_merge_node_plan_v59(
+                plan,
                 child,
                 &left[field],
                 &right[field],

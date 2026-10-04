@@ -437,14 +437,37 @@ fn source_reference_merge_node_v29(
     nodes: &mut usize,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let plan = references.plan;
     references.check(budget)?;
+    source_reference_merge_node_plan_v59(
+        references.plan,
+        node,
+        held,
+        archived,
+        leaves,
+        nodes,
+        budget,
+    )
+}
+
+// The recursive query only retains/charges storage; it never refunds or invokes
+// callbacks. Emission callers check their live floor before entering this body.
+#[allow(clippy::too_many_arguments)]
+fn source_reference_merge_node_plan_v59(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    node: usize,
+    held: &SemanticValueBindingV1,
+    archived: &SemanticValueBindingV1,
+    leaves: &mut std::slice::IterMut<'_, Option<ExecutionCfgLeafV29>>,
+    nodes: &mut usize,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
     execution_cfg_charge_node_v29(nodes, budget)
         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
     let row = *plan.nodes.get(node).ok_or_else(execution_cfg_error_v29)?;
     match row.kind {
         SourceReferenceNodeKindV29::Absent => {
-            source_reference_merge_inactive_v29(references, node, held, archived, nodes, budget)
+            source_reference_merge_inactive_plan_v59(plan, node, held, archived, nodes, budget)
         }
         SourceReferenceNodeKindV29::Loan(_) | SourceReferenceNodeKindV29::EnumView(_) => {
             let origin = match row.kind {
@@ -610,8 +633,8 @@ fn source_reference_merge_node_v29(
             for field in 0..alternative.count {
                 budget.source_reference_charge_v29(plan, 1)?;
                 let child = plan.children[argument_sum_v1(&[alternative.first, field])?];
-                source_reference_merge_node_v29(
-                    references, child, &a[field], &b[field], leaves, nodes, budget,
+                source_reference_merge_node_plan_v59(
+                    plan, child, &a[field], &b[field], leaves, nodes, budget,
                 )?;
             }
             Ok(())
@@ -636,8 +659,8 @@ fn source_reference_merge_node_v29(
                 if child >= node {
                     return Err(execution_cfg_error_v29());
                 }
-                source_reference_merge_node_v29(
-                    references,
+                source_reference_merge_node_plan_v59(
+                    plan,
                     child,
                     &held[index],
                     &archived[index],
@@ -658,8 +681,18 @@ fn source_reference_values_v29(
     nodes: &mut usize,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let plan = references.plan;
     references.check(budget)?;
+    source_reference_values_plan_v59(references.plan, binding, output, nodes, budget)
+}
+
+fn source_reference_values_plan_v59(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    binding: &SemanticValueBindingV1,
+    output: &mut Vec<ValueDef>,
+    nodes: &mut usize,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.source_reference_owner_v29(plan)?;
     execution_cfg_charge_node_v29(nodes, budget)
         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
     match binding {
@@ -679,7 +712,7 @@ fn source_reference_values_v29(
             for fields in payloads.values() {
                 budget.source_reference_charge_v29(plan, 1)?;
                 for field in fields {
-                    source_reference_values_v29(references, field, output, nodes, budget)?;
+                    source_reference_values_plan_v59(plan, field, output, nodes, budget)?;
                 }
             }
             Ok(())
@@ -700,7 +733,7 @@ fn source_reference_values_v29(
             Ok(())
         }
         SemanticValueBindingV1::SourceReference(binding) => {
-            source_reference_validate_binding_v29(references.plan, binding, budget)?;
+            source_reference_validate_binding_v29(plan, binding, budget)?;
             for value in &binding.values {
                 budget.source_reference_charge_v29(plan, 1)?;
                 let ty = execution_cfg_clone_type_v29(&value.ty, budget)
@@ -711,7 +744,7 @@ fn source_reference_values_v29(
         }
         SemanticValueBindingV1::Aggregate(fields) => {
             for field in fields {
-                source_reference_values_v29(references, field, output, nodes, budget)?;
+                source_reference_values_plan_v59(plan, field, output, nodes, budget)?;
             }
             Ok(())
         }
