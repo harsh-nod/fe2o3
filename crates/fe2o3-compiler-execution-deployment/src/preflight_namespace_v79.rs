@@ -21,6 +21,24 @@ pub(super) fn supervise_pid1(
     root: File,
     stage: &str,
 ) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    supervise_tool_pid1(root, QualificationPid1ToolV84::SystemdPreflight(stage))
+}
+
+pub(super) fn supervise_provisioning_pid1(
+    root: File,
+) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    supervise_tool_pid1(root, QualificationPid1ToolV84::ProvisioningV1)
+}
+
+enum QualificationPid1ToolV84<'a> {
+    SystemdPreflight(&'a str),
+    ProvisioningV1,
+}
+
+fn supervise_tool_pid1(
+    root: File,
+    tool: QualificationPid1ToolV84<'_>,
+) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
     let root = PreflightRootReopenV79::capture(root)?;
     let namespace = super::mount::enter_private_qualification_mount_namespace_v1()?;
     let reopened = root.reopen()?;
@@ -31,9 +49,18 @@ pub(super) fn supervise_pid1(
     rustix::thread::unshare(rustix::thread::UnshareFlags::NEWPID)
         .map_err(|source| io_error("create isolated preflight child PID namespace", source))?;
     namespace.revalidate()?;
-    let child = Command::new("/proc/self/exe")
-        .arg(super::COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79)
-        .arg(stage)
+    let mut command = Command::new("/proc/self/exe");
+    match tool {
+        QualificationPid1ToolV84::SystemdPreflight(stage) => {
+            command
+                .arg(super::COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PID1_COMMAND_V79)
+                .arg(stage);
+        }
+        QualificationPid1ToolV84::ProvisioningV1 => {
+            command.arg(super::COMPILER_EXECUTION_PROVISIONING_PID1_COMMAND_V84);
+        }
+    }
+    let child = command
         .arg(parent.as_raw_pid().to_string())
         .env_clear()
         .stdin(Stdio::from(reopened))

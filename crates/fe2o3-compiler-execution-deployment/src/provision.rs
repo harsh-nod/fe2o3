@@ -225,15 +225,40 @@ fn run_production_provisioner(root: &OwnedFd) -> Result<(), DeploymentVerificati
         .stderr(Stdio::from(child_stderr))
         .status()
         .map_err(|source| std_io_error("execute compiler-execution provisioner", source))?;
+    finish_provisioning_capture_v84(status, File::from(stdout), File::from(stderr))
+}
+
+fn finish_provisioning_capture_v84(
+    status: std::process::ExitStatus,
+    stdout: File,
+    stderr: File,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let length = |file: &File| {
+        file.metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|source| std_io_error("inspect captured provisioning output", source))
+    };
+    let stdout_len = length(&stdout)?;
+    let stderr_len = length(&stderr)?;
+    if stdout_len
+        .checked_add(stderr_len)
+        .is_none_or(|total| total > PROVISIONING_OUTPUT_MAX_BYTES_V1)
+    {
+        return Err(provisioning_invalid(
+            "combined production provisioner output exceeds the fixed bound",
+        ));
+    }
     if !status.success() {
         return Err(provisioning_invalid(format!(
-            "production provisioner failed with exit_code={:?} signal={:?}",
+            "production provisioner failed with exit_code={:?} signal={:?}; stdout=\"{}\"; stderr=\"{}\"",
             status.code(),
-            status.signal()
+            status.signal(),
+            super::preflight::read_error_prefix_v80(&stdout, stdout_len)?,
+            super::preflight::read_error_prefix_v80(&stderr, stderr_len)?,
         )));
     }
-    require_empty_bounded_output(File::from(stdout), "standard output")?;
-    require_empty_bounded_output(File::from(stderr), "standard error")
+    require_empty_bounded_output(stdout, "standard output")?;
+    require_empty_bounded_output(stderr, "standard error")
 }
 
 fn require_empty_bounded_output(
@@ -257,12 +282,18 @@ fn require_empty_bounded_output(
     Ok(())
 }
 
-/// Enters the inherited composed root and replaces this helper with the production provisioner.
+/// Supervises the production provisioner in a child-only PID and mount namespace.
 ///
 /// The qualification binary binds this hidden one-task root helper to its exact parent before
 /// entry. Success does not return because the helper is replaced by the admitted static image.
 pub fn execute_compiler_execution_provisioning_tool_v1()
 -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    let (root, null_stdin) = prepare_provisioning_tool_v84()?;
+    drop(null_stdin);
+    super::preflight_namespace_v79::supervise_provisioning_pid1(root)
+}
+
+fn prepare_provisioning_tool_v84() -> Result<(File, File), DeploymentVerificationErrorV1> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InsufficientPrivilege,
@@ -288,19 +319,51 @@ pub fn execute_compiler_execution_provisioning_tool_v1()
         },
     )
     .map_err(|source| io_error("bound provisioning file output", source))?;
+    Ok((root, null_stdin))
+}
+
+/// Executes the fixed V1 provisioner as PID1 with an authenticated live-parent pidfd.
+/// The private read-only proc mount is destroyed with this child namespace, not retained
+/// in the qualification worker. This hidden boundary grants no provisioning authority.
+pub fn execute_compiler_execution_provisioning_pid1_tool_v84(
+    expected_parent: u32,
+) -> Result<std::convert::Infallible, DeploymentVerificationErrorV1> {
+    let parent =
+        super::preflight_namespace_v79::PreflightParentBindingV79::bind_stderr(expected_parent)?;
+    let (root, null_stdin) = prepare_provisioning_tool_v84()?;
+    // Stderr carries the parent pidfd until binding. Both tool streams subsequently use the
+    // existing bounded output memfd; successful provisioning must still be completely silent.
+    let tool_stderr = rustix::io::dup(std::io::stdout())
+        .map_err(|source| io_error("duplicate captured provisioning tool output", source))?;
     rustix::process::chroot(COMPOSED_ROOT_STDIN_PATH_V1)
         .map_err(|source| io_error("enter composed root for provisioning", source))?;
     std::env::set_current_dir("/")
         .map_err(|source| std_io_error("enter provisioning root working directory", source))?;
+    super::preflight_namespace_v79::mount_private_proc_v79()?;
+    parent.require_live()?;
+    drop(parent);
+    drop(root);
     let error = Command::new(PROVISIONER_PATH_V1)
         .arg(POLICY_GENERATION_V1.to_string())
         .env_clear()
         .stdin(Stdio::from(null_stdin))
+        .stderr(Stdio::from(tool_stderr))
         .exec();
     Err(std_io_error(
         "replace provisioning helper with production provisioner",
         error,
     ))
+}
+
+/// Bounded failure-only PID1 output, never a successful provisioning report.
+pub fn compiler_execution_provisioning_pid1_error_v84(
+    error: &DeploymentVerificationErrorV1,
+) -> String {
+    super::preflight::bounded_pid1_error_v84(
+        "FE2O3_PROVISIONING_PID1_ERROR",
+        "provisioning-v1",
+        error,
+    )
 }
 
 fn validate_composed_root(root: &File) -> Result<(), DeploymentVerificationErrorV1> {
@@ -767,6 +830,8 @@ mod tests {
             DeploymentVerificationErrorKindV1::InvalidQualificationProvisioning
         );
     }
+
+    include!("provision_pid1_v84_tests.rs");
 
     #[derive(Clone, Copy, Debug)]
     enum FixtureMutationV1 {

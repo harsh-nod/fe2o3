@@ -225,7 +225,7 @@ fn bounded_capture_lengths_v80(
     Ok((output_len, error_len))
 }
 
-fn read_error_prefix_v80(
+pub(super) fn read_error_prefix_v80(
     file: &File,
     expected_len: u64,
 ) -> Result<String, DeploymentVerificationErrorV1> {
@@ -309,12 +309,20 @@ pub fn compiler_execution_systemd_preflight_pid1_error_v80(
     stage: &str,
     error: &DeploymentVerificationErrorV1,
 ) -> String {
+    bounded_pid1_error_v84("FE2O3_PREFLIGHT_PID1_ERROR", stage, error)
+}
+
+pub(super) fn bounded_pid1_error_v84(
+    prefix: &'static str,
+    stage: &str,
+    error: &DeploymentVerificationErrorV1,
+) -> String {
     let mut stage_prefix = BoundedEscapedV80::new(64);
     let _ = stage_prefix.append(stage.as_bytes());
     let mut error_prefix = BoundedEscapedV80::new(768);
     let _ = std::fmt::write(&mut error_prefix, format_args!("{error}"));
     format!(
-        "FE2O3_PREFLIGHT_PID1_ERROR stage=\"{}\" cause=\"{}\"\n",
+        "{prefix} stage=\"{}\" cause=\"{}\"\n",
         stage_prefix.finish(),
         error_prefix.finish(),
     )

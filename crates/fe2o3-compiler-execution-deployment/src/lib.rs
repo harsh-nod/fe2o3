@@ -79,7 +79,11 @@ pub use preflight::{
     execute_compiler_execution_systemd_preflight_pid1_tool_v79,
     execute_compiler_execution_systemd_preflight_tool_v1,
 };
-pub use provision::execute_compiler_execution_provisioning_tool_v1;
+pub use provision::{
+    compiler_execution_provisioning_pid1_error_v84,
+    execute_compiler_execution_provisioning_pid1_tool_v84,
+    execute_compiler_execution_provisioning_tool_v1,
+};
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
@@ -115,6 +119,9 @@ pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
 /// Hidden static-harness command that runs the admitted production provisioner in the composed root.
 pub const COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1: &str =
     "__compiler-execution-provisioning-tool-v1";
+/// Hidden PID1 entrypoint reached only through the parent-bound V1 provisioning supervisor.
+pub const COMPILER_EXECUTION_PROVISIONING_PID1_COMMAND_V84: &str =
+    "__compiler-execution-provisioning-pid1-v84";
 /// Parent-PID binding passed only from the qualification worker to its provisioning helper.
 pub const COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1: &str =
     "FE2O3_QUALIFICATION_PROVISIONING_PARENT_PID_V1";
