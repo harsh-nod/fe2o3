@@ -1,5 +1,5 @@
 //! Genuine publication and executed refinement joined to a test-key service, never launch authority.
-use super::conditional_fill_host::{AuditOnlyFillMarker, FILL_BINDING};
+use super::conditional_fill_host::{AuditOnlyFillMarker, FILL_BINDING, GeneratedFillMarker};
 use super::*;
 use ed25519_dalek::Signer;
 use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
@@ -38,7 +38,7 @@ struct RefinementAuditor {
     change_payload: bool,
 }
 
-impl WorkerV3AuditorV1<AuditOnlyFillMarker> for RefinementAuditor {
+impl WorkerV3AuditorV1<GeneratedFillMarker> for RefinementAuditor {
     type Error = Infallible;
     type Evidence = (
         OwnedConditionalFillRefinementExecutionV1,
@@ -48,7 +48,7 @@ impl WorkerV3AuditorV1<AuditOnlyFillMarker> for RefinementAuditor {
 
     fn audit(
         &mut self,
-        request: &WorkerV3VerificationRequestV1<'_, AuditOnlyFillMarker>,
+        request: &WorkerV3VerificationRequestV1<'_, GeneratedFillMarker>,
     ) -> Result<Self::Evidence, Self::Error> {
         let receipts = request.semantic_compiler_handoff().capsule().receipts();
         let inputs = validate_conditional_compiler_proof_inputs_v1(
@@ -114,6 +114,7 @@ impl WorkerV3AuditorV1<AuditOnlyFillMarker> for RefinementAuditor {
 enum Case {
     Good,
     Marker,
+    HostContract,
     Payload,
     StaleSuccess,
     StaleFailure,
@@ -126,6 +127,7 @@ fn genuine_fill_pending_retains_original_evidence_and_currentness() {
     for case in [
         Case::Good,
         Case::Marker,
+        Case::HostContract,
         Case::Payload,
         Case::StaleSuccess,
         Case::StaleFailure,
@@ -167,7 +169,7 @@ fn run_case(case: Case) {
         change_payload: matches!(case, Case::Payload),
     };
     let (refinement, carriage, host_challenge) = audit_recovered_worker_v3_verification_v1::<
-        AuditOnlyFillMarker,
+        GeneratedFillMarker,
         _,
     >(&admission, &mut proof_auditor)
     .unwrap();
@@ -225,8 +227,21 @@ fn run_case(case: Case) {
         ));
         assert_endpoint_unused(&service);
         drop(auditor);
-    } else if matches!(case, Case::Payload) {
+    } else if matches!(case, Case::HostContract) {
         let error = PendingWorkerV3ConditionalFillArtifactV1::<AuditOnlyFillMarker>::check(
+            admission,
+            refinement,
+            &mut auditor,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerV3ConditionalFillPendingErrorV1::Marker("generated host contract")
+        ));
+        assert_endpoint_unused(&service);
+        drop(auditor);
+    } else if matches!(case, Case::Payload) {
+        let error = PendingWorkerV3ConditionalFillArtifactV1::<GeneratedFillMarker>::check(
             admission,
             refinement,
             &mut auditor,
@@ -267,7 +282,7 @@ fn run_case(case: Case) {
             send_response(&service, response.canonical_bytes());
             request.verification_challenge()
         });
-        let result = PendingWorkerV3ConditionalFillArtifactV1::<AuditOnlyFillMarker>::check(
+        let result = PendingWorkerV3ConditionalFillArtifactV1::<GeneratedFillMarker>::check(
             admission,
             refinement,
             &mut auditor,

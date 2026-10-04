@@ -1,5 +1,6 @@
 //! Genuine compiler/Worker artifact with test-signed inert V2 carriage, never launch authority.
 use super::*;
+use fe2o3_device::{WriteOnlyDisjointSlice, thread};
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectLimitsV1, AuthenticatedPhysicalMachineEffectWorkerV1,
     PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
@@ -10,6 +11,26 @@ use fe2o3_verifier::{
     validate_conditional_compiler_target_lineage_v1,
 };
 use object::{Object, ObjectSection};
+
+// Captured production-extraction fixture namespace. The macro derives the marker,
+// argument ABI and host contract; none is supplied by an unsafe fixture impl.
+#[fe2o3_device::kernel(
+    typed,
+    namespace = "ef64c9e65aa7777848ff96f7538edee8e63eaada0869bd9f4b662aec03e0590e",
+    reference = write_only_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn fill_write_only(mut output: WriteOnlyDisjointSlice<u32>) {
+    let index = thread::index_1d();
+    let value = index.get() as u32;
+    let _ = output.write(index, value);
+}
+
+fn write_only_reference(point: usize, output: &mut u32) {
+    *output = point as u32;
+}
+
+pub(super) use fill_write_only_gpu::Marker as GeneratedFillMarker;
 
 pub(super) const FILL_BINDING: [u8; 32] = [
     201, 142, 90, 172, 23, 165, 117, 211, 118, 242, 35, 196, 101, 72, 69, 111, 43, 149, 220, 157,
@@ -57,6 +78,43 @@ fn audit_marker_matches_genuine_fill_descriptor() {
     assert_eq!(
         descriptor.entry_name().as_str(),
         AuditOnlyFillMarker::EXPORT_NAME
+    );
+}
+
+#[test]
+fn generated_fill_marker_matches_independently_derived_contract() {
+    let outer = fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3::decode(include_bytes!(
+        "../../../fe2o3-verifier/src/conditional_fill_program_v1/fill.handoff"
+    ))
+    .unwrap();
+    let receipts = outer.capsule().receipts();
+    let source =
+        fe2o3_compiler_ffi::CompilerDescriptorSourceV1::decode(receipts.abi().canonical_preimage())
+            .unwrap();
+    let inputs = validate_conditional_compiler_proof_inputs_v1(
+        receipts.proof_binding(),
+        receipts.semantic_mir(),
+        receipts.middle_end(),
+        receipts.kernel_ir(),
+        receipts.mir_to_kir_correspondence(),
+        receipts.formal_memory(),
+    )
+    .unwrap();
+    let lineage =
+        validate_conditional_compiler_target_lineage_v1(outer.capsule(), &inputs).unwrap();
+    let program = check_conditional_fill_program_v1(&inputs, &lineage).unwrap();
+    let contract =
+        fe2o3_host::derive_worker_v3_conditional_fill_host_contract_v1(&program, &source).unwrap();
+    assert_eq!(GeneratedFillMarker::KERNEL_BINDING_ID_V1, FILL_BINDING);
+    assert_eq!(GeneratedFillMarker::LOGICAL_NAME, "fill_write_only");
+    assert_eq!(GeneratedFillMarker::EXPORT_NAME, "fill_write_only");
+    assert_eq!(
+        contract,
+        GeneratedFillMarker::PROFILE.generated_host_contract_identity()
+    );
+    assert_ne!(
+        contract,
+        AuditOnlyFillMarker::PROFILE.generated_host_contract_identity()
     );
 }
 
@@ -143,6 +201,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3AuditorV1<K> for FillAudit
         assert!(std::ptr::eq(joined.program(), &program));
         assert!(std::ptr::eq(joined.machine(), &machine));
         assert!(!joined.grants_launch_authority());
+        assert_eq!(
+            joined.generated_host_contract_identity(),
+            GeneratedFillMarker::PROFILE.generated_host_contract_identity()
+        );
         let independent = request
             .independently_revalidate_finalizer_derivation()
             .unwrap();

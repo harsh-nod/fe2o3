@@ -317,7 +317,7 @@ pub use worker_v3_verification_admission::{
     WorkerV3VerificationChallengeIdentityV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
     WorkerV3VerificationRosterIdentityV1, WorkerV3VerifierV1,
-    audit_recovered_worker_v3_verification_v1,
+    audit_recovered_worker_v3_verification_v1, derive_worker_v3_conditional_fill_host_contract_v1,
 };
 #[cfg(target_os = "linux")]
 pub use worker_v3_verification_admission::{

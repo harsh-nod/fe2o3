@@ -49,6 +49,7 @@ const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2: &[u8] =
 mod conditional_fill;
 pub use conditional_fill::{
     CheckedWorkerV3ConditionalFillAssociationV1, WorkerV3ConditionalFillAssociationErrorV1,
+    derive_worker_v3_conditional_fill_host_contract_v1,
 };
 #[cfg(target_os = "linux")]
 pub use conditional_fill::{

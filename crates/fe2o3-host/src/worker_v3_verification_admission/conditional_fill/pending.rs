@@ -16,6 +16,7 @@ use fe2o3_verifier::{ConditionalFillProgramErrorV1, OwnedConditionalFillRefineme
 use std::{error::Error, fmt, marker::PhantomData};
 
 /// Retains one current publication, executed refinement and fresh compiler-service audit.
+/// The declared marker contract must equal the independently reconstructed fill contract.
 ///
 /// This is pending evidence, not an unconditional executable. The signed compiler
 /// audit does not establish protected key custody or independently administered

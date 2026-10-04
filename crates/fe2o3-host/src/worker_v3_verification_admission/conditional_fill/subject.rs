@@ -90,9 +90,14 @@ impl InertWorkerV3ConditionalFillSubjectV1 {
             program.function_symbol(),
         )
         .map_err(E::Machine)?;
-        let _association = request
+        let association = request
             .check_conditional_fill_analysis_v1(&program, &machine)
             .map_err(E::Association)?;
+        if association.generated_host_contract_identity()
+            != request.generated_host_contract_identity()
+        {
+            return Err(E::Marker("generated host contract"));
+        }
         let canonical = SubjectRoots {
             lineage: *request.lineage_identity().as_bytes(),
             challenge: *request.challenge_identity().as_bytes(),

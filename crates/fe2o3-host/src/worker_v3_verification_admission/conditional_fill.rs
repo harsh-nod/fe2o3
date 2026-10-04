@@ -11,6 +11,9 @@ use fe2o3_kernel_analysis::CheckedGfx942FillAnalysisV1;
 use fe2o3_verifier::CheckedConditionalFillProgramV1;
 use std::{error::Error, fmt};
 
+mod contract;
+pub use contract::derive_worker_v3_conditional_fill_host_contract_v1;
+
 #[cfg(target_os = "linux")]
 mod pending;
 #[cfg(target_os = "linux")]
@@ -55,6 +58,7 @@ pub struct CheckedWorkerV3ConditionalFillAssociationV1<'check, 'admission, K> {
     request: &'check WorkerV3VerificationRequestV1<'admission, K>,
     program: &'check CheckedConditionalFillProgramV1<'check>,
     machine: &'check CheckedGfx942FillAnalysisV1<'check>,
+    generated_host_contract: [u8; 32],
 }
 
 impl<'check, 'admission, K> CheckedWorkerV3ConditionalFillAssociationV1<'check, 'admission, K> {
@@ -72,6 +76,11 @@ impl<'check, 'admission, K> CheckedWorkerV3ConditionalFillAssociationV1<'check, 
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    /// Independently derived contract; the marker's declaration is not trusted here.
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract
     }
 }
 
@@ -189,10 +198,13 @@ impl<'admission, K: CompilerGeneratedKernelExpectationV1>
         {
             return Err(E::Machine("entry symbol"));
         }
+        let generated_host_contract =
+            derive_worker_v3_conditional_fill_host_contract_v1(program, &source)?;
         Ok(CheckedWorkerV3ConditionalFillAssociationV1 {
             request: self,
             program,
             machine,
+            generated_host_contract,
         })
     }
 }
