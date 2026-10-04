@@ -272,15 +272,19 @@ fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() 
     );
     assert!(SOURCE_POINTERS_V36.contains("0 <= index < slice.length"));
     assert!(SOURCE_POINTERS_V36.contains("forall|index: int| 0 <= index < slice.length"));
-    let (slice_borrow, index_borrow) = SOURCE_POINTERS_V36
+    let (slice_call, index_borrow) = SOURCE_POINTERS_V36
         .split_once("InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } =>")
         .unwrap()
         .1
         .split_once("InvocationSourcePointerEventV36::IndexBorrow { destination, local, index, index_bits, metadata_bits, width, alignment, bits } =>")
         .unwrap();
+    assert_eq!(
+        slice_call,
+        "\n            invocation_source_slice_borrow_step_v77(source, destination, local,\n                metadata_bits, width, alignment, bits, little_endian),\n        "
+    );
     // Struct update retains both allocation identity and the enclosing view.
     for branch in [
-        slice_borrow,
+        slice_borrow_body_v77(),
         index_borrow.split("\nproof fn ").next().unwrap(),
     ] {
         assert_eq!(branch.matches("..slice.pointer").count(), 1);
@@ -299,15 +303,30 @@ fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() 
     assert!(!SOURCE_POINTERS_V36.contains("target:"));
 }
 
-#[test]
-fn original_slice_borrow_trigger_preserves_exact_formation_and_refusal() {
-    let slice = SOURCE_POINTERS_V36
-        .split_once("InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } =>")
+fn slice_borrow_body_v77() -> &'static str {
+    SOURCE_POINTERS_V36
+        .split_once("spec fn invocation_source_slice_borrow_step_v77(")
         .unwrap()
         .1
-        .split_once("InvocationSourcePointerEventV36::IndexBorrow")
+        .split_once("spec fn invocation_source_pointer_step_v36(")
         .unwrap()
-        .0;
+        .0
+        .split_once(") -> InvocationSourceByteStateV36 {\n")
+        .unwrap()
+        .1
+        .strip_suffix("}\n\n")
+        .unwrap()
+}
+
+#[test]
+fn original_slice_borrow_trigger_preserves_exact_formation_and_refusal() {
+    let mut slice = String::from(" {\n");
+    for line in slice_borrow_body_v77().lines() {
+        slice.push_str("        ");
+        slice.push_str(line);
+        slice.push('\n');
+    }
+    slice.push_str("        }\n        ");
     assert_eq!(slice.matches("#[trigger] ").count(), 1);
     assert_eq!(
         slice.replace("#[trigger] ", ""),
@@ -345,7 +364,7 @@ fn original_slice_borrow_refusal_and_carrier_laws_are_complete_model_obligations
             .split_once(&signature)
             .unwrap()
             .1
-            .split_once("{}")
+            .split_once("\n{")
             .unwrap()
             .0;
         assert!(law.contains("source.machine.values[local] == MemoryValueV30::Slice(slice)"));

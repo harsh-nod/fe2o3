@@ -56,7 +56,20 @@ proof fn invocation_nested_source_guard_cannot_disappear_v40(
     requires source.view == Some(source_view), target.view == Some(target_view),
         0 < source_view.guards.len(), target_view.guards.len() == 0,
     ensures !invocation_pointer_views_related_v40(source, target, map, source_memory, target_memory),
-{ }
+{
+    reveal(invocation_pointer_views_related_v40);
+    if invocation_pointer_views_related_v40(source, target, map, source_memory, target_memory) {
+        let guard = source_view.guards[0];
+        assert(forall|i: int| #![trigger source_view.guards[i]]
+            0 <= i < source_view.guards.len() ==>
+            exists|j: int| #![trigger target_view.guards[j]] 0 <= j < target_view.guards.len()
+                && invocation_tag_guards_related_v40(source_view.guards[i], target_view.guards[j],
+                    map, source_memory, target_memory));
+        assert(exists|j: int| 0 <= j < target_view.guards.len()
+            && invocation_tag_guards_related_v40(guard, target_view.guards[j],
+                map, source_memory, target_memory));
+    }
+}
 
 proof fn invocation_nested_target_guard_cannot_appear_without_match_v40(
     source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
@@ -66,7 +79,20 @@ proof fn invocation_nested_target_guard_cannot_appear_without_match_v40(
     requires source.view == Some(source_view), target.view == Some(target_view),
         source_view.guards.len() == 0, 0 < target_view.guards.len(),
     ensures !invocation_pointer_views_related_v40(source, target, map, source_memory, target_memory),
-{ }
+{
+    reveal(invocation_pointer_views_related_v40);
+    if invocation_pointer_views_related_v40(source, target, map, source_memory, target_memory) {
+        let guard = target_view.guards[0];
+        assert(forall|j: int| #![trigger target_view.guards[j]]
+            0 <= j < target_view.guards.len() ==>
+            exists|i: int| #![trigger source_view.guards[i]] 0 <= i < source_view.guards.len()
+                && invocation_tag_guards_related_v40(source_view.guards[i], target_view.guards[j],
+                    map, source_memory, target_memory));
+        assert(exists|i: int| 0 <= i < source_view.guards.len()
+            && invocation_tag_guards_related_v40(source_view.guards[i], guard,
+                map, source_memory, target_memory));
+    }
+}
 
 proof fn invocation_zero_width_keeps_stale_guard_refusal_v40(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, view: MemoryStorageViewV38, index: int,

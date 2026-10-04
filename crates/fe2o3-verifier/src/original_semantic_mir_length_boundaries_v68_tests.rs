@@ -101,6 +101,65 @@ fn original_complete_source_model_includes_operand_effect_acceptance_and_refusal
 }
 
 #[test]
+fn original_complete_source_model_retains_explicit_guard_slice_and_return_witnesses() {
+    let result = run_complete_source_model_v68(LIMIT, LIMIT, |text, census| {
+        assert_eq!(census[0], 2);
+        for equation in [
+            "invocation_nested_source_guard_cannot_disappear_v40",
+            "invocation_nested_target_guard_cannot_appear_without_match_v40",
+            "invocation_source_slice_borrow_invalid_element_refuses_v74",
+            "invocation_source_enum_return_cannot_hide_a_callee_pointer_v50",
+            "invocation_source_slice_invalid_element_breaks_all_v77",
+            "invocation_source_pointer_value_escapes_frame_v77",
+            "aggregate_or_descriptor_singleton_effects_v77",
+        ] {
+            assert_eq!(text.matches(&format!("proof fn {equation}(")).count(), 1);
+        }
+        for witness in [
+            "assert(exists|j: int| 0 <= j < target_view.guards.len()",
+            "let guard = source_view.guards[0];",
+            "assert(exists|i: int| 0 <= i < source_view.guards.len()",
+            "let guard = target_view.guards[0];",
+            "if forall|element: int| 0 <= element < slice.length ==>",
+            "assert(exists|index: int| value.fields.contains_key(index)",
+            "reveal(invocation_source_snapshot_escapes_frame_v42);",
+        ] {
+            assert_eq!(text.matches(witness).count(), 1, "{witness}");
+        }
+        for isolated in [
+            "invocation_source_slice_borrow_invalid_element_refuses_v74",
+            "invocation_source_enum_return_cannot_hide_a_callee_pointer_v50",
+            "aggregate_or_descriptor_singleton_effects_v77",
+        ] {
+            assert!(text.contains(&format!(
+                "#[verifier::spinoff_prover]\nproof fn {isolated}("
+            )));
+        }
+        assert_eq!(
+            text.matches("spec fn invocation_source_slice_borrow_step_v77(")
+                .count(),
+            1
+        );
+        assert!(
+            !text.contains("#[verifier::opaque]\nspec fn invocation_source_slice_borrow_step_v77(")
+        );
+        assert!(text.contains(
+            "&& invocation_source_value_escapes_frame_v36(value.fields[field], frame))) by (compute_only);"
+        ));
+        for contract in [
+            "0 < source_view.guards.len(), target_view.guards.len() == 0,",
+            "source_view.guards.len() == 0, 0 < target_view.guards.len(),",
+            "0 <= index < slice.length,\n        !invocation_source_borrow_enabled_v36(source,",
+            "value.fields[field] == MemoryValueV30::Pointer(pointer),",
+        ] {
+            assert!(text.contains(contract), "{contract}");
+        }
+    });
+    result.0.unwrap();
+    assert_eq!(result.2, 37);
+}
+
+#[test]
 fn original_complete_source_model_length_equations_have_exact_and_one_short_resources() {
     let execute = |work, storage| {
         run_complete_source_model_v68(work, storage, |_, census| assert_eq!(census[0], 2))
