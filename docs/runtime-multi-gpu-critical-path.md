@@ -24,10 +24,10 @@ opcode coverage before clearing application admission.
    exact compiler-current-record audit. Independently pinned production deployment
    admission now retains fixed-path configuration provenance through that audit.
    Root-side process/publication observation is implemented and locally qualified
-   across UIDs. Connect its original occurrence custody to the issuer through an
-   authenticated private channel with exact issuer containment before lock release.
-   Transfer the original publication-lock descriptions to the private issuer guard
-   as well, retaining them through durable commit even if the coordinator dies.
+   across UIDs. The authenticated broker channel and private issuer guard now retain
+   original occurrence custody and both publication-lock descriptions through durable
+   commit, with exact issuer containment before failure-path lock release. Connect
+   that channel to the production coordinator registration table and static launcher.
    The empty-capability issuer cannot perform that inspection itself. Keep signing
    unprivileged; do not relax the host's ptrace policy.
    Qualify genuine compiler receipt acquisition and verification through the deployed
@@ -68,14 +68,14 @@ the original observation, publication lease and current token. The issuer needs
 an authenticated private-channel lease bound to its exact session and fresh
 challenge. Keep the root-held token through signing and ledger commit; failure
 handling must contain the exact issuer before releasing that token. This is the
-next implementation boundary, not implemented or qualified behavior.
+production integration boundary; the broker-level channel is qualified separately below.
 The [root-observation checkpoint](evidence/dev-root-occurrence-observation-2026-10-04/README.md)
 now implements that local occurrence owner with one unbroken nonblocking publication
 lock and no client-state repair or lock creation. Two isolated cases qualify root
 observation of a UID1000 private publication and real cross-UID lock contention.
 Their waiting-process/synthetic-handoff fixture is not genuine compiler acquisition.
-The authenticated coordinator session table, remote issuer guard and containment
-remain the next integration work; the root observation owner alone cannot sign.
+The authenticated coordinator session table remains the next integration work;
+the root observation owner alone cannot sign.
 
 The [lock-retention checkpoint](evidence/dev-observer-lock-retention-2026-10-04/README.md)
 adds that transfer prerequisite, not the channel:
@@ -90,18 +90,40 @@ Retaining this complete lock set in the issuer guard is necessary because killin
 or checking the root coordinator cannot make revalidation-to-commit atomic.
 Root crash closes its token without running its containment destructor.
 
-The next integration should reuse the existing root coordinator, not launch a
+The [authenticated channel checkpoint](evidence/dev-observer-channel-2026-10-04/README.md)
+now implements the broker-side root owner, private remote guard and durable issuer
+integration. Every packet binds exact kernel sender credentials, original live
+process identities, immutable launch/session identities and a fresh operation
+nonce. Begin carries both original lock descriptions. Errors poison the entire
+attached issuer admission; successful Finish follows commit and its continuity
+check. Root rechecks the occurrence before sending delayed responses and contains
+the exact issuer before releasing active custody. Idle channel closure instead
+allows a bounded clean exit, with no further requests admitted.
+
+Linux credential-passing sockets autobind on send. The factory eagerly kernel-binds
+both connected endpoints before exposure and pins both exact abstract addresses;
+it creates no filesystem socket and does not relax ordinary unnamed compiler-peer
+admission. These are CPU/subprocess tests with a waiting-rustc-shaped fixture,
+real observed publication, and test-key durable records, not genuine deployed
+compiler acquisition, a new formal proof or GPU launch authority.
+
+The next integration must reuse the existing root coordinator, not launch a
 new privileged helper. Keep supervisor bootstrap FD11 readiness/EOF-only; use a
-separate registration channel, authenticated with per-packet `SCM_CREDENTIALS`.
+separate registration channel at supervisor FD13 with the original root pidfd at
+FD14, authenticated with per-packet `SCM_CREDENTIALS`.
 Register only the accepted handoff's original compiler peer/pidfd, then bind the
-actual launched issuer before accepting requests. Do not observe at readiness:
+actual launched issuer before awaiting readiness. Do not retain Cargo's control
+endpoint, whose EOF is part of the existing readiness contract. Do not observe at readiness:
 the compiler has not published yet. A bounded session table should process one
 `Begin`, `Revalidate`, or `Finish` step at a time, with fresh operation identities.
 Deliver both lock descriptions with the authenticated Begin response; the private
 issuer guard must keep them through ledger commit. On error, poison the issuer
 session and retain root custody until that exact issuer's pidfd confirms exit.
 Preserve client custody between Prepare and Issue instead of reopening a numeric
-PID. Adding issuer FD12 also requires moving its private descriptor floor above it.
+PID. Issuer FD12 carries the observer endpoint and FD13 the original root pidfd;
+the private descriptor floor must move to 14. The deployed issuer must require
+these descriptors and attach the observer before ledger recovery and readiness,
+with no local-observation fallback. These production wiring changes remain open.
 
 ## Reuse What Works
 

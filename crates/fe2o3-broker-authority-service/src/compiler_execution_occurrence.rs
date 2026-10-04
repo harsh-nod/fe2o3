@@ -32,12 +32,6 @@ enum CompilerExecutionOccurrenceCustodyV1 {
     Synthetic,
 }
 
-enum CompilerExecutionOccurrenceGuardCustodyV1 {
-    Current(Box<CompilerModuleHandoffConsumptionTokenV3>),
-    #[cfg(test)]
-    Synthetic,
-}
-
 /// Opaque, move-only proof that one live protected rustc process produced the exact current V3
 /// publication represented by a canonical compiler-execution subject.
 ///
@@ -131,17 +125,16 @@ impl ProtectedCompilerExecutionOccurrenceV1 {
                     .acquire_current_token()
                     .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::AcquireCurrentToken)?;
                 validate_locked_occurrence(self, publication, observation, &token)?;
-                Ok(ProtectedCompilerExecutionOccurrenceGuardV1 {
+                Ok(ProtectedCompilerExecutionOccurrenceGuardV1::Current {
                     occurrence: self,
-                    custody: CompilerExecutionOccurrenceGuardCustodyV1::Current(Box::new(token)),
+                    token: Box::new(token),
                 })
             }
             #[cfg(test)]
             CompilerExecutionOccurrenceCustodyV1::Synthetic => {
                 validate_synthetic(self)?;
-                Ok(ProtectedCompilerExecutionOccurrenceGuardV1 {
+                Ok(ProtectedCompilerExecutionOccurrenceGuardV1::Synthetic {
                     occurrence: self,
-                    custody: CompilerExecutionOccurrenceGuardCustodyV1::Synthetic,
                 })
             }
         }
@@ -269,39 +262,67 @@ impl RetainedCompilerExecutionOccurrenceV1 {
     }
 }
 
-pub(crate) struct ProtectedCompilerExecutionOccurrenceGuardV1<'a> {
-    occurrence: &'a ProtectedCompilerExecutionOccurrenceV1,
-    custody: CompilerExecutionOccurrenceGuardCustodyV1,
+pub(crate) enum ProtectedCompilerExecutionOccurrenceGuardV1<'a> {
+    Current {
+        occurrence: &'a ProtectedCompilerExecutionOccurrenceV1,
+        token: Box<CompilerModuleHandoffConsumptionTokenV3>,
+    },
+    #[cfg(test)]
+    Synthetic {
+        occurrence: &'a ProtectedCompilerExecutionOccurrenceV1,
+    },
+    #[cfg(target_arch = "x86_64")]
+    Remote(Box<crate::linux::observer_channel::RemoteCompilerExecutionOccurrenceGuardV1<'a>>),
 }
 
 impl ProtectedCompilerExecutionOccurrenceGuardV1<'_> {
     pub(crate) const fn subject(&self) -> &InertCompilerExecutionSubjectV1 {
-        self.occurrence.subject()
+        match self {
+            Self::Current { occurrence, .. } => occurrence.subject(),
+            #[cfg(test)]
+            Self::Synthetic { occurrence } => occurrence.subject(),
+            #[cfg(target_arch = "x86_64")]
+            Self::Remote(guard) => guard.subject(),
+        }
     }
 
     pub(crate) const fn identity(&self) -> &[u8; SHA256_BYTES] {
-        &self.occurrence.identity
+        match self {
+            Self::Current { occurrence, .. } => &occurrence.identity,
+            #[cfg(test)]
+            Self::Synthetic { occurrence } => &occurrence.identity,
+            #[cfg(target_arch = "x86_64")]
+            Self::Remote(guard) => guard.identity(),
+        }
     }
 
     pub(crate) fn revalidate_immediately_before_signing(
         &self,
     ) -> Result<(), ProtectedCompilerExecutionOccurrenceErrorV1> {
-        match (&self.occurrence.custody, &self.custody) {
-            (
+        match self {
+            Self::Current { occurrence, token } => match &occurrence.custody {
                 CompilerExecutionOccurrenceCustodyV1::Current {
                     publication,
                     observation,
-                },
-                CompilerExecutionOccurrenceGuardCustodyV1::Current(token),
-            ) => validate_locked_occurrence(self.occurrence, publication, observation, token),
+                } => validate_locked_occurrence(occurrence, publication, observation, token),
+                #[cfg(test)]
+                CompilerExecutionOccurrenceCustodyV1::Synthetic => {
+                    Err(ProtectedCompilerExecutionOccurrenceErrorV1::InvalidSyntheticOccurrence)
+                }
+            },
             #[cfg(test)]
-            (
-                CompilerExecutionOccurrenceCustodyV1::Synthetic,
-                CompilerExecutionOccurrenceGuardCustodyV1::Synthetic,
-            ) => validate_synthetic(self.occurrence),
-            #[cfg(test)]
-            _ => Err(ProtectedCompilerExecutionOccurrenceErrorV1::InvalidSyntheticOccurrence),
+            Self::Synthetic { occurrence } => validate_synthetic(occurrence),
+            #[cfg(target_arch = "x86_64")]
+            Self::Remote(guard) => guard.revalidate().map_err(Into::into),
         }
+    }
+
+    pub(crate) fn finish(self) -> Result<(), ProtectedCompilerExecutionOccurrenceErrorV1> {
+        #[cfg(target_arch = "x86_64")]
+        if let Self::Remote(guard) = self {
+            return guard.finish().map_err(Into::into);
+        }
+        Ok(())
     }
 }
 
@@ -465,6 +486,9 @@ fn validate_synthetic(
 /// Failure to join one live protected rustc process to its exact current V3 publication.
 #[derive(Debug)]
 pub enum ProtectedCompilerExecutionOccurrenceErrorV1 {
+    /// The authenticated root-observer operation failed and cannot be reused.
+    #[cfg(target_arch = "x86_64")]
+    Observer(Box<crate::CompilerExecutionObserverErrorV1>),
     /// The admitted remote rustc process could not be observed.
     Observe(CompilerExecutionSupervisionErrorV1),
     /// The retained remote rustc process changed during revalidation.
@@ -516,6 +540,8 @@ pub enum ProtectedCompilerExecutionOccurrenceErrorV1 {
 impl fmt::Display for ProtectedCompilerExecutionOccurrenceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(target_arch = "x86_64")]
+            Self::Observer(error) => write!(formatter, "compiler observer failed: {error}"),
             Self::Observe(error) => write!(formatter, "compiler observation failed: {error}"),
             Self::RevalidateObservation(error) => {
                 write!(
@@ -605,6 +631,8 @@ impl fmt::Display for ProtectedCompilerExecutionOccurrenceErrorV1 {
 impl Error for ProtectedCompilerExecutionOccurrenceErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            #[cfg(target_arch = "x86_64")]
+            Self::Observer(error) => Some(error),
             Self::Observe(error) | Self::RevalidateObservation(error) => Some(error),
             Self::RustcArguments(error) => Some(error),
             Self::BuildAttempt(error) => Some(error),
@@ -618,6 +646,13 @@ impl Error for ProtectedCompilerExecutionOccurrenceErrorV1 {
             Self::Subject(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl From<crate::CompilerExecutionObserverErrorV1> for ProtectedCompilerExecutionOccurrenceErrorV1 {
+    fn from(error: crate::CompilerExecutionObserverErrorV1) -> Self {
+        Self::Observer(Box::new(error))
     }
 }
 

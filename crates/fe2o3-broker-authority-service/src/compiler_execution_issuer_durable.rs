@@ -1063,6 +1063,44 @@ pub struct ProtectedCompilerExecutionIssuerV1 {
     worker_ledger: WorkerReceiptLedgerV1,
 }
 
+// Keep either local custody or the remote lock aliases alive through the action's commit.
+// Errors abandon the remote guard and poison the retained issuer admission.
+fn with_compiler_occurrence<T>(
+    admission: &ProtectedCompilerExecutionIssuerAdmissionV1,
+    action: impl FnOnce(
+        &ProtectedCompilerExecutionOccurrenceGuardV1<'_>,
+    ) -> Result<T, ProtectedCompilerExecutionIssuerErrorV1>,
+) -> Result<T, ProtectedCompilerExecutionIssuerErrorV1> {
+    #[cfg(target_arch = "x86_64")]
+    if let Some(observer) = admission.observer() {
+        let guard = ProtectedCompilerExecutionOccurrenceGuardV1::Remote(Box::new(
+            observer
+                .begin()
+                .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::from)?,
+        ));
+        return with_occurrence_guard(guard, action);
+    }
+    let occurrence =
+        ProtectedCompilerExecutionOccurrenceV1::observe_current(admission.service_admission())?;
+    let guard = occurrence.acquire_for_issuer()?;
+    with_occurrence_guard(guard, action)
+}
+
+fn with_occurrence_guard<T>(
+    guard: ProtectedCompilerExecutionOccurrenceGuardV1<'_>,
+    action: impl FnOnce(
+        &ProtectedCompilerExecutionOccurrenceGuardV1<'_>,
+    ) -> Result<T, ProtectedCompilerExecutionIssuerErrorV1>,
+) -> Result<T, ProtectedCompilerExecutionIssuerErrorV1> {
+    let output = action(&guard)?;
+    guard.finish()?;
+    Ok(output)
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "compiler_execution_issuer_durable/observer_tests.rs"]
+pub(crate) mod observer_tests;
+
 impl ProtectedCompilerExecutionIssuerV1 {
     /// Acquires the singleton ledger and recovers one exact durable state.
     pub fn admit(
@@ -1094,27 +1132,24 @@ impl ProtectedCompilerExecutionIssuerV1 {
     ) -> Result<ProtectedCompilerExecutionChallengeV1, ProtectedCompilerExecutionIssuerErrorV1>
     {
         self.admission.validate_continuity()?;
-        let occurrence = ProtectedCompilerExecutionOccurrenceV1::observe_current(
-            self.admission.service_admission(),
-        )?;
-        let occurrence_guard = occurrence.acquire_for_issuer()?;
-        let nonce = generate_nonce()?;
-        occurrence_guard.revalidate_immediately_before_signing()?;
-        let next = self.ledger.record.prepare(
-            &occurrence_guard,
-            nonce,
-            self.admission.policy(),
-            self.admission.signing_key(),
-        )?;
-        let challenge = next
-            .challenge
-            .clone()
-            .expect("prepared record construction returns a challenge");
-        self.admission.validate_continuity()?;
-        self.ledger.commit(next)?;
-        self.admission.validate_continuity()?;
-        drop(occurrence_guard);
-        Ok(ProtectedCompilerExecutionChallengeV1 { challenge })
+        with_compiler_occurrence(&self.admission, |occurrence_guard| {
+            let nonce = generate_nonce()?;
+            occurrence_guard.revalidate_immediately_before_signing()?;
+            let next = self.ledger.record.prepare(
+                occurrence_guard,
+                nonce,
+                self.admission.policy(),
+                self.admission.signing_key(),
+            )?;
+            let challenge = next
+                .challenge
+                .clone()
+                .expect("prepared record construction returns a challenge");
+            self.admission.validate_continuity()?;
+            self.ledger.commit(next)?;
+            self.admission.validate_continuity()?;
+            Ok(ProtectedCompilerExecutionChallengeV1 { challenge })
+        })
     }
 
     /// Compares one exact request with a fresh supervised occurrence, signs it, and durably
@@ -1124,22 +1159,19 @@ impl ProtectedCompilerExecutionIssuerV1 {
         request_bytes: &[u8],
     ) -> Result<ProtectedCompilerExecutionReceiptV1, ProtectedCompilerExecutionIssuerErrorV1> {
         self.admission.validate_continuity()?;
-        let occurrence = ProtectedCompilerExecutionOccurrenceV1::observe_current(
-            self.admission.service_admission(),
-        )?;
-        let occurrence_guard = occurrence.acquire_for_issuer()?;
-        let next = self.ledger.record.issue(
-            &occurrence_guard,
-            request_bytes,
-            self.admission.policy(),
-            self.admission.signing_key(),
-        )?;
-        let publication = next.receipt_publication()?;
-        self.admission.validate_continuity()?;
-        self.ledger.commit(next)?;
-        self.admission.validate_continuity()?;
-        drop(occurrence_guard);
-        Ok(ProtectedCompilerExecutionReceiptV1 { publication })
+        with_compiler_occurrence(&self.admission, |occurrence_guard| {
+            let next = self.ledger.record.issue(
+                occurrence_guard,
+                request_bytes,
+                self.admission.policy(),
+                self.admission.signing_key(),
+            )?;
+            let publication = next.receipt_publication()?;
+            self.admission.validate_continuity()?;
+            self.ledger.commit(next)?;
+            self.admission.validate_continuity()?;
+            Ok(ProtectedCompilerExecutionReceiptV1 { publication })
+        })
     }
 
     fn acknowledge_published_receipt(

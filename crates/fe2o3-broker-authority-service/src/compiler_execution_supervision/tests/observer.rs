@@ -3,6 +3,91 @@ use crate::RetainedCompilerExecutionOccurrenceV1;
 use std::io::{BufRead, Write};
 use std::process::Stdio;
 
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn authenticated_channel_observes_two_fresh_occurrences() {
+    let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+    let (lease, token) =
+        fe2o3_artifact_transaction::try_observe_compiler_module_handoff_currentness_in_slot_v3(
+            fixture._artifact_directory.path(),
+            fixture.producer.as_ref().unwrap(),
+            fixture.attempt.unwrap(),
+            fe2o3_artifact_transaction::CompilerModuleHandoffSlotV3::Production,
+        )
+        .unwrap();
+    drop(token);
+    crate::linux::observer_channel::tests::exercise_occurrence_channel(
+        fixture.client.take().unwrap(),
+        fixture.admission(),
+        "success",
+        |progress| {
+            if [2, 3, 4, 5, 6, 8, 9, 10, 11, 12].contains(&progress) {
+                assert!(matches!(
+                    lease.acquire_current_token(),
+                    Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3::Busy)
+                ));
+            }
+        },
+    );
+    drop(lease.acquire_current_token().unwrap());
+    fixture.supersede_publication();
+    assert!(fixture.shutdown().success());
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn authenticated_channel_contains_replaying_issuer() {
+    let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+    crate::linux::observer_channel::tests::exercise_occurrence_channel(
+        fixture.client.take().unwrap(),
+        fixture.admission(),
+        "replay",
+        |_| {},
+    );
+    fixture.supersede_publication();
+    assert!(fixture.shutdown().success());
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn authenticated_channel_poison_survives_durable_commit_failure() {
+    let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+    crate::linux::observer_channel::tests::exercise_occurrence_channel(
+        fixture.client.take().unwrap(),
+        fixture.admission(),
+        "commit_failure",
+        |_| {},
+    );
+    fixture.supersede_publication();
+    assert!(fixture.shutdown().success());
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn authenticated_channel_rechecks_observation_before_delayed_response() {
+    let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+    let pid = fixture.client.as_ref().unwrap().client().pid();
+    let backend = fs::OpenOptions::new()
+        .write(true)
+        .open(format!("/proc/{pid}/fd/{CODEGEN_BACKEND_FD}"))
+        .unwrap();
+    let mut changed = false;
+    crate::linux::observer_channel::tests::exercise_occurrence_channel(
+        fixture.client.take().unwrap(),
+        fixture.admission(),
+        "mutation",
+        |progress| {
+            if progress == 4 && !changed {
+                backend.write_all_at(&[0x73], 0).unwrap();
+                changed = true;
+            }
+        },
+    );
+    assert!(changed);
+    fixture.supersede_publication();
+    assert!(fixture.shutdown().success());
+}
+
 #[test]
 fn standalone_observer_retains_original_client_without_service_directory() {
     let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::Exact);

@@ -91,8 +91,8 @@
 //! require_clone::<ProtectedCompilerExecutionExternalAnchorV1>();
 //! ```
 //!
-//! Compiler occurrences are constructed only inside the issuer from its own retained service
-//! admission. No caller can import or substitute that type:
+//! Signing occurrence guards require a live local observation or an authenticated root-observer
+//! session. No caller can import or substitute the private occurrence type:
 //!
 //! ```compile_fail
 //! use fe2o3_broker_authority_service::ProtectedCompilerExecutionOccurrenceV1;
@@ -165,6 +165,12 @@ pub use compiler_execution_issuer_durable::{
 #[cfg(target_os = "linux")]
 pub use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use linux::observer_channel::{
+    CompilerExecutionObserverErrorV1, PreparedRootCompilerExecutionObserverV1,
+    ProtectedCompilerExecutionObserverV1, RootCompilerExecutionObserverProgressV1,
+    RootCompilerExecutionObserverV1,
 };
 #[cfg(target_os = "linux")]
 pub(crate) use compiler_execution_occurrence::{

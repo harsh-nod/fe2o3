@@ -76,6 +76,26 @@ impl RetainedCompilerClientSessionV1 {
     pub(crate) fn pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.live_client.pidfd.as_fd()
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn retain_session(&self) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
+        self.revalidate()?;
+        let peer = rustix::io::fcntl_dupfd_cloexec(&self.peer, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectPeer,
+                "cannot retain original observer client peer",
+                io::Error::from(error),
+            )
+        })?;
+        let retained = Self {
+            peer,
+            live_client: self.live_client.try_clone()?,
+            peer_identity: self.peer_identity,
+        };
+        retained.revalidate()?;
+        self.revalidate()?;
+        Ok(retained)
+    }
 }
 
 pub(super) fn validate_client_peer_continuity(
