@@ -87,7 +87,7 @@ fn compiler_reference_currentness_fixture_v55(
         },
     };
     let site = ExecutionSiteV29::Statement {
-        block: SemanticBlockIdV1::from_index(0),
+        block: SsaBlockIdV1::new(0),
         statement: 0,
     };
     let custody = SourceCompilerEnumReferenceV55 {

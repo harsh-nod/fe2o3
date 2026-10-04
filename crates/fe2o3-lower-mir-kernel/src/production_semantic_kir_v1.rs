@@ -24250,14 +24250,14 @@ fn lower_workgroup_collective_scratch_with_allocation_v29(
 }
 
 #[allow(clippy::type_complexity)]
-fn plan_enum_payload_storage_v1(
+fn plan_enum_payload_storage_v1<'work>(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     control_flow_ssa: &SemanticControlFlowSsaPlanV1,
     sources: &BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
     next_value: &mut u32,
     execution: Option<&ExecutionAvailabilityV29<'_>>,
-    mut budget: Option<&mut dyn SemanticEmissionBudgetV1>,
+    mut budget: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
 ) -> Result<
     (
         BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
