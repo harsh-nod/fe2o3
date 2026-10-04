@@ -1,17 +1,17 @@
-name: Issue 271 Typed Global Guard and Write Suffix Diagnostic
+name: Issue 271 Explicit Guard V86 Ordinary Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-global-guard-diagnostic-v85-20261004]
+    branches: [wip/issue271-explicit-guard-diagnostic-v86-20261004]
 
 permissions:
   contents: read
 
 jobs:
   verifier-ordinary:
-    name: Exact 3126d2 joint241 ordinary tests (diagnostic only)
+    name: Exact 20d3d1 explicit guard three packages ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 110
     steps:
       - name: Check out diagnostic control
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 3126d2790ac8ee0c05d72b07ab56f816c7e0b6a3
+          ref: 20d3d189434f27dce968410276d2716ef04d5745
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-global-guard-3126d2-ordinary-v85-r3-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue271-global-guard-v85-r3-logs/
+          name: issue271-explicit-guard-20d3d1-v86-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-explicit-guard-v86-logs/
           if-no-files-found: warn
           retention-days: 7

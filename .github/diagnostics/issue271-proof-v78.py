@@ -11,19 +11,20 @@ import stat
 import subprocess
 import tempfile
 import time
+import tomllib
 
-HEAD = "3126d2790ac8ee0c05d72b07ab56f816c7e0b6a3"
-TREE = "b0b0e858aa9ee1e680f06a2dc8baf4fa3f8db374"
+HEAD = "20d3d189434f27dce968410276d2716ef04d5745"
+TREE = "41ff070040655abcab1d81b5f7c52d616a28fddc"
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
 SOURCE = ROOT / "source"
 CONTROL = ROOT / "control"
 TEMP = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
-LOGS = TEMP / "issue271-global-guard-v85-r3-logs"
+LOGS = TEMP / "issue271-explicit-guard-v86-logs"
 ROSTER = CONTROL / ".github/diagnostics/issue271-proof-roster-v78.json"
 os.umask(0o077)
 assert TEMP != ROOT and ROOT not in TEMP.parents
 LOGS.mkdir(mode=0o700)
-LANE = Path(tempfile.mkdtemp(prefix="issue271-global-guard-v85-r3-", dir=TEMP))
+LANE = Path(tempfile.mkdtemp(prefix="issue271-explicit-guard-v86-", dir=TEMP))
 IDENTITY = (LANE.stat().st_dev, LANE.stat().st_ino, LANE.stat().st_uid)
 INTERRUPTED = []
 ACTIVE_CHILD = None
@@ -76,16 +77,19 @@ def group_tasks(pgid):
 
 
 def parse_coverage(log, filters):
+    assert re.search(r"^failures:", log, re.M) is None
+    count = len(filters)
+    assert count > 0 and len(set(filters)) == count
     roster_log = re.split(r"^failures:$", log, maxsplit=1, flags=re.M)[0]
     rows = re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)(?:,.*)?$", roster_log, re.M)
-    assert len(rows) == 241 and len({name for name, _ in rows}) == 241
+    assert len(rows) == count and len({name for name, _ in rows}) == count
     assert sorted(name.rsplit("::", 1)[-1] for name, _ in rows) == sorted(filters)
     assert all(result == "ok" for _, result in rows)
-    assert re.findall(r"^running (\d+) tests?$", roster_log, re.M) == ["241"]
+    assert re.findall(r"^running (\d+) tests?$", roster_log, re.M) == [str(count)]
     assert len(re.findall(r"^test result:", log, re.M)) == 1
-    summary = re.search(r"test result: ok\. 241 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in [0-9.]+s\s*\Z", log)
+    summary = re.search(rf"test result: ok\. {count} passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out; finished in [0-9.]+s\s*\Z", log)
     assert summary is not None
-    return {"passed": 241, "failed": 0, "ignored": 0, "filtered": int(summary.group(1)), "rows": rows,
+    return {"passed": count, "failed": 0, "ignored": 0, "filtered": int(summary.group(1)), "rows": rows,
             "ignored_owning_parents_executed": False}
 
 
@@ -184,11 +188,20 @@ def run(name, args, environment, seconds, limit):
 before, error, coverage, tools, tool_pins = None, None, None, [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "3e48eccfd100b81e84dacda769334d5428468a6053c5996037388d8d2a126165"
+    assert before["roster_sha256"] == "e7d680a737c326548550b365dc9b29be77299425c0f04e32e92946b54e4c7f27"
     roster = json.loads(ROSTER.read_text())
-    assert roster["head"] == HEAD and roster["package"] == "fe2o3-lower-mir-kernel"
-    filters = roster["filters"]
-    assert len(filters) == len(set(filters)) == 241
+    assert roster["head"] == HEAD and roster["tree"] == TREE
+    groups = roster["groups"]
+    assert [(group["label"], group["package"]) for group in groups] == [
+        ("descriptor", "fe2o3-kernel-descriptor"), ("pliron", "fe2o3-pliron"),
+        ("lowerer", "fe2o3-lower-mir-kernel")]
+    assert [len(group["filters"]) for group in groups] == [15,24,2]
+    assert sum(len(group["filters"]) for group in groups) == roster["total"]
+    for pin in roster["source_pins"]:
+        assert digest(SOURCE / pin["path"]) == pin["sha256"]
+    for group in groups:
+        assert tomllib.loads((SOURCE / group["manifest"]).read_text())["package"]["name"] == group["package"]
+        assert len(group["filters"]) == len(set(group["filters"]))
     nightly = Path.home() / ".rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu"
     environment = {"HOME": str(Path.home()), "PATH": f"{nightly}/bin:/usr/bin:/bin",
                    "RUSTUP_HOME": str(Path.home() / ".rustup"), "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
@@ -214,13 +227,17 @@ try:
     cargo = str(nightly / "bin/cargo")
     run("fetch", [cargo, "fetch", "--locked", "--manifest-path", str(SOURCE / "Cargo.toml")], environment, 300, 16 * 1024**2)
     environment["CARGO_NET_OFFLINE"] = "true"
-    args = [cargo, "test", "--offline", "--locked", "--no-default-features", "-j", "2", "-p",
-            roster["package"], "--lib", "--", "--test-threads=8", *filters]
-    for name in roster["ignored_not_selected"]:
-        args += ["--skip", name]
-    run("ordinary", args, environment, 1800, 64 * 1024**2)
-    log = (LOGS / "ordinary.log").read_text()
-    coverage = parse_coverage(log, filters)
+    coverage = []
+    for group in groups:
+        filters = group["filters"]
+        args = [cargo, "test", "--offline", "--locked", "--no-default-features", "-j", "2", "-p",
+                group["package"], "--lib", "--", "--test-threads=8", *filters]
+        run(group["label"], args, environment, 1800, 64 * 1024**2)
+        log = (LOGS / (group["label"] + ".log")).read_text()
+        parsed = parse_coverage(log, filters)
+        coverage.append({"package": group["package"], **parsed})
+        save(group["label"] + "-coverage.json", parsed)
+    assert len(coverage) == 4
     assert {str(path): digest(path) for path in tools} == tool_pins
 except BaseException as failure:
     error = repr(failure)
