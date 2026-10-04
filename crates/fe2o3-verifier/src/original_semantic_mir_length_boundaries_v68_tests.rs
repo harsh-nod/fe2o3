@@ -203,6 +203,41 @@ fn original_complete_source_model_length_equations_have_exact_and_one_short_reso
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
+#[ignore = "diagnostic-only exact complete-model export; never executes or approves a proof"]
+fn diagnostic_complete_original_source_model_export_without_execution_v77() {
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("FE2O3_DIAGNOSTIC_COMPLETE_MODEL_EXPORT")
+            .expect("owned diagnostic output path"),
+    );
+    assert!(destination.is_absolute());
+    let mut exported = false;
+    let result = run_complete_source_model_v68(LIMIT, LIMIT, |text, census| {
+        assert_eq!(census[0], 2);
+        assert!(!text.is_empty() && text.len() <= 16 * 1024 * 1024);
+        let input = crate::CanonicalGeneratedVerusProofInputV3::new(text.as_bytes().to_vec())
+            .expect("identical canonical complete source-model input");
+        drop(input);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .expect("fresh diagnostic export file");
+        std::io::Write::write_all(&mut file, text.as_bytes()).expect("complete diagnostic export");
+        file.sync_all().expect("retain diagnostic export bytes");
+        assert_eq!(std::fs::read(&destination).unwrap(), text.as_bytes());
+        println!(
+            "DIAGNOSTIC_ONLY_COMPLETE_MODEL_EXPORT bytes={} census={census:?}",
+            text.len()
+        );
+        exported = true;
+    });
+    result.0.unwrap();
+    assert!(exported);
+    assert_eq!(result.2, 37);
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
 #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
 fn protected_complete_original_source_model_preserves_signed_length_boundaries() {
     use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusRuntimeLeaseV1};
