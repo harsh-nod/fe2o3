@@ -279,7 +279,7 @@ fn with_unproved<R>(
         {
             // The existing structured selector scans only admitted source; this
             // conservative debit covers its bounded wrapper/body inspection.
-            budget.charge_work(semantic.canonical_bytes().len())?;
+            budget.charge_work(semantic.canonical_encoding().len())?;
             let selected = semantic
                 .select_kernel_body_for_root_v1(*root)
                 .ok_or_else(|| binding("source reference kernel body selection refused"))?;

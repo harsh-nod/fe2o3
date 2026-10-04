@@ -2,6 +2,10 @@
 use super::*;
 use crate::reference_effect_v1::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
+use fe2o3_verifier::portable_reference_v1::signature::{
+    ReferenceCarrierV1, ReferencePointeeV1, ReferenceRegionV1, ReferenceReturnShapeV1,
+    ReferenceSignatureInputV1,
+};
 
 fn reference() -> Reference {
     let scalar = ReferenceScalarTypeV1::U32;
