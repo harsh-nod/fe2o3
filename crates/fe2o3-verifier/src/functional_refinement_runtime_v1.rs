@@ -63,14 +63,33 @@ impl FunctionalRefinementVerusRuntimeIdentityV1 {
 /// Opening or revalidating the runtime does not establish a proof or grant compiler authority.
 pub struct FunctionalRefinementVerusRuntimeLeaseV1 {
     identity: FunctionalRefinementVerusRuntimeIdentityV1,
-    backend: RetainedGeneratedVerusRuntimeBackendV1,
+    backend: RuntimeBackend,
+}
+
+enum RuntimeBackend {
+    Local(RetainedGeneratedVerusRuntimeBackendV1),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Brokered {
+        local: RetainedGeneratedVerusRuntimeBackendV1,
+        session: Box<crate::compiler_proof_broker_v1::AuthenticatedCompilerProofSessionV1>,
+    },
+}
+
+impl RuntimeBackend {
+    fn local(&self) -> &RetainedGeneratedVerusRuntimeBackendV1 {
+        match self {
+            Self::Local(local) => local,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Self::Brokered { local, .. } => local,
+        }
+    }
 }
 
 impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("FunctionalRefinementVerusRuntimeLeaseV1")
-            .field("root", &self.backend.root())
+            .field("root", &self.backend.local().root())
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
@@ -84,13 +103,13 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
             open_retained_generated_verus_runtime_v1(root).map_err(runtime_error_from_backend)?;
         Ok(Self {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
-            backend,
+            backend: RuntimeBackend::Local(backend),
         })
     }
 
     /// Returns the diagnostic path supplied when this lease was opened.
     pub fn root(&self) -> &Path {
-        self.backend.root()
+        self.backend.local().root()
     }
 
     /// Returns the exact workload-neutral runtime identity.
@@ -100,9 +119,51 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
 
     /// Revalidates the retained runtime objects and path edges.
     pub fn revalidate(&self) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
-        self.backend
-            .revalidate()
-            .map_err(runtime_error_from_backend)
+        self.revalidate_until(Instant::now() + std::time::Duration::from_secs(30))
+    }
+
+    pub(crate) fn revalidate_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
+        if let Err(error) = self.backend.local().revalidate() {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            if let RuntimeBackend::Brokered { session, .. } = &self.backend {
+                session.poison();
+            }
+            return Err(runtime_error_from_backend(error));
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if let RuntimeBackend::Brokered { session, .. } = &self.backend {
+            session
+                .revalidate_until(deadline)
+                .map_err(runtime_error_from_broker)?;
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = deadline;
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn with_compiler_broker(
+        self,
+        session: crate::compiler_proof_broker_v1::AuthenticatedCompilerProofSessionV1,
+        deadline: Instant,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let RuntimeBackend::Local(local) = self.backend else {
+            return Err(runtime_error_from_broker(std::io::Error::other(
+                "compiler-proof runtime is already brokered",
+            )));
+        };
+        let value = Self {
+            identity: self.identity,
+            backend: RuntimeBackend::Brokered {
+                local,
+                session: Box::new(session),
+            },
+        };
+        value.revalidate_until(deadline)?;
+        Ok(value)
     }
 
     pub(crate) fn execute_generated_rust_verify(
@@ -113,10 +174,25 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         profile: GeneratedVerusExecutionProfileV1,
     ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
     {
-        self.backend
-            .execute_generated_rust_verify(source, deadline, output_limit, profile)
-            .map(FunctionalRefinementRuntimeProcessOutputV1::from)
-            .map_err(runtime_error_from_backend)
+        match &self.backend {
+            RuntimeBackend::Local(local) => local
+                .execute_generated_rust_verify(source, deadline, output_limit, profile)
+                .map(FunctionalRefinementRuntimeProcessOutputV1::from)
+                .map_err(runtime_error_from_backend),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            RuntimeBackend::Brokered { local, session } => {
+                if let Err(error) = local.revalidate() {
+                    session.poison();
+                    return Err(runtime_error_from_backend(error));
+                }
+                let output = session.execute(source, deadline, output_limit, profile);
+                if let Err(error) = local.revalidate() {
+                    session.poison();
+                    return Err(runtime_error_from_backend(error));
+                }
+                output.map_err(runtime_error_from_broker)
+            }
+        }
     }
 }
 
@@ -154,6 +230,13 @@ impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
 }
 
 impl Error for FunctionalRefinementRuntimeErrorV1 {}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn runtime_error_from_broker(error: std::io::Error) -> FunctionalRefinementRuntimeErrorV1 {
+    FunctionalRefinementRuntimeErrorV1 {
+        detail: format!("authenticated compiler-proof broker failed: {error}"),
+    }
+}
 
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,

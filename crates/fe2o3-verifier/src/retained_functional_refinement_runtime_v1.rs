@@ -201,6 +201,31 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         self.revalidate()?;
         result
     }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn execute_generated_rust_verify_cancellable(
+        &self,
+        source: &CanonicalGeneratedVerusProofInputV3,
+        deadline: Instant,
+        output_limit: usize,
+        profile: GeneratedVerusExecutionProfileV1,
+        keep_alive: &dyn Fn() -> std::io::Result<()>,
+    ) -> Result<
+        RetainedFunctionalRefinementRuntimeOutputV1,
+        RetainedFunctionalRefinementRuntimeErrorV1,
+    > {
+        self.revalidate()?;
+        let result = linux::execute_functional_refinement_generated_rust_verify_cancellable(
+            &self.retained,
+            source,
+            deadline,
+            output_limit,
+            profile,
+            keep_alive,
+        );
+        self.revalidate()?;
+        result
+    }
 }
 
 fn functional_refinement_closure_identity_v1() -> [u8; 32] {

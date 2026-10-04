@@ -22,6 +22,8 @@ mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod compiler_proof_broker_v1;
 mod compiler_target_lineage_v1;
 mod conditional_fill_program_v1;
 mod conditional_fill_refinement_v1;
@@ -78,6 +80,13 @@ pub use compiler_proof_binding_v3::{
     ValidatedCompilerProofInputsV4, ValidatedConditionalCompilerProofInputsV1,
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
     validate_compiler_proof_inputs_v4, validate_conditional_compiler_proof_inputs_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use compiler_proof_broker_v1::{
+    COMPILER_PROOF_BROKER_CHILD_FD_V1, COMPILER_PROOF_ENDPOINT_CHILD_FD_V1,
+    CompilerProofBootstrapV1, CompilerProofBrokerV1, PendingCompilerProofDelegationV1,
+    PendingCompilerProofServerV1, SpawnedCompilerProofDelegationV1,
+    admit_inherited_compiler_proof_runtime_v1,
 };
 pub use gfx942_local_checked_u32_add_v1::*;
 // Deprecated compatibility exports. Despite their Verus-oriented names, these

@@ -29,11 +29,24 @@ pidfd, and keeps that owner through child reaping and managed commit/revocation.
 Compiler completion rejects readiness without original child custody; application
 readiness retains its separate outer lifecycle owner. Regressions cover wrong
 children, changed descriptor flags, missing custody and post-reap validation.
-This does not implement the unfiltered compiler-proof service. That service is
-next: use the existing pre-filter protected Cargo broker, a distinct authenticated
-compiler session, sealed generated source and bounded process output. Keep source
-generation, output validation and receipt construction inside the verifier; do
-not introduce a public proof/output import or reuse the post-publication custodian.
+The [verifier-owned compiler-proof transport](evidence/dev-compiler-proof-broker-2026-10-04/README.md)
+is now implemented and component-tested. It authenticates original sealed broker,
+wrapper and compiler processes, uses sealed generated source and bounded output,
+and retains the existing verifier-owned proof producers and receipt join. The
+one-shot spawn retains original compiler pidfd custody and drops Command aliases;
+terminal client failure shuts down the endpoint and cancels/reaps the proof tree.
+Private descriptors fit the protected launcher's minimum file limit. Local proof
+execution and its strict seccomp contracts are unchanged.
+
+This transport is not yet wired into Cargo or the compiler. Next, retain the
+original Cargo exec-permit pidfd, add one authenticated proof-preparation prefix
+without changing the initial four-descriptor response, and delegate the exact
+sealed invocation after the consuming spawn. Serve proof work concurrently with
+the existing source/ISA observer. Retain one brokered runtime in protected compiler
+custody and borrow it through both existing proof joins. Qualify the genuine
+installed application campaign through real proof and receipt publication before
+claiming this blocker resolved. Do not reuse the post-publication custodian or
+import a captured proof.
 
 After that, propagate the original committed device-library binding to the exact
 matching host library through a retained, authenticated host projection. The host
@@ -41,8 +54,10 @@ phase currently disables wrappers, and independently deriving host Cargo metadat
 does not reproduce the device binding. Then qualify FD195/current-record audit and
 retained conditional proof in the ordinary application before two-GPU fill and
 bidirectional PUBLIC XGMI. General performance work, wider opcode coverage and
-additional GPU counts remain deferred. MI300X SSH was unreachable during this
-campaign; no new hardware result is claimed.
+additional GPU counts remain deferred. WSL SSH still times out, but a read-only
+Windows OpenSSH check now reaches MI300X. Use that route for hardware qualification
+after application admission; no new hardware correctness or performance result
+is claimed.
 
 ## Implemented Foundations
 

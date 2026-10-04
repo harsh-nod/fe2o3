@@ -191,7 +191,7 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
         .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
     validate_proved_output(&observed)?;
     runtime
-        .revalidate()
+        .revalidate_until(deadline)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
     if Instant::now() >= deadline {
         return Err(FunctionalRefinementVerusExecutionErrorV2::new(

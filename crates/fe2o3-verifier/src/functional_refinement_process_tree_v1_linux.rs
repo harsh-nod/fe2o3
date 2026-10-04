@@ -364,8 +364,10 @@ pub(super) fn execute(
     deadline: Instant,
     output_limit: usize,
     profile: GeneratedVerusExecutionProfileV1,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    check_execution_owner(keep_alive)?;
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
         |error| {
             controller_error(
@@ -503,9 +505,22 @@ pub(super) fn execute(
         profile.solver_processes(),
         deadline,
         output_limit,
+        keep_alive,
     );
     sealed.revalidate(source)?;
+    check_execution_owner(keep_alive)?;
     result
+}
+
+fn check_execution_owner(
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    if let Some(validate) = keep_alive {
+        validate().map_err(|error| {
+            process_failure(format!("compiler-proof execution owner lost: {error}"))
+        })?;
+    }
+    Ok(())
 }
 
 fn prepare_child(bindings: &[DescriptorBinding], cpu_seconds: u64) -> io::Result<()> {
@@ -656,6 +671,7 @@ fn supervise(
     expected_solver_processes: usize,
     deadline: Instant,
     output_limit: usize,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     let verifier =
@@ -697,7 +713,7 @@ fn supervise(
         eof: false,
     };
     let execution = (|| {
-        let status = wait_for_specific(verifier, deadline)?;
+        let status = wait_for_specific(verifier, deadline, keep_alive)?;
         if !stopped(status) || stop_signal(status) != SIGTRAP {
             return Err(process_failure(
                 "verifier did not stop at its initial exec boundary",
@@ -724,7 +740,12 @@ fn supervise(
         let expected_process_descendants =
             expected_solver_processes + usize::from(require_auxiliary_verifier);
         let mut idle_delay = Duration::ZERO;
+        let mut next_owner_check = Instant::now();
         while !tracees.is_empty() {
+            if Instant::now() >= next_owner_check {
+                check_execution_owner(keep_alive)?;
+                next_owner_check = Instant::now() + Duration::from_millis(20);
+            }
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
             if Instant::now() >= deadline {
@@ -1063,8 +1084,14 @@ fn ptrace(
 fn wait_for_specific(
     process: i32,
     deadline: Instant,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
 ) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut next_owner_check = Instant::now();
     loop {
+        if Instant::now() >= next_owner_check {
+            check_execution_owner(keep_alive)?;
+            next_owner_check = Instant::now() + Duration::from_millis(20);
+        }
         if let Some(status) = wait_for_specific_nonblocking(process)? {
             return Ok(status);
         }
@@ -1888,6 +1915,8 @@ mod tests {
         first_descendant: i32,
         last_descendant: i32,
         descendants: Vec<i32>,
+        verifier: i32,
+        elapsed: Duration,
     }
 
     fn identity(path: &str) -> ObjectIdentityV2 {
@@ -1977,9 +2006,35 @@ mod tests {
         require_auxiliary_verifier: bool,
         expected_solver_processes: usize,
     ) -> HostileRun {
+        run_hostile_cancellable(
+            script,
+            expected_solver,
+            deadline_after,
+            leaked,
+            allowed_mappings,
+            validate_mappings,
+            require_auxiliary_verifier,
+            expected_solver_processes,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_hostile_cancellable(
+        script: &str,
+        expected_solver: &str,
+        deadline_after: Duration,
+        leaked: Option<&File>,
+        allowed_mappings: &[AllowedRuntimeExecutableV1],
+        validate_mappings: bool,
+        require_auxiliary_verifier: bool,
+        expected_solver_processes: usize,
+        keep_alive: Option<&dyn Fn() -> io::Result<()>>,
+    ) -> HostileRun {
         let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let started = Instant::now();
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         LAST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         TEST_DESCENDANTS.lock().unwrap().clear();
@@ -2022,6 +2077,7 @@ mod tests {
             expected_solver_processes,
             deadline,
             4096,
+            keep_alive,
         );
         drop(duplicates);
         HostileRun {
@@ -2029,6 +2085,8 @@ mod tests {
             first_descendant: FIRST_TEST_DESCENDANT.load(Ordering::SeqCst),
             last_descendant: LAST_TEST_DESCENDANT.load(Ordering::SeqCst),
             descendants: TEST_DESCENDANTS.lock().unwrap().clone(),
+            verifier: child.id() as i32,
+            elapsed: started.elapsed(),
         }
     }
 
@@ -2170,6 +2228,7 @@ mod tests {
             Instant::now() + Duration::from_secs(120),
             4096,
             GeneratedVerusExecutionProfileV1::Ranked,
+            None,
         )
         .unwrap();
         assert_eq!((output.exit_code, output.signal), (Some(0), None));
@@ -2203,6 +2262,7 @@ mod tests {
             Instant::now() + Duration::from_secs(120),
             4096,
             GeneratedVerusExecutionProfileV1::Ranked,
+            None,
         )
         .unwrap();
         assert_eq!((output.exit_code, output.signal), (Some(0), None));
@@ -2550,6 +2610,62 @@ mod tests {
             "{error}"
         );
         assert_process_disappears(descendant);
+    }
+
+    #[test]
+    fn owner_loss_kills_and_reaps_the_solver_before_execution_deadline() {
+        let expected_solver = identity("/bin/sleep");
+        let owner = || {
+            let descendant = LAST_TEST_DESCENDANT.load(Ordering::SeqCst);
+            if descendant > 0
+                && executable_identity(descendant).is_ok_and(|image| image == expected_solver)
+            {
+                Err(io::Error::other("test owner revoked"))
+            } else {
+                Ok(())
+            }
+        };
+        let run = run_hostile_cancellable(
+            "/bin/sleep 30; :",
+            "/bin/sleep",
+            Duration::from_secs(10),
+            None,
+            &[],
+            false,
+            false,
+            1,
+            Some(&owner),
+        );
+        let error = expect_error(run.result);
+        assert!(error.to_string().contains("test owner revoked"), "{error}");
+        assert!(run.elapsed < Duration::from_secs(5));
+        assert!(!run.descendants.is_empty());
+        for descendant in run.descendants {
+            assert_process_disappears(descendant);
+        }
+        assert_process_disappears(run.verifier);
+    }
+
+    #[test]
+    fn revoked_owner_rejects_initial_exec_wait_without_waiting_for_deadline() {
+        let run = run_hostile_cancellable(
+            "/bin/sleep 30; :",
+            "/bin/sleep",
+            Duration::from_secs(10),
+            None,
+            &[],
+            false,
+            false,
+            1,
+            Some(&|| Err(io::Error::other("owner lost before initial stop"))),
+        );
+        let error = expect_error(run.result);
+        assert!(
+            error.to_string().contains("owner lost before initial stop"),
+            "{error}"
+        );
+        assert!(run.elapsed < Duration::from_secs(5));
+        assert_process_disappears(run.verifier);
     }
 
     #[test]

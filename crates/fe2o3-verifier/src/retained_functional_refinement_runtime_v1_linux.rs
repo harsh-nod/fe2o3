@@ -506,7 +506,33 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     profile: crate::functional_refinement_runtime_v1::GeneratedVerusExecutionProfileV1,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
-    functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit, profile)
+    functional_refinement_process_tree_v1::execute(
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        profile,
+        None,
+    )
+}
+
+pub(super) fn execute_functional_refinement_generated_rust_verify_cancellable(
+    runtime: &RetainedRuntimeClosureV2,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    profile: crate::functional_refinement_runtime_v1::GeneratedVerusExecutionProfileV1,
+    keep_alive: &dyn Fn() -> std::io::Result<()>,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    functional_refinement_process_tree_v1::execute(
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        profile,
+        Some(keep_alive),
+    )
 }
 
 struct SealedGeneratedProofSourceV3 {

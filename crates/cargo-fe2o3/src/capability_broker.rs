@@ -102,7 +102,12 @@ mod platform {
     const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V3\0";
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
-    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
+    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 226;
+    #[cfg(test)]
+    const _: () = assert!(
+        RECEIVED_DESCRIPTOR_FLOOR > fe2o3_verifier::COMPILER_PROOF_ENDPOINT_CHILD_FD_V1
+            && RECEIVED_DESCRIPTOR_FLOOR > fe2o3_verifier::COMPILER_PROOF_BROKER_CHILD_FD_V1
+    );
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_CLIENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
     const _: () = assert!(
