@@ -301,6 +301,13 @@ fn entry_headers_for_handoff<R, F, H>() -> Result<usize, Resource> {
 
 trait SourceHandoffPolicyV29<R, F> {
     fn entry_headers() -> Result<usize, Resource>;
+    fn check_reference_obligations(
+        source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        bindings: &AuthenticatedProductionBindings,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        reference_obligations_v69::require_discharged(source, bindings, budget)
+    }
     fn consume<'view, 'source, 'abi, 'work>(
         source: &'view Source<'source>,
         roots: &[AbiRoot<'abi>],
@@ -580,13 +587,10 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch.into());
         }
-        // Binding and independent CPU replay are not a semantic proof. Until
-        // the source-owned consumer exists, every nonempty obligation set refuses.
-        reference_obligations_v69::require_discharged(
-            &ssa.stage.semantic_ssa,
-            &ssa.stage.bindings,
-            budget,
-        )?;
+        // Only the fixed whole-source publication policy retains the CPU
+        // obligations in its mandatory protected V50 proof. Other handoffs
+        // still refuse nonempty registrations before exposing any candidate.
+        P::check_reference_obligations(&ssa.stage.semantic_ssa, &ssa.stage.bindings, budget)?;
         let prepared = ssa.prepare_materialization_inputs_v29(|roots| {
             roots.iter().map(|root| {
                 let launch = root.source_launch().ok_or(ProductionPipelineError::Geometry(

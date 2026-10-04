@@ -132,6 +132,7 @@ fn typed_source_request_headers_include_four_graphs_complete_census_and_owned_by
         CanonicalGeneratedVerusProofInputV3,
         TypedSourceTailSubjectV50,
         EndiannessV2,
+        &'static [()],
         usize,
         usize,
     );
@@ -140,6 +141,7 @@ fn typed_source_request_headers_include_four_graphs_complete_census_and_owned_by
         &'static Source<'static>,
         &'static Native<'static, 'static, 'static, 'static>,
         EndiannessV2,
+        &'static [()],
         usize,
     );
     assert_eq!(

@@ -302,6 +302,16 @@ where
         &mut Budget<'w>,
     ) -> Result<R, Error>,
 {
+    fn check_reference_obligations(
+        source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        bindings: &AuthenticatedProductionBindings,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        // Inert admission only. consume_forwarded rebinds this complete roster
+        // on the same original owner and retains it through V50 execution.
+        reference_obligations_v69::with_inputs(source, bindings, budget, |_, _| Ok(()))
+    }
+
     fn headers() -> Result<usize, Resource> {
         let original = original_mir_v30::headers::<R, F>()?;
         headers()?

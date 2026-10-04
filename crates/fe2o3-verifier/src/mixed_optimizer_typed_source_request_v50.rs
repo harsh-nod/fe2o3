@@ -14,6 +14,16 @@ pub use receipt::{
 const DOMAIN: &[u8] = b"FE2O3/ORIGINAL-MIR/POLICY11/LICM/STORE-CONSENSUS/TYPED/V50\0";
 type Native<'n, 'p, 'v, 's> = Handoff<'n, 'p, 'v, 's, Policy11<'v, 's>>;
 
+/// Borrowed, inert CPU source records. Only the compiler's authenticated
+/// registration owner supplies source authority; this public record does not.
+/// The complete contents are replayed and bound into the generated statement.
+pub struct SourceScalarReferenceInputV69<'a> {
+    pub original_root: usize,
+    pub kernel: crate::portable_reference_v1::ReferenceFunctionIdentityV1,
+    pub reference: crate::portable_reference_v1::ReferenceFunctionIdentityV1,
+    pub replay: crate::portable_reference_v1::ReferenceReplayInputV1<'a>,
+}
+
 /// Inert identities for the complete typed statement, not a proof certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypedSourceTailSubjectV50 {
@@ -71,6 +81,7 @@ pub struct PreparedTypedSourceTailV50<'h, 'n, 'p, 'v, 's> {
     generated: CanonicalGeneratedVerusProofInputV3,
     subject: TypedSourceTailSubjectV50,
     endianness: EndiannessV2,
+    references: &'h [SourceScalarReferenceInputV69<'h>],
     retained: usize,
     required: usize,
 }
@@ -79,6 +90,7 @@ type Capture<'h, 'n, 'p, 'v, 's> = (
     &'h Source<'s>,
     &'h Native<'n, 'p, 'v, 's>,
     EndiannessV2,
+    &'h [SourceScalarReferenceInputV69<'h>],
     usize,
 );
 
@@ -193,13 +205,27 @@ pub fn prepare_typed_source_tail_v50<'h, 'n, 'p, 'v, 's>(
     endianness: EndiannessV2,
     budget: &mut Budget<'_>,
 ) -> Result<Request<'h, 'n, 'p, 'v, 's>> {
+    prepare_typed_source_tail_with_references_v69(source, handoff, endianness, &[], budget)
+}
+
+/// Add independently replayed registered scalar-reference obligations to the
+/// same original-source/final-graph statement. This still only prepares source;
+/// the existing protected execution and exact receipt import remain mandatory.
+pub fn prepare_typed_source_tail_with_references_v69<'h, 'n, 'p, 'v, 's>(
+    source: &'h Source<'s>,
+    handoff: &'h Native<'n, 'p, 'v, 's>,
+    endianness: EndiannessV2,
+    references: &'h [SourceScalarReferenceInputV69<'h>],
+    budget: &mut Budget<'_>,
+) -> Result<Request<'h, 'n, 'p, 'v, 's>> {
     source.check_query_v18(budget)?;
     handoff.check_original_source(source.source_ssa(budget)?, budget)?;
     let floor = budget.storage();
-    let capture: Capture<'_, '_, '_, '_, '_> = (source, handoff, endianness, floor);
+    let capture: Capture<'_, '_, '_, '_, '_> = (source, handoff, endianness, references, floor);
     let produce = move |budget: &mut Budget<'_>| {
-        let (source, handoff, endianness, floor) = std::convert::identity(capture);
-        produce(source, handoff, endianness, floor, budget).map_err(|e| retain(e, source))
+        let (source, handoff, endianness, references, floor) = std::convert::identity(capture);
+        produce(source, handoff, endianness, references, floor, budget)
+            .map_err(|e| retain(e, source))
     };
     #[cfg(test)]
     {
@@ -226,6 +252,7 @@ fn produce<'h, 'n, 'p, 'v, 's>(
     source: &'h Source<'s>,
     handoff: &'h Native<'n, 'p, 'v, 's>,
     endianness: EndiannessV2,
+    references: &'h [SourceScalarReferenceInputV69<'h>],
     floor: usize,
     budget: &mut Budget<'_>,
 ) -> Result<Request<'h, 'n, 'p, 'v, 's>> {
@@ -286,18 +313,20 @@ fn produce<'h, 'n, 'p, 'v, 's>(
     let (text, census) =
         source.with_ranked_correspondence_v18(&original, budget, |relation, budget| {
             let mut out = Writer::new(budget)?;
-            let census = semantics::original_scalar_v30::generate_invocations_typed_v49(
-                relation,
-                &transition,
-                &licm,
-                &motion,
-                &forwarding,
-                &final_graph,
-                launches,
-                width,
-                endianness,
-                &mut out,
-            )?;
+            let census =
+                semantics::original_scalar_v30::generate_invocations_typed_with_references_v69(
+                    relation,
+                    &transition,
+                    &licm,
+                    &motion,
+                    &forwarding,
+                    &final_graph,
+                    launches,
+                    width,
+                    endianness,
+                    references,
+                    &mut out,
+                )?;
             Ok::<_, Error>((out.finish()?, census))
         })?;
     budget.charge_work(text.len().checked_mul(3).ok_or(Resource::Arithmetic)?)?;
@@ -351,6 +380,7 @@ fn produce<'h, 'n, 'p, 'v, 's>(
         generated,
         subject,
         endianness,
+        references,
         retained,
         required: floor.checked_add(retained).ok_or(Resource::Arithmetic)?,
     })
@@ -390,8 +420,13 @@ impl Request<'_, '_, '_, '_, '_> {
     /// This checks compiler custody, not solver success.
     pub fn replay(&self, budget: &mut Budget<'_>) -> Result<()> {
         self.check(budget)?;
-        let refreshed =
-            prepare_typed_source_tail_v50(self.source, self.handoff, self.endianness, budget)?;
+        let refreshed = prepare_typed_source_tail_with_references_v69(
+            self.source,
+            self.handoff,
+            self.endianness,
+            self.references,
+            budget,
+        )?;
         let compare = (|| {
             budget.charge_work(
                 self.generated

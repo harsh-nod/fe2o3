@@ -7,6 +7,26 @@ use fe2o3_verifier::portable_reference_v1::signature::{
     ReferenceSignatureInputV1,
 };
 
+#[test]
+fn source_reference_input_rows_account_complete_identity_copies_and_borrowed_headers() {
+    type IdentityFields = ([u8; 16], [[u8; 32]; 6]);
+    type ReplayFields<'a> = (&'a (), &'a (), [u8; 32], &'a [()]);
+    type InputFields<'a> = (usize, IdentityFields, IdentityFields, ReplayFields<'a>);
+    assert_eq!(
+        size_of::<InputFields<'_>>(),
+        size_of::<fe2o3_verifier::SourceScalarReferenceInputV69<'_>>()
+    );
+    assert_eq!(
+        input_headers::<usize>().unwrap(),
+        size_of::<Vec<InputFields<'_>>>()
+            + 2 * size_of::<InputFields<'_>>()
+            + align_of::<InputFields<'_>>()
+            + size_of::<Result<usize, Error>>()
+            + align_of::<Result<usize, Error>>()
+            + 6 * size_of::<&()>()
+    );
+}
+
 fn reference() -> Reference {
     let scalar = ReferenceScalarTypeV1::U32;
     let signature_preimage = ReferenceLogicalSignaturePreimageV1::new(

@@ -34,9 +34,10 @@ pub use binding::{
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,
     PreparedMixedRelocationExpressionsV28, PreparedTypedSourceTailExecutionV50,
-    PreparedTypedSourceTailV50, TypedSourceTailSubjectV50, check_inert_typed_source_receipt_v53,
-    prepare_mixed_fixedpoint_relocation_expressions_v29, prepare_mixed_relocation_expressions_v28,
-    prepare_typed_source_tail_v50,
+    PreparedTypedSourceTailV50, SourceScalarReferenceInputV69, TypedSourceTailSubjectV50,
+    check_inert_typed_source_receipt_v53, prepare_mixed_fixedpoint_relocation_expressions_v29,
+    prepare_mixed_relocation_expressions_v28, prepare_typed_source_tail_v50,
+    prepare_typed_source_tail_with_references_v69,
 };
 #[cfg(test)]
 #[path = "mixed_optimizer_relocation_plan_v28_tests.rs"]

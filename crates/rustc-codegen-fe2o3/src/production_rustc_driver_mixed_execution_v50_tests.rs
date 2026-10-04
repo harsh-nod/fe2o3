@@ -6,6 +6,9 @@ use fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1 as Runtime;
 const EXECUTION_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::execution_v50_tests::mixed_execution_child";
 const RUNTIME_ROOT: &str = "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 
+#[path = "production_rustc_driver_source_reference_execution_v69_tests.rs"]
+mod reference_execution_v69_tests;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ExecutionObservation {
     roots: usize,

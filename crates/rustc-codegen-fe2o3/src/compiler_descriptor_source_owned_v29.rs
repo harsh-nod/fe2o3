@@ -12,6 +12,43 @@ use std::mem::{align_of, size_of};
 #[path = "compiler_descriptor_source_mixed_v28.rs"]
 pub(crate) mod mixed_v28;
 
+/// Select the original nominal mapping, not a physical slice lookalike. This
+/// carries no runtime fulfillment: the generated theorem retains the safe
+/// constructor's live/aligned/nonaliasing input premises explicitly.
+pub(crate) fn require_reference_index1d_v69(
+    root: &TypedDescriptorRootV1,
+    argument: u32,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    budget.charge_work(8)?;
+    let argument = root
+        .arguments
+        .as_slice()
+        .get(argument as usize)
+        .ok_or(Error::Unsupported("reference original descriptor argument"))?;
+    if !matches!(argument.kind, DescriptorArgumentKindV1::DisjointSlice(_))
+        || !matches!(
+            argument.access,
+            AccessMode::WriteOnly | AccessMode::ReadWrite
+        )
+        || !matches!(
+            argument
+                .layout
+                .as_ref()
+                .map(|layout| layout.rust_type().source_type()),
+            Some(RustSourceTypeShapeV1::DisjointSlice {
+                index_space: RustDisjointIndexSpaceV1::Index1D,
+                ..
+            })
+        )
+    {
+        return Err(Error::Unsupported(
+            "reference original Index1D output contract",
+        ));
+    }
+    Ok(())
+}
+
 // One private descriptor component contains exactly these six public field
 // types. Paying each field's size plus alignment bounds all aggregate padding
 // without exposing or relying on the private component's Rust layout.

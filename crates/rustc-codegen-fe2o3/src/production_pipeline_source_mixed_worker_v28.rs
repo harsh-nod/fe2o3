@@ -41,6 +41,13 @@ struct FinalInputs<'a, 'bindings, 'v, 's> {
 
 trait FinalConsumer<R, F> {
     fn headers() -> Result<usize, Resource>;
+    fn check_reference_obligations(
+        source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        bindings: &AuthenticatedProductionBindings,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        reference_obligations_v69::require_discharged(source, bindings, budget)
+    }
     fn consume(
         inputs: FinalInputs<'_, '_, '_, '_>,
         budget: &mut Budget<'_>,
@@ -277,120 +284,139 @@ fn consume_forwarded<R, F, P: FinalConsumer<R, F>>(
         let (_, _, endian) = publication::original_mir_v30::checked_runtime_for_native(
             source, native, context, budget,
         )?;
-        let composed =
-            fe2o3_verifier::prepare_typed_source_tail_v50(source, native, endian, budget)
+        reference_obligations_v69::with_inputs(
+            source.source_ssa(budget)?,
+            context.bindings,
+            budget,
+            |references, budget| {
+                let composed = fe2o3_verifier::prepare_typed_source_tail_with_references_v69(
+                    source, native, endian, references, budget,
+                )
                 .map_err(Error::MixedRelocationExpressions)?;
-        let capture: ComposedCapture<'_, '_, '_, '_, '_, '_, F> = (
-            source,
-            native,
-            &composed,
-            roots,
-            context,
-            &mut *budget,
-            pending,
-        );
-        let with_composed = move || -> Result<R, Error> {
-            let (source, native, composed, roots, context, budget, pending) =
-                std::convert::identity(capture);
-            let target = check_and_lower_mixed_target_llvm_v26(
-                source,
-                native,
-                context.bindings.rustc_target.profile(),
-                budget,
-            )?;
-            let capture: TargetCapture<'_, '_, '_, '_, '_, '_, F> = (
-                source,
-                native,
-                composed,
-                &target,
-                roots,
-                context,
-                &mut *budget,
-                pending,
-            );
-            let with_target = move || -> Result<R, Error> {
-                let (source, native, composed, target, roots, context, budget, pending) =
-                    std::convert::identity(capture);
-                let wire = descriptor::produce(
-                    &context.bindings.typed_descriptor_roots,
+                let capture: ComposedCapture<'_, '_, '_, '_, '_, '_, F> = (
                     source,
                     native,
-                    context.bindings.rustc_target.profile(),
-                    context
-                        .bindings
-                        .rustc_target
-                        .rustc_layout()
-                        .default_pointer_width_bits(),
-                    budget,
-                )?;
-                let capture: DescriptorCapture<'_, '_, '_, '_, '_, '_, F> = (
-                    source,
-                    native,
-                    composed,
-                    target,
-                    &wire,
+                    &composed,
                     roots,
                     context,
                     &mut *budget,
                     pending,
                 );
-                let with_descriptor = move || -> Result<R, Error> {
-                    let (source, native, composed, target, wire, roots, context, budget, pending) =
+                let with_composed = move || -> Result<R, Error> {
+                    let (source, native, composed, roots, context, budget, pending) =
                         std::convert::identity(capture);
-                    let table = wire.table(budget)?;
-                    let worker = prepare_mixed_worker_input_v26(
-                        target,
-                        ProductionKernelArgumentAbiInputV18 { roots },
-                        &table,
+                    let target = check_and_lower_mixed_target_llvm_v26(
+                        source,
+                        native,
+                        context.bindings.rustc_target.profile(),
                         budget,
                     )?;
-                    let inputs = FinalInputs {
+                    let capture: TargetCapture<'_, '_, '_, '_, '_, '_, F> = (
                         source,
                         native,
                         composed,
-                        worker: &worker,
+                        &target,
+                        roots,
                         context,
-                    };
-                    let capture: WorkerCapture<'_, '_, '_, '_, '_, F> =
-                        (inputs, &mut *budget, pending);
-                    let invoke = move || {
-                        let (inputs, budget, pending) = std::convert::identity(capture);
-                        // The nominal original/prefix/final request stays owned
-                        // through this callback. Replay checks owners and custody;
-                        // generated obligations are not executed proof evidence.
-                        inputs
-                            .composed
-                            .replay(budget)
-                            .map_err(Error::MixedRelocationExpressions)?;
+                        &mut *budget,
+                        pending,
+                    );
+                    let with_target = move || -> Result<R, Error> {
+                        let (source, native, composed, target, roots, context, budget, pending) =
+                            std::convert::identity(capture);
+                        let wire = descriptor::produce(
+                            &context.bindings.typed_descriptor_roots,
+                            source,
+                            native,
+                            context.bindings.rustc_target.profile(),
+                            context
+                                .bindings
+                                .rustc_target
+                                .rustc_layout()
+                                .default_pointer_width_bits(),
+                            budget,
+                        )?;
+                        let capture: DescriptorCapture<'_, '_, '_, '_, '_, '_, F> = (
+                            source,
+                            native,
+                            composed,
+                            target,
+                            &wire,
+                            roots,
+                            context,
+                            &mut *budget,
+                            pending,
+                        );
+                        let with_descriptor = move || -> Result<R, Error> {
+                            let (
+                                source,
+                                native,
+                                composed,
+                                target,
+                                wire,
+                                roots,
+                                context,
+                                budget,
+                                pending,
+                            ) = std::convert::identity(capture);
+                            let table = wire.table(budget)?;
+                            let worker = prepare_mixed_worker_input_v26(
+                                target,
+                                ProductionKernelArgumentAbiInputV18 { roots },
+                                &table,
+                                budget,
+                            )?;
+                            let inputs = FinalInputs {
+                                source,
+                                native,
+                                composed,
+                                worker: &worker,
+                                context,
+                            };
+                            let capture: WorkerCapture<'_, '_, '_, '_, '_, F> =
+                                (inputs, &mut *budget, pending);
+                            let invoke = move || {
+                                let (inputs, budget, pending) = std::convert::identity(capture);
+                                // The nominal original/prefix/final request stays owned
+                                // through this callback. Replay checks owners and custody;
+                                // generated obligations are not executed proof evidence.
+                                inputs
+                                    .composed
+                                    .replay(budget)
+                                    .map_err(Error::MixedRelocationExpressions)?;
+                                #[cfg(test)]
+                                check_fixedpoint_chain(&inputs, budget);
+                                P::consume(inputs, budget, pending.take())
+                            };
+                            #[cfg(test)]
+                            check_capture::<WorkerCapture<'_, '_, '_, '_, '_, F>, _>(&invoke);
+                            let selected = catch_unwind(AssertUnwindSafe(invoke));
+                            let released = worker.discard(budget);
+                            settled(selected, released)
+                        };
                         #[cfg(test)]
-                        check_fixedpoint_chain(&inputs, budget);
-                        P::consume(inputs, budget, pending.take())
+                        check_capture::<DescriptorCapture<'_, '_, '_, '_, '_, '_, F>, _>(
+                            &with_descriptor,
+                        );
+                        let selected = catch_unwind(AssertUnwindSafe(with_descriptor));
+                        let released = wire.discard(budget);
+                        settled(selected, released)
                     };
                     #[cfg(test)]
-                    check_capture::<WorkerCapture<'_, '_, '_, '_, '_, F>, _>(&invoke);
-                    let selected = catch_unwind(AssertUnwindSafe(invoke));
-                    let released = worker.discard(budget);
+                    check_capture::<TargetCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_target);
+                    let selected = catch_unwind(AssertUnwindSafe(with_target));
+                    let released = target.discard(budget);
                     settled(selected, released)
                 };
                 #[cfg(test)]
-                check_capture::<DescriptorCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_descriptor);
-                let selected = catch_unwind(AssertUnwindSafe(with_descriptor));
-                let released = wire.discard(budget);
+                check_capture::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_composed);
+                let selected = catch_unwind(AssertUnwindSafe(with_composed));
+                let released = composed
+                    .discard(budget)
+                    .map_err(Error::MixedRelocationExpressions);
                 settled(selected, released)
-            };
-            #[cfg(test)]
-            check_capture::<TargetCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_target);
-            let selected = catch_unwind(AssertUnwindSafe(with_target));
-            let released = target.discard(budget);
-            settled(selected, released)
-        };
-        #[cfg(test)]
-        check_capture::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_composed);
-        let selected = catch_unwind(AssertUnwindSafe(with_composed));
-        let released = composed
-            .discard(budget)
-            .map_err(Error::MixedRelocationExpressions);
-        settled(selected, released)
+            },
+        )
     };
     #[cfg(test)]
     check_capture::<NativeCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_native);
@@ -402,6 +428,14 @@ fn consume_forwarded<R, F, P: FinalConsumer<R, F>>(
 impl<R, F, P: FinalConsumer<R, F>> SourceHandoffPolicyV29<R, F> for MixedWorker<P> {
     fn entry_headers() -> Result<usize, Resource> {
         headers::<R, F, P>()
+    }
+
+    fn check_reference_obligations(
+        source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        bindings: &AuthenticatedProductionBindings,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        P::check_reference_obligations(source, bindings, budget)
     }
 
     fn consume<'view, 'source, 'abi, 'work>(

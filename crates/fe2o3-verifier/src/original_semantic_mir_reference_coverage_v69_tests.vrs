@@ -1,0 +1,82 @@
+proof fn reference_coverage_accepts_no_writes_outside_every_output_domain_v69()
+    ensures invocation_reference_complete_outputs_v69(seq![], seq![]),
+{ }
+
+proof fn reference_coverage_rejects_an_out_of_domain_write_v69(
+    observed: InvocationSourceEffectObservationV39,
+)
+    requires observed.effect is Write,
+    ensures !invocation_reference_complete_outputs_v69(seq![observed], seq![]),
+{ }
+
+proof fn reference_coverage_rejects_a_missing_or_guard_skipped_output_v69(
+    expected: InvocationReferenceOutputV69,
+)
+    ensures !invocation_reference_complete_outputs_v69(seq![], seq![expected]),
+{ }
+
+proof fn reference_coverage_rejects_two_equal_writes_even_when_both_values_match_v69(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    expected: InvocationReferenceOutputV69,
+)
+    ensures !invocation_reference_complete_outputs_v69(
+        seq![InvocationSourceEffectObservationV39 { before, after,
+            effect: MemoryOperationEffectV30::Write {
+                address: MemoryValueV30::Pointer(expected.address), width: expected.width,
+                alignment: expected.alignment, value: expected.value } },
+            InvocationSourceEffectObservationV39 { before, after,
+            effect: MemoryOperationEffectV30::Write {
+                address: MemoryValueV30::Pointer(expected.address), width: expected.width,
+                alignment: expected.alignment, value: expected.value } }], seq![expected]),
+{ }
+
+proof fn reference_coverage_accepts_one_exact_live_write_v69(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    expected: InvocationReferenceOutputV69,
+)
+    requires before.machine.valid, after.machine.valid,
+        expected.argument >= 0, expected.width > 0, expected.alignment > 0,
+    ensures invocation_reference_complete_outputs_v69(
+        seq![InvocationSourceEffectObservationV39 { before, after,
+            effect: MemoryOperationEffectV30::Write {
+                address: MemoryValueV30::Pointer(expected.address), width: expected.width,
+                alignment: expected.alignment, value: expected.value } }], seq![expected]),
+{ }
+
+proof fn reference_coverage_rejects_a_substituted_value_or_address_v69(
+    observed: InvocationSourceEffectObservationV39, expected: InvocationReferenceOutputV69,
+)
+    requires !invocation_reference_write_matches_v69(observed.effect, expected),
+    ensures !invocation_reference_complete_outputs_v69(seq![observed], seq![expected]),
+{ }
+
+proof fn reference_coverage_rejects_a_refused_source_observation_v69(
+    observed: Seq<InvocationSourceEffectObservationV39>, expected: Seq<InvocationReferenceOutputV69>,
+    index: int,
+)
+    requires 0 <= index < observed.len(),
+        observed[index].effect == MemoryOperationEffectV30::Refused,
+    ensures !invocation_reference_complete_outputs_v69(observed, expected),
+{ }
+
+proof fn reference_output_domain_keeps_zero_length_and_oversized_launch_points_v69(
+    pointer: MemoryPointerV30, point: int, length: int,
+)
+    requires length >= 0,
+    ensures !invocation_reference_point_active_v69(
+        MemoryValueV30::Slice(MemorySliceV30 { pointer, length: 0 }), point),
+        (point >= length ==> !invocation_reference_point_active_v69(
+            MemoryValueV30::Slice(MemorySliceV30 { pointer, length }), point)),
+        (0 <= point < length ==> invocation_reference_point_active_v69(
+            MemoryValueV30::Slice(MemorySliceV30 { pointer, length }), point)),
+{ }
+
+proof fn reference_outputs_with_different_lengths_have_independent_domains_v69(
+    pointer: MemoryPointerV30, point: int, short: int, long: int,
+)
+    requires 0 <= short <= point < long,
+    ensures !invocation_reference_point_active_v69(
+        MemoryValueV30::Slice(MemorySliceV30 { pointer, length: short }), point),
+        invocation_reference_point_active_v69(
+        MemoryValueV30::Slice(MemorySliceV30 { pointer, length: long }), point),
+{ }

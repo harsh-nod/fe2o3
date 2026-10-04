@@ -52,6 +52,12 @@ mod paired;
 #[path = "original_semantic_mir_invocation_typed_tail_v49.rs"]
 mod typed_tail;
 
+#[path = "original_semantic_mir_reference_expressions_v69.rs"]
+mod reference_expressions;
+
+#[path = "original_semantic_mir_reference_consumer_v69.rs"]
+mod reference_consumer;
+
 #[cfg(test)]
 #[path = "original_semantic_mir_typed_tail_v49_tests.rs"]
 mod typed_tail_tests;
@@ -90,7 +96,7 @@ pub(crate) fn generate_refinement_v36(
     endianness: fe2o3_kernel_ir::EndiannessV2,
     out: &mut Writer<'_, '_>,
 ) -> Result<[usize; 6]> {
-    generate_refinement_inner_v49(relation, launches, width, endianness, None, out)
+    generate_refinement_inner_v49(relation, launches, width, endianness, None, &[], out)
 }
 
 pub(crate) fn generate_refinement_typed_v49<'a, 'owner, 'rows>(
@@ -105,6 +111,34 @@ pub(crate) fn generate_refinement_typed_v49<'a, 'owner, 'rows>(
     endianness: fe2o3_kernel_ir::EndiannessV2,
     out: &mut Writer<'_, '_>,
 ) -> Result<[usize; 6]> {
+    generate_refinement_typed_with_references_v69(
+        relation,
+        prefix,
+        licm,
+        relocated,
+        forwarding,
+        final_inventory,
+        launches,
+        width,
+        endianness,
+        &[],
+        out,
+    )
+}
+
+pub(crate) fn generate_refinement_typed_with_references_v69<'a, 'owner, 'rows>(
+    relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    prefix: &'a fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'a, 'owner, 'owner, 'rows>,
+    licm: &'a fe2o3_kernel_analysis::CheckedCanonicalKirLicmV18<'owner>,
+    relocated: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'owner>,
+    forwarding: &'a fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV18<'owner>,
+    final_inventory: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'owner>,
+    launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
+    width: fe2o3_kernel_ir::FormalIndexWidth,
+    endianness: fe2o3_kernel_ir::EndiannessV2,
+    references: &[crate::SourceScalarReferenceInputV69<'_>],
+    out: &mut Writer<'_, '_>,
+) -> Result<[usize; 6]> {
     let tail = typed_tail::Tail::derive_final(
         relation,
         prefix,
@@ -114,7 +148,15 @@ pub(crate) fn generate_refinement_typed_v49<'a, 'owner, 'rows>(
         final_inventory,
         out,
     )?;
-    generate_refinement_inner_v49(relation, launches, width, endianness, Some(tail), out)
+    generate_refinement_inner_v49(
+        relation,
+        launches,
+        width,
+        endianness,
+        Some(tail),
+        references,
+        out,
+    )
 }
 
 fn generate_refinement_inner_v49(
@@ -123,6 +165,7 @@ fn generate_refinement_inner_v49(
     width: fe2o3_kernel_ir::FormalIndexWidth,
     endianness: fe2o3_kernel_ir::EndiannessV2,
     tail: Option<typed_tail::Tail<'_, '_, '_>>,
+    references: &[crate::SourceScalarReferenceInputV69<'_>],
     out: &mut Writer<'_, '_>,
 ) -> Result<[usize; 6]> {
     use std::fmt::Write as _;
@@ -256,6 +299,7 @@ fn generate_refinement_inner_v49(
         )
         .map_err(|error| out.source_section_error(error, "typed optimizer tail"))?;
     }
+    reference_consumer::emit(relation, &plan, &slots, references, launches, width, out)?;
     write!(out, "}}\n").map_err(|_| out.error())?;
     drop(emitted_original);
     // The typed tail releases only its nested delta; refund this older reservation

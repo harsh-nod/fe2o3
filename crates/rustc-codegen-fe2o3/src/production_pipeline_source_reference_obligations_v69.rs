@@ -407,3 +407,87 @@ pub(super) fn require_discharged(
         ))
     })
 }
+
+/// All rows are borrowed from the original authenticated registration owner.
+/// The callback must retain these inert obligations through actual proof
+/// execution; preparing or replaying this list does not discharge any row.
+pub(super) fn with_inputs<R>(
+    source: &ProductionSemanticSsaOwnerV1,
+    bindings: &AuthenticatedProductionBindings,
+    budget: &mut Budget<'_>,
+    consume: impl for<'rows> FnOnce(
+        &'rows [fe2o3_verifier::SourceScalarReferenceInputV69<'rows>],
+        &mut Budget<'_>,
+    ) -> Result<R, Error>,
+) -> Result<R, Error> {
+    use fe2o3_verifier::{
+        SourceScalarReferenceInputV69 as Input,
+        portable_reference_v1::{ReferenceArgumentRelationV1 as Relation, ReferenceReplayInputV1},
+    };
+    if bindings.reference_effect_bindings.as_slice().is_empty() {
+        let floor = budget.storage();
+        let headers = size_of_val(&consume)
+            .checked_add(size_of::<Result<R, Error>>())
+            .and_then(|n| n.checked_add(align_of::<Result<R, Error>>()))
+            .ok_or(Resource::Arithmetic)?;
+        return budget
+            .with_prepaid_scope(floor, 1, headers, headers, |budget| consume(&[], budget));
+    }
+    with_unproved(source, bindings, budget, |pending, budget| {
+        budget.reserve_storage(input_headers::<R>()?)?;
+        let mut rows = paid_vec(pending.obligations.len(), budget)?;
+        for obligation in &pending.obligations {
+            pending.check(source, bindings, budget)?;
+            let root = pending
+                .roots
+                .get(obligation.root)
+                .ok_or_else(|| binding("reference original root absent during input capture"))?;
+            let reference = obligation.reference;
+            check_function(reference, root.body, budget)?;
+            for relation in &reference.effect_ir.relations {
+                budget.charge_work(1)?;
+                if let Relation::DisjointOutputCoordinate { argument, .. } = relation {
+                    crate::compiler_descriptor::source_owned_v29::require_reference_index1d_v69(
+                        root.descriptor,
+                        *argument,
+                        budget,
+                    )?;
+                }
+            }
+            // Construct one complete inert row, then move it to retained
+            // backing. This includes identities and borrowed slice headers.
+            budget.charge_work(2 * size_of::<Input<'_>>())?;
+            rows.push(Input {
+                original_root: root.ordinal,
+                kernel: reference.kernel.clone(),
+                reference: reference.reference.clone(),
+                replay: ReferenceReplayInputV1 {
+                    signature_preimage: &reference.signature_preimage,
+                    effect_ir: &reference.effect_ir,
+                    effect_ir_sha256: reference.effect_ir_sha256,
+                    observable_output_writes: &reference.observable_output_writes,
+                },
+            });
+        }
+        let result = consume(&rows, budget);
+        pending.check(source, bindings, budget)?;
+        drop(rows);
+        result
+    })
+}
+
+fn input_headers<R>() -> Result<usize, Resource> {
+    use fe2o3_verifier::SourceScalarReferenceInputV69 as Input;
+    [
+        size_of::<Vec<Input<'_>>>(),
+        2 * size_of::<Input<'_>>(),
+        align_of::<Input<'_>>(),
+        size_of::<Result<R, Error>>(),
+        align_of::<Result<R, Error>>(),
+        6 * size_of::<&()>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, bytes| {
+        sum.checked_add(bytes).ok_or(Resource::Arithmetic)
+    })
+}
