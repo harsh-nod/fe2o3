@@ -244,6 +244,19 @@ child, and complete staging cleanup. Normal, fault, and campaign execution all
 use the same internal qualification transaction. These commands grant no
 persistent service or compiler-execution authority.
 
+The machine helper also retains the preflight-created `run/fe2o3` directory
+before invoking nspawn. It opens that exact child beneath the composed root
+with no symlink, magic-link, or mount crossing, requires an empty root-owned
+mode-`0755` directory without attributes, and rechecks its full snapshot and
+named identity before exec. Its distinct inherited descriptor supplies the
+fixed `/run/fe2o3` bind source with `norbind,noidmap`. This is necessary because
+systemd 255 mounts its private `/run` tmpfs before custom binds; a `+` source
+inside the original `/run` is then hidden. The source descriptor keeps the
+same socket/report directory visible to the original qualification root.
+Pinned nspawn closes inherited non-socket-activation descriptors before it
+executes the container payload. The target path, socket metadata admission,
+transaction checks, and shutdown/cleanup policy are unchanged.
+
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
 out-of-band expected manifest SHA-256. It admits only that digest's deterministic

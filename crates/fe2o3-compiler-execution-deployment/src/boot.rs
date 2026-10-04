@@ -110,12 +110,19 @@ impl PinnedSystemdNspawnPlanV1 {
 pub(super) fn pinned_systemd_nspawn_plan_v1(
     base_descriptor: RawFd,
     root_descriptor: RawFd,
+    runtime_descriptor: RawFd,
     identity: &QualificationMachineIdentityV1,
 ) -> Result<PinnedSystemdNspawnPlanV1, DeploymentVerificationErrorV1> {
-    if base_descriptor < 3 || root_descriptor < 3 || base_descriptor == root_descriptor {
+    if base_descriptor < 3
+        || root_descriptor < 3
+        || runtime_descriptor < 3
+        || base_descriptor == root_descriptor
+        || base_descriptor == runtime_descriptor
+        || root_descriptor == runtime_descriptor
+    {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationIsolation,
-            "systemd machine requires distinct inherited base and root descriptors",
+            "systemd machine requires distinct inherited base, root and runtime descriptors",
         ));
     }
     let base = format!("/proc/self/fd/{base_descriptor}");
@@ -146,7 +153,7 @@ pub(super) fn pinned_systemd_nspawn_plan_v1(
         "--console=pipe".to_owned(),
         "--notify-ready=yes".to_owned(),
         "--kill-signal=SIGRTMIN+3".to_owned(),
-        "--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap".to_owned(),
+        format!("--bind=/proc/self/fd/{runtime_descriptor}:/run/fe2o3:norbind,noidmap"),
         format!("--machine={}", identity.machine_name),
         "--hostname=fe2o3-qualification".to_owned(),
         format!("--uuid={}", identity.uuid),
@@ -196,12 +203,18 @@ pub fn execute_compiler_execution_systemd_machine_tool_v1(
     validate_machine_root(&root, OVERLAYFS_MAGIC_V1, "composed OverlayFS root")?;
     validate_pinned_executable(&base, PINNED_LOADER_PATH_V1, PINNED_LOADER_BYTE_LEN_V1)?;
     validate_pinned_executable(&base, PINNED_NSPAWN_PATH_V1, PINNED_NSPAWN_BYTE_LEN_V1)?;
+    let runtime = MachineRuntimeDirectoryV86::open(&root, (0, 0))?;
 
     let inherited_base = inherit_exec_descriptor(&base, 10)?;
     let inherited_root = inherit_exec_descriptor(&root, 11)?;
+    // nspawn covers the composed /run before mounting custom binds. Keep the exact
+    // source object reachable independently of that child-only overmount.
+    let inherited_runtime = inherit_exec_descriptor(&runtime.directory, 12)?;
+    runtime.revalidate(&root, (0, 0))?;
     let plan = pinned_systemd_nspawn_plan_v1(
         inherited_base.as_raw_fd(),
         inherited_root.as_raw_fd(),
+        inherited_runtime.as_raw_fd(),
         &identity,
     )?;
     let error = Command::new(plan.program())
@@ -296,6 +309,10 @@ fn inherit_exec_descriptor(
     }
     Ok(inherited)
 }
+
+#[path = "boot_runtime_v86.rs"]
+mod runtime_v86;
+use runtime_v86::MachineRuntimeDirectoryV86;
 
 pub(super) fn boot_and_stop_systemd_machine_v1(
     provisioned: &CompilerExecutionProvisionedQualificationV1,
@@ -723,7 +740,7 @@ mod tests {
             ".compiler-execution-qualification-v1-fedcba9876543210fedcba9876543210",
         )
         .unwrap();
-        let plan = pinned_systemd_nspawn_plan_v1(10, 11, &identity).unwrap();
+        let plan = pinned_systemd_nspawn_plan_v1(10, 11, 12, &identity).unwrap();
         assert_eq!(
             plan.program(),
             "/proc/self/fd/10/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
@@ -750,7 +767,7 @@ mod tests {
                 "--console=pipe",
                 "--notify-ready=yes",
                 "--kill-signal=SIGRTMIN+3",
-                "--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap",
+                "--bind=/proc/self/fd/12:/run/fe2o3:norbind,noidmap",
                 "--machine=fe2o3-q-fedcba9876543210fedcba9876543210",
                 "--hostname=fe2o3-qualification",
                 "--uuid=fedcba98-7654-3210-fedc-ba9876543210",
@@ -777,9 +794,16 @@ mod tests {
             ".compiler-execution-qualification-v1-0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        for (base, root) in [(0, 11), (10, 2), (10, 10)] {
+        for (base, root, runtime) in [
+            (0, 11, 12),
+            (10, 2, 12),
+            (10, 11, 2),
+            (10, 10, 12),
+            (10, 11, 10),
+            (10, 11, 11),
+        ] {
             assert_eq!(
-                pinned_systemd_nspawn_plan_v1(base, root, &identity)
+                pinned_systemd_nspawn_plan_v1(base, root, runtime, &identity)
                     .unwrap_err()
                     .kind(),
                 DeploymentVerificationErrorKindV1::InvalidQualificationIsolation
