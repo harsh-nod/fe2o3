@@ -11,6 +11,9 @@ mod external_reference_tests;
 #[path = "production_source_write_calls_v86_tests.rs"]
 mod write_calls_v86;
 
+#[path = "production_source_native_write_transactions_v88_tests.rs"]
+mod native_writes_v88;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

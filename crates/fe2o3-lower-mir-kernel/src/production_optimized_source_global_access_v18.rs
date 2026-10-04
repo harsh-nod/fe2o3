@@ -4,6 +4,7 @@ use fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1;
 include!("production_source_global_guard_v85.rs");
 include!("production_source_global_guard_v86.rs");
 include!("production_optimized_source_global_native_v18.rs");
+include!("production_source_native_writes_v88.rs");
 include!("production_optimized_source_global_read_conditions_v18.rs");
 #[cfg(test)]
 include!("production_optimized_source_global_access_queries_v18_tests.rs");
