@@ -15,8 +15,8 @@ fn shared_byte_state_result_definitions_preserve_complete_unconditional_equivale
             1
         );
     }
-    assert!(source.contains("ensures byte_block_refused_v58(state, observations) == MemoryBlockResultV30 {\n        state: MemoryStateV30 { valid: false, ..state },\n        observations, returned: Seq::empty(),\n    },"));
-    assert!(source.contains("ensures byte_micro_begin_result_v58(state, next_operation) == MemoryMicroStateV30 {\n        state, observations: Seq::empty(), next_operation,\n    },"));
+    assert!(source.contains("ensures byte_block_refused_v58(state, observations) == (MemoryBlockResultV30 {\n        state: MemoryStateV30 { valid: false, ..state },\n        observations, returned: Seq::empty(),\n    }),"));
+    assert!(source.contains("ensures byte_micro_begin_result_v58(state, next_operation) == (MemoryMicroStateV30 {\n        state, observations: Seq::empty(), next_operation,\n    }),"));
     for forbidden in [
         "requires ",
         "assume(",
@@ -238,6 +238,7 @@ fn protected_byte_state_result_constructors_equal_original_inline_expressions() 
     use std::time::{Duration, Instant};
 
     let program = with_state_result_equivalence_program_v58();
+    assert_complete_constructor_equalities_v60(&program);
     let source = CanonicalGeneratedVerusProofInputV3::new(program.into_bytes())
         .expect("canonical complete constructor equivalence program");
     let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
@@ -283,13 +284,16 @@ fn with_state_result_equivalence_program_v58() -> String {
 #[test]
 fn shared_byte_state_result_equivalence_program_is_complete_and_unconditional() {
     let source = with_state_result_equivalence_program_v58();
-    for name in ["byte_block_refused", "byte_micro_begin_result"] {
-        assert_eq!(
-            source
-                .matches(&format!("proof fn {name}_exact_v58("))
-                .count(),
-            1
-        );
+    assert_complete_constructor_equalities_v60(&source);
+    for name in [
+        "byte_block_refused_exact_v58",
+        "byte_micro_begin_result_exact_v58",
+        "byte_operation_result_exact_v55",
+        "byte_operation_refused_exact_v55",
+        "byte_micro_result_exact_v55",
+        "byte_micro_refused_exact_v55",
+    ] {
+        assert_eq!(source.matches(&format!("proof fn {name}(")).count(), 1);
     }
     assert_eq!(source.matches("open spec fn byte_block_258_").count(), 4);
     assert_eq!(source.matches("open spec fn byte_control_258_").count(), 4);

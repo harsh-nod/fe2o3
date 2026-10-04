@@ -1,3 +1,105 @@
+fn assert_complete_constructor_equalities_v60(source: &str) {
+    let compact = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let source = compact(source);
+    for expected in [
+        r#"ensures byte_block_refused_v58(state, observations) == (MemoryBlockResultV30 {
+            state: MemoryStateV30 { valid: false, ..state },
+            observations, returned: Seq::empty(),
+        }), { }"#,
+        r#"ensures byte_micro_begin_result_v58(state, next_operation) == (MemoryMicroStateV30 {
+            state, observations: Seq::empty(), next_operation,
+        }), { }"#,
+        r#"ensures byte_result_v55(before, after, operation, effect)
+            == (MemoryOperationResultV30 {
+                state: after,
+                observation: MemoryOperationObservationV30 {
+                    operation, before, after,
+                    valid_before: before.valid, valid_after: after.valid, effect,
+                },
+            }), { }"#,
+        r#"ensures ({
+            let result = byte_refused_v55(before, operation);
+            let after = MemoryStateV30 { valid: false, ..before };
+            result == (MemoryOperationResultV30 {
+                state: after,
+                observation: MemoryOperationObservationV30 {
+                    operation, before, after,
+                    valid_before: before.valid, valid_after: false,
+                    effect: MemoryOperationEffectV30::Refused,
+                },
+            })
+        }), { }"#,
+        r#"ensures byte_micro_result_v55(before, result, next_operation)
+            == (MemoryMicroResultV30 {
+                next: MemoryMicroStateV30 {
+                    state: result.state,
+                    observations: before.observations.push(result.observation),
+                    next_operation,
+                },
+                observation: result.observation,
+            }), { }"#,
+        r#"ensures ({
+            let state = MemoryStateV30 { valid: false, ..before.state };
+            let observation = MemoryOperationObservationV30 {
+                operation: MemorySourceOperationV30 { function: -1, block: -1, operation: -1 },
+                before: before.state, after: state,
+                valid_before: before.state.valid, valid_after: false,
+                effect: MemoryOperationEffectV30::Refused,
+            };
+            byte_micro_refused_v55(before) == (MemoryMicroResultV30 {
+                next: MemoryMicroStateV30 {
+                    state, observations: before.observations.push(observation), next_operation: -1,
+                },
+                observation,
+            })
+        }), { }"#,
+    ] {
+        assert_eq!(source.matches(&compact(expected)).count(), 1, "{expected}");
+    }
+    for (constructor, count) in [
+        ("MemoryBlockResultV30", 1),
+        ("MemoryMicroStateV30", 1),
+        ("MemoryOperationResultV30", 2),
+        ("MemoryMicroResultV30", 2),
+    ] {
+        assert_eq!(
+            source.matches(&format!("== ({constructor} {{")).count(),
+            count
+        );
+        assert!(!source.contains(&format!("== {constructor} {{")));
+    }
+}
+
+#[test]
+fn shared_byte_constructor_equalities_have_parser_safe_complete_rhs() {
+    let source = include_str!("mixed_optimizer_byte_results_v55.vrs");
+    assert_complete_constructor_equalities_v60(source);
+    assert_eq!(source.matches("proof fn ").count(), 6);
+    assert_eq!(source.matches("ensures ").count(), 6);
+    assert!(!source.contains("requires "));
+}
+
+#[test]
+fn generated_byte_frame_and_fragment_comparisons_parenthesize_rhs() {
+    let memory = super::super::byte_memory_v30::BYTE_MEMORY_V30;
+    assert!(memory.contains("frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),"));
+    assert!(!memory.contains("== MemoryDynamicFrameV30 {"));
+    for source in [
+        include_str!("mixed_optimizer_byte_view_laws_v38.vrs"),
+        include_str!("original_semantic_mir_native_provenance_laws_v39.vrs"),
+    ] {
+        assert_eq!(
+            source
+                .matches("== (MemoryByteV37::PointerFragment { pointer, width, ordinal }),")
+                .count(),
+            1
+        );
+        assert!(!source.contains("== MemoryByteV37::PointerFragment {"));
+        assert!(!source.contains("assume("));
+        assert!(!source.contains("external_body"));
+    }
+}
+
 #[test]
 fn shared_byte_result_definitions_preserve_complete_snapshots_and_refusal() {
     let source = include_str!("mixed_optimizer_byte_results_v55.vrs");
