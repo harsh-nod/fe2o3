@@ -11,6 +11,39 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private owning handoff and debugger source packages — 2026-10-04
+
+The private BF16 owning constructor now retains the real materialized source,
+verified lowering and access maps through the original-account handoff. Fresh
+Identity and swapped-input frontend sessions passed, alongside 3,897 compiler
+library tests (224 separately gated tests ignored), 73 extractor tests and two
+API tests in both debug and release. The unchanged thirteen-child candidate
+campaign and 22 owning-parent controls also passed. This checkpoint does not
+enable ordinary BF16 ranked lowering, LLVM emission or GPU execution.
+
+Two reproducible debugger source packages are now available:
+
+- [Disabled first-failure diagnostics](../tools/rocgdb-one-stop-native-adapters-v1/physical-v6/README.md)
+  preserve the previous adapter and record a bounded native-query or memory-read
+  failure without changing refusal decisions or enabling capture.
+- [Owned-queue health provider experiment](../tools/rocdbgapi-owned-queue-health-v1/README.md)
+  supplies only narrowly proven clean queue states for a newly owned runtime.
+  Unknown, unsupported, exhausted and tainted states refuse; this is not general
+  queue-error support or a replacement for the installed ROCm provider.
+
+Fresh packaged qualification passed all 64 Node groups, selected-source/API
+checks, forward/reverse patch checks and 518 C++ checks in each of strict and
+undefined-behavior-sanitized builds. Earlier fixture and command failures were
+preserved; only the final complete rerun is counted as passing. The provider
+mock fixtures do not call a real driver or GPU.
+
+A separate private full debugger build completed all four phases. Its measured
+16-type layout reserves 18,392 logical adapter bytes under the existing
+65,536-byte limit. Whole source/product and selected runtime-input checks passed;
+those checks are not an observed loaded-provider startup or native capture.
+Fresh startup, same-stop physical capture and consumer integration remain open.
+Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Basic assembly M2 acceptance 20261001
 
 The primary integrator accepted the literal M2 exit for the existing bounded

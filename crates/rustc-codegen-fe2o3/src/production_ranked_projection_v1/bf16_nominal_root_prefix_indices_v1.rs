@@ -48,7 +48,37 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     completed: bool,
     frame_credits: usize,
 }
+#[allow(dead_code)]
+#[path = "bf16_nominal_owned_root_driver_v1.rs"]
+mod owned_root_driver;
+pub(in crate::production_ranked_projection_v1) use owned_root_driver::consume_actual_nominal_root_v1;
+
 impl PendingActualRootPrefixIndicesV1 {
+    fn into_verified_parts(
+        self,
+        resources: &mut PreparationResourcesV1<'_, '_>,
+    ) -> Result<(
+        ProductionRankedKernelLoweringInputV1,
+        Vec<ProductionRankedAccessSourceV1>,
+    )> {
+        let ledger = self.ledger.ok_or_else(|| resource(Resource::Accounting))?;
+        if !resources.is_metered()
+            || resources.has_denial()
+            || resources.original_ledger_v1() != Some(ledger)
+        {
+            return Err(resource(Resource::Accounting));
+        }
+        resources.work(64)?;
+        if !self.started || !self.completed || self.frame_credits == 0 {
+            return Err(Error::Incomplete(
+                "nominal owned root prefix has not completed",
+            ));
+        }
+        // completed alone describes prefix data, not verification. The SAME
+        // owned stream/consumer must additionally pass its consuming checks.
+        self.stream.into_verified_parts(resources)
+    }
+
     pub(in crate::production_ranked_projection_v1) const fn new() -> Self {
         Self {
             graph: PendingNominalInitialGraphV1::new(),

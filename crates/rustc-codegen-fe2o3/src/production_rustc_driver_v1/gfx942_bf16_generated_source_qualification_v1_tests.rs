@@ -548,3 +548,205 @@ fn actual_generated_source() {
         "generated-source attempt refused; retained evidence is not qualification"
     );
 }
+
+struct OwningBody<'a> {
+    config: &'a Config,
+    record: &'a inputs::Record,
+    calls: usize,
+    completed: bool,
+    phase: Option<Value>,
+    failure: Option<String>,
+}
+impl Callbacks for OwningBody<'_> {
+    fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        self.calls += 1;
+        if self.calls != 1 {
+            self.failure = Some("more than one actual owning analysis callback".into());
+            return Compilation::Stop;
+        }
+        match super::transaction_in_active_session_v1(
+            tcx,
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        ) {
+            Ok(transaction) => {
+                let (result, phase) =
+                    transaction.observe_bf16_owned_root_for_test_v1(|source, emission, budget| {
+                        use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                        budget.charge_work(256)?;
+                        if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                            || super::lower_hex_v1(source.source().sha256())
+                                != self.record.spec.source.sha256
+                            || Some(emission.return_permutation())
+                                != owning_requested_permutation(self.config.session)
+                        {
+                            return Err(E::Unavailable(
+                                "actual owning source/requested Return differs",
+                            ));
+                        }
+                        Ok(())
+                    });
+                self.phase = phase.map(|phase| serde_json::to_value(phase).unwrap());
+                self.completed = result.is_ok();
+                self.failure = result.err().map(|error| diagnostic(&error));
+            }
+            Err(error) => self.failure = Some(diagnostic(&error)),
+        }
+        Compilation::Stop
+    }
+}
+
+fn owning_requested_permutation(session: u32) -> Option<[u8; 4]> {
+    match session {
+        1 => Some([0, 1, 2, 3]),
+        3 => Some([1, 0, 2, 3]),
+        _ => None,
+    }
+}
+
+fn completed_owning_phase(phase: &Value) -> bool {
+    let count = |key: &str| phase[key].as_u64();
+    let retained = count("occurrence_storage")
+        .and_then(|a| count("nominal_storage").and_then(|b| a.checked_add(b)));
+    let floor = count("entry_storage").and_then(|a| retained.and_then(|b| a.checked_add(b)));
+    phase["materialized"] == true
+        && phase["same_ledger"] == true
+        && phase["normal_attempted"] == false
+        && phase["normal_succeeded"] == false
+        && phase["failed_work"] == false
+        && phase["failed_storage"] == false
+        && retained.is_some_and(|n| n > 0)
+        && floor.is_some()
+        && count("final_storage") == floor
+        && count("work").is_some_and(|n| n > 0)
+        && count("phase_peak_storage")
+            .is_some_and(|n| floor.is_some_and(|f| n >= f) && n <= 2 * 1024 * 1024 * 1024)
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 owning continuation; root owns preparation and process supervision"]
+fn actual_generated_owning_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = OwningBody {
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // No CPU sidecar, source publication, target emission or lowerer attachment
+    // is attempted by this distinct constructor test.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let success = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-owning-source-observation-v1",
+        "session":config.session, "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "owning_entry_completed":body.completed, "phase":body.phase,
+        "failure":body.failure, "accepted":success, "parent_acceptance_required":true,
+        "normal_qualified":false, "lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    });
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private owning observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_OWNING_SOURCE_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        success && final_deadline,
+        "private owning source refused; saved evidence is not qualification"
+    );
+}
+
+#[test]
+fn owning_source_phase_requires_original_retained_account_and_no_normal_claim() {
+    // Parser controls only; these rows never stand in for a live constructor.
+    assert_eq!(owning_requested_permutation(1), Some([0, 1, 2, 3]));
+    assert_eq!(owning_requested_permutation(3), Some([1, 0, 2, 3]));
+    for refused in [0, 2, 4, u32::MAX] {
+        assert_eq!(owning_requested_permutation(refused), None);
+    }
+    let good = json!({
+        "materialized":true, "same_ledger":true, "normal_attempted":false,
+        "normal_succeeded":false, "failed_work":false, "failed_storage":false,
+        "occurrence_storage":5, "nominal_storage":7, "entry_storage":3,
+        "final_storage":15, "work":1, "phase_peak_storage":16
+    });
+    assert!(completed_owning_phase(&good));
+    for (key, value) in [
+        ("materialized", json!(false)),
+        ("same_ledger", json!(false)),
+        ("normal_attempted", json!(true)),
+        ("normal_succeeded", json!(true)),
+        ("failed_work", json!(true)),
+        ("failed_storage", json!(true)),
+        ("occurrence_storage", json!(null)),
+        ("final_storage", json!(14)),
+        ("work", json!(0)),
+        ("phase_peak_storage", json!(14)),
+        ("phase_peak_storage", json!(2u64 * 1024 * 1024 * 1024 + 1)),
+    ] {
+        let mut bad = good.clone();
+        bad[key] = value;
+        assert!(!completed_owning_phase(&bad), "{key}");
+    }
+}

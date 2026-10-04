@@ -13,6 +13,7 @@ mod nonempty_read_query;
 enum NominalQueryProfileV1 {
     Historical,
     SingleStridedRead,
+    OwnedRoot,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -60,6 +61,20 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             NominalQueryProfileV1::SingleStridedRead,
             |_, _, _| Ok(()),
         )
+    }
+
+    /// Explicit private owning-entry test. Completes materialization postflight,
+    /// then moves the same owner into the real boxed projection phase. This is
+    /// neither the ordinary dispatcher nor the lowerer/LLVM/target continuation.
+    pub(crate) fn observe_bf16_owned_root_for_test_v1(
+        self,
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<(), Error>,
+    ) -> (Result<(), Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_for_test_v1(NominalQueryProfileV1::OwnedRoot, inspect)
     }
 
     fn observe_bf16_call_source_profile_for_test_v1<R: Copy + 'static>(
@@ -142,6 +157,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                             NominalQueryProfileV1::SingleStridedRead => nonempty_read_query::inspect(
                                                 &owner, relation, &actual_inputs, budget,
                                             ),
+                                            // The new account/proof/owning constructor runs only
+                                            // after this materialization loan's full postflight.
+                                            NominalQueryProfileV1::OwnedRoot => Ok(()),
                                         },
                                     )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
@@ -234,6 +252,22 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                         ranked_roots,
                         bindings,
                     } = prepared;
+                    if matches!(profile, NominalQueryProfileV1::OwnedRoot) {
+                        // The ORIGINAL materialization Box is still alive here.
+                        // Projection acquires its own original Box before any
+                        // inventory/facts/proof; both accounts keep old caps.
+                        let checked = MaterializedNeutralProductionCompilation {
+                            materialized, ranked_roots, bindings,
+                        }.verify_private_nominal_kernel_checks_v1().map_err(Box::new)?;
+                        assert_eq!(budget.work(), before.work);
+                        assert_eq!(budget.storage(), before.final_storage);
+                        assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                        budget.check_prior_denials_v1()
+                            .map_err(materialization_resource_error_v29)?;
+                        drop(checked);
+                        eprintln!("fe2o3-bf16-private-owning-entry-v1 completed=true materialization_account_unchanged=true normal_admission=false target=false");
+                        return Ok(observed);
+                    }
                     // The original account stays live while the same nominal
                     // owner enters the unchanged refusing normal consumer.
                     let normal = MaterializedNeutralProductionCompilation {
