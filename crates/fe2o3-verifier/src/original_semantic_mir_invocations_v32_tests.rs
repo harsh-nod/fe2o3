@@ -11,8 +11,8 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
-    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticSsaLimitsV1,
-    ProductionSemanticSsaOwnerV1,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticSsaErrorV1,
+    ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
 };
 
 const LIMIT: usize = 100_000_000;
@@ -141,6 +141,34 @@ fn prepared_captured_callable_transform(
         &mut Budget<'_>,
     ) -> Result<ProductionPreparedSourceV18>,
 ) -> Result<ProductionPreparedSourceV18> {
+    with_fixture_ssa_callable_transform(
+        budget,
+        unit_return,
+        control,
+        root_count,
+        retained_storage,
+        transform,
+        |owner, launch, budget| capture(owner.unwrap(), launch, budget),
+    )
+}
+
+fn with_fixture_ssa_callable_transform<T>(
+    budget: &mut Budget<'_>,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+    transform: impl FnOnce(
+        &mut Vec<SemanticTypeDeclV1>,
+        &mut Vec<SemanticFunctionDeclV1>,
+        &mut Vec<Callable>,
+    ),
+    capture: impl FnOnce(
+        std::result::Result<ProductionSemanticSsaOwnerV1, ProductionSemanticSsaErrorV1>,
+        ProductionSourceLaunchRosterV1,
+        &mut Budget<'_>,
+    ) -> T,
+) -> T {
     assert!((2..=8).contains(&root_count));
     let root_names: Vec<_> = (0..root_count)
         .map(|root| match root {
@@ -610,8 +638,7 @@ fn prepared_captured_callable_transform(
         ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
-    )
-    .unwrap();
+    );
     capture(owner, launch, budget)
 }
 
@@ -732,6 +759,22 @@ pub(in super::super) fn run_source_transform(
         storage,
         |budget| prepared_source_transform(budget, false, false, 2, 0, transform),
         examine,
+    )
+}
+
+pub(in super::super) fn try_source_ssa_transform(
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+) -> std::result::Result<ProductionSemanticSsaOwnerV1, ProductionSemanticSsaErrorV1> {
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    with_fixture_ssa_callable_transform(
+        &mut budget,
+        false,
+        false,
+        2,
+        0,
+        |types, functions, _| transform(types, functions),
+        |owner, _launch, _budget| owner,
     )
 }
 
