@@ -44,9 +44,17 @@ opcode coverage before clearing application admission.
    the consuming join with pending compiler/proof custody or launch authority.
    Device-local fill output remains excluded from this first conditional profile
    until its retained allocation identity includes the memory-session association.
-5. Qualify admitted fill on each GPU, completed output -> staging -> settled H2D
-   -> PUBLIC XGMI -> full guarded readback in both directions, including N=65
-   with G=128. A second write-only fill does not prove consumption of peer input.
+5. Implement the ordinary admitted executable, then qualify fill on each GPU,
+   completed output -> staging -> settled H2D -> PUBLIC XGMI -> full guarded
+   readback in both directions, including N=65 with G=128. `examples/fill` still
+   returns Unsupported and its read-write f32 kernel is not the proved write-only
+   u32 index fill. Reuse the genuine conditional-fill body, with compiler-derived
+   namespace, not the fixture's captured namespace. The native fill output must
+   be exactly 260 bytes at offset zero. Put its actual completed bytes into a
+   separate guarded staging frame: this checks transfer guards, not guard storage
+   around the native fill allocation. A second write-only fill does not prove
+   consumption of peer input. Existing copy-only and fixed qualification-kernel
+   smoke tests do not complete this ordinary-application gate.
 
 Ordinary application admission also needs a reviewed initialization design.
 `cargo-fe2o3` installs the permanent no-fork application filter in `pre_exec`,
@@ -154,33 +162,56 @@ spawn/sandbox supervision and protected service isolation, neither of which foll
 from the process snapshot alone. Then deploy the fixed keyless custodian, join its
 original proof to native invocation premises, and run the selected two-GPU pipeline.
 
-The reviewed registration design reuses the supervisor/root registry rather than
-adding another listener. Cargo creates a nonblocking CLOEXEC seqpacket pair before
-spawn, enables PASSCRED and eagerly binds both endpoints. The child endpoint becomes
-occurrence slot 4 before environment encoding. Socket-creator credentials identify
-Cargo; per-message credentials must separately identify the original application
-or root responder. Root must compare reverse endpoint addresses and consume the
-original application and Cargo pidfds. Keep FD195's existing unnamed compiler-peer
-profile unchanged. The host registers after admission and before ACK, without
-reacquiring its publication token. Root must install independently bounded
-application custody before the supervisor publishes readiness; raw ACK bytes alone
-cannot satisfy that barrier. Compiler issuer exit must not retire application proof
-custody, and application exit must not imply device settlement. This design is not
-yet an implemented registration/deployment or remote proof owner.
+The reviewed registration design reuses the supervisor/root registry without
+another listener. Implement the following as one coherent application profile;
+these are not yet implemented registration/deployment or remote proof ownership.
 
-The full Cargo unit run also exposed inherited reviewed-macro source-pin drift:
-the committed macro tree no longer matches the closed host-code allowlist. Do not
-refresh that security pin merely to make tests pass. Review the intervening macro
-changes and requalify the closed build admission before the ordinary production
-application campaign. This startup change leaves that separate gate unchanged.
-A read-only delta review found no production-code defect or added proc-macro
-dependencies/I/O, but the unsafe owned-argument emission needs direct structural
-coverage before pin refresh. Add a mixed scalar/read/write/read-write/mapped-output
-test for exact accounting counts, full-signature argument ordinals, mapped index
-identity and the intended unsafe trait assertion. Check that raw-pointer and
-by-value profiles emit no runtime adapter. Then qualify macro unit/downstream
-fixtures and host generated-runtime tests under frozen source hashes. Keep the
-external-source pin independent of any workspace-local refresh.
+1. Add a canonical application binding containing the full compiler supervisor
+   handoff, exact four-slot occurrence, descriptor coordinates, envelope expectation
+   and challenge. Cargo creates a nonblocking CLOEXEC seqpacket pair before spawn,
+   enables PASSCRED and eagerly binds both endpoints. Include slot 4 before encoding
+   the occurrence. Update Cargo, host claim/cleanup, and root observation together;
+   all currently require exactly three slots. Keep FD195 unchanged.
+2. Add a distinct Cargo-to-supervisor application kind with exactly four rights:
+   compiler peer, duplicate of captured original app pidfd, proof peer, and original
+   Cargo pidfd. Ordinary compiler handoff still requires exactly two. Authenticate
+   Cargo's control credentials and the complete binding; do not numerically reopen
+   the app PID or downgrade an application to the ordinary profile.
+3. Root `RegisterApplication` uses the existing two-right compiler registration
+   transport and marks its preparation AppExpected. `AttachApplication` references
+   that exact unexpired preparation and transfers only proof peer and Cargo pidfd.
+   Duplicate the original app token from the prepared observer's retained client,
+   with pre/post validation. This keeps the root transport's two-right limit intact.
+   Install a separately bounded app entry, including separate containment custody,
+   before replying Installed. Missing/duplicate attachment and attach-after-bind
+   reject. Compiler eviction or issuer exit cannot retire the app entry.
+4. Installed returns a root-created observation-readiness reader. Root retains its
+   writer; supervisor waits on it after issuer launch/bind/readiness, outside the
+   shared registry mutex, before publishing Cargo readiness. Host exchanges a fresh
+   root challenge and exact app Ready after local admission and before Cargo ACK.
+   Authenticate socket creator, reverse addresses and distinct per-message sender
+   credentials against original pidfds. Commit observation before either readiness
+   response. The new readiness pipe is not Cargo's ACK pipe: temporary ACK writer
+   duplicates must close before return. Current pre-ACK admission does not use FD195;
+   allowing issuer service before this gate avoids a future dependency cycle.
+5. Qualify wrong slots/addresses/credentials, reordered and stale pidfds, wrong
+   registration/profile, replay, capacity, backpressure, timeout and shutdown.
+   One stalled app must not block the registry, and ACK EOF must remain observable.
+   Then deploy fixed keyless proof custody and implement the consuming native join.
+
+App-side root bootstrap must not reuse helpers requiring sandbox-forbidden waitid
+or socket shutdown. No new publication recovery or lock acquisition belongs in
+registration. Root process identity alone does not measure the fixed custodian.
+Application exit, EOF and containment remain distinct from GPU settlement.
+
+The [reviewed-macro checkpoint](evidence/dev-macro-admission-2026-10-04/README.md)
+closes the inherited workspace-local macro source-pin drift after independent delta
+review and qualification. New exact structural tests cover the complete owned and
+borrowed adapters, accounting, argument ordinals, mapped identities and unsafe trait
+assertions. Nine AST mutation controls and mixed unsupported profiles pass alongside
+macro/downstream and host runtime tests under frozen hashes. The external-source
+pin remains independent and unchanged. This admits the reviewed macro tree, not
+new host/runtime authority or an ordinary production application deployment.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
