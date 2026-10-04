@@ -1,0 +1,46 @@
+name: Issue 271 Predicated Completion Full Ordinary Diagnostic
+
+on:
+  push:
+    branches: [wip/issue271-predicated-continuation-diagnostic-v90-r2-20261004]
+
+permissions:
+  contents: read
+
+jobs:
+  verifier-ordinary:
+    name: Exact ba32d1 lowerer and Pliron full ordinary tests (diagnostic only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    steps:
+      - name: Check out diagnostic control
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ba32d119ab6b48565c81677cd95133431c937cb1
+          path: source
+          persist-credentials: false
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm ripgrep
+      - name: Install pinned Rust toolchain
+        working-directory: source
+        run: rustup show active-toolchain
+      - name: Run exact reviewed ordinary roster
+        env:
+          EXPECTED_CONTROL_HEAD: ${{ github.sha }}
+        run: python3 control/.github/diagnostics/issue271-proof-v78.py
+      - name: Upload diagnostic logs only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue271-predicated-continuation-ba32d1-ordinary-v90-r2-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-predicated-continuation-v90-r2-logs/
+          if-no-files-found: warn
+          retention-days: 7
