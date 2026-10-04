@@ -29,6 +29,32 @@ for helper in \
   grep -Fq -- "scripts/${helper}" "${builder}" || fail "missing ${helper}"
 done
 
+grep -Fq -- 'readonly cargo_target_dir="${target_root}/cargo"' "${builder}" ||
+  fail 'shared Cargo target directory is missing'
+for role in COORDINATOR CLIENT_CHECK SUPERVISOR ISSUER ANCHOR_HELPER ANCHOR PROVISIONER DEPLOYMENT_VERIFIER; do
+  grep -Fq -- "FE2O3_STATIC_${role}_TARGET_DIR="'"${cargo_target_dir}"' "${builder}" ||
+    fail "${role} does not use the shared Cargo target directory"
+done
+for image in \
+  fe2o3-compiler-execution-manifest \
+  fe2o3-compiler-execution-deployment-verify \
+  fe2o3-compiler-execution-client-check \
+  fe2o3-compiler-execution-coordinator \
+  fe2o3-compiler-execution-supervisor \
+  fe2o3-compiler-execution-issuer \
+  fe2o3-external-anchor-provisioning-helper \
+  fe2o3-external-anchor-service \
+  fe2o3-compiler-execution-provision; do
+  grep -Fq -- '"${cargo_target_dir}/${target}/release/'"${image}\"" "${builder}" ||
+    fail "${image} is not consumed from the shared Cargo target directory"
+done
+
+if grep -Eq -- '\$\{target_root\}/(coordinator|client-check|supervisor|issuer|anchor-helper|anchor|provisioner|deployment-verifier)/' "${builder}"; then
+  fail 'legacy per-role Cargo artifact lookup remains'
+fi
+grep -Fq -- '"${target_root}/launcher/fe2o3-static-preexec-launcher"' "${builder}" ||
+  fail 'separate CMake launcher output is missing'
+
 for image in \
   fe2o3-compiler-execution-client-check \
   fe2o3-compiler-execution-coordinator \

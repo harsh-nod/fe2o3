@@ -145,6 +145,13 @@ static verifier before publishing the output directory. The final two lines are
 release inputs and must be distributed outside the bundle. The non-root builder
 does not invoke the privileged installer.
 
+The eight Rust build helpers run sequentially against one fingerprinted Cargo
+cache at `${FE2O3_STATIC_DEPLOYMENT_TARGET_DIR:-target/static-deployment}/cargo`.
+The launcher keeps its separate `launcher` CMake directory. Shared dependencies
+reduce build space and repeat work; every helper still runs its original tests,
+static ELF checks and smoke checks, and the final bundle receives a fresh manifest.
+Standalone helper scripts retain their independent target-directory defaults.
+
 Install a qualified bundle into a private offline-root parent with the two
 out-of-band pins printed by the builder:
 
