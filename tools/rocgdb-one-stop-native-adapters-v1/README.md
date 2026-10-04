@@ -94,3 +94,7 @@ unchanged. No activation, runtime binding or hardware acceptance is transferred.
 ## Separate disabled checkpoint diagnostic successor
 
 The additive [physical-v7 package](physical-v7/README.md) labels first-failure checkpoint guards while preserving every original predicate and all disabled gates. It includes exact reversible source transforms and CPU controls. Physical-v6 and earlier packages remain unchanged; this source-only diagnostic is not a native-capture qualification or permission to ignore a refusal.
+
+## Separate disabled scalar checkpoint successor
+
+The additive [physical-v8 package](physical-v8/README.md) retains the checkpoint diagnostics and corrects the scalar host presentation mask from zero to lane-zero bit one. Its cumulative v6-to-v8 patch and self-contained controls leave physical-v7 and earlier packages unchanged. All activation, capture and publication gates remain disabled; source/CPU checks do not qualify a native capture.

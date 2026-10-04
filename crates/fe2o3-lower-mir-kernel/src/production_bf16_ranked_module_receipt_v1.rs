@@ -1255,3 +1255,640 @@ where
         inspect,
     )
 }
+
+/// Private formal-memory continuation retaining the exact intact nominal owner.
+/// The raw analysis and its original reasons are moved, never cloned or relabeled.
+/// Bounds and alias requirements remain unauthenticated runtime obligations.
+///
+/// The caller must retain both original accounts. This fixed owner and selected
+/// replay/guard work are metered; the legacy formal engine, its vector payloads,
+/// exact report comparison and allocations retain their existing excluded domain.
+#[doc(hidden)]
+#[must_use = "dropping the private formal owner abandons its intact source and obligations"]
+pub struct ProductionPrivateBf16FormalMemoryOwnerV1 {
+    // Formal rows die before their actual source; the caller's phase dies last.
+    analysis: fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+    attached: ProductionPrivateBf16AttachedRankedOwnerV1,
+    retained_floor: usize,
+}
+
+type PrivateBf16FormalOwnerErrorV1 = crate::ProductionFormalMemoryErrorV1;
+
+fn private_bf16_formal_owner_resource_v1(
+    error: ArgumentResourceV1,
+) -> PrivateBf16FormalOwnerErrorV1 {
+    PrivateBf16FormalOwnerErrorV1::SemanticKir(error.into())
+}
+
+fn reserve_private_bf16_formal_owner_header_v1(
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    budget.check_prior_denials_v1()?;
+    budget.charge_work(1)?;
+    let header = ProductionPrivateBf16FormalMemoryOwnerV1::retained_storage_v1();
+    // Incoming attachment credits remain retained separately. This new logical
+    // owner header also covers its not-yet-moved analysis/result representation;
+    // this is not a bound on incidental Rust stack temporaries or engine heap.
+    if header < std::mem::size_of::<PrivateBf16FormalAttemptV1>() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    budget.reserve_storage(header)?;
+    Ok(header)
+}
+
+fn check_private_bf16_formal_owner_account_v1(
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    retained_floor: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    check_private_bf16_attachment_ledger_v1(ledger, budget)?;
+    if budget.storage() < retained_floor {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    Ok(())
+}
+
+fn require_private_bf16_formal_analysis_match_v1(
+    fresh: &fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+    retained: &fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if fresh != retained {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn require_private_bf16_formal_analysis_match_for_test_v1(
+    fresh: &fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+    retained: &fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    require_private_bf16_formal_analysis_match_v1(fresh, retained)
+}
+
+fn replay_private_bf16_formal_analysis_v1(
+    attached: &ProductionPrivateBf16AttachedRankedOwnerV1,
+    retained: &fe2o3_kernel_ir::FormalMemoryObligationAnalysis,
+    expected_root: SemanticFunctionIdV1,
+    expected_return: [u8; 4],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    attached.with_private_bf16_ranked_formal_v1(
+        expected_root,
+        expected_return,
+        budget,
+        |fresh, proof, budget| {
+            budget.check_prior_denials_v1()?;
+            // The shared continuation returns the original guard refusal even
+            // if this callback returns Ok; a failed proof is never admitted.
+            if proof.is_err() {
+                return Ok(());
+            }
+            let Ok(fresh) = fresh else {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            };
+            // Exact full formal comparison retains the existing formal-engine
+            // accounting domain, just as ordinary formal replay does.
+            require_private_bf16_formal_analysis_match_v1(fresh, retained)
+        },
+    )
+}
+
+impl ProductionPrivateBf16AttachedRankedOwnerV1 {
+    /// Consumes this exact attachment into a private formal owner on its stored
+    /// original ledger. No caller-written report or source token is accepted.
+    /// A fresh raw analysis is proved, then independently rederived and proved
+    /// again before that SAME first analysis is moved into the returned owner.
+    /// Ordinary dispatch, legacy Connected attachment and target gates stay shut.
+    #[doc(hidden)]
+    pub fn into_private_bf16_formal_memory_with_budget_v1(
+        self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionPrivateBf16FormalMemoryOwnerV1, crate::ProductionFormalMemoryErrorV1>
+    {
+        check_private_bf16_attachment_ledger_v1(self.ledger, budget)
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let floor = budget.storage();
+        let slot = budget as *const _ as usize;
+        let ledger = self.ledger;
+        let protected = floor
+            .checked_add(ProductionPrivateBf16FormalMemoryOwnerV1::retained_storage_v1())
+            .ok_or_else(|| private_bf16_formal_owner_resource_v1(ArgumentResourceV1::Arithmetic))?;
+        let header = reserve_private_bf16_formal_owner_header_v1(budget)
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.verify_private_bf16_attached_retained_source_with_budget_v1(
+                expected_root,
+                expected_return,
+                budget,
+            )
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            budget
+                .charge_work(8)
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            let module = self.receipt.materialized.executable.module();
+            let [kernel] = module.kernels.as_slice() else {
+                return Err(PrivateBf16FormalOwnerErrorV1::KernelCount {
+                    actual: module.kernels.len(),
+                });
+            };
+            let extents = crate::production_formal_memory_v1::witness_extents(&kernel.domain);
+            let witness = fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: kernel.domain.rank(),
+                extents,
+            };
+            // This is the actual first analysis, not a callback-report clone.
+            let attempt: PrivateBf16FormalAttemptV1 = Ok(
+                fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+                    module,
+                    &kernel.id,
+                    witness,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+                )
+                .map_err(PrivateBf16FormalOwnerErrorV1::Analysis)?,
+            );
+            with_private_bf16_ranked_formal_frame_v1(
+                module,
+                kernel,
+                extents,
+                self.receipt.materialized.limits.max_operations,
+                expected_root.index(),
+                &attempt,
+                budget,
+                |_, _, _| Ok(()),
+            )
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+            let analysis = attempt.map_err(PrivateBf16FormalOwnerErrorV1::Analysis)?;
+            replay_private_bf16_formal_analysis_v1(
+                &self,
+                &analysis,
+                expected_root,
+                expected_return,
+                budget,
+            )
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            Ok::<_, PrivateBf16FormalOwnerErrorV1>(analysis)
+        }));
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                drop(payload);
+                Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    private_bf16_attachment_panic_error_v1(budget),
+                ))
+            }
+        };
+        if budget as *const _ as usize != slot
+            || budget.work_ledger_identity_v1() != ledger
+            || budget.storage() != protected
+        {
+            drop(result);
+            drop(self);
+            // No broad refund can erase a failed callback/engine's live floor.
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            return Err(private_bf16_formal_owner_resource_v1(
+                ArgumentResourceV1::Accounting,
+            ));
+        }
+        if let Err(error) = budget.check_prior_denials_v1() {
+            drop(result);
+            drop(self);
+            budget
+                .release_storage(header)
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            return Err(private_bf16_formal_owner_resource_v1(error));
+        }
+        match result {
+            Ok(analysis) => Ok(ProductionPrivateBf16FormalMemoryOwnerV1 {
+                analysis,
+                attached: self,
+                retained_floor: protected,
+            }),
+            Err(error) => {
+                drop(self);
+                budget
+                    .release_storage(header)
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                Err(error)
+            }
+        }
+    }
+}
+
+impl ProductionPrivateBf16FormalMemoryOwnerV1 {
+    /// Newly retained logical fixed header, excluding existing formal payloads.
+    pub const fn retained_storage_v1() -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    /// Actual unchanged singleton root count; no report can manufacture it.
+    pub fn root_count(&self) -> usize {
+        self.attached.root_count()
+    }
+
+    /// Borrows the actual retained obligations, including runtime bounds/aliases.
+    /// These rows are not authenticated launch or allocation evidence.
+    pub fn obligations(&self) -> &FormalMemoryObligations {
+        self.analysis.obligations()
+    }
+
+    /// Borrows the exact original reasons proved by the private guard engine.
+    /// The underlying raw Incomplete analysis was not relabeled Complete.
+    pub fn ranked_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
+        self.analysis.incomplete_reasons()
+    }
+
+    /// Reports the actual core-analysis classification, not composed discharge.
+    pub fn raw_analysis_is_complete(&self) -> bool {
+        self.analysis.is_complete()
+    }
+
+    /// Private retention never grants artifact or launch authority.
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+
+    /// Replays source/full translation, fresh formal extraction and all guarded
+    /// proof joins, then compares the entire actual analysis on the same phase.
+    #[doc(hidden)]
+    pub fn verify_private_bf16_formal_memory_with_budget_v1(
+        &self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), crate::ProductionFormalMemoryErrorV1> {
+        check_private_bf16_formal_owner_account_v1(
+            self.attached.ledger,
+            self.retained_floor,
+            budget,
+        )
+        .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        replay_private_bf16_formal_analysis_v1(
+            &self.attached,
+            &self.analysis,
+            expected_root,
+            expected_return,
+            budget,
+        )
+        .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)
+    }
+}
+
+#[cfg(test)]
+mod private_formal_owner_resource_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+
+    #[test]
+    fn private_formal_owner_header_exact_and_one_short() {
+        let header = ProductionPrivateBf16FormalMemoryOwnerV1::retained_storage_v1();
+        assert!(header >= std::mem::size_of::<PrivateBf16FormalAttemptV1>());
+        for (work_limit, storage_limit, accepted) in [
+            (1, 7 + header, true),
+            (0, 7 + header, false),
+            (1, 7 + header - 1, false),
+        ] {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = reserve_private_bf16_formal_owner_header_v1(&mut budget);
+            assert_eq!(result.is_ok(), accepted);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            if accepted {
+                assert_eq!(result.unwrap(), header);
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (1, 7 + header, 7 + header)
+                );
+                budget.release_storage(header).unwrap();
+            } else {
+                assert_eq!(budget.storage(), 7);
+                assert_eq!(budget.failed_work().is_some(), work_limit == 0);
+                assert_eq!(budget.failed_storage().is_some(), work_limit != 0);
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_formal_owner_account_rejects_same_counters_foreign_ledger_and_short_floor() {
+        let mut work = Work::new(10);
+        let mut other_work = Work::new(10);
+        let mut budget = Budget::new(&mut work, 8);
+        let mut other = Budget::new(&mut other_work, 8);
+        budget.reserve_storage(7).unwrap();
+        other.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        assert!(check_private_bf16_formal_owner_account_v1(ledger, 7, &mut budget).is_ok());
+        assert!(matches!(
+            check_private_bf16_formal_owner_account_v1(ledger, 7, &mut other),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))
+        ));
+        assert_eq!(
+            (budget.work(), budget.storage(), budget.peak_storage()),
+            (other.work(), other.storage(), other.peak_storage())
+        );
+        assert!(matches!(
+            check_private_bf16_formal_owner_account_v1(ledger, 8, &mut budget),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))
+        ));
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn private_formal_owner_header_and_replay_preserve_prior_denials() {
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let original = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(
+                    matches!(reserve_private_bf16_formal_owner_header_v1(&mut budget),
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                    if error == original)
+                );
+                assert!(
+                    matches!(check_private_bf16_formal_owner_account_v1(ledger, 7, &mut budget),
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                    if error == original)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+}
+
+fn private_bf16_target_frame_storage_v1<I>() -> Result<usize, ProductionSemanticKirErrorV1> {
+    std::mem::size_of::<Option<I>>()
+        .checked_add(std::mem::size_of::<Result<(), PrivateBf16FormalOwnerErrorV1>>())
+        .ok_or_else(|| ArgumentResourceV1::Arithmetic.into())
+}
+
+fn reserve_private_bf16_target_frame_v1<I>(
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    budget.check_prior_denials_v1()?;
+    budget.charge_work(1)?;
+    let storage = private_bf16_target_frame_storage_v1::<I>()?;
+    budget.reserve_storage(storage)?;
+    Ok(storage)
+}
+
+impl ProductionPrivateBf16FormalMemoryOwnerV1 {
+    /// Lends the actual executable graph, selected source function and retained
+    /// obligations only after a fresh full nominal/formal replay on this owner's
+    /// original account. No source owner, report or authority token is returned.
+    ///
+    /// The callback returns unit. Any separately retained target output must
+    /// already have its own caller-paid reservation and remain owned with this
+    /// source and account. Callback storage must return to its incoming floor.
+    /// Geometry, target cloning/verification and their existing tree/payload
+    /// domains are not made globally metered by this fixed callback frame.
+    #[doc(hidden)]
+    pub fn with_private_bf16_target_source_v1<'work, I>(
+        &self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'work>,
+        inspect: I,
+    ) -> Result<(), crate::ProductionFormalMemoryErrorV1>
+    where
+        I: FnOnce(
+            &fe2o3_kernel_ir::Module,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+            &FormalMemoryObligations,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    {
+        check_private_bf16_formal_owner_account_v1(
+            self.attached.ledger,
+            self.retained_floor,
+            budget,
+        )
+        .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let floor = budget.storage();
+        let slot = budget as *const _ as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let storage = reserve_private_bf16_target_frame_v1::<I>(budget)
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let protected = floor
+            .checked_add(storage)
+            .ok_or_else(|| private_bf16_formal_owner_resource_v1(ArgumentResourceV1::Arithmetic))?;
+        let mut inspect = Some(inspect);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.verify_private_bf16_formal_memory_with_budget_v1(
+                expected_root,
+                expected_return,
+                budget,
+            )?;
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            budget
+                .charge_work(4)
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            let semantic = self
+                .attached
+                .receipt
+                .materialized
+                .semantic_ssa()
+                .source_semantic();
+            let [root] = semantic.roots() else {
+                return Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ));
+            };
+            if *root != expected_root {
+                return Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ));
+            }
+            let function = semantic
+                .functions()
+                .get(expected_root.index() as usize)
+                .ok_or(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ))?;
+            let callback = inspect.take().ok_or_else(|| {
+                private_bf16_formal_owner_resource_v1(ArgumentResourceV1::Accounting)
+            })?;
+            callback(
+                self.attached.receipt.materialized.executable.module(),
+                function,
+                self.analysis.obligations(),
+                budget,
+            )
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)
+        }));
+        // In particular, an early replay refusal must destroy the unused
+        // captured callback before its paid Option<I> representation is refunded.
+        drop(inspect);
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                drop(payload);
+                Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    private_bf16_attachment_panic_error_v1(budget),
+                ))
+            }
+        };
+        if budget as *const _ as usize != slot
+            || budget.work_ledger_identity_v1() != ledger
+            || budget.storage() != protected
+        {
+            drop(result);
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            // Do not refund unknown callback surplus or a violated original floor.
+            return Err(private_bf16_formal_owner_resource_v1(
+                ArgumentResourceV1::Accounting,
+            ));
+        }
+        // Consume the paid Result representation before its frame refund.
+        // A typed diagnostic payload is the same declared excluded error domain
+        // as existing formal/target errors, not a retained authority record.
+        match result {
+            Ok(()) => {
+                budget
+                    .release_storage(storage)
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                Ok(())
+            }
+            Err(error) => {
+                budget
+                    .release_storage(storage)
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod private_target_frame_resource_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+
+    #[test]
+    fn private_target_frame_exact_and_one_short() {
+        let frame = private_bf16_target_frame_storage_v1::<[u8; 32]>().unwrap();
+        for (work_limit, storage_limit, accepted) in [
+            (1, 7 + frame, true),
+            (0, 7 + frame, false),
+            (1, 7 + frame - 1, false),
+        ] {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = reserve_private_bf16_target_frame_v1::<[u8; 32]>(&mut budget);
+            assert_eq!(result.is_ok(), accepted);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            if accepted {
+                assert_eq!(result.unwrap(), frame);
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (1, 7 + frame, 7 + frame)
+                );
+                budget.release_storage(frame).unwrap();
+            } else {
+                assert_eq!(budget.storage(), 7);
+                assert_eq!(budget.failed_work().is_some(), work_limit == 0);
+                assert_eq!(budget.failed_storage().is_some(), work_limit != 0);
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_target_frame_preserves_original_denials_at_exhausted_work() {
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let original = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(matches!(
+                    reserve_private_bf16_target_frame_v1::<[u8; 32]>(&mut budget),
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                        if error == original
+                ));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+}

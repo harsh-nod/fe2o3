@@ -11,6 +11,124 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 target binding and scalar debugger rebuild — 2026-10-04
+
+The private owning compilation path now derives launch geometry from the actual
+retained module, binds its selected production target, and retains the resulting
+target-bound module together with its intact formal/source owner. Fresh replay
+checks the complete bound graph, geometry, kernel/entry names and authenticated
+compilation bindings. It does not reconstruct a legacy connected owner.
+
+Fresh Identity and swapped-input frontend sessions in **debug and release**
+successfully constructed and replayed this stage for `gfx942:xnack-`, Wave64,
+rank one and workgroup 64×1×1. Wrong Return, expected target, kernel, entry,
+binding and changed bound-module controls refused admission; unused callbacks
+were dropped. All eight original formal reasons, one bounds obligation and two
+alias obligations remain retained. Source geometry is not launch-time address
+authentication.
+
+The target header reserves 3,992 bytes and the temporary observation 552 bytes
+on the original projection account. Their combined retained storage was
+909,891,635 bytes, with a 911,193,425-byte phase peak. The enclosing materialization
+account remains distinct. Fixed-state reservations do not bound inherited
+geometry construction, module cloning, formal/verifier allocation, formatting,
+allocator overhead or whole-process RSS.
+
+The seven-source change passed **3,938 compiler library tests** (231 ignored),
+73 extractor tests and two API tests in each build mode, **2,082 lowerer tests**
+in each mode, the release product build, 12 parent controls and four separately
+supervised genuine frontend processes. Initial accessor and test-macro compile
+failures were corrected without broadening admission; their evidence remains
+preserved. Qualified whole-source census:
+`5df748bb46513b7b5492d6127fe857622f3cf6913405996b5968994d0d7948f2`.
+
+The additive, disabled `physical-v8` debugger adapter package includes the
+scalar-host presentation correction while preserving `physical-v7`. Both the
+isolated package and repository copy passed 72 Node controls, strict C++ groups
+of 12/56/300 checks, UBSan groups of 56/300, exact 63-source qualification and
+forward/reverse patch checks. Activation, capture and publication stay disabled.
+
+A fresh private scalar debugger completed all four build phases. Its new
+ELF/object passed the eighteen-type layout measurement, preserving the older
+sixteen types and measuring an 18,904-byte logical reservation. Fresh static
+checks matched 80 named runtime candidates, 78 data files, nine directories and
+54 generated/source Python joins. Startup preparation passed 25 Node, 28
+collector and seven preparation groups; toolchain controls and its separate
+90-file/eight-alias census passed. These are build/static/CPU observations,
+not a new startup, physical capture, GPU-dispatch result or native retry.
+
+Next compiler work is the real checked V12 optimizer continuation and sound
+matrix-helper context/convergence support in native LLVM lowering. Neither
+optimizer invocation nor LLVM/artifact/ordinary compilation is enabled by this
+checkpoint. Fresh debugger startup and native qualification remain separate.
+No milestone or tutorial is completed here; accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+## Private BF16 owning formal stage and native checkpoint diagnosis — 2026-10-04
+
+The private compilation path now retains the actual formal memory analysis
+together with its intact nominal source owner, original projection phase and
+authenticated compilation bindings. Construction performs the first actual
+analysis, discharges the selected ranked guards, independently recomputes the
+complete analysis and compares it before retaining the first result. Later
+replay rechecks the same source, requested Return and complete retained analysis.
+No detached report, replacement account or legacy connected owner is created.
+
+Fresh Identity and swapped-input frontend sessions in **both debug and release**
+constructed this production stage, rejected the opposite Return mapping, then
+successfully replayed the correct mapping. They retained the raw Incomplete
+analysis and all eight original guard reasons, three allocations, nine accesses,
+one bounds obligation, two alias obligations and no conflicts. Source-level
+guard discharge does not authenticate runtime addresses or waive the remaining
+bounds and alias checks.
+
+The actual formal-owner header was 3,720 bytes and the temporary observation
+header 48 bytes on the original projection account. The observation was consumed
+before its refund; the stage was dropped before the enclosing original
+materialization account postflight. Tests cover exact/one-short header budgets,
+foreign accounts and insufficient floors, prior sticky denials, changed reasons
+and obligations, typed error propagation, and real Program early-refusal cleanup.
+Inherited formal-engine allocations, full equality and formatting remain outside
+the selected fixed-state accounting claim.
+
+The exact ten-source implementation passed 3,933 compiler library tests
+(230 ignored), 73 extractor tests and two API tests in each build mode, plus
+2,080 lowerer tests in each mode and the release product build. Ten parent
+controls and four genuine frontend processes qualified the private owning
+continuation. Their historical preparation is only input custody; their current
+binaries, source, observations and process results are separately bound.
+Qualification source census: `fbf9cc8128792f955f97133cfef144926c01adac1e2c098dc982bc74da19821e`.
+Geometry/target binding, V12-aware optimization, LLVM emission and ordinary
+compilation remain separate work.
+
+The new checkpoint-diagnostic native attempt on MI350 **failed** before a valid
+capture. Its retained diagnostic reported `checkpoint_changed(11)`,
+`commit-site=0`, `checkpoint-site=11` after 14 commands and 73 records.
+Only 8,192 of 8,404 stdout bytes were retained; the missing 212-byte prefix is
+not reconstructed. The zero-byte controller JSON caused the outer framing
+refusal; it is not evidence of an oversized frame.
+
+Inner and outer cleanup records joined, the owned cgroup was absent, and a
+separate point check found the four named owner/client/controller/inferior PIDs
+absent. A separate post-run whole-GDB/provider check matched the pre-run source,
+object, binary and provider content. The failed command itself has no successful
+outer postflight. No physical capture, GPU-dispatch success, global isolation,
+rollback or automatic retry is claimed; this attempt and its lease remain consumed.
+
+Frozen GDB source identifies a scalar-host presentation mismatch: condition
+processing writes the host's active lane mask of **1** before presentation, but
+the private breakpoint predicate required **0**. An independently reviewed
+one-byte candidate corrects only that presentation comparison. Eight source
+controls and 300 mocked C++ checks in each of strict and UBSan builds passed.
+This proves a source-contract correction, not which individual operand was
+observed false in the compound runtime predicate, nor successful native capture.
+A fresh private build, layout/runtime checks and separately qualified execution
+remain necessary.
+
+No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+
 ## Private BF16 ranked guard discharge — 2026-10-04
 
 The intact private owner now discharges the eight selected structural guarded-read
