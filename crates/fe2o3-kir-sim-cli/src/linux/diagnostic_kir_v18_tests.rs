@@ -4,6 +4,100 @@ use super::*;
 mod fixture;
 
 const FLOOR: usize = 97;
+
+#[test]
+fn explicit_v18_target_preserves_graph_and_executes_under_exact_profile() {
+    let bytes = fixture::bytes(&fixture::module());
+    let request = fixture::request(37);
+    for name in ["gfx942", "gfx950"] {
+        let target = SimulationTargetV1::amdgpu_from_device_target(name).unwrap();
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(fixture::BOUND);
+        let mut budget = Budget::new(&mut work, fixture::BOUND);
+        budget.reserve_storage(FLOOR).unwrap();
+        let (input, receipt) = load_bytes_for_target(
+            &bytes,
+            &request,
+            bytes.len() + request.len(),
+            &mut budget,
+            target,
+        )
+        .unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        assert_eq!(input.simulation_target(), target);
+        with_input(&bytes, &request, |legacy| {
+            assert_eq!(input.module.identity(), legacy.module.identity());
+            assert_eq!(input.request, legacy.request);
+            assert_eq!(legacy.simulation_target().amd_profile(), None);
+        });
+        let output = input
+            .module
+            .simulate(&input.request, target, input.simulation_limits)
+            .unwrap();
+        assert_eq!(output.buffer(0).unwrap().bytes(), fixture::output(37));
+        drop(output);
+        drop(input);
+        budget.release_storage(receipt.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+        let options = parse_options(
+            [
+                "--diagnostic-kir-v18",
+                "graph",
+                "--request",
+                "request",
+                "--diagnostic-target",
+                name,
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            options.program,
+            ProgramInput::DiagnosticKirV18Target("graph".into(), target)
+        );
+    }
+    for args in [
+        vec![
+            "--kir-v12",
+            "graph",
+            "--request",
+            "request",
+            "--diagnostic-target",
+            "gfx942",
+        ],
+        vec![
+            "--diagnostic-kir-v18",
+            "graph",
+            "--request",
+            "request",
+            "--diagnostic-target",
+            "gfx999",
+        ],
+        vec![
+            "--diagnostic-kir-v18",
+            "graph",
+            "--request",
+            "request",
+            "--diagnostic-target",
+            "gfx942",
+            "--diagnostic-target",
+            "gfx950",
+        ],
+        vec![
+            "--diagnostic-kir-v18",
+            "graph",
+            "--request",
+            "request",
+            "--diagnostic-target",
+            "gfx942",
+            "--record-canonical-schedule",
+            "schedule",
+        ],
+    ] {
+        assert!(parse_options(args.into_iter().map(OsString::from)).is_err());
+    }
+}
 fn with_input<T>(
     bytes: &[u8],
     request: &[u8],

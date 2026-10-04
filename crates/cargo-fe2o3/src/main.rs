@@ -32,6 +32,7 @@ mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
 mod production_census_v91;
+mod production_graph_capture_v92;
 mod profile_command;
 mod profile_dispatch_import_v1;
 mod profile_live_qualification_v1;
