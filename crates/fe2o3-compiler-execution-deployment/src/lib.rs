@@ -43,7 +43,10 @@ pub use profile::{
     COMPILER_EXECUTION_INSTALL_FILE_COUNT_V3, COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V3,
 };
 
-pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
+pub use boot::{
+    compiler_execution_systemd_machine_error_v85,
+    execute_compiler_execution_systemd_machine_tool_v1,
+};
 pub use cgroup::{
     CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
     create_compiler_execution_qualification_cgroup_v1,
