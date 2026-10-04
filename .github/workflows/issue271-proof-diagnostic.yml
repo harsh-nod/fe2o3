@@ -2,7 +2,7 @@ name: Issue 271 Typed Global Guard and Write Suffix Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-global-guard-diagnostic-v85-20261004]
+    branches: [wip/issue271-original-write-diagnostic-v86-20261004]
 
 permissions:
   contents: read
