@@ -13,7 +13,9 @@ fn packet(kind: RegistryKind) -> RegistryPacket {
         nonce: [1; 32],
         registration: if matches!(
             kind,
-            RegistryKind::Register | RegistryKind::RegisterApplication
+            RegistryKind::Register
+                | RegistryKind::RegisterApplication
+                | RegistryKind::RegisterCustodianApplication
         ) {
             [0; 32]
         } else {
@@ -23,9 +25,11 @@ fn packet(kind: RegistryKind) -> RegistryPacket {
             3;
             match kind {
                 RegistryKind::Register => COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1,
-                RegistryKind::RegisterApplication => WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
+                RegistryKind::RegisterApplication | RegistryKind::RegisterCustodianApplication =>
+                    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
                 RegistryKind::Registered
                 | RegistryKind::RegisteredApplication
+                | RegistryKind::RegisteredCustodianApplication
                 | RegistryKind::AttachApplication => 32,
                 RegistryKind::ApplicationInstalled => 64,
                 RegistryKind::Bind | RegistryKind::Bound => 52,
@@ -45,6 +49,8 @@ fn registration_codec_is_canonical_and_distinct_from_occurrence_protocol() {
         RegistryKind::RegisteredApplication,
         RegistryKind::AttachApplication,
         RegistryKind::ApplicationInstalled,
+        RegistryKind::RegisterCustodianApplication,
+        RegistryKind::RegisteredCustodianApplication,
     ] {
         let expected = packet(kind);
         let bytes = expected.encode().unwrap();
@@ -70,7 +76,9 @@ fn registration_codec_is_canonical_and_distinct_from_occurrence_protocol() {
         changed[56..88].fill(
             if matches!(
                 kind,
-                RegistryKind::Register | RegistryKind::RegisterApplication
+                RegistryKind::Register
+                    | RegistryKind::RegisterApplication
+                    | RegistryKind::RegisterCustodianApplication
             ) {
                 1
             } else {
@@ -103,6 +111,8 @@ fn registration_enforces_exact_rights_and_sender_not_socket_creator() {
         RegistryKind::RegisteredApplication,
         RegistryKind::AttachApplication,
         RegistryKind::ApplicationInstalled,
+        RegistryKind::RegisterCustodianApplication,
+        RegistryKind::RegisteredCustodianApplication,
     ] {
         let packet = packet(kind);
         for count in 0..=2 {
@@ -190,6 +200,7 @@ fn root_application_registry_transitions() {
         "pending_marker",
         "pending_retired",
         "prepared_expiry",
+        "custodian",
     ] {
         let mut fixture = Fixture::spawn(&helper, true);
         let original = fixture.registration();
@@ -261,6 +272,7 @@ fn root_application_registry_transitions() {
             supervisor: supervisor_identity,
             sessions: Vec::new(),
             applications: Vec::new(),
+            extracted_applications: [None; MAX_APPLICATIONS],
             pending: None,
             next_sequence: 1,
             closing: false,
@@ -273,12 +285,14 @@ fn root_application_registry_transitions() {
             body,
             ..packet(kind)
         };
+        let register_kind = if scenario == "custodian" {
+            RegistryKind::RegisterCustodianApplication
+        } else {
+            RegistryKind::RegisterApplication
+        };
         registry
             .register(
-                register(
-                    RegistryKind::RegisterApplication,
-                    binding.canonical_bytes().to_vec(),
-                ),
+                register(register_kind, binding.canonical_bytes().to_vec()),
                 vec![
                     rustix::io::fcntl_dupfd_cloexec(&compiler_peer, 0).unwrap(),
                     rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
@@ -287,7 +301,14 @@ fn root_application_registry_transitions() {
             .unwrap();
         assert!(registry.applications.is_empty());
         let registered = registry.pending.take().unwrap();
-        assert_eq!(registered.packet.kind, RegistryKind::RegisteredApplication);
+        assert_eq!(
+            registered.packet.kind,
+            if scenario == "custodian" {
+                RegistryKind::RegisteredCustodianApplication
+            } else {
+                RegistryKind::RegisteredApplication
+            }
+        );
         assert_eq!(registered.packet.body, binding.identity().as_bytes());
         registry.validate_pending(&registered).unwrap();
         let id = registered.packet.registration;
@@ -375,6 +396,151 @@ fn root_application_registry_transitions() {
         );
         assert_eq!(registry.applications.len(), 1);
         match scenario {
+            "custodian" => {
+                use fe2o3_runtime_protocol::{
+                    WorkerV3ApplicationRegistrationInputsV1 as Inputs,
+                    WorkerV3ApplicationSessionMessageV1 as Message,
+                };
+                drop(fixture.take_proof_peer());
+                assert!(registry.take_published_application_custodian().is_none());
+                registry
+                    .bind_issuer(
+                        bind,
+                        vec![rustix::io::fcntl_dupfd_cloexec(&identity.pidfd, 0).unwrap()],
+                    )
+                    .unwrap();
+                assert!(matches!(registry.sessions[0], Session::Bound(_)));
+                fixture.send_session(
+                    Message::hello(
+                        Inputs::new(
+                            binding.occurrence().clone(),
+                            binding.descriptors(),
+                            binding.expectation(),
+                            binding.challenge(),
+                        )
+                        .unwrap(),
+                        [31; 32],
+                    )
+                    .unwrap()
+                    .canonical_bytes(),
+                    false,
+                );
+                for _ in 0..2 {
+                    assert!(
+                        registry.applications[0]
+                            .step(&registry.prepared.root, &mut true)
+                            .unwrap()
+                    );
+                }
+                let (challenge, _) = fixture.receive_session();
+                let transcript = Message::decode(&challenge).unwrap().transcript().unwrap();
+                fixture.send_session(Message::accept(transcript).canonical_bytes(), false);
+                for _ in 0..2 {
+                    assert!(
+                        registry.applications[0]
+                            .step(&registry.prepared.root, &mut true)
+                            .unwrap()
+                    );
+                }
+                assert_eq!(
+                    rustix::io::read(&installed.rights[0], &mut bytes).unwrap(),
+                    72
+                );
+                assert_eq!(&bytes[..8], b"F3AOBS1\0");
+                assert_eq!(
+                    rustix::io::read(&installed.rights[0], &mut bytes).unwrap(),
+                    0
+                );
+                assert!(registry.take_published_application_custodian().is_none());
+                bytes[..8].copy_from_slice(b"F3APUB1\0");
+                rustix::io::write(&installed.rights[1], &bytes).unwrap();
+                assert!(
+                    registry.applications[0]
+                        .step(&registry.prepared.root, &mut true)
+                        .unwrap()
+                );
+                assert!(registry.take_published_application_custodian().is_none());
+                drop(installed);
+                assert!(
+                    registry.applications[0]
+                        .step(&registry.prepared.root, &mut true)
+                        .unwrap()
+                );
+                let handoff = registry.take_published_application_custodian().unwrap();
+                handoff.revalidate().unwrap();
+                assert_eq!(handoff.binding(), &binding);
+                assert_eq!(handoff.transcript(), transcript);
+                assert!(registry.take_published_application_custodian().is_none());
+                assert!(registry.applications.is_empty());
+                assert_eq!(registry.extracted_applications.iter().flatten().count(), 1);
+                registry
+                    .register(
+                        register(
+                            RegistryKind::RegisterCustodianApplication,
+                            binding.canonical_bytes().to_vec(),
+                        ),
+                        vec![
+                            rustix::io::fcntl_dupfd_cloexec(&compiler_peer, 0).unwrap(),
+                            rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
+                        ],
+                    )
+                    .unwrap();
+                let duplicate = registry.pending.take().unwrap();
+                let duplicate_attach = RegistryPacket {
+                    registration: duplicate.packet.registration,
+                    body: binding.identity().as_bytes().to_vec(),
+                    ..packet(RegistryKind::AttachApplication)
+                };
+                let alternate = fixture.alternate_proof_peer();
+                let error = registry
+                    .attach_application(
+                        duplicate_attach.clone(),
+                        vec![
+                            rustix::io::fcntl_dupfd_cloexec(&alternate, 0).unwrap(),
+                            rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                        ],
+                    )
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("process or registration reused"), "{error}");
+                // The production boundary counts retained reservations, even without live table entries.
+                let reservation = registry.extracted_applications[0];
+                registry.extracted_applications.fill(reservation);
+                let error = registry
+                    .attach_application(
+                        duplicate_attach,
+                        vec![
+                            alternate,
+                            rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+                        ],
+                    )
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("capacity exhausted"), "{error}");
+                handoff.revalidate().unwrap();
+                fixture.command(b'm');
+                registry.cancel_all();
+                assert!(registry.take_published_application_custodian().is_none());
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !registry.is_drained() {
+                    assert!(Instant::now() < deadline);
+                    registry
+                        .step(|error| panic!("custodian registry containment: {error}"))
+                        .unwrap();
+                }
+                assert!(pidfd_exited(&identity.pidfd).unwrap());
+                drop(registry);
+                handoff.revalidate().unwrap();
+                super::super::application::tests::assert_handoff_echo(&handoff, &mut fixture);
+                application.validate_liveness().unwrap();
+                parent.validate_liveness().unwrap();
+                drop(handoff);
+                assert!(pidfd_exited(&application.pidfd).unwrap());
+                println!(
+                    "PASS: published custodian survives exact issuer exit and registry shutdown/drop; its own Drop contains application"
+                );
+                continue;
+            }
             "independent" => {
                 registry
                     .bind_issuer(
@@ -555,6 +721,15 @@ fn application_registry_parent_helper() {
 #[test]
 #[ignore = "requires root and credential capabilities for authenticated registry transport"]
 fn root_application_registry_transport() {
+    for route in [
+        ApplicationRoute::ObservationOnly,
+        ApplicationRoute::ProofCustodian,
+    ] {
+        exercise_application_registry_transport(route);
+    }
+}
+
+fn exercise_application_registry_transport(route: ApplicationRoute) {
     use crate::linux::application_observation::tests::{Fixture, build_helper};
     use fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorHandoffV1;
     assert_eq!(rustix::process::geteuid().as_raw(), 0);
@@ -597,6 +772,11 @@ fn root_application_registry_transport() {
         rustix::io::fcntl_dupfd_cloexec(&application.pidfd, 0).unwrap(),
         fixture.proof_peer(),
         rustix::io::fcntl_dupfd_cloexec(&parent.pidfd, 0).unwrap(),
+        bytes_file(&[if route == ApplicationRoute::ObservationOnly {
+            1
+        } else {
+            2
+        }]),
     ];
     let mut supervisor = spawn_helper(
         "linux::observer_channel::registry::tests::application_registry_wire_helper",
@@ -643,7 +823,7 @@ fn root_application_registry_transport() {
     }
     assert!(installed);
     println!(
-        "PASS: root/supervisor two-exchange application API; installation alone cannot complete readiness"
+        "PASS: root/supervisor two-exchange {route:?} API; installation alone cannot complete readiness"
     );
 }
 
@@ -670,6 +850,24 @@ fn application_registry_wire_helper() {
         false,
     )
     .unwrap();
+    if read_inherited(208) == [2] {
+        let registered = registry
+            .register_custodian_application(
+                &binding,
+                compiler.as_fd(),
+                application.as_fd(),
+                proof.as_fd(),
+                parent.as_fd(),
+                Instant::now() + TIMEOUT,
+            )
+            .unwrap();
+        assert_eq!(registered.binding(), &binding);
+        assert!(matches!(
+            registered.await_observation(Instant::now() + Duration::from_millis(20)),
+            Err(CompilerExecutionObserverErrorV1::Timeout)
+        ));
+        return;
+    }
     let registered = registry
         .register_application(
             &binding,

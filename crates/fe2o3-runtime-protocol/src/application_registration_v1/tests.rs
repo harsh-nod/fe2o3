@@ -314,6 +314,20 @@ fn session_round_trip_has_exact_phase_lengths_rights_and_transcript() {
             112,
             0,
         ),
+        (
+            WorkerV3ApplicationSessionMessageV1::custodian_ready(
+                crate::WorkerV3ApplicationProofSessionV1::new(
+                    transcript,
+                    [40; 32],
+                    [41; 32],
+                    (42, 61000, 61000),
+                )
+                .unwrap(),
+            ),
+            WorkerV3ApplicationSessionKindV1::CustodianReady,
+            304,
+            1,
+        ),
     ] {
         assert_eq!(message.kind(), kind);
         assert_eq!(message.canonical_bytes().len(), length);
@@ -337,6 +351,38 @@ fn session_round_trip_has_exact_phase_lengths_rights_and_transcript() {
         trailing.push(0);
         assert!(WorkerV3ApplicationSessionMessageV1::decode(&trailing).is_err());
     }
+}
+
+#[test]
+fn custodian_ready_is_not_legacy_ready_and_requires_matching_inner_transcript() {
+    let transcript =
+        WorkerV3ApplicationSessionTranscriptV1::new([1; 32], [2; 32], [3; 32]).unwrap();
+    let session = crate::WorkerV3ApplicationProofSessionV1::new(
+        transcript,
+        [4; 32],
+        [5; 32],
+        (42, 61000, 61000),
+    )
+    .unwrap();
+    let message = WorkerV3ApplicationSessionMessageV1::custodian_ready(session.clone());
+    assert_eq!(message.proof_session(), Some(&session));
+    assert_eq!(
+        WorkerV3ApplicationSessionMessageV1::ready(transcript).proof_session(),
+        None
+    );
+    for offset in [16, 48, 80, 112 + 16, 112 + 48, 112 + 80] {
+        let mut bytes = message.canonical_bytes().to_vec();
+        bytes[offset] ^= 1;
+        assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+    }
+    let mut bytes = message.canonical_bytes().to_vec();
+    bytes[10] = WorkerV3ApplicationSessionKindV1::Ready as u8;
+    assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
+    let mut bytes = WorkerV3ApplicationSessionMessageV1::ready(transcript)
+        .canonical_bytes()
+        .to_vec();
+    bytes[10] = WorkerV3ApplicationSessionKindV1::CustodianReady as u8;
+    assert!(WorkerV3ApplicationSessionMessageV1::decode(&bytes).is_err());
 }
 
 #[test]

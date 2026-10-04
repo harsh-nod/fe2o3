@@ -42,6 +42,15 @@ now passes genuine proof/probe/EOF-quarantine and three application rejection ca
 plus all 18 existing launcher regressions. Its registration records are component
 fixtures, not completion of the authenticated ordinary-application gate.
 
+The [published custodian handoff](runtime-application-custodian-handoff-v1.md)
+now adds a distinct authenticated broker route and moves the original published
+application owner out of issuer/registry cleanup. Identity and capacity reservations
+survive extraction; the legacy route remains unchanged. This is the sender-side
+pending owner, not the independently deployed manager or a completed Ready/Activate
+transition. Next join it to the approved manager transport and staged controller,
+then the remote conditional native invocation. Do not add more standalone identity
+or route wrappers in place of those joins.
+
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
    request. The native current-publication audit passes, including substitution

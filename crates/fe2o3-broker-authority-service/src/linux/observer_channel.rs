@@ -29,15 +29,18 @@ mod application;
 mod issuer;
 pub(crate) mod registry;
 mod root;
-pub use application::PendingApplicationObservationGateV1;
+pub use application::{
+    PendingApplicationObservationGateV1, PublishedApplicationCustodianHandoffV1,
+};
 pub use issuer::ProtectedCompilerExecutionObserverV1;
 pub(crate) use issuer::RemoteCompilerExecutionOccurrenceGuardV1;
 #[cfg(test)]
 pub(crate) use issuer::tests;
 pub use registry::{
-    ObservedApplicationRegistrationV1, PreparedRootCompilerObserverRegistryV1,
-    RegisteredApplicationObserverV1, RegisteredCompilerObserverV1, RootCompilerObserverRegistryV1,
-    SupervisorCompilerObserverRegistryV1,
+    ObservedApplicationRegistrationV1, ObservedCustodianApplicationRegistrationV1,
+    PreparedRootCompilerObserverRegistryV1, RegisteredApplicationObserverV1,
+    RegisteredCompilerObserverV1, RegisteredCustodianApplicationObserverV1,
+    RootCompilerObserverRegistryV1, SupervisorCompilerObserverRegistryV1,
 };
 pub use root::{
     PreparedRootCompilerExecutionObserverV1, RootCompilerExecutionObserverProgressV1,

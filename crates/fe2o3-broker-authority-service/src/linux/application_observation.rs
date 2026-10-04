@@ -420,6 +420,16 @@ impl RetainedWorkerV3ApplicationObservationV1 {
         self.validate_processes()
     }
 
+    pub(super) fn revalidate_registered_counterpart(&self, peer: BorrowedFd<'_>) -> Result<()> {
+        self.revalidate_retained_inputs()?;
+        let (_, facts) = self
+            .proof
+            .as_ref()
+            .ok_or_else(|| invalid("registered application proof source missing"))?;
+        facts.require_counterpart(&inspect_proof_endpoint(peer, self.parent.expected_client)?)?;
+        self.validate_processes()
+    }
+
     fn validate_processes(&self) -> Result<()> {
         self.application.validate_parent(&self.parent)?;
         validate_process(&self.application, &self.application_proc)?;

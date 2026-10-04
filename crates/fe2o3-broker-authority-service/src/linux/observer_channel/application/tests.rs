@@ -181,13 +181,30 @@ fn install(
     PendingApplicationObservationGateV1,
     ApplicationPublication,
 ) {
+    install_with_peer(
+        fixture,
+        fixture.proof_peer(),
+        ApplicationRoute::ObservationOnly,
+    )
+}
+
+fn install_with_peer(
+    fixture: &Fixture,
+    peer: OwnedFd,
+    route: ApplicationRoute,
+) -> (
+    ApplicationSession,
+    PendingApplicationObservationGateV1,
+    ApplicationPublication,
+) {
     let binding = fixture.registration();
     let (session, [reader, writer]) = ApplicationSession::install(
         fixture.application_identity(),
         fixture.parent_identity(),
-        fixture.proof_peer(),
+        peer,
         binding.clone(),
         [32; 32],
+        route,
     )
     .unwrap();
     let gate = PendingApplicationObservationGateV1::admit(
@@ -206,6 +223,165 @@ fn install(
     )
     .unwrap();
     (session, gate, publication)
+}
+
+#[test]
+#[ignore = "requires root, SYS_PTRACE and credential capabilities in a private namespace"]
+fn root_custodian_handoff_campaign() {
+    assert_eq!(rustix::process::geteuid().as_raw(), 0);
+    let build = tempfile::tempdir().unwrap();
+    let helper = build_helper(build.path());
+    for scenario in [
+        "positive",
+        "short",
+        "trailing",
+        "mismatch",
+        "expired",
+        "same_cargo_peer",
+        "cancelled",
+        "legacy",
+    ] {
+        let mut fixture = Fixture::spawn(&helper, true);
+        let peer = fixture.take_proof_peer();
+        let route = if scenario == "legacy" {
+            ApplicationRoute::ObservationOnly
+        } else {
+            ApplicationRoute::ProofCustodian
+        };
+        let (session, gate, publication) = install_with_peer(&fixture, peer, route);
+        let deadline = session.deadline;
+        let mut sessions = vec![session];
+        assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+        fixture.send_session(hello(&fixture.registration()).canonical_bytes(), false);
+        assert!(step(&mut sessions[0]).unwrap());
+        assert!(step(&mut sessions[0]).unwrap());
+        let (challenge, rights) = fixture.receive_session();
+        assert_eq!(rights, 1);
+        let transcript = Message::decode(&challenge).unwrap().transcript().unwrap();
+        assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+        fixture.send_session(Message::accept(transcript).canonical_bytes(), false);
+        assert!(step(&mut sessions[0]).unwrap());
+        assert!(!step(&mut sessions[0]).unwrap());
+        assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+        sessions[0].issuer_bound();
+        assert!(step(&mut sessions[0]).unwrap());
+        gate.await_observation(Instant::now() + TIMEOUT).unwrap();
+        assert!(!step(&mut sessions[0]).unwrap());
+        let mut bytes =
+            publication_record(fixture.registration().identity().as_bytes(), &[32; 32]).to_vec();
+        match scenario {
+            "short" => {
+                bytes.pop();
+            }
+            "trailing" => bytes.push(0),
+            "mismatch" => bytes[8] ^= 1,
+            _ => {}
+        }
+        rustix::io::write(&publication.writer, &bytes).unwrap();
+        let read = step(&mut sessions[0]);
+        if scenario == "trailing" {
+            assert!(read.is_err());
+        } else {
+            assert!(read.unwrap());
+            assert!(
+                !step(&mut sessions[0]).unwrap(),
+                "full record without EOF cannot publish"
+            );
+        }
+        assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+        drop(publication);
+        if matches!(scenario, "short" | "trailing" | "mismatch") {
+            if scenario != "trailing" {
+                assert!(step(&mut sessions[0]).is_err());
+            }
+            drain(&mut sessions[0]);
+            println!("PASS: custodian handoff rejects {scenario} publication");
+            continue;
+        }
+        assert!(step(&mut sessions[0]).unwrap());
+        if scenario == "legacy" {
+            assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+            assert!(step(&mut sessions[0]).unwrap());
+            let (bytes, rights) = fixture.receive_session();
+            assert_eq!(rights, 0);
+            assert_eq!(Message::decode(&bytes).unwrap(), Message::ready(transcript));
+            fixture.acknowledge_registered();
+            fixture.command(b't');
+            assert!(step(&mut sessions[0]).unwrap());
+            assert!(sessions[0].retired());
+            fixture.exit();
+            println!("PASS: legacy Ready is unchanged and cannot mint custodian custody");
+            continue;
+        }
+        assert!(
+            !step(&mut sessions[0]).unwrap(),
+            "custodian route must not send legacy Ready"
+        );
+        if scenario == "cancelled" {
+            sessions[0].cancel();
+            assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+            drain(&mut sessions[0]);
+            println!("PASS: cancelled published registration cannot be extracted");
+            continue;
+        }
+        let mut owner = PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).unwrap();
+        assert!(sessions.is_empty());
+        assert!(PublishedApplicationCustodianHandoffV1::take_next(&mut sessions).is_none());
+        assert_eq!(owner.startup_deadline(), deadline);
+        assert_eq!(owner.binding(), &fixture.registration());
+        assert_eq!(owner.transcript(), transcript);
+        owner.revalidate().unwrap();
+        match scenario {
+            "expired" => {
+                owner.session.deadline = Instant::now();
+                assert!(owner.revalidate().is_err());
+            }
+            "same_cargo_peer" => {
+                let alternate = Endpoint::admit(fixture.alternate_proof_peer()).unwrap();
+                assert_eq!(alternate.creator, owner.session.endpoint.creator);
+                assert!(!alternate.closed().unwrap());
+                let original = std::mem::replace(&mut owner.session.endpoint, alternate);
+                let error = owner.revalidate().unwrap_err().to_string();
+                assert!(error.contains("counterpart differs"), "{error}");
+                owner.session.endpoint = original;
+                owner.revalidate().unwrap();
+            }
+            "positive" => {
+                // Private echo tests transport ownership only, not controller Ready or proof.
+                fixture.command(b'm');
+                for _ in 0..3 {
+                    owner.revalidate().unwrap();
+                }
+                assert_handoff_echo(&owner, &mut fixture);
+                fixture.acknowledge_registered();
+                owner.revalidate().unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let original = fixture.application_identity();
+        drop(owner);
+        assert!(
+            pidfd_exited(&original.pidfd).unwrap(),
+            "pending handoff Drop must contain the original app"
+        );
+        println!("PASS: custodian original-owner handoff {scenario}; exact pending containment");
+    }
+}
+
+pub(in crate::linux::observer_channel) fn assert_handoff_echo(
+    owner: &PublishedApplicationCustodianHandoffV1,
+    fixture: &mut Fixture,
+) {
+    let (bytes, rights) = owner
+        .session
+        .endpoint
+        .receive_bytes(&owner.session.application)
+        .unwrap()
+        .unwrap();
+    assert_eq!(bytes, b"p");
+    assert!(rights.is_empty());
+    assert!(owner.session.endpoint.send_bytes(b"echo", &[]).unwrap());
+    assert_eq!(fixture.receive_session(), (b"echo".to_vec(), 0));
 }
 
 fn hello(binding: &WorkerV3ApplicationRegistrationBindingV1) -> Message {

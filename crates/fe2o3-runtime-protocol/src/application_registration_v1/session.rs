@@ -1,6 +1,7 @@
 //! Bounded descriptive handshake records; OS-authenticated custody supplies their meaning.
 
 use super::*;
+use crate::{WORKER_V3_APPLICATION_PROOF_SESSION_BYTES_V1, WorkerV3ApplicationProofSessionV1};
 
 const INPUT_BYTES: usize = IDENTITY_OFFSET - OCCURRENCE_OFFSET;
 const DESCRIPTORS: usize = DESCRIPTORS_OFFSET - OCCURRENCE_OFFSET;
@@ -129,6 +130,7 @@ pub enum WorkerV3ApplicationSessionKindV1 {
     Challenge = 2,
     Accept = 3,
     Ready = 4,
+    CustodianReady = 5,
 }
 
 /// Inert equality data. Freshness and sender/process association are checked by the live owners.
@@ -169,6 +171,7 @@ impl WorkerV3ApplicationSessionTranscriptV1 {
 enum Body {
     Hello(Box<WorkerV3ApplicationRegistrationInputsV1>),
     Challenge(Box<WorkerV3ApplicationRegistrationBindingV1>),
+    CustodianReady(Box<WorkerV3ApplicationProofSessionV1>),
     Empty,
 }
 
@@ -233,6 +236,16 @@ impl WorkerV3ApplicationSessionMessageV1 {
         )
     }
 
+    /// Descriptive root handoff frame; deployment admission and original pidfd custody are
+    /// checked by live owners, never inferred from these canonical bytes.
+    pub fn custodian_ready(session: WorkerV3ApplicationProofSessionV1) -> Self {
+        Self::encode(
+            WorkerV3ApplicationSessionKindV1::CustodianReady,
+            session.transcript(),
+            Body::CustodianReady(Box::new(session)),
+        )
+    }
+
     fn encode(
         kind: WorkerV3ApplicationSessionKindV1,
         transcript: WorkerV3ApplicationSessionTranscriptV1,
@@ -241,6 +254,7 @@ impl WorkerV3ApplicationSessionMessageV1 {
         let payload: &[u8] = match &body {
             Body::Hello(value) => value.canonical_bytes(),
             Body::Challenge(value) => value.canonical_bytes(),
+            Body::CustodianReady(value) => value.canonical_bytes(),
             Body::Empty => &[],
         };
         let mut bytes = vec![0; SESSION_HEADER + payload.len()];
@@ -275,6 +289,7 @@ impl WorkerV3ApplicationSessionMessageV1 {
             1 => INPUT_BYTES,
             2 => WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
             3 | 4 => 0,
+            5 => WORKER_V3_APPLICATION_PROOF_SESSION_BYTES_V1,
             _ => return Err(WorkerV3ApplicationRegistrationErrorV1::Header),
         };
         if bytes.len() != SESSION_HEADER + payload
@@ -302,6 +317,17 @@ impl WorkerV3ApplicationSessionMessageV1 {
                     return Err(WorkerV3ApplicationRegistrationErrorV1::SessionTranscript);
                 }
                 Self::challenge(registration, app_nonce, root_nonce)?
+            }
+            5 => {
+                let session =
+                    WorkerV3ApplicationProofSessionV1::decode(&bytes[SESSION_HEADER..])
+                        .map_err(|_| WorkerV3ApplicationRegistrationErrorV1::SessionTranscript)?;
+                let transcript =
+                    WorkerV3ApplicationSessionTranscriptV1::new(app_nonce, root_nonce, binding)?;
+                if session.transcript() != transcript {
+                    return Err(WorkerV3ApplicationRegistrationErrorV1::SessionTranscript);
+                }
+                Self::custodian_ready(session)
             }
             kind => {
                 let transcript =
@@ -343,8 +369,18 @@ impl WorkerV3ApplicationSessionMessageV1 {
     pub const fn canonical_bytes(&self) -> &[u8] {
         self.bytes.as_slice()
     }
+    pub fn proof_session(&self) -> Option<&WorkerV3ApplicationProofSessionV1> {
+        match &self.body {
+            Body::CustodianReady(session) => Some(session),
+            _ => None,
+        }
+    }
     pub const fn rights(&self) -> usize {
-        if matches!(self.kind, WorkerV3ApplicationSessionKindV1::Challenge) {
+        if matches!(
+            self.kind,
+            WorkerV3ApplicationSessionKindV1::Challenge
+                | WorkerV3ApplicationSessionKindV1::CustodianReady
+        ) {
             1
         } else {
             0

@@ -181,7 +181,7 @@ pub(crate) struct Fixture {
     _replacement_ack: OwnedFd,
     expected: WorkerV3ApplicationOccurrenceV1,
     registered_expected: WorkerV3ApplicationOccurrenceV1,
-    proof_peer: OwnedFd,
+    proof_peer: Option<OwnedFd>,
     files: tempfile::TempDir,
 }
 
@@ -382,7 +382,7 @@ impl Fixture {
             _replacement_ack: replacement_ack,
             expected,
             registered_expected,
-            proof_peer,
+            proof_peer: Some(proof_peer),
             files,
         }
     }
@@ -448,13 +448,13 @@ impl Fixture {
             process_identity(&self.application_pidfd, self.application_pid, CLIENT_ID),
             process_identity(&self.parent_pidfd, self.parent.0.id(), CLIENT_ID),
             &self.registration(),
-            self.proof_peer.as_fd(),
+            self.proof_peer.as_ref().unwrap().as_fd(),
         )
     }
 
     fn assert_proof_hangup(&self) {
         let mut poll = libc::pollfd {
-            fd: self.proof_peer.as_raw_fd(),
+            fd: self.proof_peer.as_ref().unwrap().as_raw_fd(),
             events: libc::POLLIN,
             revents: 0,
         };
@@ -492,8 +492,24 @@ impl Fixture {
             WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(ENVELOPE_BYTES).unwrap(),
             &self.expected,
         );
+        self.acknowledge_expectation(
+            expected,
+            WorkerV3ApplicationHandoffChallengeV1::from_bytes([7; 32]).unwrap(),
+        );
+    }
+
+    pub(crate) fn acknowledge_registered(&mut self) {
+        let binding = self.registration();
+        self.acknowledge_expectation(binding.expectation(), binding.challenge());
+    }
+
+    fn acknowledge_expectation(
+        &mut self,
+        expected: WorkerV3ApplicationHandoffExpectationV1,
+        challenge: fe2o3_runtime_protocol::WorkerV3ApplicationHandoffChallengeV1,
+    ) {
         let ack = expected
-            .acknowledgment(WorkerV3ApplicationHandoffChallengeV1::from_bytes([7; 32]).unwrap())
+            .acknowledgment(challenge)
             .encode_canonical()
             .unwrap();
         self.control.write_all(b"a").unwrap();
@@ -545,7 +561,43 @@ impl Fixture {
     }
 
     pub(crate) fn proof_peer(&self) -> OwnedFd {
-        rustix::io::fcntl_dupfd_cloexec(&self.proof_peer, 0).unwrap()
+        rustix::io::fcntl_dupfd_cloexec(self.proof_peer.as_ref().unwrap(), 0).unwrap()
+    }
+
+    pub(crate) fn take_proof_peer(&mut self) -> OwnedFd {
+        self.proof_peer
+            .take()
+            .expect("proof counterpart already transferred")
+    }
+
+    pub(crate) fn alternate_proof_peer(&mut self) -> OwnedFd {
+        self.parent_control.write_all(b"p").unwrap();
+        poll_readable(&self.parent_control);
+        let mut byte = [0];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        let received = rustix::net::recvmsg(
+            &self.parent_control,
+            &mut [IoSliceMut::new(&mut byte)],
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC,
+        )
+        .unwrap();
+        assert_eq!(received.bytes, 1);
+        assert!(
+            !received
+                .flags
+                .intersects(rustix::net::ReturnFlags::TRUNC | rustix::net::ReturnFlags::CTRUNC)
+        );
+        let mut rights = Vec::new();
+        for message in ancillary.drain() {
+            match message {
+                RecvAncillaryMessage::ScmRights(fds) => rights.extend(fds),
+                _ => panic!("unexpected alternate proof ancillary"),
+            }
+        }
+        let [peer]: [OwnedFd; 1] = rights.try_into().unwrap();
+        peer
     }
 
     pub(crate) fn send_session(&mut self, bytes: &[u8], extra_right: bool) {
@@ -653,7 +705,7 @@ fn root_application_observation_campaign() {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut space);
     let message = rustix::net::recvmsg(
-        &fixture.proof_peer,
+        fixture.proof_peer.as_ref().unwrap(),
         &mut [IoSliceMut::new(&mut bytes)],
         &mut ancillary,
         RecvFlags::CMSG_CLOEXEC,
@@ -734,8 +786,20 @@ fn root_application_observation_campaign() {
             peer,
         )
     };
-    assert!(observe(&foreign.registration(), fixture.proof_peer.as_fd()).is_err());
-    assert!(observe(&fixture.registration(), foreign.proof_peer.as_fd()).is_err());
+    assert!(
+        observe(
+            &foreign.registration(),
+            fixture.proof_peer.as_ref().unwrap().as_fd()
+        )
+        .is_err()
+    );
+    assert!(
+        observe(
+            &fixture.registration(),
+            foreign.proof_peer.as_ref().unwrap().as_fd()
+        )
+        .is_err()
+    );
     let registration = fixture.registration();
     let mut inputs = fixture.registered_expected.inputs().to_vec();
     inputs[3] = foreign.registered_expected.inputs()[3];
@@ -756,7 +820,7 @@ fn root_application_observation_campaign() {
         registration.challenge(),
     )
     .unwrap();
-    assert!(observe(&substituted, fixture.proof_peer.as_fd()).is_err());
+    assert!(observe(&substituted, fixture.proof_peer.as_ref().unwrap().as_fd()).is_err());
     fixture.command(b't');
     fixture.assert_proof_hangup();
     fixture.acknowledge();

@@ -203,10 +203,11 @@ pub use linux::application_observation::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use linux::observer_channel::{
     CompilerExecutionObserverErrorV1, ObservedApplicationRegistrationV1,
-    PendingApplicationObservationGateV1, PreparedRootCompilerExecutionObserverV1,
-    PreparedRootCompilerObserverRegistryV1, ProtectedCompilerExecutionObserverV1,
+    ObservedCustodianApplicationRegistrationV1, PendingApplicationObservationGateV1,
+    PreparedRootCompilerExecutionObserverV1, PreparedRootCompilerObserverRegistryV1,
+    ProtectedCompilerExecutionObserverV1, PublishedApplicationCustodianHandoffV1,
     RegisteredApplicationObserverV1, RegisteredCompilerObserverV1,
-    RootCompilerExecutionObserverProgressV1,
+    RegisteredCustodianApplicationObserverV1, RootCompilerExecutionObserverProgressV1,
     RootCompilerExecutionObserverV1, RootCompilerObserverRegistryV1,
     SupervisorCompilerObserverRegistryV1,
 };

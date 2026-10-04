@@ -114,8 +114,23 @@ static int parent(void) {
     close(proof[1]);
     for (int fd = 180; fd <= 189; fd++) if (fd != 187) close(fd);
     char release;
-    transfer(187, &release, 1, 0);
-    check(release == 'q');
+    int alternate = -1;
+    for (;;) {
+        transfer(187, &release, 1, 0);
+        if (release == 'q') break;
+        check(release == 'p' && alternate == -1);
+        int pair[2];
+        proof_pair(pair);
+        alternate = pair[0];
+        iov.iov_base = &release;
+        iov.iov_len = 1;
+        message.msg_controllen = CMSG_SPACE(sizeof(int));
+        header->cmsg_len = CMSG_LEN(sizeof(int));
+        *(int *)CMSG_DATA(header) = pair[1];
+        check(sendmsg(187, &message, MSG_NOSIGNAL) == 1);
+        close(pair[1]);
+    }
+    if (alternate >= 0) close(alternate);
     close(187);
     int status = 0;
     pid_t waited;

@@ -1,6 +1,9 @@
 //! Authenticated root/supervisor registration, separate from the occurrence protocol.
 
-use super::application::{ApplicationPublication, ApplicationSession, MAX_APPLICATIONS};
+use super::application::{
+    ApplicationPublication, ApplicationRoute, ApplicationSession, MAX_APPLICATIONS,
+    PublishedApplicationCustodianHandoffV1,
+};
 use super::*;
 use fe2o3_compiler_execution_protocol::CompilerExecutionExternalAnchorServiceIdentityV1;
 use fe2o3_runtime_protocol::{
@@ -28,6 +31,8 @@ enum RegistryKind {
     RegisteredApplication,
     AttachApplication,
     ApplicationInstalled,
+    RegisterCustodianApplication,
+    RegisteredCustodianApplication,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,13 +71,18 @@ impl RegistryPacket {
             6 => RegistryKind::RegisteredApplication,
             7 => RegistryKind::AttachApplication,
             8 => RegistryKind::ApplicationInstalled,
+            9 => RegistryKind::RegisterCustodianApplication,
+            10 => RegistryKind::RegisteredCustodianApplication,
             _ => return Err(invalid("unknown registration kind")),
         };
         let size = match kind {
             RegistryKind::Register => COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1,
-            RegistryKind::RegisterApplication => WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
+            RegistryKind::RegisterApplication | RegistryKind::RegisterCustodianApplication => {
+                WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1
+            }
             RegistryKind::Registered
             | RegistryKind::RegisteredApplication
+            | RegistryKind::RegisteredCustodianApplication
             | RegistryKind::AttachApplication => 32,
             RegistryKind::ApplicationInstalled => 64,
             RegistryKind::Bind | RegistryKind::Bound => 52,
@@ -91,7 +101,9 @@ impl RegistryPacket {
             || packet.nonce == [0; 32]
             || (matches!(
                 kind,
-                RegistryKind::Register | RegistryKind::RegisterApplication
+                RegistryKind::Register
+                    | RegistryKind::RegisterApplication
+                    | RegistryKind::RegisterCustodianApplication
             ) != (packet.registration == [0; 32]))
         {
             return Err(invalid("invalid registration identity"));
@@ -105,6 +117,8 @@ impl RegistryPacket {
             | RegistryKind::Registered
             | RegistryKind::RegisterApplication
             | RegistryKind::RegisteredApplication
+            | RegistryKind::RegisterCustodianApplication
+            | RegistryKind::RegisteredCustodianApplication
             | RegistryKind::AttachApplication
             | RegistryKind::ApplicationInstalled => 2,
             RegistryKind::Bind => 1,
@@ -195,6 +209,7 @@ impl PreparedRootCompilerObserverRegistryV1 {
             supervisor,
             sessions: Vec::new(),
             applications: Vec::new(),
+            extracted_applications: [None; MAX_APPLICATIONS],
             pending: None,
             next_sequence: 1,
             closing: false,
@@ -229,7 +244,10 @@ impl PreparedRootCompilerObserverRegistryV1 {
 
 enum ApplicationAttachment {
     CompilerOnly,
-    Expected(Box<WorkerV3ApplicationRegistrationBindingV1>),
+    Expected {
+        binding: Box<WorkerV3ApplicationRegistrationBindingV1>,
+        route: ApplicationRoute,
+    },
     Attached([u8; 32]),
 }
 
@@ -250,6 +268,12 @@ struct Pending {
     deadline: Instant,
 }
 
+#[derive(Clone, Copy)]
+struct ExtractedApplicationIdentity {
+    process: (u32, u64),
+    id: [u8; 32],
+}
+
 /// Bounded root-owned registration table and fair nonblocking observer scheduler.
 ///
 /// Call `step` regularly after supervisor readiness. Session errors initiate containment and
@@ -260,12 +284,36 @@ pub struct RootCompilerObserverRegistryV1 {
     supervisor: LiveClientPidfdIdentityV1,
     sessions: Vec<Session>,
     applications: Vec<ApplicationSession>,
+    extracted_applications: [Option<ExtractedApplicationIdentity>; MAX_APPLICATIONS],
     pending: Option<Pending>,
     next_sequence: u64,
     closing: bool,
 }
 
 impl RootCompilerObserverRegistryV1 {
+    /// Moves one completely published custodian registration out of registry/issuer cleanup.
+    /// The returned owner still requires revalidation and independently approved controller
+    /// admission. It has not sent application Ready. No owner is extracted during shutdown.
+    /// Its identity/capacity reservation remains for this registry's lifetime; extraction
+    /// cannot make the same live occurrence reusable or bypass the application limit.
+    pub fn take_published_application_custodian(
+        &mut self,
+    ) -> Option<PublishedApplicationCustodianHandoffV1> {
+        if self.closing {
+            return None;
+        }
+        let slot = self
+            .extracted_applications
+            .iter()
+            .position(Option::is_none)?;
+        let handoff = PublishedApplicationCustodianHandoffV1::take_next(&mut self.applications)?;
+        self.extracted_applications[slot] = Some(ExtractedApplicationIdentity {
+            process: handoff.process_identity(),
+            id: handoff.transcript().root_nonce(),
+        });
+        Some(handoff)
+    }
+
     /// Services each live observer once and at most one control send/receive.
     /// Returns whether any observer or registration made progress.
     pub fn step(
@@ -351,7 +399,9 @@ impl RootCompilerObserverRegistryV1 {
             )? {
                 if matches!(
                     pending.packet.kind,
-                    RegistryKind::Registered | RegistryKind::RegisteredApplication
+                    RegistryKind::Registered
+                        | RegistryKind::RegisteredApplication
+                        | RegistryKind::RegisteredCustodianApplication
                 ) {
                     for session in &mut self.sessions {
                         if let Session::Prepared { id, deadline, .. } = session
@@ -379,9 +429,9 @@ impl RootCompilerObserverRegistryV1 {
             .checked_add(1)
             .ok_or_else(|| invalid("registration sequence exhausted"))?;
         match packet.kind {
-            RegistryKind::Register | RegistryKind::RegisterApplication => {
-                self.register(packet, rights)?
-            }
+            RegistryKind::Register
+            | RegistryKind::RegisterApplication
+            | RegistryKind::RegisterCustodianApplication => self.register(packet, rights)?,
             RegistryKind::AttachApplication => self.attach_application(packet, rights)?,
             RegistryKind::Bind => self.bind_issuer(packet, rights)?,
             _ => return Err(invalid("unexpected registration response at root")),
@@ -391,11 +441,17 @@ impl RootCompilerObserverRegistryV1 {
 
     fn validate_pending(&self, pending: &Pending) -> Result<()> {
         require_deadline(pending.deadline)?;
-        if matches!(pending.packet.kind, RegistryKind::Registered | RegistryKind::RegisteredApplication) && !self.sessions.iter().any(|session|
-                matches!(session, Session::Prepared { id, .. } if *id == pending.packet.registration))
-            {
-                return Err(invalid("pending registration was retired before delivery"));
-            }
+        if matches!(
+            pending.packet.kind,
+            RegistryKind::Registered
+                | RegistryKind::RegisteredApplication
+                | RegistryKind::RegisteredCustodianApplication
+        ) && !self.sessions.iter().any(|session| {
+            matches!(session,
+                Session::Prepared { id, .. } if *id == pending.packet.registration)
+        }) {
+            return Err(invalid("pending registration was retired before delivery"));
+        }
         if pending.packet.kind == RegistryKind::ApplicationInstalled {
             let application = self
                 .applications
@@ -422,23 +478,36 @@ impl RootCompilerObserverRegistryV1 {
         if self.sessions.len() >= MAX_SESSIONS {
             return Err(invalid("observer registration capacity exhausted"));
         }
-        let (launch, application, response_kind) =
-            if packet.kind == RegistryKind::RegisterApplication {
-                let binding = WorkerV3ApplicationRegistrationBindingV1::decode(&packet.body)
-                    .map_err(|_| invalid("noncanonical application registration"))?;
-                (
-                    binding.compiler_handoff().launch_manifest().clone(),
-                    ApplicationAttachment::Expected(Box::new(binding)),
-                    RegistryKind::RegisteredApplication,
-                )
-            } else {
-                (
-                    CompilerExecutionServiceLaunchManifestV1::decode(&packet.body)
-                        .map_err(|_| invalid("noncanonical registered launch"))?,
-                    ApplicationAttachment::CompilerOnly,
-                    RegistryKind::Registered,
-                )
-            };
+        let (launch, application, response_kind) = if matches!(
+            packet.kind,
+            RegistryKind::RegisterApplication | RegistryKind::RegisterCustodianApplication
+        ) {
+            let binding = WorkerV3ApplicationRegistrationBindingV1::decode(&packet.body)
+                .map_err(|_| invalid("noncanonical application registration"))?;
+            (
+                binding.compiler_handoff().launch_manifest().clone(),
+                ApplicationAttachment::Expected {
+                    binding: Box::new(binding),
+                    route: if packet.kind == RegistryKind::RegisterApplication {
+                        ApplicationRoute::ObservationOnly
+                    } else {
+                        ApplicationRoute::ProofCustodian
+                    },
+                },
+                if packet.kind == RegistryKind::RegisterApplication {
+                    RegistryKind::RegisteredApplication
+                } else {
+                    RegistryKind::RegisteredCustodianApplication
+                },
+            )
+        } else {
+            (
+                CompilerExecutionServiceLaunchManifestV1::decode(&packet.body)
+                    .map_err(|_| invalid("noncanonical registered launch"))?,
+                ApplicationAttachment::CompilerOnly,
+                RegistryKind::Registered,
+            )
+        };
         validate_launch(
             &launch,
             &self.prepared.policy,
@@ -478,7 +547,7 @@ impl RootCompilerObserverRegistryV1 {
             return Err(invalid("duplicate registration nonce"));
         }
         let response_identity = match &application {
-            ApplicationAttachment::Expected(binding) => *binding.identity().as_bytes(),
+            ApplicationAttachment::Expected { binding, .. } => *binding.identity().as_bytes(),
             _ => *launch.identity().as_bytes(),
         };
         self.sessions.push(Session::Prepared {
@@ -502,10 +571,12 @@ impl RootCompilerObserverRegistryV1 {
     }
 
     fn attach_application(&mut self, packet: RegistryPacket, rights: Vec<OwnedFd>) -> Result<()> {
-        if self.applications.len() >= MAX_APPLICATIONS {
+        if self.applications.len() + self.extracted_applications.iter().flatten().count()
+            >= MAX_APPLICATIONS
+        {
             return Err(invalid("application registration capacity exhausted"));
         }
-        let (index, binding, application) = self
+        let (index, binding, route, application) = self
             .sessions
             .iter()
             .enumerate()
@@ -514,7 +585,7 @@ impl RootCompilerObserverRegistryV1 {
                     id,
                     observer,
                     deadline,
-                    application: ApplicationAttachment::Expected(binding),
+                    application: ApplicationAttachment::Expected { binding, route },
                     ..
                 } if *id == packet.registration
                     && binding.identity().as_bytes()[..] == packet.body =>
@@ -524,6 +595,7 @@ impl RootCompilerObserverRegistryV1 {
                         Ok((
                             index,
                             (**binding).clone(),
+                            *route,
                             observer.retain_application_process(
                                 binding.compiler_handoff().launch_manifest(),
                             )?,
@@ -566,12 +638,18 @@ impl RootCompilerObserverRegistryV1 {
             .applications
             .iter()
             .any(|value| value.process_identity() == process || value.id == id)
+            || self
+                .extracted_applications
+                .iter()
+                .flatten()
+                .any(|value| value.process == process || value.id == id)
         {
             return Err(invalid("application process or registration reused"));
         }
         let mut body = binding.identity().as_bytes().to_vec();
         body.extend_from_slice(&id);
-        let (session, gate) = ApplicationSession::install(application, parent, peer, binding, id)?;
+        let (session, gate) =
+            ApplicationSession::install(application, parent, peer, binding, id, route)?;
         // Install original-process custody before publishing the gate. Issuer binding must not
         // consume this independent owner, and a lost response is contained by cancel_all.
         self.applications.push(session);
@@ -620,7 +698,7 @@ impl RootCompilerObserverRegistryV1 {
         let supervisor = self.supervisor.try_clone()?;
         match &self.sessions[index] {
             Session::Prepared {
-                application: ApplicationAttachment::Expected(_),
+                application: ApplicationAttachment::Expected { .. },
                 ..
             } => return Err(invalid("application must attach before issuer binding")),
             Session::Prepared {
@@ -698,7 +776,8 @@ impl RootCompilerObserverRegistryV1 {
         });
     }
 
-    /// Whether shutdown has begun and every exact bound issuer exit has been confirmed.
+    /// Whether registry-held custody is drained and every bound issuer exit is confirmed.
+    /// Extracted application handoffs have independent owners and are not covered by this.
     pub fn is_drained(&self) -> bool {
         self.closing && self.sessions.is_empty() && self.applications.is_empty()
     }
@@ -845,6 +924,51 @@ impl SupervisorCompilerObserverRegistryV1 {
         original_parent_pidfd: BorrowedFd<'_>,
         deadline: Instant,
     ) -> Result<RegisteredApplicationObserverV1> {
+        self.register_application_inner(
+            binding,
+            original_compiler_peer,
+            original_application_pidfd,
+            original_proof_peer,
+            original_parent_pidfd,
+            deadline,
+            RegistryKind::RegisterApplication,
+        )
+    }
+
+    /// Selects the mandatory custodian route before application observation begins.
+    /// This route cannot send legacy Ready or downgrade to observation-only registration.
+    pub fn register_custodian_application(
+        &mut self,
+        binding: &WorkerV3ApplicationRegistrationBindingV1,
+        original_compiler_peer: BorrowedFd<'_>,
+        original_application_pidfd: BorrowedFd<'_>,
+        original_proof_peer: BorrowedFd<'_>,
+        original_parent_pidfd: BorrowedFd<'_>,
+        deadline: Instant,
+    ) -> Result<RegisteredCustodianApplicationObserverV1> {
+        self.register_application_inner(
+            binding,
+            original_compiler_peer,
+            original_application_pidfd,
+            original_proof_peer,
+            original_parent_pidfd,
+            deadline,
+            RegistryKind::RegisterCustodianApplication,
+        )
+        .map(|inner| RegisteredCustodianApplicationObserverV1 { inner })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_application_inner(
+        &mut self,
+        binding: &WorkerV3ApplicationRegistrationBindingV1,
+        original_compiler_peer: BorrowedFd<'_>,
+        original_application_pidfd: BorrowedFd<'_>,
+        original_proof_peer: BorrowedFd<'_>,
+        original_parent_pidfd: BorrowedFd<'_>,
+        deadline: Instant,
+        kind: RegistryKind,
+    ) -> Result<RegisteredApplicationObserverV1> {
         let launch = binding.compiler_handoff().launch_manifest();
         validate_launch(
             launch,
@@ -855,7 +979,7 @@ impl SupervisorCompilerObserverRegistryV1 {
         )?;
         let deadline = deadline.min(Instant::now() + TIMEOUT);
         let (packet, rights) = self.exchange(
-            RegistryKind::RegisterApplication,
+            kind,
             [0; 32],
             binding.canonical_bytes().to_vec(),
             &[original_compiler_peer, original_application_pidfd],
@@ -1003,6 +1127,21 @@ impl SupervisorCompilerObserverRegistryV1 {
         )
     }
 
+    pub fn bind_custodian_application_issuer(
+        &mut self,
+        registered: &RegisteredCustodianApplicationObserverV1,
+        issuer_pid: u32,
+        original_issuer_pidfd: BorrowedFd<'_>,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.bind_application_issuer(
+            &registered.inner,
+            issuer_pid,
+            original_issuer_pidfd,
+            deadline,
+        )
+    }
+
     fn exchange(
         &mut self,
         kind: RegistryKind,
@@ -1041,6 +1180,9 @@ impl SupervisorCompilerObserverRegistryV1 {
             let expected = match kind {
                 RegistryKind::Register => RegistryKind::Registered,
                 RegistryKind::RegisterApplication => RegistryKind::RegisteredApplication,
+                RegistryKind::RegisterCustodianApplication => {
+                    RegistryKind::RegisteredCustodianApplication
+                }
                 RegistryKind::AttachApplication => RegistryKind::ApplicationInstalled,
                 RegistryKind::Bind => RegistryKind::Bound,
                 _ => return Err(invalid("invalid supervisor registration request")),
@@ -1104,6 +1246,49 @@ pub struct RegisteredApplicationObserverV1 {
     binding: WorkerV3ApplicationRegistrationBindingV1,
     gate: PendingApplicationObservationGateV1,
     publication: ApplicationPublication,
+}
+
+/// Supervisor custody for the mandatory proof-custodian route. No legacy conversion exists.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::{RegisteredCustodianApplicationObserverV1, RegisteredApplicationObserverV1};
+/// fn downgrade(value: RegisteredCustodianApplicationObserverV1) -> RegisteredApplicationObserverV1 { value.into() }
+/// ```
+pub struct RegisteredCustodianApplicationObserverV1 {
+    inner: RegisteredApplicationObserverV1,
+}
+impl RegisteredCustodianApplicationObserverV1 {
+    pub fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        self.inner.binding()
+    }
+    pub fn try_clone_for_launch(&self) -> Result<[OwnedFd; 2]> {
+        self.inner.try_clone_for_launch()
+    }
+    pub fn await_observation(
+        self,
+        deadline: Instant,
+    ) -> Result<ObservedCustodianApplicationRegistrationV1> {
+        self.inner
+            .await_observation(deadline)
+            .map(|inner| ObservedCustodianApplicationRegistrationV1 { inner })
+    }
+}
+
+/// Published registration remains distinct from controller Ready, proof, and GPU authority.
+pub struct ObservedCustodianApplicationRegistrationV1 {
+    inner: ObservedApplicationRegistrationV1,
+}
+impl ObservedCustodianApplicationRegistrationV1 {
+    pub fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        self.inner.binding()
+    }
+    pub fn revalidate(&self) -> Result<()> {
+        self.inner.revalidate()
+    }
+    /// Completes publication only. The application still awaits a separate custodian Ready.
+    pub fn confirm_publication(self, deadline: Instant) -> Result<()> {
+        self.inner.confirm_publication(deadline)
+    }
 }
 
 impl RegisteredApplicationObserverV1 {

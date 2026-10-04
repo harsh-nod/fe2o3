@@ -1,4 +1,4 @@
-//! Observation-only application lifetime, independent of compiler issuer slots and GPU custody.
+//! Application registration lifetime, independent of compiler issuer slots and GPU custody.
 
 use super::*;
 use crate::RetainedWorkerV3ApplicationObservationV1;
@@ -15,7 +15,13 @@ pub(super) const MAX_APPLICATIONS: usize = 16;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ApplicationRoute {
+    ObservationOnly,
+    ProofCustodian,
+}
 
 enum State {
     AwaitHello,
@@ -28,6 +34,7 @@ enum State {
         used: usize,
     },
     ReadyPending(Message),
+    CustodianHandoffReady(Transcript),
     Registered,
     Retired,
 }
@@ -46,6 +53,7 @@ pub(super) struct ApplicationSession {
     deadline: Instant,
     containing: bool,
     issuer_bound: bool,
+    route: ApplicationRoute,
 }
 
 impl ApplicationSession {
@@ -55,6 +63,7 @@ impl ApplicationSession {
         peer: OwnedFd,
         binding: WorkerV3ApplicationRegistrationBindingV1,
         id: [u8; 32],
+        route: ApplicationRoute,
     ) -> Result<(Self, [OwnedFd; 2])> {
         application.validate_parent(&parent)?;
         let endpoint = Endpoint::admit(peer)?;
@@ -83,6 +92,7 @@ impl ApplicationSession {
                 deadline: Instant::now() + STARTUP_TIMEOUT,
                 containing: false,
                 issuer_bound: false,
+                route,
             },
             [reader, publication_writer],
         ))
@@ -285,7 +295,14 @@ impl ApplicationSession {
                             ));
                         }
                         self.publication = None;
-                        self.state = State::ReadyPending(Message::ready(*transcript));
+                        self.state = match self.route {
+                            ApplicationRoute::ObservationOnly => {
+                                State::ReadyPending(Message::ready(*transcript))
+                            }
+                            ApplicationRoute::ProofCustodian => {
+                                State::CustodianHandoffReady(*transcript)
+                            }
+                        };
                         return Ok(true);
                     }
                     Ok(count) => {
@@ -310,6 +327,10 @@ impl ApplicationSession {
                     return Ok(true);
                 }
             }
+            State::CustodianHandoffReady(_) => {
+                // No receive or Ready here. Only the extracted custodian owner may continue.
+                self.revalidate_observation()?;
+            }
             _ => unreachable!("receive and retired states handled before send"),
         }
         Ok(false)
@@ -319,10 +340,19 @@ impl ApplicationSession {
         self.observation
             .as_ref()
             .ok_or_else(|| invalid("application observation missing"))?
-            .revalidate_retained_inputs()
+            .revalidate_registered_counterpart(self.endpoint.peer.as_fd())
             .map_err(|error| {
                 CompilerExecutionObserverErrorV1::ApplicationObservation(Box::new(error))
             })
+    }
+
+    pub(super) fn custodian_handoff_ready(&self) -> bool {
+        !self.containing
+            && self.route == ApplicationRoute::ProofCustodian
+            && self.issuer_bound
+            && self.writer.is_none()
+            && self.publication.is_none()
+            && matches!(self.state, State::CustodianHandoffReady(_))
     }
 
     pub(super) fn cancel(&mut self) {
@@ -359,6 +389,75 @@ impl ApplicationSession {
         self.observation = None;
         self.containing = false;
         self.state = State::Retired;
+    }
+}
+
+/// Original authenticated application registration, after exact publication and before Ready.
+///
+/// Only the root registry can produce this owner. It retains the original observation,
+/// process pidfds and exact proof counterpart, not a reconstruction from descriptive bytes.
+/// Extraction separates it from compiler issuer cleanup. Dropping it before the future
+/// custodian handoff contains the exact application; it is not proof or GPU authority.
+/// No Ready, activation, raw descriptor export, or settlement API is provided here.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::PublishedApplicationCustodianHandoffV1;
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<PublishedApplicationCustodianHandoffV1>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::PublishedApplicationCustodianHandoffV1;
+/// use std::os::fd::AsFd;
+/// fn export(value: PublishedApplicationCustodianHandoffV1) { let _ = value.as_fd(); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::PublishedApplicationCustodianHandoffV1;
+/// let _ = PublishedApplicationCustodianHandoffV1 {};
+/// ```
+pub struct PublishedApplicationCustodianHandoffV1 {
+    session: ApplicationSession,
+}
+
+impl PublishedApplicationCustodianHandoffV1 {
+    pub(super) fn process_identity(&self) -> (u32, u64) {
+        self.session.process_identity()
+    }
+
+    pub(super) fn take_next(sessions: &mut Vec<ApplicationSession>) -> Option<Self> {
+        let index = sessions
+            .iter()
+            .position(ApplicationSession::custodian_handoff_ready)?;
+        Some(Self {
+            session: sessions.remove(index),
+        })
+    }
+
+    pub fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        &self.session.binding
+    }
+
+    pub fn transcript(&self) -> Transcript {
+        let State::CustodianHandoffReady(transcript) = self.session.state else {
+            unreachable!("only published custodian sessions can be extracted")
+        };
+        transcript
+    }
+
+    /// Original absolute registration deadline. Extraction never grants a new startup window.
+    pub fn startup_deadline(&self) -> Instant {
+        self.session.deadline
+    }
+
+    /// Rechecks the original occurrence and counterpart, without reading the proof channel.
+    /// The historical ACK descriptor is deliberately not reopened after first observation.
+    pub fn revalidate(&self) -> Result<()> {
+        if !self.session.custodian_handoff_ready() {
+            return Err(invalid("custodian application handoff is not pending"));
+        }
+        require_deadline(self.session.deadline)?;
+        self.session.revalidate_installation()?;
+        self.session.revalidate_observation()?;
+        require_deadline(self.session.deadline)
     }
 }
 
