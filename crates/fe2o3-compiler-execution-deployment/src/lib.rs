@@ -1704,7 +1704,7 @@ mod tests {
         put_u32(&mut bytes, 12, 128 * 1024);
         put_u16(&mut bytes, 20, 6);
         put_u16(&mut bytes, 22, 17);
-        put_u16(&mut bytes, 24, 0x0100);
+        put_u16(&mut bytes, 24, 0x0200);
         put_u16(&mut bytes, 26, 1);
         put_u16(&mut bytes, 28, 4);
         put_u16(&mut bytes, 30, 0);
@@ -2100,6 +2100,44 @@ mod tests {
                 fs::set_permissions(&manifest, fs::Permissions::from_mode(0o444)).unwrap();
             },
         );
+    }
+
+    #[test]
+    fn qualification_real_builder_image_distinguishes_absent_and_uncompressed_xattrs() {
+        let bytes = include_bytes!("../tests/fixtures/qualification-base-v1.squashfs");
+        assert_eq!(u16::from_le_bytes([bytes[24], bytes[25]]), 0x0240);
+        let (_base_root, base_path, digest) = qualification_base_fixture(bytes);
+        let (installed, _install_parent) = installed_for_qualification();
+        let parent = private_install_parent();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &digest,
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(prepared.base_image_byte_len(), bytes.len() as u64);
+        assert_eq!(prepared.base_image_created_epoch(), 1_700_000_000);
+
+        for flags in [0x0040_u16, 0x0140] {
+            let mut malformed = bytes.to_vec();
+            malformed[24..26].copy_from_slice(&flags.to_le_bytes());
+            let (_base_root, base_path, digest) = qualification_base_fixture(&malformed);
+            let (installed, _install_parent) = installed_for_qualification();
+            assert_eq!(
+                qualification::prepare_compiler_execution_qualification_for_test_v1(
+                    installed,
+                    &base_path,
+                    &digest,
+                    parent.path(),
+                    current_owner(),
+                )
+                .unwrap_err()
+                .kind(),
+                DeploymentVerificationErrorKindV1::InvalidQualificationBase
+            );
+        }
     }
 
     #[test]
