@@ -174,7 +174,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     let definitions = model.inventory.definitions().len();
     emit!(
         out,
-        "open spec fn byte_block_{namespace}_{block}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n if s.values.len() != {definitions} || s.pc != {block} {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observations: Seq::empty(), returned: Seq::empty() }} }} else {{\n let current = s;\n"
+        "open spec fn byte_block_{namespace}_{block}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryBlockResultV30 {{\n if s.values.len() != {definitions} || s.pc != {block} {{ byte_block_refused_v58(s, Seq::empty()) }} else {{\n let current = s;\n"
     );
     for operation in row.operations.clone() {
         out.budget.charge_work(1)?;
@@ -206,7 +206,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
         .emit_state_predicate("done.memory", "done.values", None, out)?;
     emit!(
         out,
-        " {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..done }}, observations, returned: Seq::empty() }} }} else {{\n"
+        " {{ byte_block_refused_v58(done, observations) }} else {{\n"
     );
     emit!(
         out,

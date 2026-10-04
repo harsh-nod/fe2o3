@@ -42,6 +42,36 @@ open spec fn byte_micro_refused_v55(before: MemoryMicroStateV30) -> MemoryMicroR
     ), -1)
 }
 
+open spec fn byte_block_refused_v58(
+    state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
+) -> MemoryBlockResultV30 {
+    MemoryBlockResultV30 {
+        state: MemoryStateV30 { valid: false, ..state },
+        observations, returned: Seq::empty(),
+    }
+}
+
+open spec fn byte_micro_begin_result_v58(
+    state: MemoryStateV30, next_operation: int,
+) -> MemoryMicroStateV30 {
+    MemoryMicroStateV30 { state, observations: Seq::empty(), next_operation }
+}
+
+proof fn byte_block_refused_exact_v58(
+    state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
+)
+    ensures byte_block_refused_v58(state, observations) == MemoryBlockResultV30 {
+        state: MemoryStateV30 { valid: false, ..state },
+        observations, returned: Seq::empty(),
+    },
+{ }
+
+proof fn byte_micro_begin_result_exact_v58(state: MemoryStateV30, next_operation: int)
+    ensures byte_micro_begin_result_v58(state, next_operation) == MemoryMicroStateV30 {
+        state, observations: Seq::empty(), next_operation,
+    },
+{ }
+
 proof fn byte_operation_result_exact_v55(
     before: MemoryStateV30, after: MemoryStateV30,
     operation: MemorySourceOperationV30, effect: MemoryOperationEffectV30,

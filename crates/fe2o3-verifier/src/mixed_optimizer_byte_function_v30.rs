@@ -497,18 +497,18 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             let operations = &self.inventory.blocks()[block].operations;
             emit!(
                 out,
-                " if s.pc == {block} {{ MemoryMicroStateV30 {{ state: s, observations: Seq::empty(), next_operation: "
+                " if s.pc == {block} {{ byte_micro_begin_result_v58(s, "
             );
             if operations.is_empty() {
                 emit!(out, "-1");
             } else {
                 emit!(out, "{}", operations.start);
             }
-            emit!(out, " }} }} else\n");
+            emit!(out, ") }} else\n");
         }
         emit!(
             out,
-            " {{ MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observations: Seq::empty(), next_operation: -1 }} }}\n}}\n"
+            " {{ byte_micro_begin_result_v58(MemoryStateV30 {{ valid: false, ..s }}, -1) }}\n}}\n"
         );
         emit!(
             out,
@@ -555,7 +555,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         emit!(
             out,
-            " {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..m.state }}, observations: m.observations, returned: Seq::empty() }} }}\n}}\n"
+            " {{ byte_block_refused_v58(m.state, m.observations) }}\n}}\n"
         );
         emit!(
             out,
@@ -568,10 +568,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 " if s.pc == {block} {{ byte_block_{namespace}_{block}_v30(s, little_endian) }} else\n"
             );
         }
-        emit!(
-            out,
-            " {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observations: Seq::empty(), returned: Seq::empty() }} }}\n}}\n"
-        );
+        emit!(out, " {{ byte_block_refused_v58(s, Seq::empty()) }}\n}}\n");
         self.check(out)
     }
 
