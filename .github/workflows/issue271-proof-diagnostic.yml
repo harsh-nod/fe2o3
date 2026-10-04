@@ -1,0 +1,47 @@
+name: Issue 271 ThreadWrite Full Models Export Diagnostic
+
+on:
+  push:
+    branches: [wip/issue271-thread-write-export-diagnostic-v91-20261004]
+
+permissions:
+  contents: read
+
+jobs:
+  verifier-export:
+    name: Exact e5e4 ThreadWrite three-model export (diagnostic only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out diagnostic control
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 7c0c46473dabbb1ca7f814258c2c5c420d521ccf
+          path: source
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm ripgrep
+      - name: Install pinned Rust toolchain
+        working-directory: source
+        run: rustup show active-toolchain
+      - name: Run sole bounded three-model exporter
+        env:
+          EXPECTED_CONTROL_HEAD: ${{ github.sha }}
+        run: python3 control/.github/diagnostics/issue271-proof-v78.py
+      - name: Upload exact generated source and diagnostic logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue271-thread-write-model-export-e5e4-v91-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-thread-write-export-v91-logs/
+          if-no-files-found: warn
+          retention-days: 7

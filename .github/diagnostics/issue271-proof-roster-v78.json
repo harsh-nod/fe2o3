@@ -1,0 +1,21 @@
+{
+  "head": "7c0c46473dabbb1ca7f814258c2c5c420d521ccf",
+  "tree": "dbabb82056da23dd5926b71afe64a1a626781435",
+  "production_head": "e5e4a67e30876d58f1c4b618046b44a856adc277",
+  "production_tree": "4734aa0ca61e814d5fd2888f0994d6b53b68e107",
+  "package": "fe2o3-verifier",
+  "parent": "mixed_optimizer_refinement_v26::semantics::original_scalar_v30::invocation_body::source_bytes::descriptor_dispatch_tests::descriptor_indices_v52_tests::thread_write_v88_tests::diagnostic_complete_thread_write_models_export_without_execution_v91",
+  "source_delta": {
+    "path": "crates/fe2o3-verifier/src/original_semantic_mir_thread_write_v88_tests.rs",
+    "preimage": "2ce6b3ef65200c5b26e0acc2348ba0d0b649c8125349c996714dd39d4e61be38",
+    "postimage": "a99bca2c57f8ce26994a21a51fa7a59b752bc28b7b3a67ce1b28f247c191fc45",
+    "exporter_sha256": "db275254ec035cc44fd81bba4c16c42416b2e7aab54d7f3aebd4488796d5b3fa"
+  },
+  "variants": [
+    "plain_move",
+    "plain_copy",
+    "disjoint_move"
+  ],
+  "max_model_bytes": 16777216,
+  "scope": "One ignored exact three-model exporter only; complete generation for every original ThreadWrite ownership variant. No ordinary-test, protected-proof, native or publication credit."
+}
