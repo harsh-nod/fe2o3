@@ -3,8 +3,10 @@
 use super::*;
 use std::fmt::Write as _;
 
-pub(super) const SHARED: &str =
-    include_str!("original_semantic_mir_source_constructor_laws_v81.vrs");
+pub(super) const SHARED: &str = concat!(
+    include_str!("original_semantic_mir_source_constructor_laws_v81.vrs"),
+    include_str!("original_semantic_mir_source_enter_laws_v85.vrs"),
+);
 
 pub(super) fn emit(root: usize, fuels: &[usize], out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.reserve_storage(

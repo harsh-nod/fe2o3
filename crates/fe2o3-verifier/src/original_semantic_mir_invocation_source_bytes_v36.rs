@@ -198,6 +198,16 @@ pub(super) struct TypedOperand {
 }
 
 impl TypedOperand {
+    pub(super) fn scalar_local_coordinates(self) -> Option<(usize, bool, u32)> {
+        match self.kind {
+            OperandKind::Scalar {
+                value: Value::Local { local, moved },
+                scalar,
+            } => Some((local, moved, scalar.width())),
+            _ => None,
+        }
+    }
+
     pub(super) fn scalar_local_for_conservation(self) -> bool {
         matches!(
             self.kind,

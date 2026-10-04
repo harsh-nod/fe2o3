@@ -33,6 +33,35 @@ mod assertions;
 #[path = "original_semantic_mir_source_conservation_v81.rs"]
 mod conservation;
 
+#[path = "original_semantic_mir_source_step_hints_v85.rs"]
+mod step_hints;
+
+pub(super) struct SourceEntryHintsV85 {
+    pub(super) owner: u32,
+    pub(super) locals: Range<usize>,
+    pub(super) pc: usize,
+    pub(super) arguments: Vec<usize>,
+}
+
+pub(super) struct SourceCallHintsV85 {
+    pub(super) child: usize,
+    pub(super) arguments: Vec<(usize, bool, u32)>,
+}
+
+pub(super) struct SourceCutHintsV85 {
+    pub(super) pc: usize,
+    pub(super) instance: usize,
+    pub(super) statements: usize,
+    pub(super) operands: usize,
+    pub(super) call: Option<SourceCallHintsV85>,
+}
+
+pub(super) struct SourceStepHintsV85 {
+    pub(super) fuels: Vec<usize>,
+    pub(super) entries: Vec<Option<SourceEntryHintsV85>>,
+    pub(super) cuts: Vec<SourceCutHintsV85>,
+}
+
 enum End {
     Unreachable,
     Abort,
@@ -80,6 +109,15 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
 }
 
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
+    pub(super) fn step_hints(
+        &self,
+        root: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<SourceStepHintsV85>> {
+        self.source_slots(out)?;
+        step_hints::derive(self, root, out)
+    }
+
     pub(super) fn conservation_fuels(
         &self,
         root: usize,

@@ -7,6 +7,9 @@ use super::super::{
     boundary::{Boundaries, ControlInput},
     invocations::InvocationPlan,
 };
+use super::source_function::{
+    SourceCallHintsV85, SourceCutHintsV85, SourceEntryHintsV85, SourceStepHintsV85,
+};
 use super::{
     Error, Resource, Result, Writer, slots::SourceSlots, source_function::SourceByteProgram, vector,
 };
@@ -100,7 +103,7 @@ struct Root {
     instances: Range<usize>,
     owner: u32,
     parameters: Vec<RootArgument>,
-    conservation_fuels: Option<Vec<usize>>,
+    step_hints: Option<SourceStepHintsV85>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -680,7 +683,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 instances: scope.instances.clone(),
                 owner: scope.function.index(),
                 parameters,
-                conservation_fuels: program.conservation_fuels(root, out)?,
+                step_hints: program.step_hints(root, out)?,
             });
         }
         if result.instances.len() != total {
@@ -1012,6 +1015,8 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
     }
 
     fn check(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
         let source = self.slots.correspondence(out)?.source(out.budget)?;
         if out.budget.storage() < self.required {
             return Err(source
@@ -1028,6 +1033,7 @@ fn headers() -> usize {
     }
     h::<PairedInvocations<'_, '_, '_>>()
         + h::<Root>()
+        + h::<Option<SourceStepHintsV85>>()
         + h::<RootArgument>()
         + h::<Instance>()
         + h::<Cut>()
@@ -1073,6 +1079,10 @@ fn headers() -> usize {
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_paired_v36_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_invocation_step_v85_tests.rs"]
+mod step_tests;
 
 #[cfg(test)]
 #[path = "original_semantic_mir_aggregate_bindings_v42_tests.rs"]

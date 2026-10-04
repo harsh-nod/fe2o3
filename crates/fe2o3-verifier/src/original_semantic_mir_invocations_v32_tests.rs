@@ -762,6 +762,20 @@ pub(in super::super) fn run_source_transform(
     )
 }
 
+pub(in super::super) fn run_unit_source_transform_v85(
+    work: usize,
+    storage: usize,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_prepared(
+        work,
+        storage,
+        |budget| prepared_source_transform(budget, true, false, 2, 0, transform),
+        examine,
+    )
+}
+
 pub(in super::super) fn try_source_ssa_transform(
     transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
 ) -> std::result::Result<ProductionSemanticSsaOwnerV1, ProductionSemanticSsaErrorV1> {

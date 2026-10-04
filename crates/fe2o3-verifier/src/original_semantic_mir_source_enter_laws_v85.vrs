@@ -1,0 +1,173 @@
+#[verifier::spinoff_prover]
+proof fn invocation_source_constructor_logical_clear_well_formed_v84(
+    logical: InvocationSourceLogicalV38, count: int, begin: int, end: int,
+)
+    requires invocation_source_logical_well_formed_v38(logical, count),
+    ensures invocation_source_logical_well_formed_v38(
+        invocation_source_logical_clear_v38(logical, begin, end), count),
+{
+    hide(invocation_source_descriptor_reference_shape_v51);
+    hide(invocation_source_enum_well_formed_v47);
+    hide(invocation_source_aggregate_well_formed_v42);
+    let cleared = invocation_source_logical_clear_v38(logical, begin, end);
+    assert forall|i: int| 0 <= i < count implies cleared.versions[i] >= 0 by {
+        assert(logical.versions[i] >= 0);
+    }
+    assert forall|i: int| cleared.descriptor_references.contains_key(i) implies
+        0 <= i < count
+            && invocation_source_descriptor_reference_shape_v51(cleared.descriptor_references[i], count)
+            && !cleared.witnesses.contains_key(i) && !cleared.references.contains_key(i)
+            && !cleared.aggregates.contains_key(i) && !cleared.enums.contains_key(i) by {
+        assert(logical.descriptor_references.contains_key(i));
+    }
+    assert forall|i: int| cleared.enums.contains_key(i) implies
+        0 <= i < count && invocation_source_enum_well_formed_v47(cleared.enums[i])
+            && !cleared.witnesses.contains_key(i) && !cleared.references.contains_key(i)
+            && !cleared.aggregates.contains_key(i) by {
+        assert(logical.enums.contains_key(i));
+    }
+    assert forall|i: int| cleared.aggregates.contains_key(i) implies
+        0 <= i < count && invocation_source_aggregate_well_formed_v42(cleared.aggregates[i])
+            && !cleared.witnesses.contains_key(i) && !cleared.references.contains_key(i) by {
+        assert(logical.aggregates.contains_key(i));
+    }
+    assert forall|i: int| cleared.witnesses.contains_key(i) implies
+        0 <= i < count && cleared.witnesses[i] >= 0 && !cleared.references.contains_key(i) by {
+        assert(logical.witnesses.contains_key(i));
+    }
+    assert forall|i: int| cleared.references.contains_key(i) implies
+        0 <= i < count && 0 <= cleared.references[i].origin < count
+            && cleared.references[i].version >= 0
+            && cleared.references[i].source_type >= 0
+            && cleared.references[i].origin_generation >= 0
+            && cleared.references[i].borrow_instance >= 0
+            && cleared.references[i].borrow_block >= 0
+            && cleared.references[i].borrow_statement >= 0 by {
+        assert(logical.references.contains_key(i));
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_constructor_frame_well_formed_v84(
+    memory: ByteMemoryV30, frames: MemoryFrameRuntimeV30, owner: int,
+)
+    requires byte_frame_runtime_well_formed_v30(frames),
+        byte_private_frames_live_v30(memory, frames), frames.active.len() > 0,
+    ensures byte_frame_runtime_well_formed_v30(byte_enter_frame_v30(frames, owner)),
+        byte_private_frames_live_v30(memory, byte_enter_frame_v30(frames, owner)),
+{
+    hide(byte_execution_well_formed_v37);
+    let entered = byte_enter_frame_v30(frames, owner);
+    assert forall|i: int| #![trigger entered.active[i]] 0 <= i < entered.active.len() implies
+        0 <= entered.active[i].invocation < entered.next_invocation by {
+        if i < frames.active.len() {
+            assert(0 <= frames.active[i].invocation < frames.next_invocation);
+        } else {
+            assert(i == frames.active.len());
+        }
+    }
+    assert forall|i: int, j: int| #![trigger entered.active[i], entered.active[j]] 0 <= i < j < entered.active.len() implies
+        entered.active[i].invocation < entered.active[j].invocation by {
+        if j < frames.active.len() {
+            assert(frames.active[i].invocation < frames.active[j].invocation);
+        } else {
+            assert(j == frames.active.len());
+            assert(frames.active[i].invocation < frames.next_invocation);
+        }
+    }
+    assert forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) implies
+        match allocation {
+            MemoryAllocationV30::External { identity: _, generation } => 0 <= generation,
+            MemoryAllocationV30::Private { owner, invocation, site, generation } =>
+                0 <= owner && 0 <= invocation && 0 <= generation
+                && 0 <= site.function && 0 <= site.block && 0 <= site.operation
+                && exists|i: int| 0 <= i < entered.active.len()
+                    && entered.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),
+        } by {
+        if let MemoryAllocationV30::Private { owner, invocation, site: _, generation: _ } = allocation {
+            let i = choose|i: int| 0 <= i < frames.active.len()
+                && frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation });
+            assert(entered.active[i] == frames.active[i]);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_constructor_clear_well_formed_v84(
+    source: InvocationSourceByteStateV36, begin: int, end: int, owner: int, pc: int,
+)
+    requires invocation_source_byte_state_well_formed_v36(source),
+        source.machine.frames.active.len() > 0,
+    ensures invocation_source_byte_state_well_formed_v36(InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            pc,
+            values: Seq::new(source.machine.values.len(), |i: int|
+                if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] }),
+            frames: byte_enter_frame_v30(source.machine.frames, owner), valid: true,
+            ..source.machine
+        },
+        logical: invocation_source_logical_clear_v38(source.logical, begin, end), ..source
+    }),
+{
+    hide(byte_memory_well_formed_v30);
+    hide(byte_frame_runtime_well_formed_v30);
+    hide(byte_private_frames_live_v30);
+    hide(private_generation_counters_valid_v30);
+    hide(invocation_source_object_binding_v40);
+    hide(invocation_source_logical_well_formed_v38);
+    invocation_source_constructor_logical_clear_well_formed_v84(source.logical,
+        source.machine.values.len() as int, begin, end);
+    invocation_source_constructor_frame_well_formed_v84(source.machine.memory, source.machine.frames, owner);
+    let entered = InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            pc,
+            values: Seq::new(source.machine.values.len(), |i: int|
+                if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] }),
+            frames: byte_enter_frame_v30(source.machine.frames, owner), valid: true,
+            ..source.machine
+        },
+        logical: invocation_source_logical_clear_v38(source.logical, begin, end), ..source
+    };
+    assert forall|i: int| entered.logical.descriptor_references.contains_key(i) implies
+        !entered.objects.contains_key(i)
+            && match entered.machine.values[i] {
+                MemoryValueV30::Slice(_) => true,
+                _ => false,
+            } by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.descriptor_references.contains_key(i));
+        assert(!(begin <= i < end));
+    }
+    assert forall|i: int| entered.logical.aggregates.contains_key(i) implies
+        entered.machine.values[i] == MemoryValueV30::Undefined && !entered.objects.contains_key(i) by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.aggregates.contains_key(i));
+        assert(!(begin <= i < end));
+    }
+    assert forall|i: int| entered.logical.enums.contains_key(i) implies
+        entered.machine.values[i] == MemoryValueV30::Undefined && !entered.objects.contains_key(i) by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.enums.contains_key(i));
+        assert(!(begin <= i < end));
+    }
+    assert forall|descriptor: int| entered.slots.contains_key(descriptor) implies
+        descriptor >= 0 && entered.slots[descriptor].byte_offset == 0
+            && entered.machine.memory.live.contains_key(entered.slots[descriptor].allocation)
+            && match entered.slots[descriptor].allocation {
+                MemoryAllocationV30::Private { owner, invocation, generation, .. } =>
+                    generation >= 0 && exists|i: int| 0 <= i < entered.machine.frames.active.len()
+                        && entered.machine.frames.active[i].owner == owner
+                        && entered.machine.frames.active[i].invocation == invocation,
+                _ => false,
+            } by {
+        match source.slots[descriptor].allocation {
+            MemoryAllocationV30::Private { owner, invocation, .. } => {
+                let i = choose|i: int| 0 <= i < source.machine.frames.active.len()
+                    && source.machine.frames.active[i].owner == owner
+                    && source.machine.frames.active[i].invocation == invocation;
+                assert(entered.machine.frames.active[i] == source.machine.frames.active[i]);
+            },
+            _ => {},
+        }
+    }
+}

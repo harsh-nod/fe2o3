@@ -75,6 +75,29 @@ fn storage_markers(function: &Function, out: &mut Writer<'_, '_>) -> Result<Vec<
 }
 
 impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
+    pub(super) fn step_proof_hints(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<super::source_function::SourceEntryHintsV85> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
+        out.budget.reserve_storage(step_hint_headers())?;
+        if !self.heap_conservation_shape(out)? {
+            return Err(mismatch());
+        }
+        let mut arguments = vector(self.arguments.len(), out)?;
+        for argument in &self.arguments {
+            out.budget.charge_work(1)?;
+            arguments.push(argument.ok_or_else(mismatch)?.local);
+        }
+        Ok(super::source_function::SourceEntryHintsV85 {
+            owner: self.owner,
+            locals: self.locals.clone(),
+            pc: self.entry,
+            arguments,
+        })
+    }
+
     pub(super) fn heap_conservation_shape(&self, out: &mut Writer<'_, '_>) -> Result<bool> {
         let source = self.slots.correspondence(out)?.source(out.budget)?;
         if out.budget.storage() < self.required {
@@ -474,6 +497,19 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         }
         write!(out, " entered\n }}\n}}\n").map_err(|_| out.error())
     }
+}
+
+fn step_hint_headers() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<super::source_function::SourceEntryHintsV85>()
+        + h::<Vec<usize>>()
+        + h::<Argument>()
+        + h::<Range<usize>>()
+        + size_of::<std::slice::Iter<'_, Option<Argument>>>()
+        + 2 * size_of::<usize>()
+        + 2 * size_of::<&()>()
 }
 
 fn headers() -> usize {
