@@ -1,7 +1,7 @@
 use super::*;
 use fe2o3_kernel_descriptor::mixed_conditional_v86::*;
 
-fn predicated_contract(
+pub(super) fn predicated_contract(
     table: &DeviceDescriptorTableV3<'_>,
     unused_input: bool,
     mutate: impl FnOnce(
