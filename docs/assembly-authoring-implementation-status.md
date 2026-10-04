@@ -11,6 +11,35 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Genuine first BF16 roster and private debugger attempt — 2026-10-04
+
+Fresh Identity and swapped-input frontend sessions now pass the actual private
+Program-to-projection-roster conversion and a second full lowerer validation
+while retaining the original source owner and projection account. The new
+non-Copy observation owns its paid scratch until the ordered pre-cleanup marker;
+the separate outer entry marker follows actual owner drop and materialization
+postflight. These observations are not module receipts or source authority.
+
+Qualification passed 3,909 compiler library tests (225 ignored), 73 extractor
+tests and two API tests in both debug and release, plus a fresh release build
+and all 31 first-roster parent controls. The unchanged thirteen-process campaign
+passed 36 positive and 32 negative CPU requests and both mandatory candidate
+checks. Separate fresh two-session owning and first-roster runs then passed.
+Module authentication, lowerer attachment, ordinary ranked admission, LLVM
+emission and GPU qualification remain separate unfinished steps.
+
+The private debugger reached an actual owned runtime session but refused a
+checkpoint-consistency relationship (`checkpoint_changed`, reason 11). It
+published no physical capture. The controller timed out after the incomplete
+protocol; its downstream empty-frame refusal is not evidence of a parser bug.
+The retained inner/owner receipts join completed cleanup, the exact scope and
+five named process IDs were observed absent, and full debugger/provider content
+checks passed afterward. The failed outer gate is preserved as failed; separate
+root content rechecks do not turn it into a passing outer postflight. No automatic
+retry or broader public debugger capability was enabled.
+
+Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Full private BF16 validation and observed debugger startup — 2026-10-04
 
 The private owning BF16 path now runs the full MIR-to-PLIRON translation
