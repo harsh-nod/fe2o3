@@ -1,12 +1,8 @@
 //! Pidfd-owned launch and readiness lifecycle for the protected issuer.
 
+use crate::application_route::{ObservedApplicationRouteV1, RegisteredApplicationRouteV1};
 use core::ffi::{c_char, c_int, c_long, c_void};
-use fe2o3_broker_authority_service::{
-    ObservedApplicationRegistrationV1, RegisteredApplicationObserverV1,
-};
-use fe2o3_runtime_protocol::{
-    WorkerV3ApplicationSupervisorReadyErrorV1, WorkerV3ApplicationSupervisorReadyV1,
-};
+use fe2o3_runtime_protocol::WorkerV3ApplicationSupervisorReadyErrorV1;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -394,7 +390,7 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
 /// require_as_fd::<LaunchedProtectedIssuerV1>();
 /// ```
 pub struct LaunchedProtectedIssuerV1 {
-    application: Option<RegisteredApplicationObserverV1>,
+    application: Option<RegisteredApplicationRouteV1>,
     application_deadline: Option<Instant>,
     process: ProtectedIssuerChildV1,
     control: OwnedFd,
@@ -502,7 +498,7 @@ impl LaunchedProtectedIssuerV1 {
 /// require_as_fd::<ReadyProtectedIssuerV1>();
 /// ```
 pub struct ReadyProtectedIssuerV1 {
-    application: Option<RegisteredApplicationObserverV1>,
+    application: Option<RegisteredApplicationRouteV1>,
     application_deadline: Option<Instant>,
     process: ProtectedIssuerChildV1,
     control: OwnedFd,
@@ -528,7 +524,7 @@ impl ReadyProtectedIssuerV1 {
     #[cfg(test)]
     pub(crate) fn with_application_for_test(
         mut self,
-        registration: RegisteredApplicationObserverV1,
+        registration: RegisteredApplicationRouteV1,
         deadline: Instant,
     ) -> Self {
         assert_eq!(
@@ -591,17 +587,15 @@ impl ReadyProtectedIssuerV1 {
         let application_ready = observed
             .as_ref()
             .map(|observed| {
-                WorkerV3ApplicationSupervisorReadyV1::new(
-                    observed.binding(),
-                    self.readiness.clone(),
-                )
-                .map_err(ProtectedIssuerLaunchErrorV1::ApplicationReadiness)
+                observed
+                    .readiness_bytes(self.readiness.clone())
+                    .map_err(ProtectedIssuerLaunchErrorV1::ApplicationReadiness)
             })
             .transpose()?;
         let bytes: &[u8] = application_ready
             .as_ref()
             .map_or(self.readiness.canonical_bytes().as_slice(), |r| {
-                r.canonical_bytes().as_slice()
+                r.canonical_bytes()
             });
         publish_control_readiness(
             &self.control,
@@ -1005,6 +999,13 @@ impl ProtectedIssuerSupervisorV1 {
                         ),
                         PreparedRouteV1::Application { registration, .. } => registry
                             .bind_application_issuer(
+                                registration,
+                                pid.as_raw_pid() as u32,
+                                original_pidfd,
+                                deadline,
+                            ),
+                        PreparedRouteV1::CustodianApplication { registration, .. } => registry
+                            .bind_custodian_application_issuer(
                                 registration,
                                 pid.as_raw_pid() as u32,
                                 original_pidfd,
@@ -1563,7 +1564,7 @@ fn publish_control_readiness(
     control: &OwnedFd,
     bytes: &[u8],
     process: &ProtectedIssuerChildV1,
-    observed: Option<&ObservedApplicationRegistrationV1>,
+    observed: Option<&ObservedApplicationRouteV1>,
     deadline: Instant,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
     loop {

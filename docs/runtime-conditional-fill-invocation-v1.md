@@ -58,8 +58,10 @@ carrier lifetime and completion ordering without manufacturing a remote owner.
 These tests are not a new formal proof or production two-GPU qualification.
 
 The remaining application gate needs a fresh selected-rustc compilation through
-the actual issuer and anchor, explicit Cargo/supervisor custodian routing, the
-complete installed proof deployment, and the actual manager/controller/FD195 join.
+the actual issuer and anchor, the complete installed proof deployment, and the
+actual manager/controller/FD195 join. Explicit
+[Cargo/supervisor custodian routing](runtime-custodian-supervisor-route-v1.md) is
+implemented; its CPU/component qualification is not production proof admission.
 The older composed-startup test uses a synthetic carriage and intentionally closes
 the audit connection; it cannot satisfy this gate.
 

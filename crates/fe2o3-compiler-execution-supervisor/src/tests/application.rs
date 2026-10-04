@@ -143,21 +143,36 @@ fn atomic_dispatch_accepts_only_exact_profile_pairs_and_cannot_skip_bad_packets(
     };
     let fixture = application_fixture(&supervisor, &image);
     let rights = fixture.rights.each_ref().map(AsFd::as_fd);
-    for application in [false, true] {
+    let custodian = WorkerV3ApplicationCustodianHandoffV1::new(fixture.binding.clone());
+    for profile in 0..3 {
         for count in 0..=4 {
             let (sender, receiver) = seqpacket_pair();
-            let payload: &[u8] = if application {
-                fixture.binding.canonical_bytes()
-            } else {
-                fixture.binding.compiler_handoff().canonical_bytes()
+            let payload: &[u8] = match profile {
+                0 => fixture.binding.compiler_handoff().canonical_bytes(),
+                1 => fixture.binding.canonical_bytes(),
+                _ => custodian.canonical_bytes(),
             };
             send(&sender, payload, &rights[..count]);
             // A valid packet behind an invalid packet must never rescue the admission.
             send(&sender, fixture.binding.canonical_bytes(), &rights);
             let result = supervisor
                 .accept_profile_until::<false>(receiver, Instant::now() + Duration::from_secs(1));
-            match (application, count) {
-                (true, 4) => {
+            match (profile, count) {
+                (2, 4) => {
+                    let AcceptedHandoffV1::CustodianApplication(accepted) = result.unwrap() else {
+                        panic!("downgraded custodian application")
+                    };
+                    assert_eq!(accepted.binding(), &fixture.binding);
+                    assert!(
+                        supervisor
+                            .prepare_custodian_application_launch(
+                                *accepted,
+                                Instant::now() + Duration::from_secs(1)
+                            )
+                            .is_err()
+                    );
+                }
+                (1, 4) => {
                     let AcceptedHandoffV1::Application(accepted) = result.unwrap() else {
                         panic!("downgraded application")
                     };
@@ -173,7 +188,7 @@ fn atomic_dispatch_accepts_only_exact_profile_pairs_and_cannot_skip_bad_packets(
                             .is_err()
                     );
                 }
-                (false, 2) => assert!(matches!(result.unwrap(), AcceptedHandoffV1::Compiler(_))),
+                (0, 2) => assert!(matches!(result.unwrap(), AcceptedHandoffV1::Compiler(_))),
                 _ => assert!(matches!(
                     result,
                     Err(ProtectedIssuerSessionErrorV1::Handoff(
@@ -183,223 +198,318 @@ fn atomic_dispatch_accepts_only_exact_profile_pairs_and_cannot_skip_bad_packets(
             }
         }
     }
+    for mutation in 0..18 {
+        let (sender, receiver) = seqpacket_pair();
+        let mut payload = custodian.canonical_bytes().to_vec();
+        match mutation {
+            0..16 => payload[mutation] ^= 1,
+            16 => {
+                payload.pop();
+            }
+            _ => payload.push(0),
+        }
+        send(&sender, &payload, &rights);
+        send(&sender, custodian.canonical_bytes(), &rights);
+        assert!(
+            supervisor
+                .accept_profile_until::<false>(receiver, Instant::now() + Duration::from_secs(1))
+                .is_err()
+        );
+    }
+    // The legacy receiver must never reinterpret the custodian profile.
+    let (sender, receiver) = seqpacket_pair();
+    send(&sender, custodian.canonical_bytes(), &rights);
+    assert!(
+        supervisor
+            .accept_application_handoff_inner::<false>(receiver, Duration::from_secs(1))
+            .is_err()
+    );
+    let (sender, receiver) = seqpacket_pair();
+    send(&sender, fixture.binding.canonical_bytes(), &rights);
+    assert!(
+        supervisor
+            .accept_custodian_application_handoff_inner::<false>(receiver, Duration::from_secs(1))
+            .is_err()
+    );
+    let (sender, receiver) = seqpacket_pair();
+    send(&sender, custodian.canonical_bytes(), &rights);
+    let accepted = supervisor
+        .accept_custodian_application_handoff_inner::<false>(receiver, Duration::from_secs(1))
+        .unwrap();
+    accepted.revalidate(&supervisor).unwrap();
+    assert_eq!(accepted.binding(), &fixture.binding);
 }
 
 #[test]
 fn public_application_publication_joins_gate_and_issuer_and_cleans_up_failures() {
-    use fe2o3_broker_authority_service::RegisteredApplicationObserverV1;
+    use crate::application_route::RegisteredApplicationRouteV1;
+    use fe2o3_broker_authority_service::{
+        RegisteredApplicationObserverV1, RegisteredCustodianApplicationObserverV1,
+    };
     let image = Fixture::with_code("application-publication", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&image) else {
         return;
     };
-    for scenario in [
-        "positive",
-        "issuer_exit_after_publication",
-        "wrong",
-        "short",
-        "trailing",
-        "missing_eof",
-        "timeout",
-        "original_deadline",
-        "closed_control",
-        "publication_closed",
-        "root_endpoint_closed",
-        "issuer_exit",
-        "cancel",
-    ] {
-        // This is a publication/custody fixture, not authenticated root registration or deployment.
-        let app = application_fixture(&supervisor, &image);
-        let (sender, receiver) = seqpacket_pair();
-        send(
-            &sender,
-            app.binding.compiler_handoff().canonical_bytes(),
-            &app.rights[..2].iter().map(AsFd::as_fd).collect::<Vec<_>>(),
-        );
-        let accepted = supervisor
-            .accept_handoff_inner::<false>(receiver, Duration::from_secs(1))
+    for custodian in [false, true] {
+        for scenario in [
+            "positive",
+            "issuer_exit_after_publication",
+            "wrong",
+            "short",
+            "trailing",
+            "missing_eof",
+            "timeout",
+            "original_deadline",
+            "closed_control",
+            "publication_closed",
+            "root_endpoint_closed",
+            "issuer_exit",
+            "cancel",
+        ] {
+            // This is a publication/custody fixture, not authenticated root registration or deployment.
+            let app = application_fixture(&supervisor, &image);
+            let (sender, receiver) = seqpacket_pair();
+            send(
+                &sender,
+                app.binding.compiler_handoff().canonical_bytes(),
+                &app.rights[..2].iter().map(AsFd::as_fd).collect::<Vec<_>>(),
+            );
+            let accepted = supervisor
+                .accept_handoff_inner::<false>(receiver, Duration::from_secs(1))
+                .unwrap();
+            let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
+            let writer = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+            let launched = supervisor
+                .launch_inner::<false>(prepared, Duration::from_secs(2))
+                .unwrap();
+            let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+            read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
+            let readiness = CompilerExecutionServiceReadyV1::new(
+                launched.pid(),
+                app.binding.compiler_handoff().launch_manifest(),
+                supervisor.policy(),
+            )
             .unwrap();
-        let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
-        let writer = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
-        let launched = supervisor
-            .launch_inner::<false>(prepared, Duration::from_secs(2))
-            .unwrap();
-        let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
-        read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
-        let readiness = CompilerExecutionServiceReadyV1::new(
-            launched.pid(),
-            app.binding.compiler_handoff().launch_manifest(),
-            supervisor.policy(),
-        )
-        .unwrap();
-        rustix::io::write(&writer, readiness.canonical_bytes()).unwrap();
-        drop(writer);
-        let ready = launched.await_readiness(Duration::from_secs(1)).unwrap();
-        let (registration, root_peer, gate_writer, record, publication_reader) =
-            RegisteredApplicationObserverV1::local_fixture_for_test(app.binding.clone()).unwrap();
-        let mut publication_reader = if scenario == "publication_closed" {
-            drop(publication_reader);
-            None
-        } else {
-            Some(publication_reader)
-        };
-        let deadline = if scenario == "original_deadline" {
-            Instant::now()
-        } else {
-            Instant::now() + Duration::from_secs(1)
-        };
-        let ready = ready.with_application_for_test(registration, deadline);
-        let mut bytes = record.to_vec();
-        match scenario {
-            "wrong" => bytes[8] ^= 1,
-            "short" => {
-                bytes.pop();
-            }
-            "trailing" => bytes.push(0),
-            _ => {}
-        }
-        if !matches!(scenario, "timeout" | "cancel") {
-            rustix::io::write(&gate_writer, &bytes).unwrap();
-        }
-        let gate_writer = if matches!(scenario, "timeout" | "missing_eof" | "cancel") {
-            Some(gate_writer)
-        } else {
-            drop(gate_writer);
-            None
-        };
-        let root_peer = if scenario == "root_endpoint_closed" {
-            drop(root_peer);
-            None
-        } else {
-            Some(root_peer)
-        };
-        let sender = if scenario == "closed_control" {
-            drop(sender);
-            None
-        } else {
-            Some(sender)
-        };
-        if scenario == "issuer_exit" {
-            rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
-            let stop = Instant::now() + Duration::from_secs(1);
-            while ready.revalidate().is_ok() {
-                assert!(Instant::now() < stop);
-                std::thread::yield_now();
-            }
-        }
-        let fast_exit = if scenario == "issuer_exit_after_publication" {
-            let reader = publication_reader.take().unwrap();
-            Some(std::thread::spawn(move || {
-                let mut expected = record;
-                expected[..8].copy_from_slice(b"F3APUB1\0");
-                read_exact_nonblocking(&reader, &expected);
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    match rustix::io::read(&reader, &mut [0_u8; 1]) {
-                        Ok(0) => break,
-                        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                            assert!(Instant::now() < deadline);
-                            std::thread::yield_now();
-                        }
-                        other => panic!("invalid publication EOF: {other:?}"),
-                    }
-                }
-                // Model immediate terminal issuer work while Cargo has not read readiness yet.
-                // Its original child owner remains unreaped, so this PID cannot be reused.
-                rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
-                loop {
-                    if rustix::process::waitid(
-                        rustix::process::WaitId::Pid(pid),
-                        rustix::process::WaitIdOptions::EXITED
-                            | rustix::process::WaitIdOptions::NOHANG
-                            | rustix::process::WaitIdOptions::NOWAIT,
+            rustix::io::write(&writer, readiness.canonical_bytes()).unwrap();
+            drop(writer);
+            let ready = launched.await_readiness(Duration::from_secs(1)).unwrap();
+            let (registration, root_peer, gate_writer, record, publication_reader) = if custodian {
+                let (registration, peer, writer, record, reader) =
+                    RegisteredCustodianApplicationObserverV1::local_fixture_for_test(
+                        app.binding.clone(),
                     )
-                    .unwrap()
-                    .is_some()
-                    {
-                        break;
-                    }
-                    assert!(Instant::now() < deadline);
+                    .unwrap();
+                (
+                    RegisteredApplicationRouteV1::Custodian(registration),
+                    peer,
+                    writer,
+                    record,
+                    reader,
+                )
+            } else {
+                let (registration, peer, writer, record, reader) =
+                    RegisteredApplicationObserverV1::local_fixture_for_test(app.binding.clone())
+                        .unwrap();
+                (
+                    RegisteredApplicationRouteV1::Legacy(registration),
+                    peer,
+                    writer,
+                    record,
+                    reader,
+                )
+            };
+            let mut publication_reader = if scenario == "publication_closed" {
+                drop(publication_reader);
+                None
+            } else {
+                Some(publication_reader)
+            };
+            let deadline = if scenario == "original_deadline" {
+                Instant::now()
+            } else {
+                Instant::now() + Duration::from_secs(1)
+            };
+            let ready = ready.with_application_for_test(registration, deadline);
+            let mut bytes = record.to_vec();
+            match scenario {
+                "wrong" => bytes[8] ^= 1,
+                "short" => {
+                    bytes.pop();
+                }
+                "trailing" => bytes.push(0),
+                _ => {}
+            }
+            if !matches!(scenario, "timeout" | "cancel") {
+                rustix::io::write(&gate_writer, &bytes).unwrap();
+            }
+            let gate_writer = if matches!(scenario, "timeout" | "missing_eof" | "cancel") {
+                Some(gate_writer)
+            } else {
+                drop(gate_writer);
+                None
+            };
+            let root_peer = if scenario == "root_endpoint_closed" {
+                drop(root_peer);
+                None
+            } else {
+                Some(root_peer)
+            };
+            let sender = if scenario == "closed_control" {
+                drop(sender);
+                None
+            } else {
+                Some(sender)
+            };
+            if scenario == "issuer_exit" {
+                rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
+                let stop = Instant::now() + Duration::from_secs(1);
+                while ready.revalidate().is_ok() {
+                    assert!(Instant::now() < stop);
                     std::thread::yield_now();
                 }
-            }))
-        } else {
-            None
-        };
-        if scenario == "cancel" {
-            ready.cancel().unwrap();
-        } else {
-            let result = ready.publish_readiness(Duration::from_millis(50));
-            if matches!(scenario, "positive" | "issuer_exit_after_publication") {
-                let serving = result.unwrap();
-                if let Some(fast_exit) = fast_exit {
-                    fast_exit.join().unwrap();
-                }
-                let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
-                let (count, _) =
-                    recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT).unwrap();
-                assert_eq!(count, bytes.len());
-                let record = WorkerV3ApplicationSupervisorReadyV1::decode(&bytes).unwrap();
-                assert!(record.matches_binding(&app.binding, supervisor.policy()));
-                assert_eq!(record.compiler_readiness(), &readiness);
-                serving.cancel().unwrap();
+            }
+            let fast_exit = if scenario == "issuer_exit_after_publication" {
+                let reader = publication_reader.take().unwrap();
+                Some(std::thread::spawn(move || {
+                    let mut expected = record;
+                    expected[..8].copy_from_slice(b"F3APUB1\0");
+                    read_exact_nonblocking(&reader, &expected);
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    loop {
+                        match rustix::io::read(&reader, &mut [0_u8; 1]) {
+                            Ok(0) => break,
+                            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                                assert!(Instant::now() < deadline);
+                                std::thread::yield_now();
+                            }
+                            other => panic!("invalid publication EOF: {other:?}"),
+                        }
+                    }
+                    // Model immediate terminal issuer work while Cargo has not read readiness yet.
+                    // Its original child owner remains unreaped, so this PID cannot be reused.
+                    rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
+                    loop {
+                        if rustix::process::waitid(
+                            rustix::process::WaitId::Pid(pid),
+                            rustix::process::WaitIdOptions::EXITED
+                                | rustix::process::WaitIdOptions::NOHANG
+                                | rustix::process::WaitIdOptions::NOWAIT,
+                        )
+                        .unwrap()
+                        .is_some()
+                        {
+                            break;
+                        }
+                        assert!(Instant::now() < deadline);
+                        std::thread::yield_now();
+                    }
+                }))
             } else {
-                assert!(result.is_err(), "accepted {scenario}");
-                if scenario == "publication_closed" {
-                    let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
+                None
+            };
+            if scenario == "cancel" {
+                ready.cancel().unwrap();
+            } else {
+                let result = ready.publish_readiness(Duration::from_millis(50));
+                if matches!(scenario, "positive" | "issuer_exit_after_publication") {
+                    let serving = result.unwrap();
+                    if let Some(fast_exit) = fast_exit {
+                        fast_exit.join().unwrap();
+                    }
+                    let mut bytes = vec![
+                        0;
+                        if custodian {
+                            WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1
+                        } else {
+                            WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1
+                        }
+                    ];
                     let (count, _) =
                         recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT).unwrap();
-                    assert_eq!(
-                        count,
-                        bytes.len(),
-                        "reverse publication must follow Cargo send"
-                    );
-                    assert!(
-                        WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
-                            .unwrap()
-                            .matches_binding(&app.binding, supervisor.policy())
-                    );
+                    assert_eq!(count, bytes.len());
+                    let record = decode_routed_readiness(&bytes, custodian);
+                    assert!(record.matches_binding(&app.binding, supervisor.policy()));
+                    assert_eq!(record.compiler_readiness(), &readiness);
+                    serving.cancel().unwrap();
+                } else {
+                    assert!(result.is_err(), "accepted {scenario}");
+                    if scenario == "publication_closed" {
+                        let mut bytes = vec![
+                            0;
+                            if custodian {
+                                WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1
+                            } else {
+                                WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1
+                            }
+                        ];
+                        let (count, _) =
+                            recv(sender.as_ref().unwrap(), &mut bytes, RecvFlags::DONTWAIT)
+                                .unwrap();
+                        assert_eq!(
+                            count,
+                            bytes.len(),
+                            "reverse publication must follow Cargo send"
+                        );
+                        assert!(
+                            decode_routed_readiness(&bytes, custodian)
+                                .matches_binding(&app.binding, supervisor.policy())
+                        );
+                    }
                 }
             }
-        }
-        if let Some(reader) = publication_reader {
-            let mut bytes = [0; 73];
-            let count = rustix::io::read(&reader, &mut bytes).unwrap();
-            if scenario == "positive" {
-                assert_eq!(count, 72);
-                assert_eq!(&bytes[..8], b"F3APUB1\0");
-                assert_eq!(&bytes[8..72], &record[8..]);
-                assert_eq!(rustix::io::read(&reader, &mut bytes).unwrap(), 0);
-            } else {
-                assert_eq!(count, 0, "unexpected app release for {scenario}");
-            }
-        }
-        if let Some(sender) = sender {
-            let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
-            assert_eq!(
-                recv(&sender, &mut bytes, RecvFlags::DONTWAIT).unwrap().0,
-                0,
-                "unexpected publication for {scenario}"
-            );
-        }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            // WNOWAIT leaves reaping to the exact process owner, including its deferred reaper.
-            match rustix::process::waitid(
-                rustix::process::WaitId::Pid(pid),
-                rustix::process::WaitIdOptions::EXITED
-                    | rustix::process::WaitIdOptions::NOHANG
-                    | rustix::process::WaitIdOptions::NOWAIT,
-            ) {
-                Err(rustix::io::Errno::CHILD) => break,
-                Ok(_) => {
-                    assert!(Instant::now() < deadline, "unreaped {scenario}");
-                    std::thread::sleep(Duration::from_millis(1));
+            if let Some(reader) = publication_reader {
+                let mut bytes = [0; 73];
+                let count = rustix::io::read(&reader, &mut bytes).unwrap();
+                if scenario == "positive" {
+                    assert_eq!(count, 72);
+                    assert_eq!(&bytes[..8], b"F3APUB1\0");
+                    assert_eq!(&bytes[8..72], &record[8..]);
+                    assert_eq!(rustix::io::read(&reader, &mut bytes).unwrap(), 0);
+                } else {
+                    assert_eq!(count, 0, "unexpected app release for {scenario}");
                 }
-                Err(error) => panic!("{scenario}: {error}"),
             }
+            if let Some(sender) = sender {
+                let mut bytes = [0; WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1];
+                assert_eq!(
+                    recv(&sender, &mut bytes, RecvFlags::DONTWAIT).unwrap().0,
+                    0,
+                    "unexpected publication for {scenario}"
+                );
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                // WNOWAIT leaves reaping to the exact process owner, including its deferred reaper.
+                match rustix::process::waitid(
+                    rustix::process::WaitId::Pid(pid),
+                    rustix::process::WaitIdOptions::EXITED
+                        | rustix::process::WaitIdOptions::NOHANG
+                        | rustix::process::WaitIdOptions::NOWAIT,
+                ) {
+                    Err(rustix::io::Errno::CHILD) => break,
+                    Ok(_) => {
+                        assert!(Instant::now() < deadline, "unreaped {scenario}");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("{scenario}: {error}"),
+                }
+            }
+            assert_reaped(pid);
+            drop((gate_writer, root_peer));
         }
-        assert_reaped(pid);
-        drop((gate_writer, root_peer));
+    }
+}
+
+fn decode_routed_readiness(bytes: &[u8], custodian: bool) -> WorkerV3ApplicationSupervisorReadyV1 {
+    if custodian {
+        assert!(WorkerV3ApplicationSupervisorReadyV1::decode(bytes).is_err());
+        WorkerV3ApplicationCustodianSupervisorReadyV1::decode(bytes)
+            .unwrap()
+            .application_readiness()
+            .clone()
+    } else {
+        assert!(WorkerV3ApplicationCustodianSupervisorReadyV1::decode(bytes).is_err());
+        WorkerV3ApplicationSupervisorReadyV1::decode(bytes).unwrap()
     }
 }
 

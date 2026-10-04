@@ -28,6 +28,12 @@ const IDENTITY_OFFSET: usize = CHALLENGE_OFFSET + WORKER_V3_APPLICATION_HANDOFF_
 const OCCURRENCE_BUDGET: WorkerV3ApplicationHandoffCodecBudgetV1 =
     WorkerV3ApplicationHandoffCodecBudgetV1::new(FOUR_INPUT_OCCURRENCE_BYTES, 1024, 4);
 
+mod custodian;
+pub use custodian::{
+    WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1,
+    WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1, WorkerV3ApplicationCustodianHandoffV1,
+    WorkerV3ApplicationCustodianRouteErrorV1, WorkerV3ApplicationCustodianSupervisorReadyV1,
+};
 mod ready;
 pub use ready::{
     WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationSupervisorReadyErrorV1,

@@ -43,6 +43,7 @@ pub use supervisor_handoff::{
     ApplicationSupervisorHandoffErrorV1, CompilerExecutionHandoffErrorV1,
     CompilerExecutionSupervisorCredentialsV1, MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1,
     PendingApplicationSupervisorV1, PendingCompilerExecutionSupervisorV1,
+    PendingCustodianApplicationSupervisorV1,
 };
 
 /// Move-only caller-owned challenge for one terminal current-record verification.

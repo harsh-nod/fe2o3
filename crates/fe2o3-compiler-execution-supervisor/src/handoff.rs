@@ -24,7 +24,10 @@ use rustix::net::{
 use crate::{ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1};
 
 mod application;
-pub use application::{AcceptedApplicationHandoffV1, ProtectedApplicationHandoffErrorV1};
+pub use application::{
+    AcceptedApplicationHandoffV1, AcceptedCustodianApplicationHandoffV1,
+    ProtectedApplicationHandoffErrorV1,
+};
 
 /// Move-only, fully admitted rustc descriptors and their authenticated control connection.
 ///
@@ -249,11 +252,17 @@ fn receive_handoff(
 > {
     match receive_profile(control, deadline)? {
         ReceivedHandoffV1::Compiler(bytes, [peer, pidfd]) => Ok((bytes, peer, pidfd)),
-        ReceivedHandoffV1::Application(..) => Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer),
+        ReceivedHandoffV1::Application(..) | ReceivedHandoffV1::CustodianApplication(..) => {
+            Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
+        }
     }
 }
 
 enum ReceivedHandoffV1 {
+    CustodianApplication(
+        Box<[u8; fe2o3_runtime_protocol::WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1]>,
+        [OwnedFd; 4],
+    ),
     Compiler(
         [u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1],
         [OwnedFd; 2],
@@ -265,6 +274,7 @@ enum ReceivedHandoffV1 {
 }
 
 pub(crate) enum AcceptedHandoffV1 {
+    CustodianApplication(Box<AcceptedCustodianApplicationHandoffV1>),
     Compiler(Box<AcceptedCompilerExecutionHandoffV1>),
     Application(Box<AcceptedApplicationHandoffV1>),
 }
@@ -291,6 +301,20 @@ impl ProtectedIssuerSupervisorV1 {
         };
         let (snapshot, packet) = receive().map_err(E::Handoff)?;
         match packet {
+            ReceivedHandoffV1::CustodianApplication(bytes, rights) => {
+                let handoff =
+                    fe2o3_runtime_protocol::WorkerV3ApplicationCustodianHandoffV1::decode(&*bytes)
+                        .map_err(|e| {
+                            E::ApplicationHandoff(
+                                ProtectedApplicationHandoffErrorV1::CustodianRoute(e),
+                            )
+                        })?;
+                self.admit_received_custodian_application::<REQUIRE_DISTINCT_UID>(
+                    control, handoff, rights, snapshot, deadline,
+                )
+                .map(|accepted| AcceptedHandoffV1::CustodianApplication(Box::new(accepted)))
+                .map_err(E::ApplicationHandoff)
+            }
             ReceivedHandoffV1::Compiler(bytes, [peer, pidfd]) => {
                 let handoff = CompilerExecutionSupervisorHandoffV1::decode(&bytes)
                     .map_err(|e| E::Handoff(ProtectedIssuerHandoffErrorV1::CanonicalHandoff(e)))?;
@@ -323,10 +347,11 @@ fn receive_profile(
     control: &OwnedFd,
     deadline: Instant,
 ) -> Result<ReceivedHandoffV1, ProtectedIssuerHandoffErrorV1> {
+    use fe2o3_runtime_protocol::WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1 as CUSTODIAN_BYTES;
     use fe2o3_runtime_protocol::WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1 as APP_BYTES;
     loop {
         wait_readable(control, deadline)?;
-        let mut payload = [0; APP_BYTES];
+        let mut payload = [0; CUSTODIAN_BYTES];
         let mut vectors = [IoSliceMut::new(&mut payload)];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(5))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
@@ -366,6 +391,10 @@ fn receive_profile(
                 rights.try_into().unwrap(),
             )),
             (APP_BYTES, 4) => Ok(ReceivedHandoffV1::Application(
+                Box::new(payload[..APP_BYTES].try_into().unwrap()),
+                rights.try_into().unwrap(),
+            )),
+            (CUSTODIAN_BYTES, 4) => Ok(ReceivedHandoffV1::CustodianApplication(
                 Box::new(payload),
                 rights.try_into().unwrap(),
             )),

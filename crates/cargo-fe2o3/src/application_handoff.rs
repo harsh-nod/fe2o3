@@ -46,6 +46,7 @@ use crate::generation;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
+pub(crate) const RUNNER_CUSTODIAN_CONTEXT_VERSION: &str = "4";
 #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
 #[cfg(feature = "application-handoff-fault-injection-test-only")]
@@ -77,6 +78,7 @@ const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApplicationCompilerServiceExposureV1 {
     Required,
+    CustodianRequired,
     #[cfg(any(
         test,
         feature = "application-handoff-adversarial-fixture",
@@ -87,12 +89,14 @@ pub(crate) enum ApplicationCompilerServiceExposureV1 {
 
 impl ApplicationCompilerServiceExposureV1 {
     pub(crate) const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
+        matches!(self, Self::Required | Self::CustodianRequired)
     }
 
     const fn descriptor(self) -> Option<RawFd> {
         match self {
-            Self::Required => Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1),
+            Self::Required | Self::CustodianRequired => {
+                Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1)
+            }
             #[cfg(any(
                 test,
                 feature = "application-handoff-adversarial-fixture",
@@ -868,7 +872,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                         .map_err(|error| format!("failed to encode V3 challenge: {error}"))?,
                 ),
             );
-        let custody = ApplicationHandoffCustodyV1::prepare(
+        let custody = ApplicationHandoffCustodyV1::prepare_with_service(
             ApplicationHandoffExpectationV1 {
                 occurrence,
                 descriptors: [envelope_fd, artifact_directory_fd, ack_fd],
@@ -877,6 +881,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 challenge,
             },
             Some(proof),
+            compiler_service,
         );
         let timeouts = timeouts.for_worker_v3();
         let directory_device = directory_stat.st_dev;
@@ -1164,6 +1169,7 @@ struct ApplicationHandoffCustodyV1 {
     child: Option<RetainedCompilerExecutionChildV1>,
     protocol: ApplicationHandoffExpectationV1,
     proof: ApplicationProofCustodyV1,
+    compiler_service: ApplicationCompilerServiceExposureV1,
 }
 
 // The enclosing custody box is allocated once before spawn; keep every state inline.
@@ -1176,11 +1182,25 @@ enum ApplicationProofCustodyV1 {
 }
 
 impl ApplicationHandoffCustodyV1 {
+    #[cfg(test)]
     fn prepare(
         protocol: ApplicationHandoffExpectationV1,
         prepared_proof: Option<PreparedApplicationProofChannelV1>,
     ) -> Box<Self> {
+        Self::prepare_with_service(
+            protocol,
+            prepared_proof,
+            ApplicationCompilerServiceExposureV1::Required,
+        )
+    }
+
+    fn prepare_with_service(
+        protocol: ApplicationHandoffExpectationV1,
+        prepared_proof: Option<PreparedApplicationProofChannelV1>,
+        compiler_service: ApplicationCompilerServiceExposureV1,
+    ) -> Box<Self> {
         Box::new(Self {
+            compiler_service,
             child: None,
             protocol,
             proof: match prepared_proof {
@@ -1344,6 +1364,7 @@ impl SpawnedApplicationAck {
         (
             ApplicationProofTransferPeerV1,
             WorkerV3ApplicationRegistrationInputsV1,
+            ApplicationCompilerServiceExposureV1,
         ),
         String,
     > {
@@ -1370,7 +1391,7 @@ impl SpawnedApplicationAck {
         else {
             unreachable!("validated retained proof custody")
         };
-        Ok((proof, inputs))
+        Ok((proof, inputs, custody.compiler_service))
     }
 
     pub(crate) fn retained_child(&self) -> &RetainedCompilerExecutionChildV1 {

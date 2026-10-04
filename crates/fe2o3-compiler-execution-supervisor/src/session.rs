@@ -185,6 +185,8 @@ impl ProtectedIssuerSupervisorV1 {
         let accepted =
             self.accept_profile_until::<PRODUCTION>(control, start + timeouts.handoff())?;
         let prepared = match accepted {
+            crate::handoff::AcceptedHandoffV1::CustodianApplication(accepted) => self
+                .prepare_custodian_application_launch(*accepted, start + MAX_BOUNDARY_TIMEOUT_V1),
             crate::handoff::AcceptedHandoffV1::Compiler(accepted) => {
                 self.prepare_launch_inner::<PRODUCTION>(*accepted)
             }

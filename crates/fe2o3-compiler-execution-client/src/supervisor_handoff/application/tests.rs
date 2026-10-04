@@ -157,107 +157,125 @@ fn application_readiness_requires_exact_packet_binding_and_real_eof() {
         policy(),
     )
     .unwrap();
-    for scenario in [
-        "positive",
-        "ordinary",
-        "short",
-        "extended",
-        "rights",
-        "second",
-        "empty_open",
-        "empty_closed",
-        "empty_rights",
-        "no_eof",
-        "binding",
-        "expired",
-        "original_deadline",
-    ] {
-        let (control, sender) = pair();
-        let deadline = Instant::now() + Duration::from_millis(50);
-        let pending = PendingApplicationSupervisorV1 {
-            control,
-            binding: binding.clone(),
-            expected: expected(),
-            deadline: if scenario == "original_deadline" {
-                Instant::now()
-            } else {
-                deadline
-            },
-        };
-        let mut payload = ready.canonical_bytes().to_vec();
-        match scenario {
-            "ordinary" => payload = compiler.canonical_bytes().to_vec(),
-            "short" => {
-                payload.pop();
+    for custodian in [false, true] {
+        for scenario in [
+            "positive",
+            "opposite_route",
+            "ordinary",
+            "short",
+            "extended",
+            "rights",
+            "second",
+            "empty_open",
+            "empty_closed",
+            "empty_rights",
+            "no_eof",
+            "binding",
+            "expired",
+            "original_deadline",
+        ] {
+            let (control, sender) = pair();
+            let deadline = Instant::now() + Duration::from_millis(50);
+            let pending = PendingApplicationSupervisorV1 {
+                control,
+                binding: binding.clone(),
+                expected: expected(),
+                deadline: if scenario == "original_deadline" {
+                    Instant::now()
+                } else {
+                    deadline
+                },
+            };
+            let mut payload = ready.canonical_bytes().to_vec();
+            match scenario {
+                "ordinary" => payload = compiler.canonical_bytes().to_vec(),
+                "short" => {
+                    payload.pop();
+                }
+                "extended" => payload.push(0),
+                "binding" => {
+                    let changed = WorkerV3ApplicationRegistrationBindingV1::new(
+                        binding.compiler_handoff().clone(),
+                        binding.occurrence().clone(),
+                        binding.descriptors(),
+                        binding.expectation(),
+                        WorkerV3ApplicationHandoffChallengeV1::from_bytes([88; 32]).unwrap(),
+                    )
+                    .unwrap();
+                    payload = WorkerV3ApplicationSupervisorReadyV1::new(&changed, compiler.clone())
+                        .unwrap()
+                        .canonical_bytes()
+                        .to_vec();
+                }
+                _ => {}
             }
-            "extended" => payload.push(0),
-            "binding" => {
-                let changed = WorkerV3ApplicationRegistrationBindingV1::new(
-                    binding.compiler_handoff().clone(),
-                    binding.occurrence().clone(),
-                    binding.descriptors(),
-                    binding.expectation(),
-                    WorkerV3ApplicationHandoffChallengeV1::from_bytes([88; 32]).unwrap(),
-                )
-                .unwrap();
-                payload = WorkerV3ApplicationSupervisorReadyV1::new(&changed, compiler.clone())
-                    .unwrap()
+            if custodian && scenario != "opposite_route" {
+                let mut framed = WorkerV3ApplicationCustodianSupervisorReadyV1::new(ready.clone())
+                    .canonical_bytes()[..16]
+                    .to_vec();
+                framed.extend_from_slice(&payload);
+                payload = framed;
+            } else if !custodian && scenario == "opposite_route" {
+                payload = WorkerV3ApplicationCustodianSupervisorReadyV1::new(ready.clone())
                     .canonical_bytes()
                     .to_vec();
             }
-            _ => {}
-        }
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut ancillary = SendAncillaryBuffer::new(&mut space);
-        let rights = [sender.as_fd()];
-        if scenario == "rights" {
-            assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
-        }
-        sendmsg(
-            &sender,
-            &[IoSlice::new(&payload)],
-            &mut ancillary,
-            SendFlags::NOSIGNAL,
-        )
-        .unwrap();
-        if matches!(
-            scenario,
-            "second" | "empty_open" | "empty_closed" | "empty_rights"
-        ) {
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
             let mut ancillary = SendAncillaryBuffer::new(&mut space);
-            if scenario == "empty_rights" {
+            let rights = [sender.as_fd()];
+            if scenario == "rights" {
                 assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
             }
-            let trailing: &[u8] = if scenario == "second" { &payload } else { &[] };
             sendmsg(
                 &sender,
-                &[IoSlice::new(trailing)],
+                &[IoSlice::new(&payload)],
                 &mut ancillary,
                 SendFlags::NOSIGNAL,
             )
             .unwrap();
-        }
-        let retained_sender = if matches!(scenario, "no_eof" | "empty_open") {
-            Some(sender)
-        } else {
-            drop(sender);
-            None
-        };
-        let result = pending.await_readiness_until(
-            &profile,
-            if scenario == "expired" {
+            if matches!(
+                scenario,
+                "second" | "empty_open" | "empty_closed" | "empty_rights"
+            ) {
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+                let mut ancillary = SendAncillaryBuffer::new(&mut space);
+                if scenario == "empty_rights" {
+                    assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
+                }
+                let trailing: &[u8] = if scenario == "second" { &payload } else { &[] };
+                sendmsg(
+                    &sender,
+                    &[IoSlice::new(trailing)],
+                    &mut ancillary,
+                    SendFlags::NOSIGNAL,
+                )
+                .unwrap();
+            }
+            let retained_sender = if matches!(scenario, "no_eof" | "empty_open") {
+                Some(sender)
+            } else {
+                drop(sender);
+                None
+            };
+            let requested_deadline = if scenario == "expired" {
                 Instant::now()
             } else {
                 deadline
-            },
-        );
-        if scenario == "positive" {
-            assert_eq!(result.unwrap(), ready);
-        } else {
-            assert!(result.is_err(), "accepted {scenario}");
+            };
+            let result = if custodian {
+                PendingCustodianApplicationSupervisorV1 { inner: pending }
+                    .await_readiness_until(&profile, requested_deadline)
+                    .map(|ready| ready.application_readiness().clone())
+            } else {
+                pending.await_readiness_until(&profile, requested_deadline)
+            };
+            if scenario == "positive" {
+                assert_eq!(result.unwrap(), ready);
+            } else {
+                assert!(result.is_err(), "accepted {scenario}");
+            }
+            drop(retained_sender);
         }
-        drop(retained_sender);
     }
     // The shared ordinary receiver must also reject the dedicated application's larger packet.
     let (control, sender) = pair();
@@ -277,75 +295,98 @@ fn application_readiness_requires_exact_packet_binding_and_real_eof() {
 #[test]
 fn application_transfer_sends_exact_binding_and_four_original_rights_without_reopening() {
     let _lock = RESERVED_CHILD_FD_LOCK.lock().unwrap();
-    let Fixture {
-        child,
-        retained,
-        launch,
-        proof,
-        binding,
-    } = fixture();
-    let before = PIDFD_OPEN_CALLS.get();
-    let (control, receiver) = pair();
-    let pending = transfer(
-        launch,
-        proof,
-        binding.clone(),
-        control,
-        expected(),
-        anchor(),
-        &policy(),
-        Instant::now() + Duration::from_secs(2),
-    )
-    .unwrap();
-    assert_eq!(PIDFD_OPEN_CALLS.get(), before);
-    assert_eq!(pending.binding(), &binding);
-    let mut payload = [0; WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1];
-    let mut vectors = [IoSliceMut::new(&mut payload)];
-    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(5))];
-    let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-    let received = recvmsg(
-        &receiver,
-        &mut vectors,
-        &mut ancillary,
-        RecvFlags::CMSG_CLOEXEC,
-    )
-    .unwrap();
-    assert_eq!(received.bytes, 840);
-    assert!(
-        !received
-            .flags
-            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-    );
-    let mut rights = Vec::new();
-    for message in ancillary.drain() {
-        match message {
-            RecvAncillaryMessage::ScmRights(fds) => rights.extend(fds),
-            _ => panic!("unexpected ancillary"),
-        }
-    }
-    assert_eq!(payload, *binding.canonical_bytes());
-    assert_eq!(rights.len(), 4);
-    for fd in &rights {
+    for custodian in [false, true] {
+        let Fixture {
+            child,
+            retained,
+            launch,
+            proof,
+            binding,
+        } = fixture();
+        let before = PIDFD_OPEN_CALLS.get();
+        let (control, receiver) = pair();
+        let transfer = if custodian {
+            transfer::<true>
+        } else {
+            transfer::<false>
+        };
+        let pending = transfer(
+            launch,
+            proof,
+            binding.clone(),
+            control,
+            expected(),
+            anchor(),
+            &policy(),
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(PIDFD_OPEN_CALLS.get(), before);
+        assert_eq!(pending.binding(), &binding);
+        let mut payload = [0; WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1];
+        let mut vectors = [IoSliceMut::new(&mut payload)];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(5))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        let received = recvmsg(
+            &receiver,
+            &mut vectors,
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC,
+        )
+        .unwrap();
         assert_eq!(
-            rustix::io::fcntl_getfd(fd).unwrap(),
-            rustix::io::FdFlags::CLOEXEC
+            received.bytes,
+            if custodian {
+                WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1
+            } else {
+                WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1
+            }
         );
+        assert!(
+            !received
+                .flags
+                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+        );
+        let mut rights = Vec::new();
+        for message in ancillary.drain() {
+            match message {
+                RecvAncillaryMessage::ScmRights(fds) => rights.extend(fds),
+                _ => panic!("unexpected ancillary"),
+            }
+        }
+        if custodian {
+            assert_eq!(
+                WorkerV3ApplicationCustodianHandoffV1::decode(&payload[..received.bytes])
+                    .unwrap()
+                    .binding(),
+                &binding
+            );
+        } else {
+            assert_eq!(&payload[..received.bytes], binding.canonical_bytes());
+        }
+        assert_eq!(rights.len(), 4);
+        for fd in &rights {
+            assert_eq!(
+                rustix::io::fcntl_getfd(fd).unwrap(),
+                rustix::io::FdFlags::CLOEXEC
+            );
+        }
+        assert_eq!(
+            rustix::net::sockopt::socket_peercred(&rights[0])
+                .unwrap()
+                .pid
+                .as_raw_pid() as u32,
+            child.0.id()
+        );
+        for (index, pid) in [(1, child.0.id()), (3, std::process::id())] {
+            let info =
+                std::fs::read_to_string(format!("/proc/self/fdinfo/{}", rights[index].as_raw_fd()))
+                    .unwrap();
+            assert!(info.lines().any(|line| line == format!("Pid:\t{pid}")));
+        }
+        assert!(rustix::net::sockopt::socket_passcred(&rights[2]).unwrap());
+        retained.validate_custody().unwrap();
     }
-    assert_eq!(
-        rustix::net::sockopt::socket_peercred(&rights[0])
-            .unwrap()
-            .pid
-            .as_raw_pid() as u32,
-        child.0.id()
-    );
-    for (index, pid) in [(1, child.0.id()), (3, std::process::id())] {
-        let info =
-            std::fs::read_to_string(format!("/proc/self/fdinfo/{}", rights[index].as_raw_fd()))
-                .unwrap();
-        assert!(info.lines().any(|line| line == format!("Pid:\t{pid}")));
-    }
-    assert!(rustix::net::sockopt::socket_passcred(&rights[2]).unwrap());
-    retained.validate_custody().unwrap();
 }
 
 #[test]
@@ -389,7 +430,7 @@ fn application_transfer_rejects_foreign_pair_changed_binding_and_closed_control(
         } else {
             Instant::now() + Duration::from_secs(1)
         };
-        let result = transfer(
+        let result = transfer::<false>(
             launch,
             proof,
             binding,
@@ -419,7 +460,7 @@ fn exited_original_application_cannot_be_transferred() {
     child.0.wait().unwrap();
     let (control, _receiver) = pair();
     assert!(
-        transfer(
+        transfer::<false>(
             launch,
             proof,
             binding,

@@ -1040,11 +1040,43 @@ fn cargo_with_protected_release(
     }
 }
 
+fn parse_application_proof_route(
+    command: &str,
+    args: &[OsString],
+) -> Result<
+    (
+        Vec<OsString>,
+        application_handoff::ApplicationCompilerServiceExposureV1,
+    ),
+    String,
+> {
+    use application_handoff::ApplicationCompilerServiceExposureV1 as Service;
+    let mut service = Service::Required;
+    let mut forwarded = Vec::with_capacity(args.len());
+    let mut application_args = false;
+    for argument in args {
+        if !application_args && argument == "--application-proof-custodian" {
+            if command != "run" || service == Service::CustodianRequired {
+                return Err(
+                    "--application-proof-custodian requires run and may appear only once".into(),
+                );
+            }
+            service = Service::CustodianRequired;
+        } else {
+            application_args |= argument == "--";
+            forwarded.push(argument.clone());
+        }
+    }
+    Ok((forwarded, service))
+}
+
 fn cargo_with_backend_result(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
 ) -> Result<(), String> {
+    let (forwarded_args, compiler_service) = parse_application_proof_route(command, args)?;
+    let args = forwarded_args.as_slice();
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
     validate_production_compilation_environment(
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
@@ -1174,7 +1206,13 @@ fn cargo_with_backend_result(
         authorized_closure,
     };
     let mut context = BackendRunContext::prepare(preparation, args)?;
-    run_cargo_with_backend(&mut context, command, args, protected_release)
+    run_cargo_with_backend(
+        &mut context,
+        command,
+        args,
+        protected_release,
+        compiler_service,
+    )
 }
 
 fn validate_production_compilation_environment(
@@ -1504,8 +1542,9 @@ fn run_cargo_with_backend(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<(), String> {
-    run_cargo_with_backend_inner(context, command, args, protected_release)
+    run_cargo_with_backend_inner(context, command, args, protected_release, compiler_service)
 }
 
 fn run_cargo_with_backend_inner(
@@ -1513,6 +1552,7 @@ fn run_cargo_with_backend_inner(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
@@ -1785,6 +1825,7 @@ fn run_cargo_with_backend_inner(
             &context.pinned_rustc,
             context.generation.artifact_dir(),
             production_plan.host_mut().args_mut(),
+            compiler_service,
         )?;
     }
     run_production_host_cargo(context, production_plan.host(), protected_release)?;
@@ -2245,6 +2286,7 @@ fn inject_production_application_runner(
     pinned_rustc: &PinnedRustc,
     artifact_dir: &project::PinnedDirectory,
     args: &mut Vec<OsString>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<(), String> {
     let (target, original_runner) =
         resolve_application_runner(project, pinned_cargo, pinned_rustc, args, true)?;
@@ -2262,7 +2304,23 @@ fn inject_production_application_runner(
         vec![
             executable,
             INTERNAL_RUNNER_ARG.to_string(),
-            application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
+            match compiler_service {
+                application_handoff::ApplicationCompilerServiceExposureV1::CustodianRequired => {
+                    application_handoff::RUNNER_CUSTODIAN_CONTEXT_VERSION
+                }
+                application_handoff::ApplicationCompilerServiceExposureV1::Required => {
+                    application_handoff::RUNNER_CONTEXT_VERSION
+                }
+                #[cfg(any(
+                    test,
+                    feature = "application-handoff-adversarial-fixture",
+                    feature = "application-handoff-fault-injection-test-only"
+                ))]
+                application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled => {
+                    return Err("production runner requires compiler service custody".into());
+                }
+            }
+            .to_string(),
             hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
             artifact_device.to_string(),
             artifact_inode.to_string(),
@@ -2667,6 +2725,10 @@ fn application_runner_policy(
     String,
 > {
     match context.to_str() {
+        Some(application_handoff::RUNNER_CUSTODIAN_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::CustodianRequired,
+        )),
         Some(application_handoff::RUNNER_CONTEXT_VERSION) => Ok((
             application_handoff::ApplicationTimeouts::PRODUCTION,
             application_handoff::ApplicationCompilerServiceExposureV1::Required,
@@ -2754,18 +2816,19 @@ fn run_application_with_handoff(
     };
     let compiler_execution_readiness = match compiler_execution_boundary {
         Some(boundary) => {
-            match spawned_ack
-                .take_registration_transfer()
-                .and_then(|(proof, inputs)| {
+            match spawned_ack.take_registration_transfer().and_then(
+                |(proof, inputs, selected_service)| {
                     boundary
                         .finish_application(
                             spawned_ack.retained_child(),
                             proof,
                             inputs,
                             spawned_ack.deadline(),
+                            selected_service,
                         )
                         .map_err(|error| error.to_string())
-                }) {
+                },
+            ) {
                 Ok(readiness) => Some(readiness),
                 Err(error) => {
                     drop(handoff);
@@ -3819,6 +3882,62 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static OBSERVER_FINISH_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn application_custodian_selection_is_explicit_run_only_and_preserves_arguments() {
+        use crate::application_handoff::ApplicationCompilerServiceExposureV1 as Service;
+        use std::os::unix::ffi::OsStringExt;
+        let flag = OsString::from("--application-proof-custodian");
+        let binary = OsString::from_vec(vec![0xff, b'a']);
+        let arguments = vec![
+            flag.clone(),
+            "--bin".into(),
+            binary.clone(),
+            "--".into(),
+            flag.clone(),
+            flag.clone(),
+        ];
+        let (forwarded, service) = super::parse_application_proof_route("run", &arguments).unwrap();
+        assert_eq!(service, Service::CustodianRequired);
+        assert_eq!(forwarded, arguments[1..]);
+        assert!(
+            super::parse_application_proof_route("build", std::slice::from_ref(&flag)).is_err()
+        );
+        assert!(
+            super::parse_application_proof_route("run", &[flag.clone(), flag.clone()]).is_err()
+        );
+        assert_eq!(
+            super::parse_application_proof_route("run", &["--".into(), flag])
+                .unwrap()
+                .1,
+            Service::Required
+        );
+        assert_eq!(
+            super::parse_application_proof_route("run", &[binary])
+                .unwrap()
+                .1,
+            Service::Required
+        );
+        for (context, expected) in [
+            (
+                crate::application_handoff::RUNNER_CONTEXT_VERSION,
+                Service::Required,
+            ),
+            (
+                crate::application_handoff::RUNNER_CUSTODIAN_CONTEXT_VERSION,
+                Service::CustodianRequired,
+            ),
+        ] {
+            let (timeouts, actual) = application_runner_policy(OsStr::new(context)).unwrap();
+            assert_eq!(actual, expected);
+            assert!(actual.is_required());
+            assert_eq!(
+                timeouts,
+                crate::application_handoff::ApplicationTimeouts::PRODUCTION
+            );
+        }
+        assert!(application_runner_policy(OsStr::new("4-extra")).is_err());
+    }
 
     #[test]
     fn internal_short_timeout_runner_context_selects_short_policy() {

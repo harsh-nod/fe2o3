@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use fe2o3_broker_authority_service::{
     ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1, ProtectedServiceAdmissionErrorV1,
     RegisteredApplicationObserverV1, RegisteredCompilerObserverV1,
-    current_process_start_time_ticks_v1,
+    RegisteredCustodianApplicationObserverV1, current_process_start_time_ticks_v1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionServiceLaunchCapabilityV1;
 use fe2o3_compiler_execution_issuer::{
@@ -32,12 +32,13 @@ use fe2o3_static_preexec_manifest::{
 use rustix::fs::{FileType, MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::pipe::{PipeFlags, pipe_with};
 
+use crate::application_route::RegisteredApplicationRouteV1;
 use crate::authority::{ExternalAnchorLaunchClonesV1, observer_error};
 use crate::handoff::validate_service_peer;
 use crate::{
     AcceptedApplicationHandoffV1, AcceptedCompilerExecutionHandoffV1,
-    ProtectedApplicationHandoffErrorV1, ProtectedIssuerHandoffErrorV1,
-    ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
+    AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1,
+    ProtectedIssuerHandoffErrorV1, ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
 };
 
 const SOURCE_COUNT_V1: usize = 14;
@@ -128,6 +129,11 @@ pub struct PreparedProtectedIssuerLaunchV1 {
 }
 
 pub(super) enum PreparedRouteV1 {
+    CustodianApplication {
+        accepted: Box<AcceptedCustodianApplicationHandoffV1>,
+        registration: Box<RegisteredCustodianApplicationObserverV1>,
+        deadline: Instant,
+    },
     Compiler {
         accepted: Box<AcceptedCompilerExecutionHandoffV1>,
         registration: Option<Box<RegisteredCompilerObserverV1>>,
@@ -144,12 +150,15 @@ impl PreparedRouteV1 {
         match self {
             Self::Compiler { accepted, .. } => accepted,
             Self::Application { accepted, .. } => accepted.compiler(),
+            Self::CustodianApplication { accepted, .. } => accepted.compiler(),
         }
     }
 
     pub(super) fn application_deadline(&self) -> Option<Instant> {
         match self {
-            Self::Application { deadline, .. } => Some(*deadline),
+            Self::Application { deadline, .. } | Self::CustodianApplication { deadline, .. } => {
+                Some(*deadline)
+            }
             _ => None,
         }
     }
@@ -170,6 +179,21 @@ impl PreparedRouteV1 {
     ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
         use ProtectedIssuerLaunchPreparationErrorV1 as E;
         match self {
+            Self::CustodianApplication {
+                accepted,
+                registration,
+                deadline,
+            } => {
+                accepted
+                    .revalidate(supervisor)
+                    .map_err(E::ApplicationHandoff)?;
+                if registration.binding() != accepted.binding() {
+                    return Err(E::LaunchManifestMismatch);
+                }
+                if Instant::now() >= *deadline {
+                    return Err(E::Handoff(ProtectedIssuerHandoffErrorV1::Timeout));
+                }
+            }
             Self::Compiler {
                 accepted,
                 registration,
@@ -213,20 +237,32 @@ impl PreparedRouteV1 {
                 registration: None, ..
             } => return Ok(None),
             Self::Application { registration, .. } => registration.try_clone_for_launch(),
+            Self::CustodianApplication { registration, .. } => registration.try_clone_for_launch(),
         };
         result.map(Some).map_err(|error| {
             ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
         })
     }
 
-    pub(super) fn into_serving_inputs(self) -> (OwnedFd, Option<RegisteredApplicationObserverV1>) {
+    pub(super) fn into_serving_inputs(self) -> (OwnedFd, Option<RegisteredApplicationRouteV1>) {
         match self {
             Self::Compiler { accepted, .. } => (accepted.into_control(), None),
             Self::Application {
                 accepted,
                 registration,
                 ..
-            } => (accepted.into_control(), Some(*registration)),
+            } => (
+                accepted.into_control(),
+                Some(RegisteredApplicationRouteV1::Legacy(*registration)),
+            ),
+            Self::CustodianApplication {
+                accepted,
+                registration,
+                ..
+            } => (
+                accepted.into_control(),
+                Some(RegisteredApplicationRouteV1::Custodian(*registration)),
+            ),
         }
     }
 }
@@ -449,6 +485,26 @@ impl ProtectedIssuerSupervisorV1 {
         }
         let registration = accepted.register(self, deadline)?;
         self.materialize_launch(PreparedRouteV1::Application {
+            accepted: Box::new(accepted),
+            registration: Box::new(registration),
+            deadline,
+        })
+    }
+
+    /// Prepares an issuer retaining mandatory custodian registration through publication.
+    pub fn prepare_custodian_application_launch(
+        &self,
+        accepted: AcceptedCustodianApplicationHandoffV1,
+        deadline: Instant,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || remaining > Duration::from_secs(120) {
+            return Err(ProtectedIssuerLaunchPreparationErrorV1::Handoff(
+                ProtectedIssuerHandoffErrorV1::InvalidTimeout,
+            ));
+        }
+        let registration = accepted.register(self, deadline)?;
+        self.materialize_launch(PreparedRouteV1::CustodianApplication {
             accepted: Box::new(accepted),
             registration: Box::new(registration),
             deadline,

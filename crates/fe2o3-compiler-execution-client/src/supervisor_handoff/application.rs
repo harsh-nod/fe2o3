@@ -6,8 +6,11 @@ use crate::{
     RetainedApplicationServiceLaunchV1,
 };
 use fe2o3_runtime_protocol::{
-    WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
-    WorkerV3ApplicationSupervisorReadyErrorV1, WorkerV3ApplicationSupervisorReadyV1,
+    WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1,
+    WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationCustodianHandoffV1,
+    WorkerV3ApplicationCustodianRouteErrorV1, WorkerV3ApplicationCustodianSupervisorReadyV1,
+    WorkerV3ApplicationRegistrationBindingV1, WorkerV3ApplicationSupervisorReadyErrorV1,
+    WorkerV3ApplicationSupervisorReadyV1,
 };
 
 #[derive(Debug)]
@@ -16,6 +19,7 @@ pub enum ApplicationSupervisorHandoffErrorV1 {
     ProofChannel(ApplicationProofChannelErrorV1),
     Readiness(WorkerV3ApplicationSupervisorReadyErrorV1),
     BindingMismatch,
+    CustodianRoute(WorkerV3ApplicationCustodianRouteErrorV1),
 }
 
 impl fmt::Display for ApplicationSupervisorHandoffErrorV1 {
@@ -24,6 +28,7 @@ impl fmt::Display for ApplicationSupervisorHandoffErrorV1 {
             Self::Handoff(error) => write!(f, "application handoff: {error}"),
             Self::ProofChannel(error) => write!(f, "application handoff: {error}"),
             Self::Readiness(error) => write!(f, "application handoff: {error}"),
+            Self::CustodianRoute(error) => write!(f, "application handoff: {error}"),
             Self::BindingMismatch => {
                 f.write_str("application binding differs from original launch custody")
             }
@@ -37,6 +42,7 @@ impl Error for ApplicationSupervisorHandoffErrorV1 {
             Self::Handoff(error) => Some(error),
             Self::ProofChannel(error) => Some(error),
             Self::Readiness(error) => Some(error),
+            Self::CustodianRoute(error) => Some(error),
             Self::BindingMismatch => None,
         }
     }
@@ -74,6 +80,42 @@ pub struct PendingApplicationSupervisorV1 {
     deadline: Instant,
 }
 
+/// Single-use custodian transfer custody. No legacy readiness or downgrade is accepted.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_client::{PendingCustodianApplicationSupervisorV1, PendingApplicationSupervisorV1};
+/// fn downgrade(value: PendingCustodianApplicationSupervisorV1) -> PendingApplicationSupervisorV1 { value.into() }
+/// ```
+pub struct PendingCustodianApplicationSupervisorV1 {
+    inner: PendingApplicationSupervisorV1,
+}
+
+impl PendingCustodianApplicationSupervisorV1 {
+    pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        self.inner.binding()
+    }
+
+    /// Requires custodian-route readiness and terminal EOF from the original supervisor.
+    /// This is not controller Ready, proof custody, or execution authority.
+    pub fn await_readiness_until(
+        self,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<WorkerV3ApplicationCustodianSupervisorReadyV1, ApplicationSupervisorHandoffErrorV1>
+    {
+        self.inner
+            .await_readiness_with::<WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1, _>(
+                profile,
+                deadline,
+                |bytes| {
+                    WorkerV3ApplicationCustodianSupervisorReadyV1::decode(bytes)
+                        .map_err(ApplicationSupervisorHandoffErrorV1::CustodianRoute)
+                },
+                WorkerV3ApplicationCustodianSupervisorReadyV1::application_readiness,
+            )
+    }
+}
+
 impl fmt::Debug for PendingApplicationSupervisorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let _retained = self.control.as_fd();
@@ -97,6 +139,24 @@ impl PendingApplicationSupervisorV1 {
         profile: &CompilerExecutionClientProfileV1,
         deadline: Instant,
     ) -> Result<WorkerV3ApplicationSupervisorReadyV1, ApplicationSupervisorHandoffErrorV1> {
+        self.await_readiness_with::<WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, _>(
+            profile,
+            deadline,
+            |bytes| {
+                WorkerV3ApplicationSupervisorReadyV1::decode(bytes)
+                    .map_err(ApplicationSupervisorHandoffErrorV1::Readiness)
+            },
+            |ready| ready,
+        )
+    }
+
+    fn await_readiness_with<const N: usize, T>(
+        self,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+        decode: fn(&[u8]) -> Result<T, ApplicationSupervisorHandoffErrorV1>,
+        application: fn(&T) -> &WorkerV3ApplicationSupervisorReadyV1,
+    ) -> Result<T, ApplicationSupervisorHandoffErrorV1> {
         let deadline = deadline.min(self.deadline);
         validate_boundary_deadline(deadline)?;
         let launch = self.binding.compiler_handoff().launch_manifest();
@@ -108,13 +168,9 @@ impl PendingApplicationSupervisorV1 {
             return Err(ApplicationSupervisorHandoffErrorV1::BindingMismatch);
         }
         validate_control(&self.control, self.expected)?;
-        let bytes = receive_readiness::<WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1>(
-            &self.control,
-            deadline,
-        )?;
-        let readiness = WorkerV3ApplicationSupervisorReadyV1::decode(&bytes)
-            .map_err(ApplicationSupervisorHandoffErrorV1::Readiness)?;
-        if !readiness.matches_binding(&self.binding, profile.policy()) {
+        let bytes = receive_readiness::<N>(&self.control, deadline)?;
+        let readiness = decode(&bytes)?;
+        if !application(&readiness).matches_binding(&self.binding, profile.policy()) {
             return Err(ApplicationSupervisorHandoffErrorV1::BindingMismatch);
         }
         require_control_eof(&self.control, deadline)?;
@@ -130,6 +186,29 @@ impl RetainedApplicationServiceLaunchV1 {
     /// The embedded compiler handoff is independently reconstructed and compared before send.
     /// The returned owner admits only the dedicated application readiness profile.
     pub fn transfer_to_supervisor_until(
+        self,
+        proof: ApplicationProofTransferPeerV1,
+        binding: WorkerV3ApplicationRegistrationBindingV1,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<PendingApplicationSupervisorV1, ApplicationSupervisorHandoffErrorV1> {
+        self.transfer_application_route::<false>(proof, binding, profile, deadline)
+    }
+
+    /// Transfers the same four original rights on the mandatory proof-custodian route.
+    /// No fallback to ordinary application registration is attempted.
+    pub fn transfer_custodian_to_supervisor_until(
+        self,
+        proof: ApplicationProofTransferPeerV1,
+        binding: WorkerV3ApplicationRegistrationBindingV1,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<PendingCustodianApplicationSupervisorV1, ApplicationSupervisorHandoffErrorV1> {
+        self.transfer_application_route::<true>(proof, binding, profile, deadline)
+            .map(|inner| PendingCustodianApplicationSupervisorV1 { inner })
+    }
+
+    fn transfer_application_route<const CUSTODIAN: bool>(
         self,
         proof: ApplicationProofTransferPeerV1,
         binding: WorkerV3ApplicationRegistrationBindingV1,
@@ -155,7 +234,7 @@ impl RetainedApplicationServiceLaunchV1 {
             expected,
             deadline,
         )?;
-        transfer(
+        transfer::<CUSTODIAN>(
             self,
             proof,
             binding,
@@ -187,7 +266,7 @@ fn validate_binding(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn transfer(
+fn transfer<const CUSTODIAN: bool>(
     launch: RetainedApplicationServiceLaunchV1,
     proof: ApplicationProofTransferPeerV1,
     binding: WorkerV3ApplicationRegistrationBindingV1,
@@ -210,6 +289,12 @@ fn transfer(
         proof.as_fd(),
         launch.parent_pidfd.as_fd(),
     ];
+    let custodian = CUSTODIAN.then(|| WorkerV3ApplicationCustodianHandoffV1::new(binding.clone()));
+    let payload: &[u8] = custodian
+        .as_ref()
+        .map_or(binding.canonical_bytes().as_slice(), |route| {
+            route.canonical_bytes().as_slice()
+        });
     loop {
         wait_writable(&control, deadline)?;
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
@@ -222,11 +307,11 @@ fn transfer(
         }
         match sendmsg(
             &control,
-            &[IoSlice::new(binding.canonical_bytes())],
+            &[IoSlice::new(payload)],
             &mut ancillary,
             SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
         ) {
-            Ok(count) if count == binding.canonical_bytes().len() => break,
+            Ok(count) if count == payload.len() => break,
             Ok(_) => return Err(CompilerExecutionHandoffErrorV1::PartialSend.into()),
             Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
             Err(error) => return Err(CompilerExecutionHandoffErrorV1::Io(error.into()).into()),

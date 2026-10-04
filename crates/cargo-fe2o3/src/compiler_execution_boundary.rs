@@ -18,8 +18,8 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
 };
 use fe2o3_runtime_protocol::{
-    WorkerV3ApplicationRegistrationBindingV1, WorkerV3ApplicationRegistrationInputsV1,
-    WorkerV3ApplicationSupervisorReadyV1,
+    WorkerV3ApplicationCustodianSupervisorReadyV1, WorkerV3ApplicationRegistrationBindingV1,
+    WorkerV3ApplicationRegistrationInputsV1, WorkerV3ApplicationSupervisorReadyV1,
 };
 
 const COMPILER_EXECUTION_BOUNDARY_TIMEOUT: Duration =
@@ -130,6 +130,7 @@ impl PreparedCompilerExecutionBoundaryV1 {
         proof: ApplicationProofTransferPeerV1,
         inputs: WorkerV3ApplicationRegistrationInputsV1,
         deadline: Instant,
+        compiler_service: crate::application_handoff::ApplicationCompilerServiceExposureV1,
     ) -> Result<ParentApplicationSupervisorReadinessCustodyV1, CompilerExecutionBoundaryErrorV1>
     {
         let Self {
@@ -156,19 +157,50 @@ impl PreparedCompilerExecutionBoundaryV1 {
         let binding = inputs
             .bind(handoff)
             .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
-        let pending = launch
-            .transfer_to_supervisor_until(proof, binding.clone(), profile.profile(), deadline)
-            .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?;
-        let readiness = pending
-            .await_readiness_until(profile.profile(), deadline)
-            .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?;
+        use crate::application_handoff::ApplicationCompilerServiceExposureV1 as Service;
+        let readiness = match compiler_service {
+            Service::Required => ApplicationReadinessV1::Legacy(
+                launch
+                    .transfer_to_supervisor_until(
+                        proof,
+                        binding.clone(),
+                        profile.profile(),
+                        deadline,
+                    )
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?
+                    .await_readiness_until(profile.profile(), deadline)
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?,
+            ),
+            Service::CustodianRequired => ApplicationReadinessV1::Custodian(
+                launch
+                    .transfer_custodian_to_supervisor_until(
+                        proof,
+                        binding.clone(),
+                        profile.profile(),
+                        deadline,
+                    )
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?
+                    .await_readiness_until(profile.profile(), deadline)
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?,
+            ),
+            #[cfg(any(
+                test,
+                feature = "application-handoff-adversarial-fixture",
+                feature = "application-handoff-fault-injection-test-only"
+            ))]
+            Service::TestDisabled => {
+                return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                    "application registration requires compiler service custody".into(),
+                ));
+            }
+        };
         let compiler = ParentCompilerExecutionReadinessCustodyV1::admit(
             profile,
             policy,
             supervisor,
             child.child_pid(),
             manifest,
-            readiness.compiler_readiness().clone(),
+            readiness.application().compiler_readiness().clone(),
         )?;
         let custody = ParentApplicationSupervisorReadinessCustodyV1 {
             compiler,
@@ -184,20 +216,48 @@ impl PreparedCompilerExecutionBoundaryV1 {
 pub(crate) struct ParentApplicationSupervisorReadinessCustodyV1 {
     compiler: ParentCompilerExecutionReadinessCustodyV1,
     binding: WorkerV3ApplicationRegistrationBindingV1,
-    readiness: WorkerV3ApplicationSupervisorReadyV1,
+    readiness: ApplicationReadinessV1,
+}
+
+// Retain both complete canonical profiles inline with the original startup custody.
+#[allow(clippy::large_enum_variant)]
+enum ApplicationReadinessV1 {
+    Legacy(WorkerV3ApplicationSupervisorReadyV1),
+    Custodian(WorkerV3ApplicationCustodianSupervisorReadyV1),
+}
+
+impl ApplicationReadinessV1 {
+    fn application(&self) -> &WorkerV3ApplicationSupervisorReadyV1 {
+        match self {
+            Self::Legacy(ready) => ready,
+            Self::Custodian(ready) => ready.application_readiness(),
+        }
+    }
+
+    fn is_canonical(&self) -> bool {
+        match self {
+            Self::Legacy(ready) => {
+                WorkerV3ApplicationSupervisorReadyV1::decode(ready.canonical_bytes()).as_ref()
+                    == Ok(ready)
+            }
+            Self::Custodian(ready) => {
+                WorkerV3ApplicationCustodianSupervisorReadyV1::decode(ready.canonical_bytes())
+                    .as_ref()
+                    == Ok(ready)
+            }
+        }
+    }
 }
 
 impl ParentApplicationSupervisorReadinessCustodyV1 {
     pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
         self.compiler.revalidate()?;
-        let canonical =
-            WorkerV3ApplicationSupervisorReadyV1::decode(self.readiness.canonical_bytes())
-                .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
-        if canonical != self.readiness
+        if !self.readiness.is_canonical()
             || self.binding.compiler_handoff().launch_manifest() != &self.compiler.manifest
-            || self.readiness.compiler_readiness() != &self.compiler.readiness
+            || self.readiness.application().compiler_readiness() != &self.compiler.readiness
             || !self
                 .readiness
+                .application()
                 .matches_binding(&self.binding, self.compiler.policy.policy())
         {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
@@ -612,8 +672,12 @@ pub(crate) mod tests {
         let mut custody = ParentApplicationSupervisorReadinessCustodyV1 {
             compiler,
             binding,
-            readiness,
+            readiness: ApplicationReadinessV1::Legacy(readiness.clone()),
         };
+        custody.revalidate().unwrap();
+        custody.readiness = ApplicationReadinessV1::Custodian(
+            WorkerV3ApplicationCustodianSupervisorReadyV1::new(readiness),
+        );
         custody.revalidate().unwrap();
         custody.binding = WorkerV3ApplicationRegistrationBindingV1::new(
             custody.binding.compiler_handoff().clone(),

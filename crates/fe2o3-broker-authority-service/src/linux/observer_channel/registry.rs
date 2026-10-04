@@ -1258,6 +1258,16 @@ pub struct RegisteredCustodianApplicationObserverV1 {
     inner: RegisteredApplicationObserverV1,
 }
 impl RegisteredCustodianApplicationObserverV1 {
+    /// Local publication-mechanics fixture only; not authenticated custodian registration.
+    #[cfg(feature = "test-support")]
+    pub fn local_fixture_for_test(
+        binding: WorkerV3ApplicationRegistrationBindingV1,
+    ) -> Result<(Self, OwnedFd, OwnedFd, [u8; 72], OwnedFd)> {
+        let (inner, peer, writer, record, reader) =
+            RegisteredApplicationObserverV1::local_fixture_for_test(binding)?;
+        Ok((Self { inner }, peer, writer, record, reader))
+    }
+
     pub fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
         self.inner.binding()
     }

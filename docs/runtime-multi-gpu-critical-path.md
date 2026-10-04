@@ -10,22 +10,33 @@ The [conditional native invocation join](runtime-conditional-fill-invocation-v1.
 is now implemented: exact charged generated packing, full64 coverage, selected
 finalized entry, mandatory native storage constraint and shared remote custody
 through the existing completion carrier. Production application admission and
-two-GPU execution are still unqualified. The next blocker is explicit
-Cargo/supervisor custodian routing plus the installed proof deployment, followed
-by a fresh real-issuer compile-to-application campaign. The old composed-startup
+two-GPU execution are still unqualified. Explicit
+[Cargo/supervisor custodian routing](runtime-custodian-supervisor-route-v1.md) is
+implemented with the run-only `--application-proof-custodian` option. The next
+blocker is the complete installed proof deployment, followed by a fresh
+real-issuer compile-to-application campaign. The old composed-startup
 fixture uses synthetic carriage and cannot qualify production FD195 verification.
 
 The [independent proof manager](runtime-proof-manager-v1.md) now implements the
 authenticated registered-owner/controller join and cooperative coordinator
 bootstrap. Its fixed manager owns controller launch, ReadyOffered custody and
 post-coordinator-loss retention. The public launcher no longer accepts arbitrary
-raw registration tuples. Ordinary host/supervisor route selection, composed
-production admission and two-GPU application qualification remain
+raw registration tuples. Ordinary host/supervisor route selection is implemented;
+composed production admission and two-GPU application qualification remain
 the next gates; do not equate manager activation with proof or GPU execution.
 The standard compiler-only deployment bundle still excludes the manager/controller
 closure and its approval records. Package and activate those resources before
 switching the ordinary host/supervisor route; the isolated manager fixture does
 not establish production deployment readiness.
+
+The next deployment change must extend the closed compiler-only bundle/installer
+inventory with the proof manager, application controller and manager unit; install
+the analyzer's immutable loader/LLVM closure and the protected Verus runtime; then
+provision application approval before manager approval against their final paths.
+The manager approval also pins the installed coordinator image. Development-tree
+analyzer measurements cannot be reused after relocation because they include
+mapped paths, and the manager service hides home directories. Activate the manager
+independently; service ordering alone does not start it.
 
 Expedite one ordinary admitted application across two selected GPUs. Native
 multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
@@ -72,7 +83,7 @@ now adds a distinct authenticated broker route and moves the original published
 application owner out of issuer/registry cleanup. Identity and capacity reservations
 survive extraction; the legacy route remains unchanged. The sender-side pending
 owner now joins the approved manager transport and staged controller through
-Ready/Activate. Ordinary host/supervisor selection must switch together with the
+Ready/Activate. Explicit ordinary host/supervisor selection now joins the
 consuming proof client; the legacy application route is not a fallback for remote
 proof. Do not add more standalone identity or route wrappers in place of that join.
 

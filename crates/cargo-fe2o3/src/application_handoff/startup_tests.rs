@@ -83,6 +83,13 @@ pub(crate) fn inert_registration_inputs() -> WorkerV3ApplicationRegistrationInpu
 }
 
 fn pending(child: &Child) -> PendingApplicationAck {
+    pending_with_service(child, ApplicationCompilerServiceExposureV1::Required)
+}
+
+fn pending_with_service(
+    child: &Child,
+    service: ApplicationCompilerServiceExposureV1,
+) -> PendingApplicationAck {
     let (read, write) = cloexec_pipe().unwrap();
     let proof = PreparedApplicationProofChannelV1::prepare().unwrap();
     let mut protocol = protocol();
@@ -114,7 +121,7 @@ fn pending(child: &Child) -> PendingApplicationAck {
     PendingApplicationAck {
         read,
         parent_write: Some(write),
-        custody: ApplicationHandoffCustodyV1::prepare(protocol, Some(proof)),
+        custody: ApplicationHandoffCustodyV1::prepare_with_service(protocol, Some(proof), service),
         sandbox: Some(PendingApplicationSandbox::test_reported_admission(Ok(
             child.id(),
         ))),
@@ -318,9 +325,15 @@ fn fast_exit_before_required_service_retains_original_cleanup() {
     queue_ack(&mut pending);
     let mut spawned = spawned(pending, &child);
     let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
-    let (proof, inputs) = spawned.take_registration_transfer().unwrap();
+    let (proof, inputs, service) = spawned.take_registration_transfer().unwrap();
     assert!(matches!(
-        boundary.finish_application(spawned.retained_child(), proof, inputs, spawned.deadline()),
+        boundary.finish_application(
+            spawned.retained_child(),
+            proof,
+            inputs,
+            spawned.deadline(),
+            service
+        ),
         Err(CompilerExecutionBoundaryErrorV1::ChildChannel(
             CompilerExecutionChildChannelErrorV1::ChildExited
         ))
@@ -356,7 +369,8 @@ fn registration_transfer_is_single_use_and_preserves_cleanup() {
         .custody
         .protocol
         .proof_descriptor = original;
-    let (proof, inputs) = spawned.take_registration_transfer().unwrap();
+    let (proof, inputs, service) = spawned.take_registration_transfer().unwrap();
+    assert_eq!(service, ApplicationCompilerServiceExposureV1::Required);
     assert_eq!(inputs.canonical_bytes().len(), 600);
     assert!(spawned.take_registration_transfer().is_err());
     assert_original(&spawned.cleanup, &child, original_fd);
@@ -380,6 +394,31 @@ fn expired_startup_cannot_accept_a_buffered_ack_or_start_registration() {
     let (_, cleanup) = failure.into_parts();
     assert_original(&cleanup, &child, original_fd);
     terminate_application_group(child, cleanup).unwrap();
+}
+
+#[test]
+fn custodian_selection_survives_spawn_and_single_use_registration() {
+    let child = exited_child();
+    let pending = pending_with_service(
+        &child,
+        ApplicationCompilerServiceExposureV1::CustodianRequired,
+    );
+    let mut spawned = spawned(pending, &child);
+    let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
+    let (proof, inputs, service) = spawned.take_registration_transfer().unwrap();
+    assert_eq!(
+        service,
+        ApplicationCompilerServiceExposureV1::CustodianRequired
+    );
+    assert_eq!(
+        service.descriptor(),
+        Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1)
+    );
+    assert_eq!(inputs.canonical_bytes().len(), 600);
+    assert!(spawned.take_registration_transfer().is_err());
+    assert_original(&spawned.cleanup, &child, original_fd);
+    drop(proof);
+    terminate_application_group(child, spawned.into_cleanup()).unwrap();
 }
 
 #[test]

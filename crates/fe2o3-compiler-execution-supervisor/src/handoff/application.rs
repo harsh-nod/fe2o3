@@ -2,7 +2,8 @@
 
 use super::*;
 use fe2o3_runtime_protocol::{
-    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WorkerV3ApplicationInputOccurrenceV1,
+    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WorkerV3ApplicationCustodianHandoffV1,
+    WorkerV3ApplicationCustodianRouteErrorV1, WorkerV3ApplicationInputOccurrenceV1,
     WorkerV3ApplicationRegistrationBindingV1, WorkerV3ApplicationRegistrationErrorV1,
 };
 use rustix::fs::OFlags;
@@ -16,6 +17,8 @@ pub enum ProtectedApplicationHandoffErrorV1 {
     Binding(WorkerV3ApplicationRegistrationErrorV1),
     /// The candidate proof peer's shape, creator, or continuity is invalid.
     ProofPeer(&'static str),
+    /// The mandatory custodian wire profile is not canonical.
+    CustodianRoute(WorkerV3ApplicationCustodianRouteErrorV1),
 }
 
 impl fmt::Display for ProtectedApplicationHandoffErrorV1 {
@@ -24,6 +27,7 @@ impl fmt::Display for ProtectedApplicationHandoffErrorV1 {
             Self::Handoff(error) => write!(f, "application handoff: {error}"),
             Self::Binding(error) => write!(f, "application binding: {error}"),
             Self::ProofPeer(reason) => write!(f, "application proof peer: {reason}"),
+            Self::CustodianRoute(error) => write!(f, "application custodian route: {error}"),
         }
     }
 }
@@ -34,6 +38,7 @@ impl Error for ProtectedApplicationHandoffErrorV1 {
             Self::Handoff(error) => Some(error),
             Self::Binding(error) => Some(error),
             Self::ProofPeer(_) => None,
+            Self::CustodianRoute(error) => Some(error),
         }
     }
 }
@@ -79,6 +84,64 @@ pub struct AcceptedApplicationHandoffV1 {
     live_parent: LiveClientPidfdIdentityV1,
     proof_snapshot: ProofSnapshot,
     parent_snapshot: DescriptorSnapshotV1,
+}
+
+/// Original application custody admitted only through the mandatory custodian profile.
+/// There is no downgrade to ordinary registration, readiness or compiler authority.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_supervisor::{AcceptedCustodianApplicationHandoffV1, AcceptedApplicationHandoffV1};
+/// fn downgrade(value: AcceptedCustodianApplicationHandoffV1) -> AcceptedApplicationHandoffV1 { value.into() }
+/// ```
+pub struct AcceptedCustodianApplicationHandoffV1 {
+    inner: AcceptedApplicationHandoffV1,
+}
+
+impl AcceptedCustodianApplicationHandoffV1 {
+    /// Returns descriptive data, not proof or execution authority.
+    pub const fn binding(&self) -> &WorkerV3ApplicationRegistrationBindingV1 {
+        self.inner.binding()
+    }
+
+    /// Rechecks the original four descriptors, live parentage and endpoint continuity.
+    pub fn revalidate(
+        &self,
+        supervisor: &ProtectedIssuerSupervisorV1,
+    ) -> Result<(), ProtectedApplicationHandoffErrorV1> {
+        self.inner.revalidate(supervisor)
+    }
+
+    pub(crate) fn compiler(&self) -> &AcceptedCompilerExecutionHandoffV1 {
+        self.inner.compiler()
+    }
+
+    pub(crate) fn into_control(self) -> OwnedFd {
+        self.inner.into_control()
+    }
+
+    pub(crate) fn register(
+        &self,
+        supervisor: &ProtectedIssuerSupervisorV1,
+        deadline: Instant,
+    ) -> Result<
+        fe2o3_broker_authority_service::RegisteredCustodianApplicationObserverV1,
+        crate::ProtectedIssuerLaunchPreparationErrorV1,
+    > {
+        use crate::ProtectedIssuerLaunchPreparationErrorV1 as E;
+        self.revalidate(supervisor).map_err(E::ApplicationHandoff)?;
+        supervisor
+            .observer_registry(deadline)
+            .map_err(E::Supervisor)?
+            .register_custodian_application(
+                self.binding(),
+                self.inner.compiler.service_peer.as_fd(),
+                self.inner.compiler.client_pidfd.as_fd(),
+                self.inner.proof_peer.as_fd(),
+                self.inner.parent_pidfd.as_fd(),
+                deadline,
+            )
+            .map_err(|error| E::Supervisor(crate::authority::observer_error(error)))
+    }
 }
 
 impl fmt::Debug for AcceptedApplicationHandoffV1 {
@@ -176,6 +239,65 @@ impl AcceptedApplicationHandoffV1 {
 }
 
 impl ProtectedIssuerSupervisorV1 {
+    /// Admits only the exact four-right custodian profile, never ordinary application bytes.
+    pub fn accept_custodian_application_handoff(
+        &self,
+        control: OwnedFd,
+        timeout: Duration,
+    ) -> Result<AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1> {
+        self.accept_custodian_application_handoff_inner::<true>(control, timeout)
+    }
+
+    pub(crate) fn accept_custodian_application_handoff_inner<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        timeout: Duration,
+    ) -> Result<AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1> {
+        if timeout.is_zero() || timeout > Duration::from_secs(120) {
+            return Err(ProtectedIssuerHandoffErrorV1::InvalidTimeout.into());
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(ProtectedIssuerHandoffErrorV1::DeadlineOverflow)?;
+        self.revalidate()
+            .map_err(ProtectedIssuerHandoffErrorV1::Supervisor)?;
+        validate_control_shape(&control)?;
+        if REQUIRE_DISTINCT_UID
+            && control_peer_identity(&control)?.uid() == self.credentials().uid()
+        {
+            return Err(ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch.into());
+        }
+        let snapshot = descriptor_snapshot(&control)?;
+        let ReceivedHandoffV1::CustodianApplication(bytes, rights) =
+            receive_profile(&control, deadline)?
+        else {
+            return Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer.into());
+        };
+        let handoff = WorkerV3ApplicationCustodianHandoffV1::decode(&*bytes)
+            .map_err(ProtectedApplicationHandoffErrorV1::CustodianRoute)?;
+        self.admit_received_custodian_application::<REQUIRE_DISTINCT_UID>(
+            control, handoff, rights, snapshot, deadline,
+        )
+    }
+
+    pub(super) fn admit_received_custodian_application<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        handoff: WorkerV3ApplicationCustodianHandoffV1,
+        rights: [OwnedFd; 4],
+        snapshot: DescriptorSnapshotV1,
+        deadline: Instant,
+    ) -> Result<AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1> {
+        self.admit_received_application::<REQUIRE_DISTINCT_UID>(
+            control,
+            handoff.binding().clone(),
+            rights,
+            snapshot,
+            deadline,
+        )
+        .map(|inner| AcceptedCustodianApplicationHandoffV1 { inner })
+    }
+
     /// Admits only the exact four-right application profile on a dedicated control connection.
     ///
     /// Calling the compiler-only receiver on this packet fails closed.
@@ -329,6 +451,8 @@ fn receive(
 > {
     match receive_profile(control, deadline)? {
         ReceivedHandoffV1::Application(payload, rights) => Ok((*payload, rights)),
-        ReceivedHandoffV1::Compiler(..) => Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer),
+        ReceivedHandoffV1::Compiler(..) | ReceivedHandoffV1::CustodianApplication(..) => {
+            Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
+        }
     }
 }

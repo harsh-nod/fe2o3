@@ -76,6 +76,50 @@ fn ready_fixture() -> WorkerV3ApplicationSupervisorReadyV1 {
     .unwrap()
 }
 
+#[test]
+fn custodian_supervisor_profiles_are_exact_and_reject_legacy_cross_routes() {
+    let binding = fixture();
+    let handoff = WorkerV3ApplicationCustodianHandoffV1::new(binding.clone());
+    let ready = WorkerV3ApplicationCustodianSupervisorReadyV1::new(ready_fixture());
+    assert_eq!(handoff.binding(), &binding);
+    assert_eq!(
+        WorkerV3ApplicationCustodianHandoffV1::decode(handoff.canonical_bytes()).unwrap(),
+        handoff
+    );
+    assert_eq!(
+        WorkerV3ApplicationCustodianSupervisorReadyV1::decode(ready.canonical_bytes()).unwrap(),
+        ready
+    );
+    assert!(WorkerV3ApplicationCustodianHandoffV1::decode(binding.canonical_bytes()).is_err());
+    assert!(WorkerV3ApplicationRegistrationBindingV1::decode(handoff.canonical_bytes()).is_err());
+    assert!(
+        WorkerV3ApplicationCustodianSupervisorReadyV1::decode(ready_fixture().canonical_bytes())
+            .is_err()
+    );
+    assert!(WorkerV3ApplicationSupervisorReadyV1::decode(ready.canonical_bytes()).is_err());
+    for original in [
+        handoff.canonical_bytes().as_slice(),
+        ready.canonical_bytes().as_slice(),
+    ] {
+        let accepts = |bytes: &[u8]| {
+            if original.len() == WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1 {
+                WorkerV3ApplicationCustodianHandoffV1::decode(bytes).is_ok()
+            } else {
+                WorkerV3ApplicationCustodianSupervisorReadyV1::decode(bytes).is_ok()
+            }
+        };
+        for index in 0..original.len() {
+            let mut changed = original.to_vec();
+            changed[index] ^= 1;
+            assert!(!accepts(&changed), "accepted mutation at {index}");
+        }
+        assert!(!accepts(&original[..original.len() - 1]));
+        let mut extended = original.to_vec();
+        extended.push(0);
+        assert!(!accepts(&extended));
+    }
+}
+
 fn reseal_ready(bytes: &mut [u8]) {
     let mut hash = Sha256::new();
     hash.update(b"FE2O3/WORKER-V3/APPLICATION-SUPERVISOR-READY/V1\0");

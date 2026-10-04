@@ -380,7 +380,14 @@ fn root_composed_production_application_startup() {
     )
     .unwrap();
 
-    for case in ["descriptor", "roster", "delayed", "fallback", "cancelled"] {
+    for case in [
+        "descriptor",
+        "roster",
+        "delayed",
+        "fallback",
+        "cancelled",
+        "custodian-publication",
+    ] {
         println!("BEGIN composed startup {case}");
         let case_root = root.path().join(case);
         directory(&case_root, SERVICE_UID, SERVICE_GID, 0o700);
@@ -490,6 +497,7 @@ fn root_composed_production_application_startup() {
         let mut first_progress = false;
         let mut delayed_steps = 0;
         let mut closing = false;
+        let mut custodian_extracted = false;
         loop {
             let progress = registry.step(|error| {
                 println!("{case}: root session retired: {error}");
@@ -521,6 +529,20 @@ fn root_composed_production_application_startup() {
                 }
                 Err(error) => panic!("{case}: root registry failed: {error}"),
             }
+            if let Some(handoff) = registry.take_published_application_custodian() {
+                assert_eq!(case, "custodian-publication");
+                assert!(!custodian_extracted, "duplicate custodian publication");
+                handoff.revalidate().unwrap();
+                assert_eq!(
+                    handoff.transcript().binding(),
+                    *handoff.binding().identity().as_bytes()
+                );
+                assert!(registry.take_published_application_custodian().is_none());
+                custodian_extracted = true;
+                // This routing fixture deliberately contains the original app before Ready.
+                // It does not install a manager or claim proof/current-record admission.
+                drop(handoff);
+            }
             let client_done = client.poll();
             let service_done = service.poll();
             if let Some(status) = client_done {
@@ -543,6 +565,7 @@ fn root_composed_production_application_startup() {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(first_progress);
+        assert_eq!(custodian_extracted, case == "custodian-publication");
         if case == "delayed" {
             assert!(
                 delayed_steps > 2,

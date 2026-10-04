@@ -33,8 +33,11 @@ pub use application_proof_v1::{
     WorkerV3ApplicationProofSessionV1,
 };
 pub use application_registration_v1::{
-    WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1, WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1,
-    WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1, WorkerV3ApplicationRegistrationBindingV1,
+    WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1,
+    WORKER_V3_APPLICATION_CUSTODIAN_READY_BYTES_V1, WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1,
+    WORKER_V3_APPLICATION_SESSION_MAX_BYTES_V1, WORKER_V3_APPLICATION_SUPERVISOR_READY_BYTES_V1,
+    WorkerV3ApplicationCustodianHandoffV1, WorkerV3ApplicationCustodianRouteErrorV1,
+    WorkerV3ApplicationCustodianSupervisorReadyV1, WorkerV3ApplicationRegistrationBindingV1,
     WorkerV3ApplicationRegistrationDescriptorsV1, WorkerV3ApplicationRegistrationErrorV1,
     WorkerV3ApplicationRegistrationIdentityV1, WorkerV3ApplicationRegistrationInputsV1,
     WorkerV3ApplicationSessionKindV1, WorkerV3ApplicationSessionMessageV1,

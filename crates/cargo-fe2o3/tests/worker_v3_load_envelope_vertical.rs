@@ -1529,13 +1529,18 @@ fn composed_production_application_startup_helper() {
     let case = std::env::var("FE2O3_COMPOSED_CASE").unwrap();
     assert!(matches!(
         case.as_str(),
-        "descriptor" | "roster" | "delayed" | "fallback" | "cancelled"
+        "descriptor" | "roster" | "delayed" | "fallback" | "cancelled" | "custodian-publication"
     ));
     let application = PathBuf::from(std::env::var_os("FE2O3_COMPOSED_STATIC_CONSUMER").unwrap());
     assert!(application.is_absolute());
     let fixture = prepared_v3_application_fixture();
     let report_path = fixture.directory.0.join("composed-report.json");
-    let completed = v3_application_runner_command_for_context(&fixture, &application, "3")
+    let context = if case == "custodian-publication" {
+        "4"
+    } else {
+        "3"
+    };
+    let completed = v3_application_runner_command_for_context(&fixture, &application, context)
         .arg(&fixture.kernel)
         .arg("gfx942:xnack-")
         .arg(&report_path)
@@ -1554,8 +1559,14 @@ fn composed_production_application_startup_helper() {
         String::from_utf8_lossy(&completed.stdout),
         String::from_utf8_lossy(&completed.stderr),
     );
-    assert_eq!(completed.status.success(), case != "cancelled");
-    if case != "cancelled" {
+    let positive = !matches!(case.as_str(), "cancelled" | "custodian-publication");
+    assert_eq!(completed.status.success(), positive);
+    if case == "custodian-publication" {
+        let report: serde_json::Value = serde_json::from_slice(&report_bytes).unwrap();
+        assert_eq!(report["host_consumer"], true);
+        assert_eq!(report["loader_environment_clear"], true);
+        assert_eq!(report["admitted"], false);
+    } else if positive {
         let report: serde_json::Value = serde_json::from_slice(&report_bytes).unwrap();
         for field in [
             "host_consumer",

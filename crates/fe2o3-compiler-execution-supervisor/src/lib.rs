@@ -19,6 +19,7 @@ use fe2o3_protected_static_executable::{
 use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
 
+mod application_route;
 mod authority;
 #[allow(unsafe_code)]
 mod deployment;
@@ -49,7 +50,8 @@ pub use deployment::{
 };
 pub use handoff::{
     AcceptedApplicationHandoffV1, AcceptedCompilerExecutionHandoffV1,
-    ProtectedApplicationHandoffErrorV1, ProtectedIssuerHandoffErrorV1,
+    AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1,
+    ProtectedIssuerHandoffErrorV1,
 };
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use listener::{
