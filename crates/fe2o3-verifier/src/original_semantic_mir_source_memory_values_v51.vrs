@@ -88,7 +88,7 @@ spec fn invocation_source_memory_value_valid_v51(
                     InvocationSourceMemoryKindV51::Array { element, count, stride } =>
                         0 <= count && 0 <= stride && layout.width == count * stride
                             && forall|i: int| 0 <= i < count ==>
-                                invocation_source_memory_value_valid_v51(source,
+                                #[trigger] invocation_source_memory_value_valid_v51(source,
                                     MemoryPointerV30 { byte_offset: pointer.byte_offset + i * stride, ..pointer },
                                     element, (fuel - 1) as nat, little_endian),
                 }

@@ -423,6 +423,46 @@ fn typed_borrow_runtime_validates_fields_without_reading_padding_or_creating_bac
 }
 
 #[test]
+fn typed_array_trigger_preserves_stride_bounds_and_recursive_validity() {
+    let runtime = include_str!("original_semantic_mir_source_memory_values_v51.vrs");
+    let array = runtime
+        .split_once("InvocationSourceMemoryKindV51::Array { element, count, stride } =>")
+        .unwrap()
+        .1
+        .split_once("\n                }")
+        .unwrap()
+        .0
+        .trim();
+    assert_eq!(runtime.matches("#[trigger] ").count(), 1);
+    let original = r#"0 <= count && 0 <= stride && layout.width == count * stride
+                            && forall|i: int| 0 <= i < count ==>
+                                invocation_source_memory_value_valid_v51(source,
+                                    MemoryPointerV30 { byte_offset: pointer.byte_offset + i * stride, ..pointer },
+                                    element, (fuel - 1) as nat, little_endian),"#;
+    assert_eq!(array.replace("#[trigger] ", ""), original);
+}
+
+#[test]
+fn typed_array_invalid_element_law_is_in_complete_source_model() {
+    let laws = include_str!("original_semantic_mir_source_memory_laws_v51.vrs");
+    let name = "proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(";
+    let law = laws.split_once(name).unwrap().1;
+    assert!(law.contains("0 <= index < count, fuel > 0,"));
+    assert!(law.contains("pointer.byte_offset + index * stride"));
+    assert!(law.contains("element, (fuel - 1) as nat, little_endian)"));
+    assert!(law.contains(
+        "ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),"
+    ));
+    assert!(law.trim_end().ends_with("{}"));
+    assert!(!law.contains("admit"));
+    assert!(!law.contains("assume"));
+    assert!(!law.contains("external_body"));
+    let complete = super::super::super::super::source_bytes::SOURCE_BYTES_V36;
+    assert_eq!(complete.matches(name).count(), 1);
+    assert!(complete.contains(laws));
+}
+
+#[test]
 fn typed_borrow_finite_reference_cases_require_defined_fields_and_current_storage_not_padding() {
     // This executable bounded reference matrix is distinct from the generated
     // source proof obligations; it is not execution of the Verus model.

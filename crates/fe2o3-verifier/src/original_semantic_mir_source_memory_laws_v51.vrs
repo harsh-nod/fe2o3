@@ -43,3 +43,18 @@ proof fn invocation_source_typed_memory_missing_field_refuses_v51(
             fields[field].source_type, (fuel - 1) as nat, little_endian),
     ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
 {}
+
+proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
+    source: InvocationSourceByteStateV36, pointer: MemoryPointerV30,
+    ty: int, layout: InvocationSourceMemoryLayoutV51,
+    element: int, count: int, stride: int, index: int,
+    fuel: nat, little_endian: bool,
+)
+    requires invocation_source_memory_layout_v51(ty) == Some(layout),
+        layout.kind == (InvocationSourceMemoryKindV51::Array { element, count, stride }),
+        0 <= index < count, fuel > 0,
+        !invocation_source_memory_value_valid_v51(source,
+            MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },
+            element, (fuel - 1) as nat, little_endian),
+    ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
+{}
