@@ -30,6 +30,14 @@ fn machine_stderr_pipe_is_bounded_nonblocking_and_retains_writer_mode() {
     drop(writer);
     capture.drain().unwrap();
     assert!(capture.eof);
+    capture.admitted_capacity += 1;
+    assert!(
+        capture
+            .drain()
+            .unwrap_err()
+            .to_string()
+            .contains("capacity changed")
+    );
 }
 
 #[test]

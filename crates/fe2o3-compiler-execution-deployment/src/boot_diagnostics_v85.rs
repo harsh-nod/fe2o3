@@ -13,6 +13,7 @@ const PIPE_REQUEST_BYTES: usize = 4096;
 
 pub(super) struct MachineStderrV85 {
     reader: OwnedFd,
+    admitted_capacity: usize,
     bytes: Vec<u8>,
     eof: bool,
     refused: bool,
@@ -41,6 +42,7 @@ impl MachineStderrV85 {
         Ok((
             Self {
                 reader,
+                admitted_capacity: size,
                 bytes: Vec::with_capacity(MAX_BYTES),
                 eof: false,
                 refused: false,
@@ -53,6 +55,7 @@ impl MachineStderrV85 {
         if self.refused {
             return Err(self.failure("systemd machine stderr exceeds the fixed 64KiB bound"));
         }
+        self.revalidate_capacity()?;
         if self.eof {
             return Ok(());
         }
@@ -62,6 +65,7 @@ impl MachineStderrV85 {
             match rustix::io::read(&self.reader, &mut buffer[..length]) {
                 Ok(0) => {
                     self.eof = true;
+                    self.revalidate_capacity()?;
                     return Ok(());
                 }
                 Ok(count) => {
@@ -73,10 +77,19 @@ impl MachineStderrV85 {
                     }
                     self.bytes.extend_from_slice(&buffer[..count]);
                 }
-                Err(Errno::AGAIN | Errno::INTR) => return Ok(()),
+                Err(Errno::AGAIN | Errno::INTR) => return self.revalidate_capacity(),
                 Err(source) => return Err(io_error("read bounded systemd machine stderr", source)),
             }
         }
+    }
+
+    fn revalidate_capacity(&self) -> Result<(), DeploymentVerificationErrorV1> {
+        let current = fcntl_getpipe_size(&self.reader)
+            .map_err(|source| io_error("revalidate systemd machine stderr capacity", source))?;
+        if current != self.admitted_capacity {
+            return Err(self.failure("systemd machine stderr pipe capacity changed"));
+        }
+        Ok(())
     }
 
     pub(super) fn prefix(&self) -> String {
