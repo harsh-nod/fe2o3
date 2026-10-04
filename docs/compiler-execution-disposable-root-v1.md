@@ -180,7 +180,14 @@ name that version. The machine helper separately receives retained SquashFS and
 OverlayFS descriptors, validates the exact pinned loader and `systemd-nspawn`
 metadata, and executes them through `/proc/self/fd`; no host systemd executable
 participates. The machine has a private network namespace and a deterministic
-name/UUID derived from the random staging identity. A pidfd binds ordinary
+name/UUID derived from the random staging identity. Its default syscall filter
+adds only `pidfd_getfd` for the coordinator's original cross-UID descriptor
+observation. The default capability set already includes `CAP_SYS_PTRACE` and
+`CAP_DAC_OVERRIDE`; no extra capability grant or namespace relaxation is used.
+This policy follows the [systemd 255 filter](https://github.com/systemd/systemd/blob/v255/src/nspawn/nspawn-seccomp.c)
+and [option semantics](https://github.com/systemd/systemd/blob/v255/man/systemd-nspawn.xml).
+Actual cross-UID observation still requires runtime qualification; startup alone
+does not prove it. A pidfd binds ordinary
 readiness, shutdown, and reaping to the exact helper process. Before releasing
 the lease-blocked worker, the outer supervisor creates one deterministic child
 of its current writable cgroup V2 domain. Its name binds the retained install-

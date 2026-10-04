@@ -109,6 +109,7 @@ for boot_contract in \
   'getpgid' \
   'getpgrp' \
   '--private-network' \
+  '--system-call-filter=pidfd_getfd' \
   '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
   'COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1' \
   'MachineSocketReadinessV1' \
