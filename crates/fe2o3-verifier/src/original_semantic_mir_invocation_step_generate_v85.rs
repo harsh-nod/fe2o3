@@ -1,6 +1,7 @@
 //! Proof partitioning over authentic source cuts, without changing the step contract.
 
 use super::*;
+use std::fmt::Write as _;
 
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
