@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   source-owning-parents:
-    name: Exact 8a3e5 actual source custody parents (diagnostic only)
+    name: Exact 82089 launch-envelope source custody parents (diagnostic only)
     runs-on: ubuntu-24.04
     timeout-minutes: 140
     steps:
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 8a3e5eb115ba499a75fbc5df383b2c86c04ab6ec
+          ref: 82089b5ace3179dfc27f3911349c64ef8d710f79
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-owning-8a3e5-v79-${{ github.run_attempt }}
+          name: issue271-owning-82089-v82-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-owning-v78-logs/
           if-no-files-found: warn
           retention-days: 7

@@ -1,5 +1,5 @@
 {
-  "head": "8a3e5eb115ba499a75fbc5df383b2c86c04ab6ec",
+  "head": "82089b5ace3179dfc27f3911349c64ef8d710f79",
   "package": "rustc-codegen-fe2o3",
   "parents": [
     {
@@ -54,6 +54,34 @@
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
       "sha256": "d6e518f5f648702cecf06774b1fb54ddef899c15433161091d76da89daee66af"
+    },
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26.rs",
+      "sha256": "bef44ec42277d4faa48aa993cb0defb47bd54bd6cfa53773a51e40f30e8c0ff1"
+    },
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs",
+      "sha256": "47432fd63824c095f0b14d4428637073b690a649b00bdd7c82f694ad913e4396"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26.rs",
+      "sha256": "72745f4ab92bb91e87c818ccf8ca5d2e33391881ec8068f39000061eb45d60a6"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26_tests.rs",
+      "sha256": "28927a6a6c1ce46b6341affa725f068ec1d24fe4a6f060e2cee695ca210db6fa"
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26.rs",
+      "sha256": "d1818daedcf85f2f5ab5b3a461a429ffc867dbc4086a8c9738d2cdf9befab78a"
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/mixed_conditional_dispatch_v26_tests.rs",
+      "sha256": "51530a83bdb9f6250307167991bb873da6740566c17e0f2dfb696bf2e7a6a09c"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/mixed_target_selection_v53_tests.rs",
+      "sha256": "7931a7e7058e7380f7a116a638eb8c68031340f5e27a766bf0b3de60cb82d897"
     }
   ],
   "scope": "Actual source and resource/custody owning parents only. No protected proof, kernel execution, publication authority or service qualification.",
