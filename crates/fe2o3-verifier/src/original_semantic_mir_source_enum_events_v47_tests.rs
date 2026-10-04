@@ -710,3 +710,84 @@ fn original_enum_copy_refusal_laws_are_complete_model_proof_obligations() {
         assert!(!law.contains("external_body"));
     }
 }
+
+#[test]
+fn original_enum_construction_triggers_preserve_recipes_evaluation_and_refusals() {
+    let runtime = include_str!("original_semantic_mir_source_enum_values_v47.vrs");
+    let constructor = runtime
+        .split_once("spec fn invocation_source_enum_construct_v47(")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let trigger = "#![trigger invocation_source_enum_field_type_v47(source_type, variant, field)] ";
+    assert_eq!(constructor.matches(trigger).count(), 2);
+    assert_eq!(
+        constructor.replace(trigger, ""),
+        r#"
+    source: InvocationSourceByteStateV36, destination: int, source_type: int, variant: int,
+    fields: Seq<InvocationSourceEnumPayloadV43>, root: int, instance: int, little_endian: bool,
+) -> InvocationSourceEnumResultV43 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || invocation_source_enum_field_count_v47(source_type, variant) != Some(fields.len() as int)
+        || !(forall|field: int| 0 <= field < fields.len() ==>
+            match invocation_source_enum_field_type_v47(source_type, variant, field) {
+                Some(ty) => invocation_source_enum_payload_recipe_v47(ty, fields[field]),
+                None => false,
+            }) {
+        invocation_source_enum_refused_v43(source, seq![])
+    } else {
+        let evaluated = invocation_source_enum_operands_v43(source, fields, root, instance, little_endian);
+        if !evaluated.source.machine.valid || evaluated.values.len() != fields.len()
+            || !(forall|field: int| 0 <= field < fields.len() ==>
+                match invocation_source_enum_field_type_v47(source_type, variant, field) {
+                    Some(ty) => invocation_source_enum_field_current_v47(
+                        evaluated.source, ty, evaluated.values[field], little_endian),
+                    None => false,
+                }) {
+            invocation_source_enum_refused_v43(evaluated.source, evaluated.observations)
+        } else {
+            let value = InvocationSourceEnumV47 { source_type, variant,
+                fields: Map::new(Set::range(0int, evaluated.values.len() as int),
+                    |field: int| evaluated.values[field]) };
+            let installed = invocation_source_enum_install_v47(evaluated.source, destination, value);
+            if !installed.machine.valid {
+                invocation_source_enum_refused_v43(installed, evaluated.observations)
+            } else { InvocationSourceEnumResultV43 {
+                source: installed, observations: evaluated.observations } }
+        }
+    }"#
+    );
+}
+
+#[test]
+fn original_enum_construction_refusal_laws_are_complete_model_proof_obligations() {
+    let runtime = include_str!("original_semantic_mir_source_enum_values_v47.vrs");
+    let complete = super::super::SOURCE_BYTES_V36;
+    assert!(complete.contains(runtime));
+    for name in [
+        "invocation_source_enum_invalid_recipe_refuses_construction_v73",
+        "invocation_source_enum_stale_field_refuses_construction_v73",
+    ] {
+        let signature = format!("proof fn {name}(");
+        assert_eq!(complete.matches(&signature).count(), 1);
+        let law = runtime
+            .split_once(&signature)
+            .unwrap()
+            .1
+            .split_once("{}")
+            .unwrap()
+            .0;
+        assert!(law.contains("0 <= field < fields.len(),"));
+        assert!(law.contains(
+            "invocation_source_enum_field_type_v47(source_type, variant, field) == Some(ty)"
+        ));
+        assert!(law.contains(
+            "invocation_source_enum_construct_v47(source, destination, source_type, variant,"
+        ));
+        for forbidden in ["admit", "assume", "external_body"] {
+            assert!(!law.contains(forbidden));
+        }
+    }
+}

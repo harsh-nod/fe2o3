@@ -388,7 +388,7 @@ spec fn invocation_source_enum_construct_v47(
 ) -> InvocationSourceEnumResultV43 {
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
         || invocation_source_enum_field_count_v47(source_type, variant) != Some(fields.len() as int)
-        || !(forall|field: int| 0 <= field < fields.len() ==>
+        || !(forall|field: int| #![trigger invocation_source_enum_field_type_v47(source_type, variant, field)] 0 <= field < fields.len() ==>
             match invocation_source_enum_field_type_v47(source_type, variant, field) {
                 Some(ty) => invocation_source_enum_payload_recipe_v47(ty, fields[field]),
                 None => false,
@@ -397,7 +397,7 @@ spec fn invocation_source_enum_construct_v47(
     } else {
         let evaluated = invocation_source_enum_operands_v43(source, fields, root, instance, little_endian);
         if !evaluated.source.machine.valid || evaluated.values.len() != fields.len()
-            || !(forall|field: int| 0 <= field < fields.len() ==>
+            || !(forall|field: int| #![trigger invocation_source_enum_field_type_v47(source_type, variant, field)] 0 <= field < fields.len() ==>
                 match invocation_source_enum_field_type_v47(source_type, variant, field) {
                     Some(ty) => invocation_source_enum_field_current_v47(
                         evaluated.source, ty, evaluated.values[field], little_endian),
@@ -435,4 +435,30 @@ proof fn invocation_source_enum_missing_field_refuses_copy_v72(
         0 <= field < count,
         invocation_source_enum_field_type_v47(source_type, variant, field).is_none(),
     ensures !invocation_source_enum_type_copyable_v47(source_type),
+{}
+
+proof fn invocation_source_enum_invalid_recipe_refuses_construction_v73(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int, variant: int,
+    fields: Seq<InvocationSourceEnumPayloadV43>, root: int, instance: int, little_endian: bool,
+    field: int, ty: InvocationSourceEnumFieldTypeV47,
+)
+    requires 0 <= field < fields.len(),
+        invocation_source_enum_field_type_v47(source_type, variant, field) == Some(ty),
+        !invocation_source_enum_payload_recipe_v47(ty, fields[field]),
+    ensures invocation_source_enum_construct_v47(source, destination, source_type, variant,
+        fields, root, instance, little_endian) == invocation_source_enum_refused_v43(source, seq![]),
+{}
+
+proof fn invocation_source_enum_stale_field_refuses_construction_v73(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int, variant: int,
+    fields: Seq<InvocationSourceEnumPayloadV43>, root: int, instance: int, little_endian: bool,
+    field: int, ty: InvocationSourceEnumFieldTypeV47, evaluated: InvocationSourceEnumOperandsV43,
+)
+    requires evaluated == invocation_source_enum_operands_v43(source, fields, root, instance, little_endian),
+        0 <= field < fields.len(),
+        field < evaluated.values.len(),
+        invocation_source_enum_field_type_v47(source_type, variant, field) == Some(ty),
+        !invocation_source_enum_field_current_v47(evaluated.source, ty, evaluated.values[field], little_endian),
+    ensures !invocation_source_enum_construct_v47(source, destination, source_type, variant,
+        fields, root, instance, little_endian).source.machine.valid,
 {}
