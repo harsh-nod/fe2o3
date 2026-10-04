@@ -1,0 +1,46 @@
+name: Issue 271 Combined Full Model Export Diagnostic
+
+on:
+  push:
+    branches: [wip/issue271-combined-model-export-v83-20261004]
+
+permissions:
+  contents: read
+
+jobs:
+  verifier-export:
+    name: Exact b9 combined generator full-model export (diagnostic only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out diagnostic control
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 16cfb7cf10da914f5e6c164f05f885413911c702
+          path: source
+          persist-credentials: false
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm ripgrep
+      - name: Install pinned Rust toolchain
+        working-directory: source
+        run: rustup show active-toolchain
+      - name: Run sole bounded complete-model exporter
+        env:
+          EXPECTED_CONTROL_HEAD: ${{ github.sha }}
+        run: python3 control/.github/diagnostics/issue271-proof-v78.py
+      - name: Upload exact generated source and diagnostic logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue271-model-export-b9-v83-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-export-v83-logs/
+          if-no-files-found: warn
+          retention-days: 7

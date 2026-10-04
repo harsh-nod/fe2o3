@@ -1,0 +1,15 @@
+{
+  "head": "16cfb7cf10da914f5e6c164f05f885413911c702",
+  "tree": "5ce824f349b212d6623d686b03aa96ce970eadcc",
+  "production_head": "b9bde0c8a5235167ea2328e3414936473138adf1",
+  "production_tree": "33a1cac55d72c7440b6921bee30a8a284ad1b4aa",
+  "package": "fe2o3-verifier",
+  "parent": "mixed_optimizer_refinement_v26::semantics::original_scalar_v30::invocation_body::classified_tests::length_boundary_tests::diagnostic_complete_original_source_model_export_without_execution_v77",
+  "source_delta": {
+    "path": "crates/fe2o3-verifier/src/original_semantic_mir_length_boundaries_v68_tests.rs",
+    "preimage": "c76669f9bc9da158407661b94f6c1b3a9060da3ce23b0171815686aeb07e7041",
+    "postimage": "fc56662936d1a8b49505c096a34651cba4db319d747c8c3f5dccc22d1b01f129",
+    "exporter_sha256": "54a4397d7470fe3e99dc8fe651bc6e1b7c447981e4ffcc001e0d737df77ece5b"
+  },
+  "scope": "One ignored exact full-model export only. No ordinary-test, protected-proof, native, or publication credit."
+}
