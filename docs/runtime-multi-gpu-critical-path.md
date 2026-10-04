@@ -37,6 +37,10 @@ the staged capsule alone cannot authenticate that observation. The generated-onl
 multi-device native-peer constructor is also implemented without granting generic
 compute authority. Next priorities are, in order: manager/registered-owner handoff,
 remote conditional native-invocation join and two-GPU application qualification.
+The [application-controller campaign](evidence/dev-application-proof-controller-2026-10-04/README.md)
+now passes genuine proof/probe/EOF-quarantine and three application rejection cases,
+plus all 18 existing launcher regressions. Its registration records are component
+fixtures, not completion of the authenticated ordinary-application gate.
 
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
