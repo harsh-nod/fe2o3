@@ -126,6 +126,25 @@ before allowing acknowledgment, while retaining the original pidfd and other
 occurrence evidence. Keeping the ACK writer alive for proof custody would deadlock
 startup. App-lifetime proof custody must not occupy the compiler issuer's bounded
 worker slots, and process exit alone cannot prove GPU settlement.
+The [application-observation checkpoint](evidence/dev-application-observation-2026-10-04/README.md)
+now provides that local process/input prerequisite. It independently checks original
+pidfds, parent relationship and credentials, a kernel-sealed static image and the
+three current handoff descriptor slots. It retains exact envelope bytes without
+decoding or recovering publication, and closes both temporary ACK writer duplicates
+before returning. Post-ACK validation checks live process, executable, envelope and
+directory continuity without touching the closed/reused ACK slot. An isolated
+root/UID1000 campaign now qualifies ACK EOF with the observation alive, source
+substitution, changed flags/bytes, same-byte executable replacement and application
+death while its parent remains live. This is neither authenticated registration nor
+the no-fork application/proof-custodian deployment.
+Next, bind a dedicated inherited proof endpoint as an additional input occurrence
+on both Cargo and host sides, authenticate messages against the original application
+pidfd, and retain a fresh bounded application session independently of issuer
+lifetime. Preserve the complete occurrence through Cargo's ACK transition; drop
+Cargo's ACK writer before any registration wait. The join must authenticate Cargo's
+spawn/sandbox supervision and protected service isolation, neither of which follows
+from the process snapshot alone. Then deploy the fixed keyless custodian, join its
+original proof to native invocation premises, and run the selected two-GPU pipeline.
 The [native-fill checkpoint](evidence/dev-conditional-native-fill-2026-10-04/README.md)
 checks exact machine shape, patched arguments and original native owner/session
 association. Its one-generation constraint is not the pending-proof admission join.
