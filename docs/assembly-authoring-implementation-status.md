@@ -11,6 +11,50 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 ranked guard discharge — 2026-10-04
+
+The intact private owner now discharges the eight selected structural guarded-read
+proof requirements against its actual retained executable module after fresh
+source/report replay and fresh formal analysis. The proof checks the original
+body locations, complete access coverage, strict same-slice bounds and the
+guard/select/index relationship. It preserves the raw Incomplete analysis,
+including all eight reasons, one bounds obligation and two alias obligations;
+it does not authenticate launch-time addresses or waive those obligations.
+
+Fresh Identity and swapped-input frontend sessions in debug and release
+observed successful private guard discharge with three allocations, nine
+accesses and no conflicts. The paid observation advances the original account
+by 48 work units after raw analysis collection without changing the live frame
+storage or peak. No detached success token or legacy connected owner is created.
+
+The final source passed 3,931 compiler library tests (229 ignored), 73 extractor
+tests and two API tests in both modes, plus 2,076 lowerer tests in each mode and
+a fresh release product build. Seven new lowerer groups cover exact/one-short
+budgets, invalid guards/slices/indexes/selects, reason/location coverage, prior
+denials, callback refusal/panic/surplus and destructor-before-refund cleanup.
+Eight separately qualified parent controls cover the genuine endpoint framing.
+The first lowerer test build failed because parent tests could not name private
+child helpers; a test-only forwarding bridge fixes that visibility without
+changing production visibility. Those failed runs remain preserved.
+
+The reservation covers selected fixed state, callback storage, locations and
+guard work on the original account. Inherited formal-engine allocations,
+formatter state and allocator/RSS overhead remain explicitly outside the claim.
+The fresh sessions reuse historical preparation as input, not as current
+compilation evidence. Unstable target-feature warnings are retained.
+
+The checkpoint-diagnostic debugger separately passed actual no-inferior startup,
+cleanup review, 77 profile/controller controls, 11 source-generation controls
+and a fresh default-debug controller build with 64 protocol plus 97 native CPU
+tests. This is not a GPU capture, native retry or visualization acceptance;
+the earlier failed native attempt and consumed startup-only lease remain
+historical and cannot authorize a new attempt.
+
+An owning formal pipeline stage, target/geometry continuation, ordinary
+compilation, LLVM emission and GPU qualification remain separate implementation
+work. No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 formal diagnostics — 2026-10-04
 
 The intact private owner can now lend its retained executable module to the

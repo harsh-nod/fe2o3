@@ -906,7 +906,7 @@ mod formal_diagnostic {
         Ok(())
     }
 
-    fn emit_attempt(
+    pub(super) fn emit_attempt(
         attempt: &Result<Analysis, FormalError>,
         budget: &mut Budget<'_>,
         requested: [u8; 4],
@@ -1146,5 +1146,157 @@ mod formal_diagnostic {
             if location.block == BlockId(7) && location.operation_index == 11
                 && callee.as_str() == "a\nb\\c")
         );
+    }
+}
+
+#[cfg(test)]
+mod ranked_formal_observation {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        FormalMemoryIncompleteReason as Reason, FormalMemoryObligationAnalysis as Analysis,
+        FormalMemoryObligationError as FormalError,
+    };
+    use fe2o3_lower_mir_kernel::{
+        ProductionMemoryDischargeFailureV1 as Failure, ProductionSemanticKirErrorV1 as LowerError,
+    };
+
+    fn emit_proof(
+        attempt: &Result<Analysis, FormalError>,
+        proof: &Result<(), Failure>,
+        budget: &mut Budget<'_>,
+        requested: [u8; 4],
+    ) -> Result<(), LowerError> {
+        // Preserve exact raw analysis and original reason rows. This does not
+        // label the core Incomplete result Complete or erase runtime obligations.
+        super::formal_diagnostic::emit_attempt(attempt, budget, requested)?;
+        budget.check_prior_denials_v1()?;
+        budget.charge_work(40)?;
+        if let Err(failure) = proof {
+            let detail = match failure {
+                Failure::Stage(detail)
+                | Failure::Access { detail, .. }
+                | Failure::GuardedBound { detail, .. } => *detail,
+            };
+            budget.charge_work(detail.len())?;
+            eprintln!(
+                "fe2o3-bf16-private-ranked-formal-refused-v1 value={:?}",
+                failure
+            );
+            // The lowerer still returns refusal even when this diagnostic
+            // callback returns Ok. No completion marker is emitted here.
+            return Ok(());
+        }
+        let Ok(analysis) = attempt else {
+            return Err(LowerError::CorrespondenceMismatch);
+        };
+        let report = analysis.obligations();
+        let reasons = analysis.incomplete_reasons();
+        budget.charge_work(reasons.len())?;
+        if analysis.is_complete()
+            || reasons.len() != 8
+            || reasons
+                .iter()
+                .any(|reason| !matches!(reason, Reason::GuardedAccessRequiresRankedProof { .. }))
+            || report.allocations().len() != 3
+            || report.accesses().len() != 9
+            || report.bounds_requirements().len() != 1
+            || report.runtime_alias_requirements().len() != 2
+            || !report.inter_invocation_conflicts().is_empty()
+        {
+            return Err(LowerError::CorrespondenceMismatch);
+        }
+        budget.check_prior_denials_v1()?;
+        eprintln!(
+            "fe2o3-bf16-private-ranked-formal-v1 discharged=true raw_analysis=incomplete discharged_reasons={} allocations={} accesses={} bounds={} aliases={} conflicts={} permutation={} work={} storage={} peak={} same_account=true source_join=true fresh_full_replay=true intact_owner=true cleanup_pending=true formal_admission=false normal_admission=false launch_authenticated=false",
+            reasons.len(),
+            report.allocations().len(),
+            report.accesses().len(),
+            report.bounds_requirements().len(),
+            report.runtime_alias_requirements().len(),
+            report.inter_invocation_conflicts().len(),
+            if requested == [0, 1, 2, 3] {
+                "identity"
+            } else {
+                "swap01"
+            },
+            budget.work(),
+            budget.storage(),
+            budget.peak_storage(),
+        );
+        Ok(())
+    }
+
+    impl ProductionRankedSemanticProgramV1 {
+        /// Distinct test-only ranked guard continuation. No account-paid observation
+        /// survives either consuming conversion, and no formal report escapes.
+        pub(crate) fn observe_private_nominal_ranked_formal_for_test_v1(
+            self,
+            requested: [u8; 4],
+        ) -> Result<(), E> {
+            let mut roster = self.into_verified_roster_receipt()?;
+            roster.phase.require_clean_v1()?;
+            let materialized = &roster.materialized;
+            let roots = &roster.source_order_roots;
+            roster.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(32 + 32 + 4 + 8).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata(
+                        "ranked formal proof requires one actual root",
+                    ));
+                };
+                let emission =
+                    materialized
+                        .bf16_call_instance_emission_v1()
+                        .ok_or(E::RosterMetadata(
+                            "ranked formal proof has no actual nominal emission",
+                        ))?;
+                if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3])
+                    || !std::ptr::eq(emission.owner(), materialized)
+                    || emission.root() != root.semantic_root
+                    || emission.return_permutation() != requested
+                    || root.access_sources.len() != 3
+                    || !root.executable_effect_sources.is_empty()
+                    || root.ranked_ir.is_empty()
+                {
+                    return Err(E::RosterMetadata(
+                        "ranked formal proof actual source/maps/Return differ",
+                    ));
+                }
+                Ok(())
+            })?;
+            let module = roster.into_private_bf16_module_verified_receipt_v1()?;
+            let mut paired = module.into_private_bf16_attached_ranked_v1()?;
+            paired.verification.phase.require_clean_v1()?;
+            let owner = &paired.owner;
+            let roots = &paired.verification.roots;
+            paired.verification.phase.with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                budget.charge_work(2).map_err(resource)?;
+                let [root] = roots.as_ref() else {
+                    return Err(E::RosterMetadata(
+                        "ranked formal proof owning pair changed roots",
+                    ));
+                };
+                if owner.root_count() != 1 {
+                    return Err(E::RosterMetadata(
+                        "ranked formal proof owning pair changed identity",
+                    ));
+                }
+                owner
+                    .with_private_bf16_ranked_formal_v1(
+                        root.semantic_root,
+                        requested,
+                        budget,
+                        |attempt, proof, budget| emit_proof(attempt, proof, budget, requested),
+                    )
+                    .map_err(E::Custody)
+            })?;
+            paired.verification.phase.require_clean_v1()?;
+            // Source/report first, original projection phase last; caller still
+            // retains the separate original materialization account.
+            drop(paired);
+            Ok(())
+        }
     }
 }
