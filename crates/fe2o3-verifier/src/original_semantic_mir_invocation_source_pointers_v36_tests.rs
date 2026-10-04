@@ -278,7 +278,10 @@ fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() 
         .split_once("InvocationSourcePointerEventV36::IndexBorrow { destination, local, index, index_bits, metadata_bits, width, alignment, bits } =>")
         .unwrap();
     // Struct update retains both allocation identity and the enclosing view.
-    for branch in [slice_borrow, index_borrow] {
+    for branch in [
+        slice_borrow,
+        index_borrow.split("\nproof fn ").next().unwrap(),
+    ] {
         assert_eq!(branch.matches("..slice.pointer").count(), 1);
         assert!(
             branch.contains(
@@ -293,6 +296,141 @@ fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() 
     assert!(!SOURCE_POINTERS_V36.contains("byte_pop_frame_v30"));
     assert!(!SOURCE_POINTERS_V36.contains("byte_allocate_v30"));
     assert!(!SOURCE_POINTERS_V36.contains("target:"));
+}
+
+#[test]
+fn original_slice_borrow_trigger_preserves_exact_formation_and_refusal() {
+    let slice = SOURCE_POINTERS_V36
+        .split_once("InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } =>")
+        .unwrap()
+        .1
+        .split_once("InvocationSourcePointerEventV36::IndexBorrow")
+        .unwrap()
+        .0;
+    assert_eq!(slice.matches("#[trigger] ").count(), 1);
+    assert_eq!(
+        slice.replace("#[trigger] ", ""),
+        r#" {
+            if 0 <= local < source.machine.values.len() && width > 0
+                && invocation_source_pointer_carrier_v36(source.machine.values[local], metadata_bits) {
+                match source.machine.values[local] {
+                    MemoryValueV30::Slice(slice) => {
+                        if byte_range_aligned_v30(source.machine.memory, slice.pointer, slice.length * width, alignment)
+                            && slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8)
+                            && forall|index: int| 0 <= index < slice.length ==>
+                                invocation_source_borrow_enabled_v36(source,
+                                    MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+                                    width, alignment, bits, little_endian) {
+                            invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice))
+                        } else { invocation_source_byte_refused_v36(source) }
+                    }
+                    _ => invocation_source_byte_refused_v36(source),
+                }
+            } else { invocation_source_byte_refused_v36(source) }
+        }
+        "#
+    );
+}
+
+#[test]
+fn original_slice_borrow_refusal_and_carrier_laws_are_complete_model_obligations() {
+    for name in [
+        "invocation_source_slice_borrow_invalid_element_refuses_v74",
+        "invocation_source_slice_borrow_valid_elements_preserve_carrier_v74",
+    ] {
+        let signature = format!("proof fn {name}(");
+        assert_eq!(SOURCE_POINTERS_V36.matches(&signature).count(), 1);
+        let law = SOURCE_POINTERS_V36
+            .split_once(&signature)
+            .unwrap()
+            .1
+            .split_once("{}")
+            .unwrap()
+            .0;
+        assert!(law.contains("source.machine.values[local] == MemoryValueV30::Slice(slice)"));
+        assert!(law.contains("0 <= index < slice.length"));
+        assert!(law.contains("slice.pointer.byte_offset + index * width, ..slice.pointer"));
+        assert!(law.contains("width, alignment, bits, little_endian)"));
+        assert!(law.contains("ensures"));
+        assert!(law.contains("invocation_source_pointer_step_v36(source,"));
+        for forbidden in ["assume", "admit", "external_body"] {
+            assert!(!law.contains(forbidden));
+        }
+    }
+    let generated = super::super::super::super::invocations::tests::run_variant(
+        LIMIT,
+        LIMIT,
+        true,
+        |plan, out| {
+            super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let relation = slots.correspondence(out)?;
+                let launches = [ExplicitLaunchExtent::Exact {
+                    rank: 1,
+                    extents: [64, 1, 1],
+                }; 2];
+                super::super::super::generate_refinement_v36(
+                    relation,
+                    &launches,
+                    FormalIndexWidth::Bits64,
+                    fe2o3_kernel_ir::EndiannessV2::Little,
+                    out,
+                )?;
+                assert!(out.text.contains(SOURCE_POINTERS_V36));
+                Ok(())
+            })
+        },
+    );
+    generated.0.unwrap();
+    assert_eq!(generated.2, 37);
+}
+
+#[test]
+fn original_copy_window_triggers_preserve_exact_padding_and_relocation_domains() {
+    let runtime = include_str!("original_semantic_mir_observed_effects_v39.vrs");
+    let window = runtime
+        .split_once("spec fn invocation_copy_windows_related_v39(")
+        .unwrap()
+        .1
+        .split_once("\nspec fn invocation_observed_effect_related_v39(")
+        .unwrap()
+        .0;
+    let hints = [
+        "#![trigger source.live[original.allocation].initialized[original.byte_offset + i]] ",
+        "#![trigger source.live[original.allocation].relocations.contains_key(original.byte_offset + i)] ",
+    ];
+    let mut without_hints = window.to_owned();
+    for hint in hints {
+        assert_eq!(window.matches(hint).count(), 1);
+        without_hints = without_hints.replace(hint, "");
+    }
+    assert_eq!(
+        without_hints,
+        r#"
+    source: ByteMemoryV30, target: ByteMemoryV30,
+    original: MemoryPointerV30, actual: MemoryPointerV30, width: int,
+    map: InvocationByteMapV36,
+) -> bool {
+    byte_range_live_v30(source, original, width) && byte_range_live_v30(target, actual, width)
+    && (forall|i: int| 0 <= i < width ==>
+        source.live[original.allocation].initialized[original.byte_offset + i]
+            == target.live[actual.allocation].initialized[actual.byte_offset + i]
+        && (source.live[original.allocation].initialized[original.byte_offset + i] ==>
+            invocation_byte_token_related_v37(source.live[original.allocation].bytes[original.byte_offset + i],
+                target.live[actual.allocation].bytes[actual.byte_offset + i], map, source, target)))
+    && (forall|i: int| 0 <= i < width ==> {
+        let source_cells = source.live[original.allocation].relocations;
+        let target_cells = target.live[actual.allocation].relocations;
+        let source_complete = source_cells.contains_key(original.byte_offset + i)
+            && i + source_cells[original.byte_offset + i].width <= width;
+        let target_complete = target_cells.contains_key(actual.byte_offset + i)
+            && i + target_cells[actual.byte_offset + i].width <= width;
+        source_complete == target_complete && (source_complete ==>
+            invocation_relocation_related_v37(source_cells[original.byte_offset + i],
+                target_cells[actual.byte_offset + i], map, source, target))
+    })
+}
+"#
+    );
 }
 
 #[test]

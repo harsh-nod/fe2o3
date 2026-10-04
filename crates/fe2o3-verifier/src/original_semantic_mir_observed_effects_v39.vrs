@@ -241,13 +241,13 @@ spec fn invocation_copy_windows_related_v39(
     map: InvocationByteMapV36,
 ) -> bool {
     byte_range_live_v30(source, original, width) && byte_range_live_v30(target, actual, width)
-    && (forall|i: int| 0 <= i < width ==>
+    && (forall|i: int| #![trigger source.live[original.allocation].initialized[original.byte_offset + i]] 0 <= i < width ==>
         source.live[original.allocation].initialized[original.byte_offset + i]
             == target.live[actual.allocation].initialized[actual.byte_offset + i]
         && (source.live[original.allocation].initialized[original.byte_offset + i] ==>
             invocation_byte_token_related_v37(source.live[original.allocation].bytes[original.byte_offset + i],
                 target.live[actual.allocation].bytes[actual.byte_offset + i], map, source, target)))
-    && (forall|i: int| 0 <= i < width ==> {
+    && (forall|i: int| #![trigger source.live[original.allocation].relocations.contains_key(original.byte_offset + i)] 0 <= i < width ==> {
         let source_cells = source.live[original.allocation].relocations;
         let target_cells = target.live[actual.allocation].relocations;
         let source_complete = source_cells.contains_key(original.byte_offset + i)

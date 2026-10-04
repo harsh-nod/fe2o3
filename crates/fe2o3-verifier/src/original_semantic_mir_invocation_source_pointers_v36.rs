@@ -521,7 +521,7 @@ spec fn invocation_source_pointer_step_v36(
                         if byte_range_aligned_v30(source.machine.memory, slice.pointer, slice.length * width, alignment)
                             && slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8)
                             && forall|index: int| 0 <= index < slice.length ==>
-                                invocation_source_borrow_enabled_v36(source,
+                                #[trigger] invocation_source_borrow_enabled_v36(source,
                                     MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
                                     width, alignment, bits, little_endian) {
                             invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice))
@@ -553,6 +553,46 @@ spec fn invocation_source_pointer_step_v36(
         }
     } }
 }
+
+proof fn invocation_source_slice_borrow_invalid_element_refuses_v74(
+    source: InvocationSourceByteStateV36, slice: MemorySliceV30,
+    destination: int, local: int, metadata_bits: int, width: int, alignment: int, bits: int,
+    root: int, instance: int, index: int, little_endian: bool,
+)
+    requires 0 <= local < source.machine.values.len(),
+        source.machine.values[local] == MemoryValueV30::Slice(slice),
+        0 <= index < slice.length,
+        !invocation_source_borrow_enabled_v36(source,
+            MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+            width, alignment, bits, little_endian),
+    ensures !invocation_source_pointer_step_v36(source,
+        InvocationSourcePointerEventV36::SliceBorrow {
+            destination, local, metadata_bits, width, alignment, bits },
+        root, instance, little_endian).machine.valid,
+{}
+
+proof fn invocation_source_slice_borrow_valid_elements_preserve_carrier_v74(
+    source: InvocationSourceByteStateV36, slice: MemorySliceV30,
+    destination: int, local: int, metadata_bits: int, width: int, alignment: int, bits: int,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid, invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(),
+        0 <= local < source.machine.values.len(), width > 0,
+        source.machine.values[local] == MemoryValueV30::Slice(slice),
+        invocation_source_pointer_carrier_v36(MemoryValueV30::Slice(slice), metadata_bits),
+        byte_range_aligned_v30(source.machine.memory, slice.pointer, slice.length * width, alignment),
+        slice.pointer.byte_offset + slice.length * width < memory_value_modulus_v30(8),
+        forall|index: int| 0 <= index < slice.length ==>
+            #[trigger] invocation_source_borrow_enabled_v36(source,
+                MemoryPointerV30 { byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer },
+                width, alignment, bits, little_endian),
+    ensures invocation_source_pointer_step_v36(source,
+        InvocationSourcePointerEventV36::SliceBorrow {
+            destination, local, metadata_bits, width, alignment, bits },
+        root, instance, little_endian)
+        == invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice)),
+{}
 "#;
 
 #[cfg(test)]
