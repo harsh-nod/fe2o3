@@ -36,7 +36,7 @@ base_image_sha256=<64 lowercase hexadecimal characters>
 base_image_bytes=<positive decimal length>
 git_commit=<40 lowercase hexadecimal characters>
 source_date_epoch=<commit timestamp>
-package_count=99
+package_count=102
 ```
 
 The mode-`0700` output has exactly three mode-`0444`, single-link files:
@@ -47,7 +47,7 @@ The mode-`0700` output has exactly three mode-`0444`, single-link files:
 
 The builder resolves the important recursive dependency closure of 12 fixed
 root packages and requires its package-name set to equal the checked-in
-99-record lock. It downloads every exact version, validates package name,
+102-record lock. It downloads every exact version, validates package name,
 architecture, and SHA-256 before extraction, runs no maintainer scripts, and
 replaces account and machine identity files with canonical content. The image
 contains the repository-owned `fe2o3-qualification.target` and binds the Git
@@ -62,7 +62,7 @@ after image-profile and digest checks succeed.
 The lock pins package bytes, not repository availability. The builder fails
 closed if the configured Ubuntu repositories no longer serve an exact version
 or if their dependency closure changes. A release archive must retain or mirror
-the 99 digest-pinned `.deb` inputs to guarantee rebuild availability over the
+the 102 digest-pinned `.deb` inputs to guarantee rebuild availability over the
 release lifetime; accepting a newer package under the old identity is never an
 allowed fallback.
 
