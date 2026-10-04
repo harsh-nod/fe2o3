@@ -41,6 +41,7 @@ struct PendingSourceIssuedRolesV29 {
     sources: Vec<PendingSourceIssuedSiteV29>,
     issuers: Vec<PendingSourceIssuedIssuerV29>,
     lengths: Vec<PendingSourceLengthV76>,
+    writes: Vec<PendingSourceWriteV86>,
     accesses: Vec<PendingSourceIssuedAccessV29>,
     selected: Vec<PendingSourceSelectedAccessV30>,
 }
@@ -51,6 +52,7 @@ impl PendingSourceIssuedRolesV29 {
             sources: Vec::new(),
             issuers: Vec::new(),
             lengths: Vec::new(),
+            writes: Vec::new(),
             accesses: Vec::new(),
             selected: Vec::new(),
         }
@@ -70,6 +72,7 @@ impl PendingSourceIssuedRolesV29 {
                 std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
             )?,
             argument_product_v1(self.lengths.capacity(), size_of::<PendingSourceLengthV76>())?,
+            argument_product_v1(self.writes.capacity(), size_of::<PendingSourceWriteV86>())?,
             argument_product_v1(
                 self.accesses.capacity(),
                 std::mem::size_of::<PendingSourceIssuedAccessV29>(),
@@ -92,10 +95,11 @@ fn pending_issued_roles_match_v29(
     right: &PendingSourceIssuedRolesV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
-    budget.charge_work(5)?;
+    budget.charge_work(6)?;
     if left.sources.len() != right.sources.len()
         || left.issuers.len() != right.issuers.len()
         || left.lengths.len() != right.lengths.len()
+        || left.writes.len() != right.writes.len()
         || left.accesses.len() != right.accesses.len()
         || left.selected.len() != right.selected.len()
     {
@@ -111,6 +115,7 @@ fn pending_issued_roles_match_v29(
             std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
         )?,
         argument_product_v1(left.lengths.len(), size_of::<PendingSourceLengthV76>())?,
+        argument_product_v1(left.writes.len(), size_of::<PendingSourceWriteV86>())?,
         argument_product_v1(
             left.accesses.len(),
             std::mem::size_of::<PendingSourceIssuedAccessV29>(),
@@ -124,6 +129,7 @@ fn pending_issued_roles_match_v29(
     Ok(left.sources == right.sources
         && left.issuers == right.issuers
         && left.lengths == right.lengths
+        && left.writes == right.writes
         && left.accesses == right.accesses)
 }
 
@@ -171,6 +177,10 @@ fn source_issued_census_query_headers_v29() -> Result<usize, ArgumentResourceV1>
         h::<(usize, SsaValueV1)>()?,
         h::<std::slice::Iter<'_, fe2o3_pliron::ProductionSemanticSsaEdgeDefinitionOccurrenceV1>>()?,
         h::<std::ops::Range<usize>>()?,
+        h::<&PendingSourceWriteV86>()?,
+        h::<Option<&PendingSourceWriteV86>>()?,
+        h::<std::slice::Iter<'_, PendingSourceWriteV86>>()?,
+        size_of::<usize>(),
     ])
 }
 
@@ -199,6 +209,7 @@ fn source_issued_call_v29<'a>(
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
             | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
     )
     .then_some(call))
 }
@@ -314,6 +325,18 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         self.retained.sources = emission_vec_v1(expected, budget)?;
+        call_splice_sort_work_v1(self.retained.writes.len(), budget)
+            .map_err(source_address_call_error_v29)?;
+        self.retained
+            .writes
+            .sort_unstable_by_key(|row| (row.instance.index(), row.block.index()));
+        for pair in self.retained.writes.windows(2) {
+            budget.charge_work(2)?;
+            if (pair[0].instance, pair[0].block) == (pair[1].instance, pair[1].block) {
+                return Err(source_issued_error_v29());
+            }
+        }
+        let mut write_count = 0usize;
         for ordinal in 0..self.instances.instances().len() {
             budget.charge_work(2)?;
             let instance = self
@@ -351,6 +374,32 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
                 self.retained
                     .sources
                     .push(PendingSourceIssuedSiteV29 { instance, block });
+                budget.charge_work(2)?;
+                if matches!(
+                    self.instances
+                        .owner()
+                        .source_semantic()
+                        .callables()
+                        .get(call.callee().index() as usize),
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation:
+                            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. },
+                        ..
+                    })
+                ) {
+                    if self
+                        .retained
+                        .writes
+                        .get(write_count)
+                        .is_none_or(|row| row.instance != instance || row.block != block)
+                    {
+                        return Err(source_issued_error_v29());
+                    }
+                    write_count = write_count
+                        .checked_add(1)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?;
+                    continue;
+                }
                 let Some(destination) = call.destination().map(|destination| destination.place())
                 else {
                     continue;
@@ -443,7 +492,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
                 self.issuers.insert(key);
             }
         }
-        if self.retained.sources.len() != expected {
+        if self.retained.sources.len() != expected || write_count != self.retained.writes.len() {
             return Err(source_issued_error_v29());
         }
         self.owned = argument_sum_v1(&[
@@ -458,3 +507,4 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
 }
 
 include!("production_source_length_calls_v76.rs");
+include!("production_source_write_calls_v86.rs");

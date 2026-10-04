@@ -39,9 +39,9 @@ fn checked_write_tail_headers_v85() -> Result<usize, ArgumentResourceV1> {
 
 // The closed emission/replay caller prepays the fixed borrowed frame above.
 // No graph walk, allocation, or recursively structured type comparison occurs.
-fn check_checked_write_tail_v85(
+fn check_checked_write_tail_v85<O: std::borrow::Borrow<Operation>>(
     inputs: CheckedWriteInputsV85,
-    operations: &[Operation],
+    operations: &[O],
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<CheckedWriteTailV85, ProductionSemanticKirErrorV1> {
     budget.charge_work(128)?;
@@ -49,13 +49,13 @@ fn check_checked_write_tail_v85(
     if operations.len() != 7 + extra {
         return Err(source_issued_error_v29());
     }
-    let length = &operations[0];
-    let extent = &operations[1];
-    let zero = &operations[2 + extra];
-    let select = &operations[3 + extra];
-    let data = &operations[4 + extra];
-    let address = &operations[5 + extra];
-    let store = &operations[6 + extra];
+    let length = operations[0].borrow();
+    let extent = operations[1].borrow();
+    let zero = operations[2 + extra].borrow();
+    let select = operations[3 + extra].borrow();
+    let data = operations[4 + extra].borrow();
+    let address = operations[5 + extra].borrow();
+    let store = operations[6 + extra].borrow();
     let ([length_value], [extent_value], [zero_value], [offset], [base], [pointer]) = (
         length.results.as_slice(),
         extent.results.as_slice(),
@@ -67,11 +67,12 @@ fn check_checked_write_tail_v85(
         return Err(source_issued_error_v29());
     };
     let predicate = if let Some(precondition) = inputs.precondition {
-        let [result] = operations[2].results.as_slice() else {
+        let conjunction = operations[2].borrow();
+        let [result] = conjunction.results.as_slice() else {
             return Err(source_issued_error_v29());
         };
         if result.ty != Type::BOOL
-            || !matches!(operations[2].kind, OperationKind::Binary { op: BinaryOp::BitAnd, lhs, rhs }
+            || !matches!(conjunction.kind, OperationKind::Binary { op: BinaryOp::BitAnd, lhs, rhs }
                 if lhs == precondition && rhs == extent_value.id)
         {
             return Err(source_issued_error_v29());

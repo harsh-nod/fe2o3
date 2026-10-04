@@ -91,6 +91,18 @@ fn check(
     let result = check_checked_write_tail_v85(inputs, rows, &mut budget);
     assert_eq!(budget.storage(), 0);
     assert_eq!(budget.work(), 128);
+    // Replay borrows actual mapped operations; it need not own a contiguous copy.
+    let borrowed: Vec<_> = rows.iter().collect();
+    let mut replay_work = CanonicalKernelIrWorkBudgetV1::new(128);
+    let mut replay_budget = ArgumentBudgetV1::new(&mut replay_work, 0);
+    let replay = check_checked_write_tail_v85(inputs, &borrowed, &mut replay_budget);
+    match (&result, &replay) {
+        (Ok(expected), Ok(actual)) => assert_eq!(expected, actual),
+        (Err(_), Err(_)) => {}
+        _ => panic!("owned/borrowed suffix differs: {result:?} / {replay:?}"),
+    }
+    assert_eq!(replay_budget.storage(), 0);
+    assert_eq!(replay_budget.work(), 128);
     result
 }
 

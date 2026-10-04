@@ -505,7 +505,9 @@ fn check_source_issued_payload_v29(
             if results.len() != 1
                 || results[0].id != value
                 || *actual != expected
-                || !matches!(operation.kind, OperationKind::Store { value: stored, .. } if stored == value)
+                || !matches!(operation.kind,
+                    OperationKind::Store { value: stored, .. }
+                    | OperationKind::GuardedStore { value: stored, .. } if stored == value)
             {
                 return Err(source_issued_error_v29());
             }

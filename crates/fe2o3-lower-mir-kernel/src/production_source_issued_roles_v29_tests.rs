@@ -78,6 +78,27 @@ pub(in super::super) fn run_issued_role_owner_v18(
         &mut ArgumentBudgetV1<'work>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize) {
+    run_issued_role_owner_access_v86(
+        owner,
+        fe2o3_kernel_descriptor::AccessMode::ReadWrite,
+        work_limit,
+        storage_limit,
+        retained_floor,
+        consume,
+    )
+}
+
+pub(in super::super) fn run_issued_role_owner_access_v86(
+    owner: ProductionSemanticSsaOwnerV1,
+    descriptor_access: fe2o3_kernel_descriptor::AccessMode,
+    work_limit: usize,
+    storage_limit: usize,
+    retained_floor: &std::cell::Cell<Option<usize>>,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceCorrespondenceV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> SourceOwnedResultV18<()>,
+) -> (SourceOwnedResultV18<()>, usize, usize) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
@@ -134,7 +155,7 @@ pub(in super::super) fn run_issued_role_owner_v18(
                         ValidName::new(name).unwrap(),
                         &source,
                         &layout,
-                        fe2o3_kernel_descriptor::AccessMode::ReadWrite,
+                        descriptor_access,
                         (ordinal * 16) as u32,
                     )
                     .unwrap(),
@@ -230,6 +251,7 @@ fn check_issued_role_positive_v18(
         rows.sources.capacity() * std::mem::size_of::<PendingSourceIssuedSiteV29>()
             + rows.issuers.capacity() * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
             + rows.lengths.capacity() * std::mem::size_of::<PendingSourceLengthV76>()
+            + rows.writes.capacity() * std::mem::size_of::<PendingSourceWriteV86>()
             + rows.accesses.capacity() * std::mem::size_of::<PendingSourceIssuedAccessV29>()
     );
     if used {
@@ -308,6 +330,7 @@ fn issued_pointer_original_issuers_and_accesses_grow_independently() {
                                 * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
                             + rows.lengths.capacity()
                                 * std::mem::size_of::<PendingSourceLengthV76>()
+                            + rows.writes.capacity() * std::mem::size_of::<PendingSourceWriteV86>()
                             + rows.accesses.capacity()
                                 * std::mem::size_of::<PendingSourceIssuedAccessV29>()
                     );
@@ -491,17 +514,24 @@ pub(in super::super) fn copied_issued_rows_v18(
             .map_err(immutable_memory_error_v29)?,
         lengths: emission_vec_v1(rows.lengths.len() + 1, budget)
             .map_err(immutable_memory_error_v29)?,
+        writes: emission_vec_v1(rows.writes.len() + 1, budget)
+            .map_err(immutable_memory_error_v29)?,
         accesses: emission_vec_v1(rows.accesses.len() + 1, budget)
             .map_err(immutable_memory_error_v29)?,
         selected: copied_selected_rows_v30(&rows.selected, budget)
             .map_err(immutable_memory_error_v29)?,
     };
     budget.charge_work(
-        rows.sources.len() + rows.issuers.len() + rows.lengths.len() + rows.accesses.len(),
+        rows.sources.len()
+            + rows.issuers.len()
+            + rows.lengths.len()
+            + rows.writes.len()
+            + rows.accesses.len(),
     )?;
     copy.sources.extend_from_slice(&rows.sources);
     copy.issuers.extend_from_slice(&rows.issuers);
     copy.lengths.extend_from_slice(&rows.lengths);
+    copy.writes.extend_from_slice(&rows.writes);
     copy.accesses.extend_from_slice(&rows.accesses);
     Ok(copy)
 }

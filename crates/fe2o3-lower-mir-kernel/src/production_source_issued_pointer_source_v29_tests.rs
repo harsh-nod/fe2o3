@@ -8,6 +8,9 @@ mod shared_intrinsic_witness_tests;
 #[path = "production_source_external_reference_v29_tests.rs"]
 mod external_reference_tests;
 
+#[path = "production_source_write_calls_v86_tests.rs"]
+mod write_calls_v86;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
@@ -101,6 +104,16 @@ fn abi(
     inputs: &[SemanticTypeIdV1],
     output: SemanticTypeIdV1,
 ) -> SemanticFunctionAbiV1 {
+    abi_with_bool_result_v86(tag, kernel, inputs, output, false)
+}
+
+fn abi_with_bool_result_v86(
+    tag: u8,
+    kernel: bool,
+    inputs: &[SemanticTypeIdV1],
+    output: SemanticTypeIdV1,
+    bool_result: bool,
+) -> SemanticFunctionAbiV1 {
     let plain = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
@@ -131,7 +144,17 @@ fn abi(
             ))
         })
         .collect();
-    let result = if output == UNIT {
+    let result = if bool_result {
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                SemanticAbiExtensionV1::ZeroExtend,
+                0,
+                None,
+            )
+            .unwrap(),
+        )
+    } else if output == UNIT {
         SemanticAbiPassModeV1::Ignore
     } else if output == OPTIONAL {
         SemanticAbiPassModeV1::Direct(

@@ -1549,9 +1549,22 @@ fn source_address_accesses_v29(
                                     scoped_source_call_destination_v29(original, frame.site)
                                 }
                                 Some(ScopedMemoryRoleV29::IntrinsicWrite) => {
-                                    return Err(source_reference_error_v29(
-                                        "checked intrinsic write requires its source address and guard replay",
-                                    ));
+                                    if object.is_some() {
+                                        return Err(source_issued_error_v29());
+                                    }
+                                    if issued.is_none() {
+                                        issued = Some(SourceIssuedAccessesV29::new(
+                                            references.plan,
+                                            instances,
+                                            source_index,
+                                            budget,
+                                        )?);
+                                    }
+                                    issued
+                                        .as_mut()
+                                        .ok_or(ArgumentResourceV1::Accounting)?
+                                        .write_v86(references, instance, anchor, row, budget)?;
+                                    continue;
                                 }
                                 None => None,
                             }

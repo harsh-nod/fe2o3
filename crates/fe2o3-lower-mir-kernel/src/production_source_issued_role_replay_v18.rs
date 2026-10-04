@@ -4,6 +4,7 @@
 
 include!("production_source_reference_selection_replay_v30.rs");
 include!("production_source_length_replay_v76.rs");
+include!("production_source_write_replay_v86.rs");
 
 pub(super) fn source_issued_tail_locations_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
@@ -51,6 +52,11 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
             return original
                 .source
                 .missing("selected reference access requires its conditional V30 consumer");
+        }
+        if !pending.issued.writes.is_empty() {
+            return original
+                .source
+                .missing("checked write requires its explicit-predicate consumer");
         }
         check_immutable_issued_roles_v18(original, root, &pending.issued, budget)?;
         Ok(Some(&pending.issued))
@@ -440,7 +446,11 @@ fn check_immutable_issued_roles_inner_v18(
             .missing("issued source issuer census differs");
     }
     if source_count == 0 {
-        if !rows.issuers.is_empty() || !rows.lengths.is_empty() || !rows.accesses.is_empty() {
+        if !rows.issuers.is_empty()
+            || !rows.lengths.is_empty()
+            || !rows.writes.is_empty()
+            || !rows.accesses.is_empty()
+        {
             return original
                 .source
                 .missing("issued evidence lacks original issuer");
@@ -562,6 +572,7 @@ fn check_immutable_issued_roles_inner_v18(
         }
     }
     check_immutable_source_lengths_v76(original, root, rows, function, budget)?;
+    check_immutable_source_writes_v86(original, root, rows, function, budget)?;
     let mut previous_access = None;
     for row in &rows.accesses {
         budget.charge_work(2)?;
@@ -699,7 +710,12 @@ fn check_immutable_issued_roles_inner_v18(
         .map_err(immutable_memory_error_v29)?;
     budget.charge_work(argument_product_v1(
         2,
-        argument_sum_v1(&[rows.issuers.len(), rows.lengths.len(), accesses.len()])?,
+        argument_sum_v1(&[
+            rows.issuers.len(),
+            rows.lengths.len(),
+            rows.writes.len(),
+            accesses.len(),
+        ])?,
     )?)?;
     let mut valid = true;
     fe2o3_kernel_ir::with_function_control_flow_v1(function, Default::default(), budget, |view| {
@@ -713,6 +729,13 @@ fn check_immutable_issued_roles_inner_v18(
         for length in &rows.lengths {
             if length.receiver != length.root_input
                 && view.unique_value_origin(length.receiver)? != Some(length.root_input)
+            {
+                valid = false;
+            }
+        }
+        for write in &rows.writes {
+            if write.receiver != write.root_input
+                && view.unique_value_origin(write.receiver)? != Some(write.root_input)
             {
                 valid = false;
             }
@@ -744,6 +767,7 @@ pub(super) fn source_issued_replay_headers_v18() -> Result<usize, ArgumentResour
     }
     argument_sum_v1(&[
         source_length_replay_headers_v76()?,
+        source_write_replay_headers_v86()?,
         source_issued_census_query_headers_v29()?,
         h::<usize>()?,
         h::<bool>()?,

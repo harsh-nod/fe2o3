@@ -209,6 +209,8 @@ fn issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_poin
                         .map_err(source_emission_error_v18)?,
                     lengths: emission_vec_v1(rows.lengths.len(), budget)
                         .map_err(source_emission_error_v18)?,
+                    writes: emission_vec_v1(rows.writes.len(), budget)
+                        .map_err(source_emission_error_v18)?,
                     accesses: emission_vec_v1(rows.accesses.len(), budget)
                         .map_err(source_emission_error_v18)?,
                     selected: copied_selected_rows_v30(&rows.selected, budget)
@@ -218,11 +220,13 @@ fn issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_poin
                     rows.sources.len()
                         + rows.issuers.len()
                         + rows.lengths.len()
+                        + rows.writes.len()
                         + rows.accesses.len(),
                 )?;
                 copy.sources.extend_from_slice(&rows.sources);
                 copy.issuers.extend_from_slice(&rows.issuers);
                 copy.lengths.extend_from_slice(&rows.lengths);
+                copy.writes.extend_from_slice(&rows.writes);
                 copy.accesses.extend_from_slice(&rows.accesses);
                 let access = copy
                     .accesses
