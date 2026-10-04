@@ -1072,6 +1072,10 @@ where
         &self.facts
     }
 
+    pub(crate) const fn storage_identity(&self) -> SharedGttAllocationIdentityV1 {
+        self.token.storage_identity()
+    }
+
     pub(crate) fn into_token(self) -> SharedGttAllocationV1<P, S> {
         self.token
     }

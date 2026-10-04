@@ -534,6 +534,7 @@ pub(in crate::queue) fn pristine_dispatch_fixture_v1(
         data_premises,
         generation: DispatchGenerationOwnerV1::with_next_generation(next_generation).unwrap(),
         persistent_control: PersistentFixedDispatchControlStateV1::Ordinary,
+        conditional_fill: None,
     };
     (memory, owner)
 }

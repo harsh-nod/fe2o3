@@ -197,6 +197,16 @@ persistent_data_accessors!(PreparedGfx942PersistentDispatchV1);
 persistent_data_accessors!(GeneratedGfx942PersistentStorageV1);
 
 impl PreparedGfx942PersistentDispatchV1 {
+    /// Adds the closed native fill constraint without changing the original
+    /// dispatch-contract identity or granting any execution authority.
+    pub fn require_conditional_fill_v1(mut self) -> Self {
+        self.packet = self.packet.require_conditional_fill_v1();
+        // Retire earlier inert plans even though the compiler's original
+        // contract digest is unchanged by this additional runtime constraint.
+        self.data.source_identity = std::sync::Arc::new(());
+        self
+    }
+
     pub const fn packet(&self) -> &Gfx942FixedDispatchPacketV1 {
         &self.packet
     }

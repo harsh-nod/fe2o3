@@ -29,6 +29,33 @@ fn prepared(hsaco: &[u8], count: usize, offset: usize) -> PreparedGfx942RuntimeD
 }
 
 #[test]
+fn conditional_fill_constraint_retires_prior_source_identity_without_repacking() {
+    let hsaco = synthetic_cov6::preparation_module();
+    let projection = prepared(&hsaco, 1, 0)
+        .into_persistent_projection_v1(&hsaco)
+        .unwrap();
+    let old = std::sync::Arc::clone(projection.data.source_identity());
+    let contract = projection.dispatch_contract_sha256();
+    let image = projection.data.executable_image.as_ptr();
+    let buffers = projection.data.buffers.as_ptr();
+    let constrained = projection.require_conditional_fill_v1();
+    assert!(!std::sync::Arc::ptr_eq(
+        &old,
+        constrained.data.source_identity()
+    ));
+    assert_eq!(constrained.dispatch_contract_sha256(), contract);
+    assert_eq!(constrained.data.executable_image.as_ptr(), image);
+    assert_eq!(constrained.data.buffers.as_ptr(), buffers);
+    let identity = std::sync::Arc::clone(constrained.data.source_identity());
+    let storage = constrained.into_generated_storage_v1();
+    assert!(std::sync::Arc::ptr_eq(
+        &identity,
+        storage.data.source_identity()
+    ));
+    assert!(storage.control_available());
+}
+
+#[test]
 fn generated_roster_rejects_policy_count_length_access_and_read_only_seed_mismatch() {
     for field in 0..4 {
         let hsaco = synthetic_cov6::preparation_module();

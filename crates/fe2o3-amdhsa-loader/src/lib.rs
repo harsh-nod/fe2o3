@@ -574,6 +574,11 @@ impl OwnedValidatedEnvelope {
 }
 
 impl<'a> ValidatedEnvelope<'a> {
+    /// Exact immutable object bytes retained by this descriptive envelope.
+    pub const fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
     /// Length of the exact input borrow retained by this envelope.
     pub const fn input_len(&self) -> u64 {
         self.bytes.len() as u64

@@ -27,6 +27,9 @@ pub(crate) mod control_release;
 pub(crate) mod preparation;
 pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 
+#[path = "queue_dispatch_binding/conditional_fill.rs"]
+mod conditional_fill;
+
 #[path = "queue_dispatch_binding/generation_preflight.rs"]
 mod generation_preflight;
 pub use generation_preflight::Gfx942FixedDispatchPreallocationV1;
@@ -287,6 +290,7 @@ pub struct Gfx942FixedDispatchPacketV1 {
     dynamic_group_segment_bytes: u32,
     kernarg_bytes: Box<[u8]>,
     buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    conditional_fill: bool,
 }
 
 impl Gfx942FixedDispatchPacketV1 {
@@ -345,7 +349,20 @@ impl Gfx942FixedDispatchPacketV1 {
             dynamic_group_segment_bytes,
             kernarg_bytes,
             buffers,
+            conditional_fill: false,
         }
+    }
+
+    /// Requires the closed full64 fill profile at native preparation and binding.
+    ///
+    /// This only narrows admission. It supplies no compiler, proof or execution
+    /// authority. The first profile requires one ordinary packet, one program,
+    /// one nonempty whole coherent-host output and 272-byte kernargs. Only its
+    /// first dispatch generation may bind; replay requires fresh preparation.
+    #[must_use]
+    pub fn require_conditional_fill_v1(mut self) -> Self {
+        self.conditional_fill = true;
+        self
     }
 
     pub const fn program_index(&self) -> usize {
@@ -382,6 +399,7 @@ impl fmt::Debug for Gfx942FixedDispatchPacketV1 {
             )
             .field("kernarg_bytes", &self.kernarg_bytes.len())
             .field("buffer_count", &self.buffers.len())
+            .field("conditional_fill", &self.conditional_fill)
             .finish_non_exhaustive()
     }
 }
@@ -913,7 +931,8 @@ pub(super) fn preflight_gfx942_persistent_compute_dispatch_v1(
     layout: Gfx942FixedDispatchDataLayoutV1,
     initialized: bool,
 ) -> Result<DeviceDataEffectV1, Gfx942DispatchBindingErrorV1> {
-    if layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal
+    if packets[0].conditional_fill
+        || layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal
         || packets[0].buffers.len() != 1
         || packets[0].buffers[0].data_index != 0
         || packets[0].buffers[0].data_byte_offset != 0
@@ -1058,9 +1077,10 @@ pub(super) fn three_binding_persistent_fixed_dispatch_control_identity_v1(
     content_roles: [Gfx942DeviceContentRoleV1; 3],
     data_storage: [Gfx942SdmaBufferStorageIdentityV1; 3],
 ) -> Result<ThreeBindingPersistentFixedDispatchControlIdentityV1, Gfx942DispatchBindingErrorV1> {
-    if data_layouts
-        .iter()
-        .any(|layout| layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal)
+    if packets[0].conditional_fill
+        || data_layouts
+            .iter()
+            .any(|layout| layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal)
         || !initialized[0]
         || !initialized[1]
         || !initialized[2]
@@ -2291,6 +2311,7 @@ struct PreparedDispatchPacketV1 {
     kernarg_layout_identity: [u8; 32],
     code_bound_kernarg_layout: bool,
     code_index: usize,
+    conditional_fill: bool,
 }
 
 fn prepared_kernarg_layout_matches_code(
@@ -2331,6 +2352,7 @@ pub(super) struct DispatchResourceOwnerV1 {
     data_premises: Vec<RetainedDataPremiseV1>,
     generation: DispatchGenerationOwnerV1,
     persistent_control: PersistentFixedDispatchControlStateV1,
+    conditional_fill: Option<Box<conditional_fill::ConditionalFillStorageV1>>,
 }
 
 impl DispatchResourceOwnerV1 {
@@ -2551,6 +2573,14 @@ impl DispatchResourceOwnerV1 {
         ),
         Gfx942DispatchBindingErrorV1,
     > {
+        match (
+            &self.conditional_fill,
+            self.packets.iter().any(|packet| packet.conditional_fill),
+        ) {
+            (Some(premises), true) => premises.revalidate(self)?,
+            (None, false) => {}
+            _ => return Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+        }
         dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)
     }
 
@@ -3691,6 +3721,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             kernarg_layout_identity: typed.layout_identity,
             code_bound_kernarg_layout: false,
             code_index: 0,
+            conditional_fill: false,
         });
     }
 
@@ -3703,6 +3734,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
         data_premises,
         generation,
         persistent_control: PersistentFixedDispatchControlStateV1::Ordinary,
+        conditional_fill: None,
     })
 }
 
@@ -4005,11 +4037,17 @@ pub fn project_gfx942_fixed_host_packet_v1(
             })
         })
         .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
-    plan_public_fixed_dispatch_resources(
+    let plan = plan_public_fixed_dispatch_resources(
         core::slice::from_ref(program),
         core::array::from_ref(&packet),
         &layouts,
         &vec![true; layouts.len()],
+    )?;
+    let _ = conditional_fill::check_plan(
+        core::slice::from_ref(program),
+        core::array::from_ref(&packet),
+        &plan,
+        PersistentFixedDispatchControlStateV1::Ordinary,
     )?;
     Ok(packet)
 }
@@ -4034,8 +4072,14 @@ pub fn preflight_gfx942_fixed_dispatch_replacement<const N: usize>(
         .iter()
         .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
         .collect();
-    let _ =
+    let plan =
         plan_public_fixed_dispatch_resources(programs, packets, &data_layouts, &data_initialized)?;
+    let _ = conditional_fill::check_plan(
+        programs,
+        packets,
+        &plan,
+        PersistentFixedDispatchControlStateV1::Ordinary,
+    )?;
     Ok(predecessor_generation + 1)
 }
 

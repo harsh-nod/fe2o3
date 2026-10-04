@@ -67,12 +67,17 @@ fe2o3-aql.workspace = true
 fe2o3-drm-uapi.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-kfd-uapi.workspace = true
+fe2o3-kernel-analysis = { workspace = true, default-features = false, features = ["gfx942-fill-model"] }
 fe2o3-runtime-model.workspace = true
 fe2o3-resource-accounting.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["event", "mm", "param", "pipe", "process", "thread", "time"] }
 sha2.workspace = true
 zeroize = "=1.9.0"
+
+[dev-dependencies]
+# Decode the captured Worker request in CPU tests, not in the native runtime.
+fe2o3-kernel-analysis = { workspace = true, default-features = false, features = ["authenticated-machine-effect"] }
 
 [lints.rust]
 unsafe_code = "deny"

@@ -134,6 +134,7 @@ pub(crate) enum PreparationStageV1 {
     KernargMap,
     KernargRetain,
     PacketResolve(usize),
+    ConditionalFill,
     Commit,
     Complete,
     Transferred,
@@ -177,6 +178,7 @@ pub(crate) struct FixedDispatchPreparationCustodyV1<const N: usize> {
     current_code: CodeStageV1,
     current_materialized_sha256: Option<[u8; 32]>,
     kernarg: KernargStageV1,
+    conditional_fill: Option<Box<conditional_fill::ConditionalFillStorageV1>>,
     prepared_packets: Vec<PreparedDispatchPacketV1>,
     data_authorities: Vec<DispatchDataAuthorityV1>,
     data_premises: Vec<RetainedDataPremiseV1>,
@@ -206,6 +208,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             current_code: CodeStageV1::Empty,
             current_materialized_sha256: None,
             kernarg: KernargStageV1::Empty,
+            conditional_fill: None,
             prepared_packets: Vec::new(),
             data_authorities: Vec::new(),
             data_premises: Vec::new(),
@@ -310,7 +313,14 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             &layouts,
             &initialized,
         )?);
+        let fill = conditional_fill::check_plan(
+            programs,
+            &self.packets,
+            self.plan.as_ref().unwrap(),
+            self.control,
+        )?;
         self.step(PreparationStageV1::Capacity)?;
+        self.conditional_fill = fill.as_ref().map(|_| Box::default());
         let capacity_error =
             |_| Gfx942DispatchBindingErrorV1::InvalidCode("preparation output capacity");
         self.program_identity
@@ -455,7 +465,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         };
         let plan = self.plan.as_ref().unwrap();
         let data = self.retained_data.as_ref().unwrap();
-        memory.write_kernarg(token, |bytes| {
+        let conditional_kernarg = memory.write_kernarg(token, |bytes| {
             bytes.fill(0);
             for (input, packet) in self.packets.iter().zip(&plan.packets) {
                 let start = packet.kernarg_offset;
@@ -485,7 +495,12 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                     _ => unreachable!("implicit-kernarg preflight plan/value mismatch"),
                 }
             }
+            fill.as_ref()
+                .map(|_| bytes[..conditional_fill::KERNARG_BYTES].try_into().unwrap())
         })?;
+        if let Some(storage) = &mut self.conditional_fill {
+            storage.kernarg = conditional_kernarg;
+        }
         self.step(PreparationStageV1::KernargMap)?;
         let KernargStageV1::Cpu(token) = &self.kernarg else {
             unreachable!("materialized kernarg token")
@@ -524,7 +539,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                     packet: index,
                     detail: "mapped kernarg address",
                 })?;
-            self.prepared_packets.push(PreparedDispatchPacketV1 {
+            let prepared = PreparedDispatchPacketV1 {
                 geometry: input.geometry,
                 ordering: input.ordering,
                 private_segment_size: packet.private_segment_size,
@@ -536,7 +551,34 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                     .dispatch_abi_identity,
                 code_bound_kernarg_layout: true,
                 code_index: input.program_index,
-            });
+                conditional_fill: input.conditional_fill,
+            };
+            if let Some(model) = &fill {
+                self.step(PreparationStageV1::ConditionalFill)?;
+                let KernargStageV1::Retained(kernarg) = &self.kernarg else {
+                    unreachable!("retained kernarg")
+                };
+                let storage = self
+                    .conditional_fill
+                    .as_mut()
+                    .expect("prepaid conditional storage");
+                storage.premises =
+                    Some(conditional_fill::PreparedConditionalFillPremisesV1::check(
+                        model,
+                        &self.packets[index],
+                        self.plan.as_ref().unwrap(),
+                        conditional_fill::NativeFillCustodyV1 {
+                            code: &self.code[0],
+                            code_identity: self.code_identity[0],
+                            kernarg,
+                            output: &self.retained_data.as_ref().unwrap()[0].authority,
+                            generation: self.generation.as_ref().unwrap(),
+                        },
+                        storage.kernarg.expect("captured conditional kernarg"),
+                        prepared,
+                    )?);
+            }
+            self.prepared_packets.push(prepared);
         }
         self.commit()?;
         self.step(PreparationStageV1::Complete)
@@ -588,6 +630,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             data_premises: core::mem::take(&mut self.data_premises),
             generation: self.generation.take().unwrap(),
             persistent_control: self.control,
+            conditional_fill: self.conditional_fill.take(),
         });
         if let Some(roles) = roles {
             let completed = self.completed.as_mut().unwrap();

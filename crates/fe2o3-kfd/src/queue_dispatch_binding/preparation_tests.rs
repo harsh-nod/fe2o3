@@ -12,6 +12,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[path = "template_binding_tests.rs"]
 mod template_binding_tests;
 
+#[path = "conditional_fill_tests.rs"]
+mod conditional_fill_tests;
+
 pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourceOwnerV1) {
     let mut memory = Memory::new(true);
     let data = memory.roster();

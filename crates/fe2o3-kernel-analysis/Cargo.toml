@@ -11,12 +11,14 @@ description = "Conservative kernel IR and authenticated physical-machine analyse
 [features]
 default = ["authenticated-machine-effect", "pliron-analysis"]
 authenticated-machine-effect = [
+    "gfx942-fill-model",
     "dep:fe2o3-artifact-transaction",
     "dep:fe2o3-hsaco",
     "dep:rustc_apfloat",
     "dep:rustix",
     "dep:sha2",
 ]
+gfx942-fill-model = ["dep:fe2o3-hsaco"]
 pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:dialect-proof", "dep:fe2o3-pliron-owner-core", "dep:pliron", "dep:sha2"]
 
 [dependencies]
