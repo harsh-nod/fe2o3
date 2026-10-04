@@ -1,8 +1,0 @@
-error[E0432]: unresolved imports `fe2o3_host::RawHipKernelParams`, `fe2o3_host::RawHipLaunchConfig`, `fe2o3_host::launch_raw_hip`
- --> tests/ui/production_application_handoff/raw_hip_launch_route_is_unavailable.rs:1:18
-  |
-1 | use fe2o3_host::{RawHipKernelParams, RawHipLaunchConfig, launch_raw_hip};
-  |                  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `launch_raw_hip` in the root
-  |                  |                   |
-  |                  |                   no `RawHipLaunchConfig` in the root
-  |                  no `RawHipKernelParams` in the root

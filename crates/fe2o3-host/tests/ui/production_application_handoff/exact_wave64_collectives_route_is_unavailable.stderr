@@ -1,5 +1,0 @@
-error[E0432]: unresolved import `fe2o3_host::join_wave64_collectives_v1`
- --> tests/ui/production_application_handoff/exact_wave64_collectives_route_is_unavailable.rs:1:5
-  |
-1 | use fe2o3_host::join_wave64_collectives_v1;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `join_wave64_collectives_v1` in the root
