@@ -1327,9 +1327,10 @@ fn enum_variant_metadata_validation_has_an_independent_exact_work_boundary() {
                     unreachable!()
                 };
                 *variant = Some(original);
-                // Owner5 + node1 + enum owner5 + charged shape(owner5+6)
+                // Emission owner5 + plan owner5 + node1 + enum owner5
+                // + charged shape(owner5+6)
                 // + two fields(owner5+2 each) + metadata(owner5+2).
-                let exact = 5 + 1 + 5 + (5 + 6) + 2 * (5 + 2) + (5 + 2);
+                let exact = 5 + 5 + 1 + 5 + (5 + 6) + 2 * (5 + 2) + (5 + 2);
                 budget.charge_work(usize::MAX - budget.work() - exact + usize::from(short))?;
                 let before = (budget.work(), budget.storage());
                 let mut untouched = [None];
