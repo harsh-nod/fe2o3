@@ -109,6 +109,7 @@ enum ByteBodiesV56<'a> {
     Inline,
     Define,
     Reuse(&'a [bool]),
+    DefineOrReuse(&'a [bool]),
 }
 
 /// Complete supported operation census over the exact retained Inventory.
@@ -449,7 +450,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
         self.check(out)?;
-        if let ByteBodiesV56::Reuse(rows) = bodies
+        if let ByteBodiesV56::Reuse(rows) | ByteBodiesV56::DefineOrReuse(rows) = bodies
             && rows.len() != self.operations.len()
         {
             return Err(mismatch());
@@ -470,7 +471,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         for (offset, plan) in self.operations.iter().enumerate() {
             out.budget.charge_work(1)?;
             if let ByteOperationV30::Scalar(scalar) = plan
-                && !matches!(bodies, ByteBodiesV56::Reuse(rows) if rows[offset])
+                && !matches!(bodies, ByteBodiesV56::Reuse(rows) | ByteBodiesV56::DefineOrReuse(rows) if rows[offset])
             {
                 scalar.emit_definition(namespace, out)?;
             }
@@ -484,7 +485,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 .ok_or(Resource::Arithmetic)?;
             let body = match bodies {
                 ByteBodiesV56::Define => ByteBodyEmissionV56::Define,
-                ByteBodiesV56::Reuse(rows) if rows[offset] => ByteBodyEmissionV56::Reuse,
+                ByteBodiesV56::Reuse(rows) | ByteBodiesV56::DefineOrReuse(rows) if rows[offset] => {
+                    ByteBodyEmissionV56::Reuse
+                }
+                ByteBodiesV56::DefineOrReuse(_) => ByteBodyEmissionV56::Define,
                 _ => ByteBodyEmissionV56::Inline,
             };
             self.emit_operation(namespace, operation, plan, body, out)?;

@@ -25,6 +25,12 @@ fn emitted_mismatch() -> Error {
     Error::Statement("reused byte function was not emitted for the exact model")
 }
 
+#[derive(Clone, Copy)]
+enum BodyReuseScope {
+    Parent,
+    LocalPredecessor,
+}
+
 impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owner, R> {
     pub(in super::super) fn new(
         inventory: &'a Inventory<'owner>,
@@ -47,7 +53,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 + 2 * size_of::<TransitionBodyV56<'a>>()
                 + size_of::<Option<TransitionBodyV56<'a>>>()
                 + size_of::<Result<Option<TransitionBodyV56<'a>>>>()
-                + size_of::<([&(); 6], [usize; 4], [Result<()>; 2])>(),
+                + size_of::<([&(); 12], [usize; 6], [Result<()>; 2], BodyReuseScope)>(),
         )?;
         let mut namespaces = vector(inventory.functions().len(), out)?;
         out.budget.charge_work(inventory.functions().len())?;
@@ -135,6 +141,26 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         namespace: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
+        self.emit_recorded::<R>(model, namespace, None, out)
+    }
+
+    pub(in super::super) fn emit_after_local_predecessor_v93<S: ByteAllocationResolverV30>(
+        &mut self,
+        model: &ByteFunctionV30<'a, 'owner, R>,
+        namespace: usize,
+        predecessor: &EmittedByteFunctionsV55<'_, '_, S>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.emit_recorded(model, namespace, Some(predecessor), out)
+    }
+
+    fn emit_recorded<S: ByteAllocationResolverV30>(
+        &mut self,
+        model: &ByteFunctionV30<'a, 'owner, R>,
+        namespace: usize,
+        predecessor: Option<&EmittedByteFunctionsV55<'_, '_, S>>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
         let result = (|| {
             self.check_model(model, out)?;
             out.budget.charge_work(3)?;
@@ -145,7 +171,15 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             {
                 return Err(emitted_mismatch());
             }
-            model.emit_with_bodies_v56(namespace, ByteBodiesV56::Define, out)?;
+            match predecessor {
+                Some(previous) => previous.emit_reusing_bodies(
+                    model,
+                    namespace,
+                    BodyReuseScope::LocalPredecessor,
+                    out,
+                )?,
+                None => model.emit_with_bodies_v56(namespace, ByteBodiesV56::Define, out)?,
+            }
             let row = &self.inventory.functions()[function];
             for (operation, plan) in row.operations.clone().zip(&model.operations) {
                 out.budget.charge_work(1)?;
@@ -175,6 +209,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
         namespace: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
+        self.emit_reusing_bodies(model, namespace, BodyReuseScope::Parent, out)
+    }
+
+    fn emit_reusing_bodies<S: ByteAllocationResolverV30>(
+        &self,
+        model: &ByteFunctionV30<'_, '_, S>,
+        namespace: usize,
+        scope: BodyReuseScope,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
         let result = (|| {
             self.check(out)?;
             model.check(out)?;
@@ -195,9 +239,12 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 .copied()
                 .flatten()
                 .ok_or_else(emitted_mismatch)?;
+            let local = matches!(scope, BodyReuseScope::LocalPredecessor);
             if original.coordinate != current.coordinate
-                || original.operations != current.operations
-                || original.blocks != current.blocks
+                || (!local
+                    && (original.operations != current.operations
+                        || original.blocks != current.blocks))
+                || (local && source == namespace)
             {
                 return Err(emitted_mismatch());
             }
@@ -210,12 +257,26 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
             let mut reuse = vector(model.operations.len(), out)?;
             for (operation, plan) in current.operations.clone().zip(&model.operations) {
                 out.budget.charge_work(5)?;
-                let left = &self.inventory.operations()[operation];
                 let right = &model.inventory.operations()[operation];
+                // Motion can change occurrence coordinates. Such operations
+                // keep a new complete body, even if their arithmetic agrees.
+                let Some(left) = self
+                    .inventory
+                    .operations()
+                    .get(operation)
+                    .filter(|_| original.operations.contains(&operation))
+                else {
+                    reuse.push(false);
+                    continue;
+                };
                 if left.coordinate != right.coordinate
                     || block_index(self.inventory, left.coordinate.block)?
                         != block_index(model.inventory, right.coordinate.block)?
                 {
+                    if local {
+                        reuse.push(false);
+                        continue;
+                    }
                     return Err(emitted_mismatch());
                 }
                 let scalar = matches!(plan, ByteOperationV30::Scalar(_));
@@ -233,6 +294,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                 } else {
                     false
                 };
+                // Local-stage allocation transport is independently derived;
+                // leave its body distinct rather than reuse an origin label.
+                let shared = shared && !(local && matches!(plan, ByteOperationV30::Alloca(_)));
                 if shared && let ByteOperationV30::Alloca(alloca) = plan {
                     let site = alloca.allocation_site();
                     if self.sites[operation] != Some(site)
@@ -251,11 +315,20 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> EmittedByteFunctionsV55<'a, 'owne
                     };
                     emit!(
                         out,
-                        "use super::{name}_{source}_{operation}_v{version} as {name}_{namespace}_{operation}_v{version};\n"
+                        "use {}::{name}_{source}_{operation}_v{version} as {name}_{namespace}_{operation}_v{version};\n",
+                        if local { "self" } else { "super" }
                     );
                 }
             }
-            model.emit_with_bodies_v56(namespace, ByteBodiesV56::Reuse(&reuse), out)?;
+            model.emit_with_bodies_v56(
+                namespace,
+                if local {
+                    ByteBodiesV56::DefineOrReuse(&reuse)
+                } else {
+                    ByteBodiesV56::Reuse(&reuse)
+                },
+                out,
+            )?;
             drop(reuse);
             out.budget.release_storage(
                 out.budget

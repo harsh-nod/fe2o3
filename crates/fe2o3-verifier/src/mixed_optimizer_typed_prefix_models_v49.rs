@@ -624,6 +624,19 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             let original_allocations = self.view(AllocationSideV48::Original, out)?;
             let prefix_allocations = self.view(AllocationSideV48::Prefix, out)?;
             let relocated_allocations = self.view(AllocationSideV48::Relocated, out)?;
+            let mut emitted_prefix = if forwarded.is_some() {
+                Some(super::super::super::byte_function_v30::EmittedByteFunctionsV55::new(
+                    output,
+                    output_physical,
+                    &prefix_allocations,
+                    super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(
+                        width, output_contracts, registry_namespace,
+                    ),
+                    out,
+                )?)
+            } else {
+                None
+            };
             let mut emitted_relocated = if forwarded.is_some() {
                 let (physical, contracts) = relocated.ok_or_else(mismatch)?;
                 Some(super::super::super::byte_function_v30::EmittedByteFunctionsV55::new(
@@ -675,18 +688,18 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                 original_emission.map_err(|error| {
                     out.source_section_error(error, "typed prefix original byte functions")
                 })?;
-                after
-                    .emit(
-                        input
-                            .functions()
-                            .len()
-                            .checked_add(function)
-                            .ok_or(Resource::Arithmetic)?,
-                        out,
-                    )
-                    .map_err(|error| {
-                        out.source_section_error(error, "typed prefix output byte functions")
-                    })?;
+                let prefix_namespace = input
+                    .functions()
+                    .len()
+                    .checked_add(function)
+                    .ok_or(Resource::Arithmetic)?;
+                match emitted_prefix.as_mut() {
+                    Some(index) => index.emit(&after, prefix_namespace, out),
+                    None => after.emit(prefix_namespace, out),
+                }
+                .map_err(|error| {
+                    out.source_section_error(error, "typed prefix output byte functions")
+                })?;
                 drop((before, after));
                 if let Some((physical, contracts)) = relocated {
                     let model = super::super::super::byte_function_v30::ByteFunctionV30::derive(
@@ -701,7 +714,12 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                         .and_then(|n| n.checked_add(function))
                         .ok_or(Resource::Arithmetic)?;
                     let emitted = match emitted_relocated.as_mut() {
-                        Some(index) => index.emit(&model, namespace, out),
+                        Some(index) => index.emit_after_local_predecessor_v93(
+                            &model,
+                            namespace,
+                            emitted_prefix.as_ref().ok_or_else(mismatch)?,
+                            out,
+                        ),
                         None => model.emit(namespace, out),
                     };
                     emitted.map_err(|error| {
@@ -777,6 +795,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             }
             emit!(out, "}}\n");
             drop(emitted_relocated);
+            drop(emitted_prefix);
             drop((
                 segments,
                 original_allocations,
