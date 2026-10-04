@@ -1,0 +1,162 @@
+{
+  "head": "1c33f6fa2ae6cb5cdca72e7860db46933d07297a",
+  "tree": "3e081de10f7442b7c14a9dca60c14b7333650770",
+  "groups": [
+    {
+      "label": "cargo",
+      "package": "cargo-fe2o3",
+      "target": "cargo-fe2o3",
+      "kind": "bin",
+      "manifest": "crates/cargo-fe2o3/Cargo.toml",
+      "library": "crates/cargo-fe2o3/src/main.rs",
+      "minimum_total": 498,
+      "required_normal_leaves": [
+        "production_census_roundtrip_is_bounded_canonical_and_non_authoritative",
+        "production_census_rejects_legacy_identity_roster_and_authority_substitution",
+        "production_census_binds_every_broker_occurrence_axis",
+        "production_census_collector_requires_all_units_and_exact_payload_duplicates",
+        "production_census_transport_does_not_accept_summary_or_characteristic_payloads"
+      ],
+      "focused_normal_leaves": [
+        "production_census_roundtrip_is_bounded_canonical_and_non_authoritative",
+        "production_census_rejects_legacy_identity_roster_and_authority_substitution",
+        "production_census_binds_every_broker_occurrence_axis",
+        "production_census_collector_requires_all_units_and_exact_payload_duplicates",
+        "production_census_transport_does_not_accept_summary_or_characteristic_payloads"
+      ],
+      "threads": 1
+    },
+    {
+      "label": "protocol",
+      "package": "fe2o3-runtime-protocol",
+      "target": "fe2o3_runtime_protocol",
+      "kind": "lib",
+      "manifest": "crates/fe2o3-runtime-protocol/Cargo.toml",
+      "library": "crates/fe2o3-runtime-protocol/src/lib.rs",
+      "minimum_total": 22,
+      "required_normal_leaves": [
+        "ack_codec_rejects_truncation_trailing_bytes_and_state_substitution",
+        "ack_rejects_stale_challenge_application_envelope_and_inputs",
+        "application_occurrence_rejects_aliasing_duplicate_slots_and_zero_values",
+        "application_occurrence_sorts_inputs_and_round_trips_canonically",
+        "challenge_expectation_commitment_and_ack_round_trip_and_bind_state",
+        "count_and_allocation_budgets_fail_before_allocation",
+        "decoder_rejects_every_truncation_and_trailing_bytes",
+        "decoder_rejects_hostile_lengths_counts_reserved_and_checksum",
+        "decoder_rejects_noncanonical_and_aliased_wire_inputs",
+        "every_worker_v3_state_wire_has_distinct_magic_and_rejects_cross_use",
+        "exact_identity_codecs_have_distinct_magic_and_reject_cross_use",
+        "linux_descriptor_occurrence_is_stable_and_binds_each_object_axis",
+        "maximum_input_count_is_bounded_and_canonical",
+        "opaque_envelope_identity_is_exact_schema_independent_and_inert",
+        "zero_challenge_and_zero_state_identities_fail_closed",
+        "codec_budget_rejects_wire_and_allocation_exhaustion",
+        "hostile_count_and_lengths_are_rejected_without_allocation",
+        "magic_version_reserved_and_checksum_are_rejected",
+        "provider_substitution_and_reordering_are_not_accepted_as_canonical_evidence",
+        "streaming_provider_archive_binding_matches_the_transaction_codec",
+        "truncation_and_trailing_bytes_are_rejected_before_nested_decode",
+        "worker_v2_wires_have_no_v3_fallback"
+      ],
+      "focused_normal_leaves": [
+        "ack_codec_rejects_truncation_trailing_bytes_and_state_substitution",
+        "ack_rejects_stale_challenge_application_envelope_and_inputs",
+        "application_occurrence_rejects_aliasing_duplicate_slots_and_zero_values",
+        "application_occurrence_sorts_inputs_and_round_trips_canonically",
+        "challenge_expectation_commitment_and_ack_round_trip_and_bind_state",
+        "count_and_allocation_budgets_fail_before_allocation",
+        "decoder_rejects_every_truncation_and_trailing_bytes",
+        "decoder_rejects_hostile_lengths_counts_reserved_and_checksum",
+        "decoder_rejects_noncanonical_and_aliased_wire_inputs",
+        "every_worker_v3_state_wire_has_distinct_magic_and_rejects_cross_use",
+        "exact_identity_codecs_have_distinct_magic_and_reject_cross_use",
+        "linux_descriptor_occurrence_is_stable_and_binds_each_object_axis",
+        "maximum_input_count_is_bounded_and_canonical",
+        "opaque_envelope_identity_is_exact_schema_independent_and_inert",
+        "zero_challenge_and_zero_state_identities_fail_closed",
+        "codec_budget_rejects_wire_and_allocation_exhaustion",
+        "hostile_count_and_lengths_are_rejected_without_allocation",
+        "magic_version_reserved_and_checksum_are_rejected",
+        "provider_substitution_and_reordering_are_not_accepted_as_canonical_evidence",
+        "streaming_provider_archive_binding_matches_the_transaction_codec",
+        "truncation_and_trailing_bytes_are_rejected_before_nested_decode",
+        "worker_v2_wires_have_no_v3_fallback"
+      ],
+      "threads": 2
+    }
+  ],
+  "source_pins": [
+    {
+      "path": "crates/cargo-fe2o3/src/binding_wrapper.rs",
+      "sha256": "cb29a1c9633a7ca4fb6ec5162c4c4726ca2d119860e4258b5b8a0b0348ac0288"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/build_config.rs",
+      "sha256": "e614c21a94e473bfc21dcac4957b05f6b926038db8b60c2729b8f70676a38c84"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/build_config_tests.rs",
+      "sha256": "a379cd5ba8220468fde77ddbc442009bf625ec23074f760ba1ed092564ce73dc"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/capability_broker.rs",
+      "sha256": "78dbc8f2bde51c526a8457a48fd73c0866c770b48b29dbe408545b94bee9589e"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/main.rs",
+      "sha256": "cb70164508bfaf0ed31967cbc1deb2c14d01a84965d2920d7f2490f1fd8ffde3"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/production_census_v91.rs",
+      "sha256": "0849fb56d9d623aa7af4623ecb06bbd493d9dd18267da6ff39ce051705d62ea1"
+    },
+    {
+      "path": "docs/compiler/tutorial-production-census-v91.md",
+      "sha256": "6cc1474c95e604f9c5428ed7ca3e1908b84917345eae951825aa119524961d08"
+    },
+    {
+      "path": "scripts/qualify-tutorial-default-cargo.py",
+      "sha256": "44e88be17ec6ef95da14ba05d811518fe70ab32148f6c28f259023e745a0583a"
+    },
+    {
+      "path": "scripts/tests/tutorial_default_cargo.py",
+      "sha256": "625c75cbaff65350a1d764f7049c4f32836981065f335d553b7826dd4192589e"
+    },
+    {
+      "path": "scripts/tests/tutorial_production_census_v91.py",
+      "sha256": "9cd13f5bdd1221ca52d731f4dd08b1bf8085c1024ee191a28ed62dabbb3361c7"
+    },
+    {
+      "path": "scripts/tutorial_production_census_v91.py",
+      "sha256": "80ce65620c7aa5c019f308ca855c15d7659d46e9b80eddf67c539e3394d4cbaf"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "ce1f3e4422849a13bf3603c7e49c2e8e8080dfef1a768963e00a13ef86d33b3c"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "028250a2cdd1c0f2576f419bf93310389c189bb5cc74888a20c6eb6154e116af"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "49eeb550dd57841add3be3442177e78f6f0668ffc4f31739ce78d75f8129b154"
+    },
+    {
+      "path": "crates/cargo-fe2o3/Cargo.toml",
+      "sha256": "7ca32c1de8a41610c6673d97a70e4f29664f459b319b817d2bb316c15d49dfef"
+    },
+    {
+      "path": "crates/fe2o3-runtime-protocol/Cargo.toml",
+      "sha256": "02ac72f5a37bb4606ed49acd929960bceb999c3586133fd398ee879365e0af05"
+    },
+    {
+      "path": "crates/fe2o3-runtime-protocol/src/lib.rs",
+      "sha256": "b7999b6526ad37a6397d3669888ad629316f4a04ec65e0df6f02833d22585c0e"
+    },
+    {
+      "path": "crates/cargo-fe2o3/src/source_isa_observation.rs",
+      "sha256": "47c5d472a4e359137fdc8b1d7794fae7137f31f9daf02feacd31863cbf3c546f"
+    }
+  ]
+}
