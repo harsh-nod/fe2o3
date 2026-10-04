@@ -1,17 +1,17 @@
-name: Issue 271 Typed Global Guard and Write Suffix Diagnostic
+name: Issue 271 Predicated Host Full Ordinary Diagnostic
 
 on:
   push:
-    branches: [wip/issue271-host-predicated-diagnostic-v88-20261004]
+    branches: [wip/issue271-host-broad-diagnostic-v89-20261004]
 
 permissions:
   contents: read
 
 jobs:
   verifier-ordinary:
-    name: Exact 76b8ae host-predicated18 ordinary tests (diagnostic only)
+    name: Exact 5b2a64 full host ordinary tests (diagnostic only)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 70
     steps:
       - name: Check out diagnostic control
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -22,7 +22,7 @@ jobs:
       - name: Check out exact reviewed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 76b8ae8ad8f24ec4f5eae80cd1039815dead53dd
+          ref: 5b2a642fc236e18a0076b18a6c23d75c7c9230f3
           path: source
           persist-credentials: false
       - name: Install generic test prerequisites
@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-host-predicated-76b8ae-ordinary-v88-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue271-host-predicated-v88-logs/
+          name: issue271-host-broad-5b2a64-ordinary-v89-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue271-host-broad-v89-logs/
           if-no-files-found: warn
           retention-days: 7

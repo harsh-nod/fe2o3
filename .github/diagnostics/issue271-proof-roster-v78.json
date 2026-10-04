@@ -1,8 +1,9 @@
 {
-  "head": "76b8ae8ad8f24ec4f5eae80cd1039815dead53dd",
-  "tree": "522902aab13d2c9422111aceeedcf43db21473f6",
+  "head": "5b2a642fc236e18a0076b18a6c23d75c7c9230f3",
+  "tree": "99c56b12f981ceb32e638c52e682bbd6c118b3fc",
   "package": "fe2o3-host",
-  "filters": [
+  "expected_total": 174,
+  "required_normal_leaves": [
     "generated_mixed_complete_join_refuses_same_count_abi_and_packing_substitution",
     "generated_mixed_exact_and_one_short_join_limits_preserve_inherited_storage",
     "generated_mixed_generic_representation_preserves_distinct_conditional_occurrence_binding",
@@ -15,6 +16,10 @@
     "mixed_v53_generated_preparation_preserves_nested_resource_sources",
     "mixed_v53_generated_preparation_reaches_real_packer_and_preserves_v26_family",
     "mixed_v53_generated_preparation_refuses_candidate_layout_and_contract_substitution",
+    "predicated_generated_preparation_has_exact_and_one_short_complete_resources",
+    "predicated_generated_preparation_keeps_original_typed_resource_source",
+    "predicated_generated_preparation_reaches_actual_packer_with_empty_and_mixed_guards",
+    "predicated_generated_preparation_refuses_layout_contract_and_formation_substitution",
     "predicated_mixed_pack_exact_and_one_short_resources_preserve_custody",
     "predicated_mixed_pack_keeps_unused_and_empty_slice_obligations",
     "predicated_mixed_pack_preserves_full_guard_identity",
@@ -22,81 +27,6 @@
     "predicated_mixed_pack_rejects_wrong_subject_layout_content_and_launch",
     "predicated_mixed_pack_retains_exact_v86_rows_and_runtime_identity"
   ],
-  "rows": [
-    {
-      "name": "generated_mixed_complete_join_refuses_same_count_abi_and_packing_substitution",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_exact_and_one_short_join_limits_preserve_inherited_storage",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_generic_representation_preserves_distinct_conditional_occurrence_binding",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_launch_access_domain_and_empty_bindings_remain_distinct",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_pack_preserves_multiple_accesses_real_borrows_and_runtime_family",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_physical_envelope_binds_workgroup_and_each_actual_dispatch",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "generated_mixed_unused_slice_keeps_complete_actual_mapping_without_fake_read",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_conditional_v26_tests.rs"
-    },
-    {
-      "name": "mixed_v53_generated_preparation_has_exact_and_one_short_complete_resources",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs"
-    },
-    {
-      "name": "mixed_v53_generated_preparation_preserves_aligned_empty_slices_without_buffers",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs"
-    },
-    {
-      "name": "mixed_v53_generated_preparation_preserves_nested_resource_sources",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs"
-    },
-    {
-      "name": "mixed_v53_generated_preparation_reaches_real_packer_and_preserves_v26_family",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs"
-    },
-    {
-      "name": "mixed_v53_generated_preparation_refuses_candidate_layout_and_contract_substitution",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_exact_and_one_short_resources_preserve_custody",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_keeps_unused_and_empty_slice_obligations",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_preserves_full_guard_identity",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_refuses_logical_only_address_formation_even_when_empty",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_rejects_wrong_subject_layout_content_and_launch",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    },
-    {
-      "name": "predicated_mixed_pack_retains_exact_v86_rows_and_runtime_identity",
-      "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs"
-    }
-  ],
-  "ignored_not_selected": [],
   "source_pins": [
     {
       "path": "Cargo.lock",
@@ -128,20 +58,24 @@
     },
     {
       "path": "crates/fe2o3-host/src/generated_kfd_mixed_contract_v88_tests.rs",
-      "sha256": "0cb3e6bc6e8452a15bf1fd72b38f37696e06f8c3c4218615c1af396fff70ebc4"
+      "sha256": "99e5dc4aeac56ec8b6f6f7c60a8878c9c99fbf0e40bac0e03aa00eb68a43b82e"
+    },
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53.rs",
+      "sha256": "316b4a3f2e5768ce8812e57213e07f370271a94fe1b33ffd46a453dcb26270fe"
     },
     {
       "path": "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs",
-      "sha256": "8acb10871745856feb74bb170e00ae499f9e1a409bc254be454c5e36a40894d8"
+      "sha256": "7b77131e228f2fb49bd8a55ca6d205f5cdd63a6538da0332cd5d572f44bb6159"
+    },
+    {
+      "path": "crates/fe2o3-host/src/generated_kfd_predicated_preparation_v89_tests.rs",
+      "sha256": "55aecc1f74da95eb7d3b59e2d4cf3c63f43a4837e2f11c392bf2c0bb3d3b98b7"
     },
     {
       "path": "rust-toolchain.toml",
       "sha256": "49eeb550dd57841add3be3442177e78f6f0668ffc4f31739ce78d75f8129b154"
     }
   ],
-  "union": {
-    "prior_mixed": 12,
-    "predicated": 6,
-    "distinct": 18
-  }
+  "scope": "Complete compiled host ordinary discovery/run, unchanged no-default-features; all22 mixed packing/preparation tests required normal. No owning proof or execution authority."
 }
