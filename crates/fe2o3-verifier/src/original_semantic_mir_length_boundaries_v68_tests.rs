@@ -74,9 +74,10 @@ fn original_complete_source_model_keeps_signed_length_boundaries_and_all_shared_
         ] {
             assert_eq!(text.matches(&format!("proof fn {equation}(")).count(), 1);
         }
+        // Five semantic obligations and their independently checked shared helper.
         assert_eq!(
             DESCRIPTOR_EFFECT_EQUATIONS_V68.matches("proof fn ").count(),
-            5
+            6
         );
         for forbidden in ["assume(", "external_body", "admit(", "assume_specification"] {
             assert!(!text.contains(forbidden), "{forbidden}");
