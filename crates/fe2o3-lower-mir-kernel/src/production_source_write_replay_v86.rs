@@ -9,6 +9,7 @@ fn source_write_replay_headers_v86() -> Result<usize, ArgumentResourceV1> {
         [Coordinate; 7],
         [&'a Operation; 7],
         SourceOwnedResultV18<&'a [PendingSourceWriteV86]>,
+        SourceOwnedResultV18<[Coordinate; 7]>,
         SourceOwnedResultV18<()>,
         Result<Type, ProductionSemanticKirErrorV1>,
         [Type; 2],
@@ -18,6 +19,60 @@ fn source_write_replay_headers_v86() -> Result<usize, ArgumentResourceV1> {
         std::mem::align_of::<Frame<'_>>(),
         checked_write_tail_headers_v85()?,
     ])
+}
+
+pub(super) fn checked_source_writes_v87<'view>(
+    original: &'view ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<&'view [PendingSourceWriteV86]> {
+    original.query(budget)?;
+    original.retain_query((|| {
+        let owner = original.source.root_row(root)?;
+        let Some(pending) = owner.source_slots.pending_memory.as_ref() else {
+            return Ok(&[][..]);
+        };
+        check_immutable_issued_roles_v18(original, root, &pending.issued, budget)?;
+        Ok(pending.issued.writes.as_slice())
+    })())
+}
+
+pub(super) fn source_write_tail_locations_v87(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    row: &PendingSourceWriteV86,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<[fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1; 7]> {
+    let mut tail = [None; 7];
+    for source in
+        original.source_operation_rows(root, row.instance.index(), row.block, None, budget)?
+    {
+        budget.charge_work(8)?;
+        let ProductionSourceOperationV18::Operation(operation) =
+            original.mapped_source_operation(source.location, budget)?
+        else {
+            return original
+                .source
+                .missing("source write original operation is absent");
+        };
+        tail.rotate_left(1);
+        tail[6] = Some(operation);
+    }
+    let [
+        Some(length),
+        Some(extent),
+        Some(zero),
+        Some(offset),
+        Some(data),
+        Some(pointer),
+        Some(store),
+    ] = tail
+    else {
+        return original
+            .source
+            .missing("source write original suffix is incomplete");
+    };
+    Ok([length, extent, zero, offset, data, pointer, store])
 }
 
 fn check_immutable_source_writes_v86(
@@ -99,36 +154,8 @@ fn check_immutable_source_writes_v86(
             row.definition,
             budget,
         )?;
-        let mut tail = [None; 7];
-        for source in
-            original.source_operation_rows(root, row.instance.index(), row.block, None, budget)?
-        {
-            budget.charge_work(8)?;
-            let ProductionSourceOperationV18::Operation(operation) =
-                original.mapped_source_operation(source.location, budget)?
-            else {
-                return original
-                    .source
-                    .missing("source write original operation is absent");
-            };
-            tail.rotate_left(1);
-            tail[6] = Some(operation);
-        }
-        let [
-            Some(length),
-            Some(extent),
-            Some(zero),
-            Some(offset),
-            Some(data),
-            Some(pointer),
-            Some(store),
-        ] = tail
-        else {
-            return original
-                .source
-                .missing("source write original suffix is incomplete");
-        };
-        let coordinates = [length, extent, zero, offset, data, pointer, store];
+        let coordinates = source_write_tail_locations_v87(original, root, row, budget)?;
+        let [length, _, _, _, _, _, store] = coordinates;
         let first = source_operation_row_v18(original.inventory, length, budget)?.operation;
         let mut operations = [first; 7];
         for (destination, coordinate) in operations.iter_mut().zip(coordinates).skip(1) {
