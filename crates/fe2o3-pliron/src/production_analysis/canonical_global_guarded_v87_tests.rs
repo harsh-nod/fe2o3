@@ -66,6 +66,7 @@ fn pending_guarded_v87_opt_in_preserves_three_operands_and_legacy_refusal() {
                         budget,
                         |view, budget| {
                             for function in 1..=count {
+                                let before = budget.work();
                                 let operation = view
                                     .operation(
                                         pending.owner,
@@ -73,6 +74,7 @@ fn pending_guarded_v87_opt_in_preserves_three_operands_and_legacy_refusal() {
                                         budget,
                                     )?
                                     .unwrap();
+                                assert_eq!(budget.work() - before, 16);
                                 let expected = &pending.owner.module().functions[function]
                                     .body
                                     .as_ref()
@@ -90,6 +92,16 @@ fn pending_guarded_v87_opt_in_preserves_three_operands_and_legacy_refusal() {
                                     }
                                 ));
                                 assert!(operation.results.is_empty());
+                            }
+                            for (location, supported) in
+                                [(coordinate(1, 0), true), (coordinate(0, 0), false)]
+                            {
+                                let before = budget.work();
+                                assert_eq!(
+                                    view.operation(pending.owner, location, budget)?.is_some(),
+                                    supported
+                                );
+                                assert_eq!(budget.work() - before, 16);
                             }
                             assert!(!view.memory_safety_is_complete());
                             assert!(!view.native_stage_coverage_is_complete());

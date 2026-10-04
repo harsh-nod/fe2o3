@@ -95,11 +95,19 @@ impl PendingCanonicalGlobalAccessesV18<'_, '_> {
             .and_then(|body| body.blocks.get(coordinate.block.block as usize))
             .and_then(|block| block.operations.get(coordinate.operation as usize))
             .ok_or_else(|| self.guard.exact_graph())?;
-        if self.guarded_stores_v87 {
-            if let Some(actual) = self.graph.pending_guarded_global_operation_v87(coordinate) {
-                debug_assert!(std::ptr::eq(row, actual));
-                return Ok(Some(actual));
-            }
+        if self.guarded_stores_v87
+            && matches!(
+                row.kind,
+                fe2o3_kernel_ir::OperationKind::GuardedStore { .. }
+            )
+        {
+            return Ok(self
+                .graph
+                .pending_guarded_global_operation_v87(coordinate)
+                .map(|actual| {
+                    debug_assert!(std::ptr::eq(row, actual));
+                    actual
+                }));
         }
         Ok(self
             .graph
