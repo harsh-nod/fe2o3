@@ -2265,7 +2265,14 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                     None => {
                         // Unknown Private/Generic pointers may alias every
                         // tracked cell. They cannot be ignored as unrelated.
-                        if object || self.exact(pointer, budget)?.is_some() {
+                        // The closed compiler-use census authenticates only
+                        // this exact store; disjointness alone is insufficient.
+                        if (object
+                            && self
+                                .compiler_reference_use_v55(block.id, ordinal, operation, budget)?
+                                .is_none())
+                            || self.exact(pointer, budget)?.is_some()
+                        {
                             return Err(source_raw_physical_error_v29());
                         }
                     }
