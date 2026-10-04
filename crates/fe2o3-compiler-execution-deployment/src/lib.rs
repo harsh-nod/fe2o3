@@ -1416,6 +1416,8 @@ mod tests {
     const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    include!("installed_namespace_v77_tests.rs");
+
     #[test]
     fn manifest_sources_follow_sha256sum_byte_order() {
         let sources = FILE_SPECS_V1

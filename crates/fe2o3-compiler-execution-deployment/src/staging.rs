@@ -956,6 +956,9 @@ fn refresh_mount_namespace_descriptors(
     }
     // Keep original cleanup custody until the entire current-namespace tree is checked.
     revalidate_staged_qualification(staged, owner)?;
+    staged
+        .prepared
+        .refresh_installed_mount_namespace_descriptors(owner)?;
     staged.root = Some(root);
     staged.directories = directories;
     revalidate_staged_qualification(staged, owner)

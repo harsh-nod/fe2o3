@@ -128,6 +128,13 @@ impl PreparedCompilerExecutionQualificationV1 {
         &self.installed
     }
 
+    pub(super) fn refresh_installed_mount_namespace_descriptors(
+        &mut self,
+        owner: (u32, u32),
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        self.installed.refresh_mount_namespace_descriptors(owner)
+    }
+
     pub(super) fn sealed_base_image(&self) -> &File {
         &self.base.file
     }

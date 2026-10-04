@@ -123,6 +123,13 @@ insertion and parent-path replacement.
 The root-only mount transaction runs only after entering a new mount namespace
 from a dedicated single-threaded process and making `/` recursively private.
 The namespace identity is retained and rechecked before every operation.
+The installed lower root and its original install parent are also reopened in
+the current namespace before loop attachment. Their complete object snapshots,
+original no-symlink/no-magic-link path policy, deterministic root name, and full
+sealed deployment projection must agree before either retained descriptor is
+replaced. A descriptor opened before namespace entry still refers to the old
+mount object even when its inode is unchanged; OverlayFS refuses to clone that
+foreign-namespace lower. Reopening is custody preservation, not new authority.
 Staging descriptors are reopened in that namespace with the original no-symlink,
 no-cross-filesystem resolver and exact retained tree identities. Mount attachment
 and cleanup require Linux 6.8 or newer with `STATX_MNT_ID_UNIQUE`; the returned
