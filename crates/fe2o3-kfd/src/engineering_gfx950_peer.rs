@@ -242,19 +242,56 @@ struct NativeTransaction<'a> {
     local_id: u64,
 }
 
-fn check_contexts(contexts: &mut [Context], shared_full_currentness: bool) -> Result<()> {
+trait ContextFenceBackend {
+    fn participants(&self) -> usize;
+    fn shared_full_currentness(&mut self) -> Result<()>;
+    fn full_currentness(&mut self, rank: usize) -> Result<()>;
+    fn idle(&mut self, rank: usize) -> Result<()>;
+    fn idle_after_currentness(&mut self, rank: usize) -> Result<()>;
+}
+
+fn run_context_fence(
+    backend: &mut impl ContextFenceBackend,
+    shared_full_currentness: bool,
+) -> Result<()> {
     if shared_full_currentness {
-        host_observation::shared_currentness(contexts, host_observation::SharedScope::GroupFence)?;
-        for context in contexts {
-            context.check_idle()?;
+        // One fresh group observation includes each rank's full mutable checks.
+        // Only the queue validation remains; do not rediscover topology per rank.
+        backend.shared_full_currentness()?;
+        for rank in 0..backend.participants() {
+            backend.idle_after_currentness(rank)?;
         }
     } else {
-        for context in contexts {
-            context.check_currentness(true)?;
-            context.check_idle()?;
+        for rank in 0..backend.participants() {
+            backend.full_currentness(rank)?;
+            backend.idle(rank)?;
         }
     }
     Ok(())
+}
+
+struct NativeContextFence<'a>(&'a mut [Context]);
+
+impl ContextFenceBackend for NativeContextFence<'_> {
+    fn participants(&self) -> usize {
+        self.0.len()
+    }
+    fn shared_full_currentness(&mut self) -> Result<()> {
+        host_observation::shared_currentness(self.0, host_observation::SharedScope::GroupFence)
+    }
+    fn full_currentness(&mut self, rank: usize) -> Result<()> {
+        self.0[rank].check_currentness(true)
+    }
+    fn idle(&mut self, rank: usize) -> Result<()> {
+        self.0[rank].check_idle()
+    }
+    fn idle_after_currentness(&mut self, rank: usize) -> Result<()> {
+        self.0[rank].check_idle_after_currentness()
+    }
+}
+
+fn check_contexts(contexts: &mut [Context], shared_full_currentness: bool) -> Result<()> {
+    run_context_fence(&mut NativeContextFence(contexts), shared_full_currentness)
 }
 
 impl PeerTransactionBackend for NativeTransaction<'_> {

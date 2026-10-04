@@ -1,5 +1,136 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FenceEvent {
+    Shared,
+    Full(usize),
+    Idle(usize),
+    Queue(usize),
+}
+
+struct RecordingContextFence {
+    participants: usize,
+    events: Vec<FenceEvent>,
+    fail_at: Option<usize>,
+}
+
+impl RecordingContextFence {
+    fn record(&mut self, event: FenceEvent) -> Result<()> {
+        self.events.push(event);
+        if self.fail_at == Some(self.events.len()) {
+            Err("injected context fence failure".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl ContextFenceBackend for RecordingContextFence {
+    fn participants(&self) -> usize {
+        self.participants
+    }
+    fn shared_full_currentness(&mut self) -> Result<()> {
+        self.record(FenceEvent::Shared)
+    }
+    fn full_currentness(&mut self, rank: usize) -> Result<()> {
+        self.record(FenceEvent::Full(rank))
+    }
+    fn idle(&mut self, rank: usize) -> Result<()> {
+        self.record(FenceEvent::Idle(rank))
+    }
+    fn idle_after_currentness(&mut self, rank: usize) -> Result<()> {
+        self.record(FenceEvent::Queue(rank))
+    }
+}
+
+fn fence_events(participants: usize, shared: bool) -> Vec<FenceEvent> {
+    if shared {
+        std::iter::once(FenceEvent::Shared)
+            .chain((0..participants).map(FenceEvent::Queue))
+            .collect()
+    } else {
+        (0..participants)
+            .flat_map(|rank| [FenceEvent::Full(rank), FenceEvent::Idle(rank)])
+            .collect()
+    }
+}
+
+#[test]
+fn shared_context_fence_checks_every_queue_after_one_fresh_group_observation() {
+    for participants in [2, 8] {
+        let mut backend = RecordingContextFence {
+            participants,
+            events: vec![],
+            fail_at: None,
+        };
+        run_context_fence(&mut backend, true).unwrap();
+        assert_eq!(backend.events, fence_events(participants, true));
+        run_context_fence(&mut backend, true).unwrap();
+        let expected = fence_events(participants, true).repeat(2);
+        assert_eq!(backend.events, expected);
+        backend.fail_at = Some(expected.len() + 1);
+        assert!(run_context_fence(&mut backend, true).is_err());
+        assert_eq!(&backend.events[..expected.len()], expected);
+        assert_eq!(&backend.events[expected.len()..], [FenceEvent::Shared]);
+    }
+}
+
+#[test]
+fn ordinary_context_fence_keeps_full_and_idle_checks_in_rank_order() {
+    for participants in [2, 8] {
+        let mut backend = RecordingContextFence {
+            participants,
+            events: vec![],
+            fail_at: None,
+        };
+        run_context_fence(&mut backend, false).unwrap();
+        assert_eq!(backend.events, fence_events(participants, false));
+    }
+}
+
+#[test]
+fn every_context_fence_failure_stops_and_quarantines_the_group() {
+    for participants in [2, 8] {
+        for shared in [false, true] {
+            let expected = fence_events(participants, shared);
+            for fail_at in 1..=expected.len() {
+                let mut backend = RecordingContextFence {
+                    participants,
+                    events: vec![],
+                    fail_at: Some(fail_at),
+                };
+                let result = run_context_fence(&mut backend, shared);
+                assert!(result.is_err());
+                assert_eq!(backend.events, expected[..fail_at]);
+                let mut group = Gfx950EngineeringPeerGroupV1 {
+                    incarnation: 7,
+                    contexts: vec![],
+                    buffers: BTreeMap::new(),
+                    next_buffer: 1,
+                    poisoned: false,
+                    closed: false,
+                    shared_full_currentness: shared,
+                };
+                let token = Gfx950EngineeringPeerBufferV1 {
+                    group: 7,
+                    id: 1,
+                    owner: 0,
+                    bytes: 8,
+                };
+                assert!(group.finish(result).is_err());
+                assert!(group.poisoned);
+                let quarantine = "peer group is closed or quarantined";
+                assert_eq!(group.require_active().unwrap_err(), quarantine);
+                assert_eq!(group.allocate(0, &[1], 8).unwrap_err(), quarantine);
+                assert_eq!(group.write(token, 0, &[0]).unwrap_err(), quarantine);
+                assert_eq!(group.read(token, 0, 1).unwrap_err(), quarantine);
+                assert_eq!(group.release(token).unwrap_err(), quarantine);
+                assert_eq!(group.close().unwrap_err(), quarantine);
+            }
+        }
+    }
+}
+
 #[test]
 fn group_record_budget_is_bounded_by_participant_allocation_limits() {
     assert_eq!(group_allocation_limit(2).unwrap(), 4096);

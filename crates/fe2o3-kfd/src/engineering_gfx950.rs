@@ -614,6 +614,15 @@ impl Context {
             return Err("ordered batch context is terminally poisoned".into());
         }
         self.check_currentness(false)?;
+        self.check_idle_after_currentness()
+    }
+
+    // Only the ordinary wrapper or an immediately preceding fresh group fence
+    // may use this queue check. No currentness observation is retained for reuse.
+    fn check_idle_after_currentness(&mut self) -> Result<()> {
+        if self.ordered_batch_poisoned {
+            return Err("ordered batch context is terminally poisoned".into());
+        }
         let (write, read) =
             Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
                 .map_err(explain)?;
