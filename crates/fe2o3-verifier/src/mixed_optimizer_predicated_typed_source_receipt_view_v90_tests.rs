@@ -318,11 +318,14 @@ fn predicated_inert_receipt_preserves_outer_floor_and_sticky_denials_before_retr
         );
         assert_eq!(budget.storage(), FLOOR);
         let debited = budget.work();
+        let denial = (budget.failed_work(), budget.failed_storage());
+        assert!(denial.0.is_some() || denial.1.is_some());
         for _ in 0..2 {
             assert!(
                 check_inert_predicated_typed_source_receipt_v90(input(&wire), &mut budget).is_err()
             );
             assert_eq!((budget.work(), budget.storage()), (debited, FLOOR));
+            assert_eq!((budget.failed_work(), budget.failed_storage()), denial);
         }
     }
 }
