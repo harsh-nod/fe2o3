@@ -31,6 +31,7 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
+mod production_census_v91;
 mod profile_command;
 mod profile_dispatch_import_v1;
 mod profile_live_qualification_v1;
@@ -2029,6 +2030,52 @@ fn finish_capability_broker_observations_to(
             let frames = decoded.frames().len();
             let missing = decoded.missing_units().len();
             let failure = decoded.failure().map_or(0, |failure| failure.code());
+            if !completed.census.is_empty() {
+                if completed.census.len() != frames || missing != 0 || failure != 0 {
+                    let _ = observer_telemetry::write_line_to(
+                        output,
+                        format_args!("[cargo-fe2o3] incomplete production census refused"),
+                    );
+                    return;
+                }
+                let encoded = (|| -> Result<Vec<u8>, String> {
+                    let mut rows = Vec::new();
+                    rows.try_reserve_exact(frames).map_err(|e| e.to_string())?;
+                    for ((unit, bytes), frame) in completed.census.iter().zip(decoded.frames()) {
+                        let row = production_census_v91::Census::decode(bytes)?;
+                        row.check_frame(frame)?;
+                        if row.unit != *unit || row.config != completed.config {
+                            return Err("production census collector context differs".to_owned());
+                        }
+                        rows.push(row);
+                    }
+                    let bytes = serde_json::to_vec(&rows).map_err(|e| e.to_string())?;
+                    if bytes.len() > production_census_v91::MAX_AGGREGATE {
+                        return Err("production census aggregate bound".to_owned());
+                    }
+                    Ok(bytes)
+                })();
+                match encoded.and_then(|bytes| source_isa_collection_hex(&bytes)) {
+                    Ok(bytes) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "{} frames={frames} missing=0 failure=0 encoding=hex:{bytes} authority=observation-only",
+                                production_census_v91::PREFIX
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "[cargo-fe2o3] production census encoding failed: {error}"
+                            ),
+                        );
+                    }
+                }
+                return;
+            }
             if let Some((unit, characteristic)) = completed.characteristic {
                 if frames != 1 || missing != 0 || failure != 0 {
                     let _ = observer_telemetry::write_line_to(

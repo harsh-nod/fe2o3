@@ -142,6 +142,7 @@ impl ProductionSourceIsaObserverPolicyV1 {
 pub(crate) enum ProductionSourceIsaObservationKindV1 {
     Summary,
     Characteristic,
+    ProductionCensusV91,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -972,6 +973,9 @@ fn parse_source_isa_observation(
     let observation = exact_object(value, OBSERVATION_KEYS_V1, "observation")?;
     let kind = required_string(observation, "kind", "observation")?;
     match kind {
+        crate::production_census_v91::KIND => {
+            Ok(ProductionSourceIsaObservationKindV1::ProductionCensusV91)
+        }
         SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1 => Ok(ProductionSourceIsaObservationKindV1::Summary),
         SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1 => {
             Ok(ProductionSourceIsaObservationKindV1::Characteristic)

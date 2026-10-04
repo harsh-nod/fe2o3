@@ -1989,6 +1989,11 @@ impl SourceIsaObservationEmitterV1 {
         &mut self,
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
     ) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
         if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
             self.sink.take();
             report_source_isa_observation_emission(
@@ -2019,6 +2024,12 @@ impl SourceIsaObservationEmitterV1 {
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
     ) {
         let status = match self.kind {
+            crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91 => {
+                self.sink.take();
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "production census requires the completed V89 managed path".to_owned(),
+                )
+            }
             crate::build_config::ProductionSourceIsaObservationKindV1::Summary => {
                 emit_source_isa_observation_once(
                     &mut self.sink,
@@ -2054,6 +2065,11 @@ impl SourceIsaObservationEmitterV1 {
     }
 
     fn emit_ready(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
         if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
             self.sink.take();
             report_source_isa_observation_emission(
@@ -2075,6 +2091,52 @@ impl SourceIsaObservationEmitterV1 {
 }
 
 impl ManagedProductionAttempt {
+    fn prepare_census_v91(
+        &self,
+        wire: &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV2,
+        artifact: &[u8],
+    ) -> Option<Result<crate::production_census_v91::Census, String>> {
+        let observer = self.source_isa_observer.as_ref()?;
+        (observer.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91)
+            .then(|| {
+                crate::production_census_v91::snapshot(
+                    observer.config,
+                    observer.unit,
+                    wire,
+                    artifact,
+                )
+            })
+    }
+
+    fn emit_completed_census_v91(
+        &mut self,
+        census: Option<Result<crate::production_census_v91::Census, String>>,
+    ) {
+        let (Some(observer), Some(census)) = (self.source_isa_observer.as_mut(), census) else {
+            return;
+        };
+        let attempt = self.attempt;
+        report_source_isa_observation_emission(emit_source_isa_observation_once(
+            &mut observer.sink,
+            observer.attempt,
+            attempt,
+            || {
+                let census = census?;
+                let frame = ready_source_isa_observation_frame_v1(
+                    observer.config,
+                    observer.unit,
+                    attempt,
+                    census.finalization,
+                )
+                .map_err(|error| error.to_string())?;
+                census.check_frame(&frame)?;
+                Ok::<_, String>((frame, census))
+            },
+            |sink, (frame, census)| sink.submit_census(frame, census),
+        ));
+    }
+
     fn emit_finalized_source_isa_observation(
         &mut self,
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
@@ -2675,7 +2737,7 @@ fn complete_recovered_production_artifact(
 }
 
 fn complete_published_production_artifact(
-    managed: &ManagedProductionAttempt,
+    managed: &mut ManagedProductionAttempt,
     published: PublishedMixedWorkerHsacoV89,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
@@ -2706,12 +2768,17 @@ fn complete_published_production_artifact(
             "strict V3 publication-intent retirement failed: {error}"
         ))
     })?;
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 fn complete_ready_production_artifact(
@@ -2738,12 +2805,17 @@ fn complete_ready_production_artifact(
             )));
         }
     }
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "recovered strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "recovered strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 #[cfg(unix)]

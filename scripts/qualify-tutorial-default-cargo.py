@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run every registered tutorial input through the protected default Cargo entry.
 
-This is a compile/refusal census, not a proof, publication, or GPU attestation.
-Even a zero Cargo exit leaves exact V53 publication/native qualification open:
-Cargo may have reused artifacts and this harness does not authenticate receipts.
+The default records the complete live V89/V90 managed-publication census.
+It does not grant authority or replace the manifest's CPU-reference and semantic
+simulation obligations. Cargo success without the exact census is refused.
 """
 
 from __future__ import annotations
@@ -211,22 +211,30 @@ def write_report(output, report):
 
 
 def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout, max_log_bytes,
-               *, runner=run_command, environment=None):
+               *, runner=run_command, environment=None, production=False):
     environment = dict(os.environ if environment is None else environment)
     validator, census, manifest, manifest_sha, invocations = load_inputs(root, manifest_path)
+    production_module = load_module("tutorial_production_census_v91",
+        root / "scripts/tutorial_production_census_v91.py") if production else None
     output.mkdir(parents=True, exist_ok=False)
     selected = [(key, row) for key, row in sorted(invocations.items()) if row[0]["target"] in targets]
     report = {
-        "schema": SCHEMA, "manifest": str(manifest_path), "manifestSha256": manifest_sha,
+        "schema": "fe2o3-tutorial-production-census-v91" if production else SCHEMA,
+        "manifest": str(manifest_path), "manifestSha256": manifest_sha,
         "registeredInvocations": len(invocations), "selectedInvocations": len(selected),
         "coversAllRegisteredInvocations": len(selected) == len(invocations),
         "commandFamily": "cargo-fe2o3 authority release build",
-        "requiredDescriptorSchema": 53, "requiredTypedLineageSchema": 50,
+        "requiredDescriptorSchema": 89 if production else 53,
+        "requiredTypedLineageSchema": 90 if production else 50,
         "runtimePath": str(RUNTIME), "runtimePresenceAuthenticatesNothing": True,
         "qualified": False, "authenticatesCompilerExecution": False,
         "grantsArtifactOrLaunchAuthority": False, "defaultPipelineQualificationPassed": False,
-        "pendingEvidence": ["same-invocation complete V53 kernel publication census",
-                            "authenticated executed V50 proof and native refinement", "full tutorial qualification"],
+        "pendingEvidence": (["all registered live V89/V90 compilation censuses",
+                             "same-input CPU reference execution",
+                             "declared BundleV7/KIR12 simulation adapter is absent",
+                             "exact negative diagnostics and absent artifacts"] if production else
+                            ["same-invocation complete V53 kernel publication census",
+                             "authenticated executed V50 proof and native refinement", "full tutorial qualification"]),
         "limits": {"timeoutSecondsPerInvocation": timeout, "logBytesPerInvocation": max_log_bytes},
         "prerequisiteFailures": prerequisites(cargo_fe2o3, environment), "complete": False,
         "cases": [{"id": key, "fixture": row[0], "references": [list(reference) for reference in row[1]],
@@ -251,6 +259,15 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
         else:
             child_environment = dict(environment)
             child_environment["FE2O3_TARGET"] = case["fixture"]["target"]
+            if production:
+                try:
+                    child_environment, expected = production_module.prepare(root, case["fixture"],
+                        cargo_fe2o3, child_environment, output, ordinal)
+                    case["productionExpected"] = expected
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    case.update(status="production-input-refused", productionError=str(error))
+                    write_report(output, report)
+                    continue
             log_name = f"{ordinal:04d}.log"
             case["log"] = log_name
             outcome = runner(case["arguments"], root, child_environment, output / log_name,
@@ -263,11 +280,25 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
                 _, current_sha = validator.load_manifest(manifest_path, with_sha256=True)
                 if before != after or current_sha != manifest_sha:
                     case["status"] = "source-changed"
+                elif production:
+                    try:
+                        observed = production_module.reconcile(output / log_name, outcome, expected)
+                        case["productionCensus"] = observed
+                        case["status"] = observed["status"] if not case["expectedNegative"] else "unexpected-negative-success"
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        case["productionError"] = str(error)
+                        if outcome["exitCode"] == 0:
+                            case["status"] = "production-census-refused"
             except (OSError, ValueError, SystemExit) as error:
                 case.update(status="source-changed", sourceError=str(error))
         write_report(output, report)
     report["counts"] = dict(sorted(Counter(case["status"] for case in report["cases"]).items()))
     report["complete"] = True
+    if production:
+        report["positiveCompilationCensusPassed"] = all(case["status"] == "production-compile-census-pass"
+            for case in report["cases"] if not case["expectedNegative"])
+        report["referenceExecutionPassed"] = False
+        report["semanticSimulationPassed"] = False
     write_report(output, report)
     return report
 
@@ -282,6 +313,8 @@ def census_main(argv=None):
     parser.add_argument("--target", choices=("all", "gfx942", "gfx950"), default="all")
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--max-log-bytes", type=int, default=MAX_LOG_BYTES)
+    parser.add_argument("--legacy-compile-census", action="store_true",
+                        help="record only the historical compile/refusal diagnostic, never qualification")
     args = parser.parse_args(argv)
     if not 1 <= args.timeout_seconds <= MAX_TIMEOUT_SECONDS or not 1 <= args.max_log_bytes <= MAX_LOG_BYTES:
         parser.error("timeout or log limit exceeds the finite harness envelope")
@@ -292,7 +325,8 @@ def census_main(argv=None):
     targets = ("gfx942", "gfx950") if args.target == "all" else (args.target,)
     try:
         report = run_census(root, manifest, args.cargo_fe2o3, args.target_dir.resolve(), args.output.resolve(),
-                            targets, args.timeout_seconds, args.max_log_bytes)
+                            targets, args.timeout_seconds, args.max_log_bytes,
+                            production=not args.legacy_compile_census)
     except (OSError, ValueError, SystemExit) as error:
         print(f"tutorial default Cargo census refused: {error}", file=sys.stderr)
         return 2
