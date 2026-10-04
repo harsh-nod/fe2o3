@@ -155,6 +155,7 @@ pub use compiler_module_handoff::{
     publish_simulation_kernel_ir_handoff_v1, recover_compiler_execution_receipt_transport_v1,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
+    try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
@@ -3796,6 +3797,7 @@ struct PinnedOutput {
     inode: u64,
     path_guard: Option<FilesystemPathGuardDomain>,
     identity_revalidation: OutputIdentityRevalidationV1,
+    observation_only: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -3986,6 +3988,7 @@ impl PinnedOutput {
             inode: stat.st_ino,
             path_guard,
             identity_revalidation: OutputIdentityRevalidationV1::Path,
+            observation_only: false,
         })
     }
 
@@ -4034,6 +4037,7 @@ impl PinnedOutput {
                 .map(FilesystemPathGuardDomain::try_clone)
                 .transpose()?,
             identity_revalidation: self.identity_revalidation,
+            observation_only: self.observation_only,
         })
     }
 
@@ -4158,7 +4162,14 @@ impl PinnedOutput {
             let fd = openat(
                 &self.fd,
                 LOCK_FILE,
-                OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDWR
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC
+                    | if self.observation_only {
+                        OFlags::NONBLOCK
+                    } else {
+                        OFlags::CREATE
+                    },
                 Mode::RUSR | Mode::WUSR,
             )
             .map_err(std::io::Error::from)?;
@@ -6211,6 +6222,15 @@ fn read_attempt_registry(output: &PinnedOutput) -> Result<AttemptRegistry, EmitE
 }
 
 fn recover_attempt_registry(output: &PinnedOutput) -> Result<(), EmitError> {
+    if output.observation_only {
+        return match statat(&output.fd, RECOVERY_ATTEMPT_FILE, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(error) if error == rustix::io::Errno::NOENT => Ok(()),
+            Err(error) => Err(std::io::Error::from(error).into()),
+            Ok(_) => Err(build_attempt_error(
+                "read-only observation rejects build-attempt recovery residue",
+            )),
+        };
+    }
     let Some(bytes) = read_control_file(
         output,
         RECOVERY_ATTEMPT_FILE,
@@ -6241,7 +6261,14 @@ fn read_control_file(
     let fd = match openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | if output.observation_only {
+                OFlags::NONBLOCK
+            } else {
+                OFlags::empty()
+            },
         Mode::empty(),
     ) {
         Ok(fd) => fd,

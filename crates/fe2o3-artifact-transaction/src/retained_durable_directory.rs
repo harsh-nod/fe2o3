@@ -238,6 +238,7 @@ impl RetainedDurableDirectoryV1 {
                 identity_revalidation: OutputIdentityRevalidationV1::RetainedServiceDescriptor {
                     service_uid,
                 },
+                observation_only: false,
             },
             service_uid,
         })

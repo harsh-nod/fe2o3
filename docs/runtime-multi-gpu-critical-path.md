@@ -23,9 +23,11 @@ opcode coverage before clearing application admission.
    refinement, publication token, independently rechecked finalizer and fresh
    exact compiler-current-record audit. Independently pinned production deployment
    admission now retains fixed-path configuration provenance through that audit.
-   First supply bounded cross-UID compiler observation: the empty-capability issuer
-   cannot perform its current procfs/`pidfd_getfd` inspection of an ordinary compiler.
-   Keep signing unprivileged; do not relax the host's ptrace policy.
+   Root-side process/publication observation is implemented and locally qualified
+   across UIDs. Connect its original occurrence custody to the issuer through an
+   authenticated private channel with exact issuer containment before lock release.
+   The empty-capability issuer cannot perform that inspection itself. Keep signing
+   unprivileged; do not relax the host's ptrace policy.
    Qualify genuine compiler receipt acquisition and verification through the deployed
    issuer and separate anchor; test-key responses do not complete that qualification.
    Preserve unconditional admission; never expose the pending state through existing
@@ -65,6 +67,13 @@ an authenticated private-channel lease bound to its exact session and fresh
 challenge. Keep the root-held token through signing and ledger commit; failure
 handling must contain the exact issuer before releasing that token. This is the
 next implementation boundary, not implemented or qualified behavior.
+The [root-observation checkpoint](evidence/dev-root-occurrence-observation-2026-10-04/README.md)
+now implements that local occurrence owner with one unbroken nonblocking publication
+lock and no client-state repair or lock creation. Two isolated cases qualify root
+observation of a UID1000 private publication and real cross-UID lock contention.
+Their waiting-process/synthetic-handoff fixture is not genuine compiler acquisition.
+The authenticated coordinator session table, remote issuer guard and containment
+remain the next integration work; the root observation owner alone cannot sign.
 
 ## Reuse What Works
 

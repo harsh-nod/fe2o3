@@ -163,7 +163,9 @@ pub use compiler_execution_issuer_durable::{
     ProtectedCompilerExecutionReceiptV1,
 };
 #[cfg(target_os = "linux")]
-pub use compiler_execution_occurrence::ProtectedCompilerExecutionOccurrenceErrorV1;
+pub use compiler_execution_occurrence::{
+    ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1,
+};
 #[cfg(target_os = "linux")]
 pub(crate) use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceGuardV1, ProtectedCompilerExecutionOccurrenceV1,
@@ -197,7 +199,8 @@ pub use durable_session_consume::{
 pub use linux::{
     AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
-    ProtectedServiceAdmissionV1, current_process_start_time_ticks_v1,
+    ProtectedServiceAdmissionV1, RetainedCompilerClientSessionV1,
+    current_process_start_time_ticks_v1,
 };
 #[cfg(target_os = "linux")]
 pub use session::{

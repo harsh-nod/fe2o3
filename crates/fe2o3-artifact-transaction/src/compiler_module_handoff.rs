@@ -4042,6 +4042,41 @@ pub(crate) mod semantic_v3 {
         recover_receipt_in_slot_v3(output_dir, producer, attempt, slot)
     }
 
+    /// Observes an already committed V3 publication without repairing or creating client files.
+    ///
+    /// Returns `Busy` instead of waiting for cooperative publication locks. The original lock
+    /// remains held across receipt reconstruction, lease admission and returned token custody.
+    /// Missing locks and crash residue fail closed. Reacquiring the returned lease also requires
+    /// an existing lock. This performs ordinary bounded filesystem I/O; it is not an async API
+    /// or a wall-clock deadline for an unresponsive filesystem. No compiler authority is granted.
+    pub fn try_observe_compiler_module_handoff_currentness_in_slot_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+    ) -> Result<
+        (
+            CompilerModuleHandoffCurrentnessLeaseV3,
+            CompilerModuleHandoffConsumptionTokenV3,
+        ),
+        CompilerModuleHandoffErrorV3,
+    > {
+        let mut output = PinnedOutput::open_existing(output_dir)?;
+        output.observation_only = true;
+        let lock = output
+            .try_lock()?
+            .ok_or(CompilerModuleHandoffErrorV3::Busy)?;
+        let receipt = recover_receipt_locked_v3(&output, producer, attempt, slot)?;
+        let lease = mint_currentness_lease_locked_v3(output, producer, receipt)?;
+        let handoff = load_current_handoff_locked(&lease.binding)?;
+        let token = CompilerModuleHandoffConsumptionTokenV3 {
+            binding: Arc::clone(&lease.binding),
+            handoff,
+            _lock: lock,
+        };
+        Ok((lease, token))
+    }
+
     /// Atomically publishes opaque receipt bytes beside the exact current V3 handoff subject.
     ///
     /// This lower transport validates the complete subject-to-transaction binding but does not
@@ -4825,8 +4860,17 @@ pub(crate) mod semantic_v3 {
     ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
         let output = PinnedOutput::open_existing(output_dir)?;
         let _lock = output.lock()?;
+        recover_receipt_locked_v3(&output, producer, attempt, slot)
+    }
+
+    fn recover_receipt_locked_v3(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+    ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
         output.verify_path_identity()?;
-        authorize(&output, producer, attempt)?;
+        authorize(output, producer, attempt)?;
 
         let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
         let slot_identity = slot_identity_for::<HandoffV3Schema>(producer_identity, attempt, slot);
@@ -4836,15 +4880,19 @@ pub(crate) mod semantic_v3 {
             format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, attempt)
-            .map_err(engine_error_v3)?;
+        if !output.observation_only {
+            cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, attempt)
+                .map_err(engine_error_v3)?;
+        }
         let slot_directory = open_private_directory(
             &parent.fd,
             &parent.path,
             format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
+        if !output.observation_only {
+            recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
+        }
         require_current_slot_shape_v3(&slot_directory)?;
 
         let ready_file = open_pinned_handoff_file_v3(
@@ -4913,7 +4961,7 @@ pub(crate) mod semantic_v3 {
             return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
         }
 
-        authorize(&output, producer, attempt)?;
+        authorize(output, producer, attempt)?;
         output.verify_path_identity()?;
         parent.verify()?;
         slot_directory.verify()?;
@@ -4955,6 +5003,14 @@ pub(crate) mod semantic_v3 {
         let _lock = output
             .try_lock()?
             .ok_or(CompilerModuleHandoffErrorV3::Busy)?;
+        mint_currentness_lease_locked_v3(output, producer, receipt)
+    }
+
+    fn mint_currentness_lease_locked_v3(
+        output: PinnedOutput,
+        producer: &ProducerIdentity,
+        receipt: CompilerModuleHandoffReceiptV3,
+    ) -> Result<CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV3> {
         output.verify_path_identity()?;
         authorize(&output, producer, receipt.attempt())?;
 
@@ -4970,15 +5026,19 @@ pub(crate) mod semantic_v3 {
             format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, receipt.attempt())
-            .map_err(engine_error_v3)?;
+        if !output.observation_only {
+            cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, receipt.attempt())
+                .map_err(engine_error_v3)?;
+        }
         let slot_directory = open_private_directory(
             &parent.fd,
             &parent.path,
             format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
-        recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
+        if !output.observation_only {
+            recover_slot::<HandoffV3Schema>(&slot_directory).map_err(engine_error_v3)?;
+        }
         require_current_slot_shape_v3(&slot_directory)?;
 
         let ready_file = open_pinned_handoff_file_v3(
@@ -6616,6 +6676,8 @@ pub(crate) mod semantic_v3 {
             ));
         }
 
+        mod observation;
+
         #[test]
         fn v3_wrong_expected_identity_is_retryable_and_same_publish_is_idempotent() {
             let temp = TestDirectory::new();
@@ -7793,6 +7855,7 @@ pub use semantic_v3::{
     recover_compiler_execution_receipt_transport_v1,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
+    try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
 
 #[cfg(test)]

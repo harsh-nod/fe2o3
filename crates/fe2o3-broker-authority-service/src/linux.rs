@@ -9,6 +9,9 @@ use fe2o3_runtime_protocol::CompilerExecutionExternalAnchorServiceIdentityV1;
 use rustix::fs::OFlags;
 use rustix::net::{AddressFamily, SocketType};
 
+mod client_session;
+pub use client_session::RetainedCompilerClientSessionV1;
+
 const DIRECTORY_PERMISSIONS: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 const MAX_PIDFD_FDINFO_BYTES: u64 = 4096;
@@ -939,13 +942,6 @@ impl ProtectedServiceAdmissionV1 {
             AdmissionErrorKindV1::RootCloseOnExec,
             "supervisor root",
         )?;
-        require_close_on_exec(
-            &self.peer,
-            AdmissionErrorKindV1::PeerCloseOnExec,
-            "service peer",
-        )?;
-        self.live_client.validate_liveness()?;
-
         let root_identity = validate_root(&self.root, self.service_uid)?;
         if root_identity != self.root_identity {
             return Err(ProtectedServiceAdmissionErrorV1::new(
@@ -954,43 +950,18 @@ impl ProtectedServiceAdmissionV1 {
             ));
         }
 
-        let peer_identity = validate_peer_shape(&self.peer)?;
-        if peer_identity != self.peer_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerIdentityChanged,
-                "retained service peer descriptor identity changed",
-            ));
-        }
-        require_distinct_descriptors(root_identity, peer_identity)?;
+        require_distinct_descriptors(root_identity, self.peer_identity)?;
         require_distinct_pidfd_descriptor(
             root_identity,
-            peer_identity,
+            self.peer_identity,
             self.live_client.descriptor_identity,
         )?;
-
-        if REQUIRE_DISTINCT_UID && self.live_client.expected_client.uid == self.service_uid {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::SameUidClient,
-                "expected client UID equals protected service effective UID",
-            ));
-        }
-        let credentials = PeerCredentialsV1::inspect(&self.peer)?;
-        if credentials != self.live_client.expected_client.credentials() {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerCredentialsChanged,
-                "retained service peer SO_PEERCRED no longer matches expected client identity",
-            ));
-        }
-        let final_peer_identity =
-            ObjectIdentityV1::inspect(&self.peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
-        if final_peer_identity != self.peer_identity {
-            return Err(ProtectedServiceAdmissionErrorV1::new(
-                AdmissionErrorKindV1::PeerIdentityChanged,
-                "retained service peer identity changed while checking credentials",
-            ));
-        }
-        self.live_client.validate_liveness()?;
-        Ok(())
+        client_session::validate_client_peer_continuity(
+            &self.peer,
+            &self.live_client,
+            self.peer_identity,
+            REQUIRE_DISTINCT_UID.then_some(self.service_uid),
+        )
     }
 
     #[cfg(test)]
@@ -2691,6 +2662,38 @@ mod tests {
         non_authoritative_test_admission(root, peer)
             .validate_non_authoritative_test_continuity()
             .unwrap();
+    }
+
+    #[test]
+    fn standalone_client_session_checks_credentials_and_descriptor_continuity() {
+        let expected = current_process_identity();
+        let (peer, _client) = seqpacket();
+        let peer_number = peer.as_raw_fd();
+        let live = LiveClientPidfdIdentityV1::admit(pidfd_for(expected.pid()), expected).unwrap();
+        let session = RetainedCompilerClientSessionV1::admit(peer, live).unwrap();
+        session.revalidate().unwrap();
+        assert_eq!(session.client(), expected);
+        // SAFETY: the session still owns this exact descriptor; deliberately clear its flag.
+        assert_eq!(unsafe { libc::fcntl(peer_number, libc::F_SETFD, 0) }, 0);
+        assert_eq!(
+            session.revalidate().unwrap_err().kind(),
+            AdmissionErrorKindV1::PeerCloseOnExec
+        );
+
+        let wrong = ExpectedClientProcessIdentityV1::new(
+            expected.pid(),
+            expected.uid().wrapping_add(1),
+            expected.gid(),
+        )
+        .unwrap();
+        let (peer, _client) = seqpacket();
+        let live = LiveClientPidfdIdentityV1::admit(pidfd_for(expected.pid()), wrong).unwrap();
+        assert_eq!(
+            RetainedCompilerClientSessionV1::admit(peer, live)
+                .unwrap_err()
+                .kind(),
+            AdmissionErrorKindV1::PeerCredentialsMismatch
+        );
     }
 
     #[test]

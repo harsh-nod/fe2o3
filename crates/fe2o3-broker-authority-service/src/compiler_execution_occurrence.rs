@@ -8,8 +8,7 @@ use fe2o3_artifact_transaction::{
     CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
     CompilerModuleHandoffErrorV3, CompilerModuleHandoffSlotV3, EmitError,
     InertCompilerExecutionSubjectV1, ProducerIdentity, ProducerIdentityFromRustcErrorV1,
-    acquire_compiler_module_handoff_currentness_lease_v3,
-    recover_compiler_module_handoff_receipt_in_slot_v3,
+    try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
 use fe2o3_rustc_invocation::{
     DigestError, InvocationDigestV3, RustcArgsErrorV2, RustcInvocationDescriptorV3,
@@ -18,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     CompilerExecutionSupervisionErrorV1, ProtectedServiceAdmissionV1,
-    ValidatedRemoteRustcProcessObservationV1,
+    RetainedCompilerClientSessionV1, ValidatedRemoteRustcProcessObservationV1,
 };
 
 const SHA256_BYTES: usize = 32;
@@ -66,37 +65,39 @@ impl ProtectedCompilerExecutionOccurrenceV1 {
     ) -> Result<Self, ProtectedCompilerExecutionOccurrenceErrorV1> {
         let observation = ValidatedRemoteRustcProcessObservationV1::observe(admission)
             .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::Observe)?;
+        let (occurrence, token) = Self::observe_with_current_token(observation)?;
+        drop(token);
+        Ok(occurrence)
+    }
+
+    fn observe_with_current_token(
+        observation: ValidatedRemoteRustcProcessObservationV1,
+    ) -> Result<
+        (Self, CompilerModuleHandoffConsumptionTokenV3),
+        ProtectedCompilerExecutionOccurrenceErrorV1,
+    > {
         let expected = ExpectedCompilerExecutionPublicationV1::derive(observation.descriptor())?;
         let output_dir = observation.artifact_directory_procfd_path();
-        let receipt = recover_compiler_module_handoff_receipt_in_slot_v3(
+        let (publication, token) = try_observe_compiler_module_handoff_currentness_in_slot_v3(
             &output_dir,
             &expected.producer,
             expected.attempt,
             CompilerModuleHandoffSlotV3::Production,
         )
         .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::RecoverPublication)?;
-        let publication = acquire_compiler_module_handoff_currentness_lease_v3(
-            &output_dir,
-            &expected.producer,
-            receipt,
-        )
-        .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::AcquirePublicationLease)?;
-
-        let token = publication
-            .acquire_current_token()
-            .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::AcquireCurrentToken)?;
         let (subject, identity) =
             reconstruct_locked_occurrence(&publication, &observation, &token)?;
-        drop(token);
-
-        Ok(Self {
-            subject,
-            identity,
-            custody: CompilerExecutionOccurrenceCustodyV1::Current {
-                publication,
-                observation: Box::new(observation),
+        Ok((
+            Self {
+                subject,
+                identity,
+                custody: CompilerExecutionOccurrenceCustodyV1::Current {
+                    publication,
+                    observation: Box::new(observation),
+                },
             },
-        })
+            token,
+        ))
     }
 
     pub(crate) const fn subject(&self) -> &InertCompilerExecutionSubjectV1 {
@@ -173,6 +174,78 @@ impl ProtectedCompilerExecutionOccurrenceV1 {
     #[cfg(test)]
     pub(crate) const fn grants_launch_authority(&self) -> bool {
         false
+    }
+}
+
+/// Live compiler observation and independently reconstructed Production publication under lock.
+///
+/// Used by an out-of-issuer observer with the required OS permissions. The original process,
+/// descriptors, publication lease and current token remain owned together until drop. No caller
+/// subject, digest, path or returned bytes can replace that custody. This does not authenticate
+/// a coordinator channel, admit an issuer session, or grant signing, loading or launch authority.
+///
+/// A remote observer must retain this value through the issuer's durable commit. Before dropping
+/// it on channel failure or timeout, that observer must contain the exact issuer and confirm exit.
+/// There is no timeout-based lease expiry here.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::RetainedCompilerExecutionOccurrenceV1;
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<RetainedCompilerExecutionOccurrenceV1>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::RetainedCompilerExecutionOccurrenceV1;
+/// fn serializable<T: serde::Serialize>() {}
+/// serializable::<RetainedCompilerExecutionOccurrenceV1>();
+/// ```
+pub struct RetainedCompilerExecutionOccurrenceV1 {
+    occurrence: ProtectedCompilerExecutionOccurrenceV1,
+    token: CompilerModuleHandoffConsumptionTokenV3,
+}
+
+impl fmt::Debug for RetainedCompilerExecutionOccurrenceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedCompilerExecutionOccurrenceV1")
+            .field("occurrence", &self.occurrence)
+            .field("authority", &"none")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetainedCompilerExecutionOccurrenceV1 {
+    pub fn observe(
+        client: RetainedCompilerClientSessionV1,
+    ) -> Result<Self, ProtectedCompilerExecutionOccurrenceErrorV1> {
+        let observation = ValidatedRemoteRustcProcessObservationV1::observe_client(client)
+            .map_err(ProtectedCompilerExecutionOccurrenceErrorV1::Observe)?;
+        let (occurrence, token) =
+            ProtectedCompilerExecutionOccurrenceV1::observe_with_current_token(observation)?;
+        Ok(Self { occurrence, token })
+    }
+
+    pub const fn subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        self.occurrence.subject()
+    }
+
+    pub const fn identity(&self) -> &[u8; SHA256_BYTES] {
+        &self.occurrence.identity
+    }
+
+    /// Repeats live process and locked publication checks against the original observations.
+    pub fn revalidate(&self) -> Result<(), ProtectedCompilerExecutionOccurrenceErrorV1> {
+        match &self.occurrence.custody {
+            CompilerExecutionOccurrenceCustodyV1::Current {
+                publication,
+                observation,
+            } => {
+                validate_locked_occurrence(&self.occurrence, publication, observation, &self.token)
+            }
+            #[cfg(test)]
+            CompilerExecutionOccurrenceCustodyV1::Synthetic => {
+                unreachable!("observer cannot import synthetic custody")
+            }
+        }
     }
 }
 
