@@ -26,7 +26,8 @@ const SQUASHFS_MAGIC_V1: u32 = 0x7371_7368;
 const SQUASHFS_COMPRESSION_ZSTD_V1: u16 = 6;
 const SQUASHFS_BLOCK_BYTES_V1: u32 = 128 * 1024;
 const SQUASHFS_BLOCK_LOG_V1: u16 = 17;
-const SQUASHFS_NO_XATTRS_FLAG_V1: u16 = 0x0100;
+// SquashFS bit 9 means no xattrs; bit 8 only means uncompressed xattrs.
+const SQUASHFS_NO_XATTRS_FLAG_V1: u16 = 0x0200;
 const SQUASHFS_MAJOR_V1: u16 = 4;
 const SQUASHFS_MINOR_V1: u16 = 0;
 const SQUASHFS_PADDING_BYTES_V1: u64 = 4096;

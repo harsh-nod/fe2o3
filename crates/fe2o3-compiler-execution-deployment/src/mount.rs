@@ -6,7 +6,8 @@ use fe2o3_loop_device::{ReadOnlyAutoclearLoopDeviceV1, attach_sealed_read_only_l
 use rustix::fs::{Mode, OFlags, ResolveFlags, fstat, fstatfs, openat2};
 use rustix::mount::{
     FsMountFlags, FsOpenFlags, MountAttrFlags, MountPropagationFlags, MoveMountFlags, UnmountFlags,
-    fsconfig_create, fsconfig_set_string, fsmount, fsopen, mount_change, move_mount, unmount,
+    fsconfig_create, fsconfig_set_flag, fsconfig_set_string, fsmount, fsopen, mount_change,
+    move_mount, unmount,
 };
 
 use super::fault::{NoQualificationFaultV1, QualificationFaultHooksV1};
@@ -492,6 +493,13 @@ fn attach_base(
     })?;
     let context = fsopen("squashfs", FsOpenFlags::FSOPEN_CLOEXEC)
         .map_err(|source| io_error("open SquashFS mount context", source))?;
+    // Superblock creation opens the device before fsmount applies mount attributes.
+    fsconfig_set_flag(&context, "ro").map_err(|source| {
+        io_error(
+            "request read-only qualification SquashFS superblock",
+            source,
+        )
+    })?;
     fsconfig_set_string(&context, "source", loop_device.device_path())
         .map_err(|source| io_error("bind loop device to SquashFS context", source))?;
     fsconfig_create(&context)
@@ -732,6 +740,41 @@ fn require_filesystem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squashfs_superblock_is_readonly_before_creation() {
+        let body = include_str!("mount.rs")
+            .split_once("fn attach_base(")
+            .unwrap()
+            .1
+            .split_once("fn attach_overlay(")
+            .unwrap()
+            .0;
+        let ordered = [
+            "fsopen(\"squashfs\", FsOpenFlags::FSOPEN_CLOEXEC)",
+            "fsconfig_set_flag(&context, \"ro\")",
+            "fsconfig_set_string(&context, \"source\", loop_device.device_path())",
+            "fsconfig_create(&context)",
+            "let detached = fsmount(",
+        ];
+        let positions = ordered.map(|call| {
+            assert_eq!(body.matches(call).count(), 1, "{call}");
+            body.find(call).unwrap()
+        });
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let readonly_step: String = body[positions[1]..positions[2]]
+            .chars()
+            .filter(|value| !value.is_ascii_whitespace())
+            .collect();
+        assert_eq!(
+            readonly_step,
+            "fsconfig_set_flag(&context,\"ro\").map_err(|source|{io_error(\"requestread-onlyqualificationSquashFSsuperblock\",source,)})?;"
+        );
+        for flag in ["MOUNT_ATTR_RDONLY", "MOUNT_ATTR_NODEV", "MOUNT_ATTR_NOSUID"] {
+            assert!(body[positions[4]..].contains(flag), "{flag}");
+        }
+        assert!(!body.contains("\"rw\""));
+    }
 
     #[test]
     fn descriptor_mount_paths_and_lower_order_are_canonical() {

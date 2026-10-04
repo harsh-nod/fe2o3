@@ -1822,7 +1822,7 @@ mod tests {
         put_u32(&mut bytes, 12, 128 * 1024);
         put_u16(&mut bytes, 20, 6);
         put_u16(&mut bytes, 22, 17);
-        put_u16(&mut bytes, 24, 0x0100);
+        put_u16(&mut bytes, 24, 0x0200);
         put_u16(&mut bytes, 26, 1);
         put_u16(&mut bytes, 28, 4);
         put_u16(&mut bytes, 30, 0);
@@ -2249,6 +2249,75 @@ mod tests {
         drop(base_root);
         qualification::revalidate_prepared_qualification_for_test_v1(&prepared, current_owner())
             .unwrap();
+    }
+
+    #[test]
+    fn qualification_preparation_accepts_realistic_squashfs_no_xattrs_flags() {
+        let (installed, _install_parent) = installed_for_qualification();
+        let expected_manifest = installed.manifest_sha256();
+        let mut bytes = canonical_qualification_base_bytes();
+        // Literal flags from the retained mksquashfs 4.6.1 base, independent of the parser constant.
+        bytes[24..26].copy_from_slice(&0x0240_u16.to_le_bytes());
+        let (_base_root, base_path, base_sha256) = qualification_base_fixture(&bytes);
+        let parent = private_install_parent();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &base_sha256,
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(prepared.manifest_sha256(), expected_manifest);
+        assert_eq!(lower_hex(&prepared.base_image_sha256()), base_sha256);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        qualification::revalidate_prepared_qualification_for_test_v1(&prepared, current_owner())
+            .unwrap();
+    }
+
+    #[test]
+    fn qualification_preparation_rejects_uncompressed_xattrs_without_absence() {
+        let (installed, _install_parent) = installed_for_qualification();
+        let mut bytes = canonical_qualification_base_bytes();
+        bytes[24..26].copy_from_slice(&0x0140_u16.to_le_bytes());
+        let (_base_root, base_path, base_sha256) = qualification_base_fixture(&bytes);
+        let parent = private_install_parent();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBase
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn qualification_preparation_rejects_present_xattr_table() {
+        let (installed, _install_parent) = installed_for_qualification();
+        let mut bytes = canonical_qualification_base_bytes();
+        bytes[24..26].copy_from_slice(&0x0240_u16.to_le_bytes());
+        bytes[56..64].copy_from_slice(&96_u64.to_le_bytes());
+        let (_base_root, base_path, base_sha256) = qualification_base_fixture(&bytes);
+        let parent = private_install_parent();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBase
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 
     #[test]

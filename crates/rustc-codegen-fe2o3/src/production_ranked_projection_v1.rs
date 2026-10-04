@@ -3259,6 +3259,8 @@ pub(crate) fn source_launch_roster_for_ranked_inputs_v1(
 #[path = "production_ranked_projection_v1/bf16_nominal_owned_projection_v1.rs"]
 mod bf16_nominal_owned_projection_v1;
 pub(crate) use bf16_nominal_owned_projection_v1::project_private_nominal_materialized_v1;
+#[path = "production_ranked_projection_v1/bf16_nominal_module_receipt_v1.rs"]
+mod bf16_nominal_module_receipt_v1;
 
 pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
