@@ -24,6 +24,7 @@ jobs:
         with:
           ref: 16cfb7cf10da914f5e6c164f05f885413911c702
           path: source
+          fetch-depth: 2
           persist-credentials: false
       - name: Install generic test prerequisites
         run: |
