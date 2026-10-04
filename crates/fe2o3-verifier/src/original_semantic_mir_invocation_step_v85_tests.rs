@@ -104,7 +104,9 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                     statements.push(statement);
                 }
                 blocks[1] = SemanticBasicBlockV1::new(block.identity(), block.source(), statements, terminator).unwrap();
-                functions[0] = SemanticFunctionDeclV1::new(original.identity(), original.role(), original.item_definition_identity(), original.monomorphization_identity(), original.generic_type_arguments_identity(), original.const_generic_arguments_identity(), original.source(), original.abi().clone(), original.locals().to_vec(), original.entry(), blocks).unwrap();
+                functions[0] = SemanticFunctionDeclV1::new(original.identity(), original.role(), original.item_definition_identity(), original.monomorphization_identity(), original.generic_type_arguments_identity(), original.const_generic_arguments_identity(), original.source(), original.abi().clone(), original.locals().to_vec(), original.entry(), blocks)
+                    .unwrap()
+                    .with_kernel_entry(original.kernel_entry().unwrap().clone());
             },
             |plan, out| with_slots(plan, out, |slots, out| {
                 let mut program = SourceByteProgram::derive(plan, slots, out)?;

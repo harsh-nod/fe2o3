@@ -48,12 +48,20 @@ fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
 
 #[test]
 fn source_step_hints_copy_authentic_coordinates_with_exact_and_one_short_accounts() {
+    use super::super::super::super::invocations::tests::FLOOR;
+
     let measured = run(LIMIT, LIMIT);
     measured.0.unwrap();
-    run(measured.1, measured.3).0.unwrap();
-    assert!(run(measured.1 - 1, measured.3).0.is_err());
-    assert!(run(measured.1, measured.3 - 1).0.is_err());
-    assert_eq!(measured.2, 0);
+    assert_eq!(measured.2, FLOOR);
+    let exact = run(measured.1, measured.3);
+    exact.0.unwrap();
+    assert_eq!(exact.2, FLOOR);
+    let short_work = run(measured.1 - 1, measured.3);
+    assert!(short_work.0.is_err());
+    assert_eq!(short_work.2, FLOOR);
+    let short_storage = run(measured.1, measured.3 - 1);
+    assert!(short_storage.0.is_err());
+    assert_eq!(short_storage.2, FLOOR);
 }
 
 #[test]
