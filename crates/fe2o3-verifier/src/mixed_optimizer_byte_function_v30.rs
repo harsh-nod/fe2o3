@@ -168,7 +168,7 @@ pub(super) fn emit_pointer_value_type(
 ) -> Result<()> {
     emit!(
         out,
-        "match {value} {{ MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p, {}, {}), _ => false }}",
+        "byte_pointer_value_type_v57({value}, {}, {})",
         pointer_space(address_space)?,
         scalar_bytes(ScalarType::Index, width)?
     );
@@ -184,10 +184,7 @@ pub(super) fn emit_value_type(
     match ty {
         Type::Unit => emit!(out, "matches!({value}, MemoryValueV30::Unit)"),
         Type::Scalar(scalar) => {
-            emit!(
-                out,
-                "match {value} {{ MemoryValueV30::Scalar(v) => 0 <= v < "
-            );
+            emit!(out, "byte_scalar_type_v57({value}, ");
             if *scalar == ScalarType::Bool {
                 emit!(out, "2");
             } else {
@@ -197,11 +194,11 @@ pub(super) fn emit_value_type(
                     scalar_bytes(*scalar, width)?
                 );
             }
-            emit!(out, ", _ => false }}");
+            emit!(out, ")");
         }
         Type::Vector(vector) => emit!(
             out,
-            "match {value} {{ MemoryValueV30::Vector(v) => v.len() == {} && (forall|lane: int| 0 <= lane < v.len() ==> 0 <= v[lane] < memory_value_modulus_v30({})), _ => false }}",
+            "byte_vector_type_v57({value}, {}, {})",
             vector.lanes,
             scalar_bytes(vector.element, width)?
         ),
@@ -210,8 +207,7 @@ pub(super) fn emit_value_type(
         }
         Type::Slice(slice) => emit!(
             out,
-            "match {value} {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}) && byte_pointer_type_v30(slice.pointer, {}, {}), _ => false }}",
-            scalar_bytes(ScalarType::Index, width)?,
+            "byte_slice_type_v57({value}, {}, {})",
             pointer_space(slice.address_space)?,
             scalar_bytes(ScalarType::Index, width)?,
         ),
