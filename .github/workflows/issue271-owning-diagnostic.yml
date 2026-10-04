@@ -40,7 +40,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue271-owning-2193-${{ github.run_attempt }}
+          name: issue271-owning-2193-r2-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue271-owning-v78-logs/
           if-no-files-found: warn
           retention-days: 7

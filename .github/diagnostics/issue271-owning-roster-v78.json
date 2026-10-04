@@ -1,6 +1,6 @@
 {
   "head": "2193f899e345e885f61fb482641cdaae55570241",
-  "package": "rustc_codegen_fe2o3",
+  "package": "rustc-codegen-fe2o3",
   "parents": [
     {
       "label": "original-custody",

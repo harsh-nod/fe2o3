@@ -204,9 +204,9 @@ before, error, coverage, tools, tool_pins = None, None, [], [], None
 sysroot_files, sysroot_pins = [], None
 try:
     before = source_pin()
-    assert before["roster_sha256"] == "f5030d84059c2f0c15129b44bbab1a65e526cb45d75c3771771058c13eed8ea3"
+    assert before["roster_sha256"] == "bd52763b1a463fd345e475ed4efaf5279a0fb193a8c63be4574dbbe1e64df7b0"
     roster = json.loads(ROSTER.read_text())
-    assert roster["head"] == HEAD and roster["package"] == "rustc_codegen_fe2o3"
+    assert roster["head"] == HEAD and roster["package"] == "rustc-codegen-fe2o3"
     parents = roster["parents"]
     assert len(parents) == 3 and len({entry["parent"] for entry in parents}) == 3
     assert [entry["captures"] for entry in parents] == [2, 4, 2]
