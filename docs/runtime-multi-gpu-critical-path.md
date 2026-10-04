@@ -11,6 +11,13 @@ multi-device routing, DATA ownership, issue/completion and PUBLIC XGMI already
 have scoped hardware qualification. Do not add more routing wrappers or expand
 opcode coverage before clearing application admission.
 
+The immediate implementation work is the deployed custodian/application handoff,
+then the conditional invocation join to existing per-device native preparation.
+The [fixed-controller execution campaign](evidence/dev-proof-controller-execution-2026-10-04/README.md)
+now passes real post-exec analysis/proof, retained-owner probing, three mismatch
+controls and live-Verus cancellation. Do not substitute another isolated identity
+or routing checkpoint for those two production joins.
+
 1. Completed: retain the genuine conditional fill compiler owners, exact finalizer
    lineage and authenticated analyzer/model association in the host verification
    request. The native current-publication audit passes, including substitution
@@ -112,6 +119,9 @@ For the next transport increment, reuse registration instead of adding a second
 application handoff handshake: stage a duplicate of the exact peer in an
 independently measured sibling custodian, keep it inactive, and extend the
 root-authenticated Ready message with its deployment/session identity and pidfd.
+The filtered compiler coordinator cannot launch the unfiltered proof role directly.
+Provide an independently approved fixed unfiltered launch boundary and an actual
+resource opener/launcher; an identity-only deployment manifest is insufficient.
 Only root sends Ready. After successful Ready delivery, activate the custodian
 and retire root's peer alias; proof packets then require that custodian's exact
 per-message credentials and fresh nonce. This design is not yet implemented.
