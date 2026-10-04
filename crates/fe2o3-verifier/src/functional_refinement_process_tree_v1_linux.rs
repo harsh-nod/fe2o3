@@ -1,7 +1,7 @@
 //! Descendant-aware Linux controller for workload-neutral functional-refinement proofs.
 
 use std::collections::BTreeMap;
-use std::ffi::c_void;
+use std::ffi::{c_long, c_void};
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, RawFd};
@@ -69,6 +69,7 @@ const SIGSTOP: i32 = 19;
 const SIGTRAP: i32 = 5;
 
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
+const SYS_CLOSE_RANGE: c_long = 436;
 const F_SETFD: i32 = 2;
 const FD_CLOEXEC: i32 = 1;
 const PR_SET_NO_NEW_PRIVS: i32 = 38;
@@ -201,7 +202,7 @@ struct UserRegistersX86_64 {
 }
 
 unsafe extern "C" {
-    fn close_range(first: u32, last: u32, flags: u32) -> i32;
+    fn syscall(number: c_long, ...) -> c_long;
     fn dup2(old_descriptor: i32, new_descriptor: i32) -> i32;
     fn fcntl(descriptor: i32, command: i32, ...) -> i32;
     fn getrlimit(resource: i32, limit: *mut ResourceLimit) -> i32;
@@ -508,8 +509,9 @@ pub(super) fn execute(
 }
 
 fn prepare_child(bindings: &[DescriptorBinding], cpu_seconds: u64) -> io::Result<()> {
+    // Use the Linux syscall directly: static musl has no close_range wrapper.
     // SAFETY: close_range only marks descriptors close-on-exec in this process.
-    if unsafe { close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
+    if unsafe { syscall(SYS_CLOSE_RANGE, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
         return Err(io::Error::last_os_error());
     }
     for binding in bindings {

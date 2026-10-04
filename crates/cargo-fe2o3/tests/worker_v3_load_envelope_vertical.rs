@@ -73,6 +73,9 @@ mod conditional_fill_host;
 #[path = "fixtures/conditional_fill_pending.rs"]
 mod conditional_fill_pending;
 
+#[path = "fixtures/conditional_fill_controller.rs"]
+mod conditional_fill_controller;
+
 #[path = "fixtures/compiler_closure.rs"]
 mod compiler_closure;
 
