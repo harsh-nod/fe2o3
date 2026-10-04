@@ -53,7 +53,7 @@ pub(super) fn derive(
             None
         });
         for (block, row) in function.control.iter().enumerate() {
-            out.budget.charge_work(2)?;
+            out.budget.charge_work(6)?;
             let (operands, call) = match &row.end {
                 End::Call { child, arguments } => {
                     out.budget.charge_work(arguments.len())?;
@@ -92,6 +92,14 @@ pub(super) fn derive(
                 operands,
                 call,
                 frame_preserving: !conserves_heap && cut_frames::supports(function, block, out)?,
+                normalization: match row.end {
+                    End::ThreadWrite(call)
+                        if row.statements == 0 && call.normalization_coordinates().is_some() =>
+                    {
+                        Some(call)
+                    }
+                    _ => None,
+                },
             });
         }
     }
@@ -117,6 +125,8 @@ fn headers() -> usize {
         + h::<Vec<(usize, bool, u32)>>()
         + h::<Option<SourceCallHintsV85>>()
         + h::<SourceCutHintsV85>()
+        + h::<Option<thread_write::ThreadWriteCall>>()
+        + h::<Option<(usize, u32)>>()
         + h::<SourceEntryHintsV85>()
         + h::<SourceCallHintsV85>()
         + h::<(usize, bool, u32)>()

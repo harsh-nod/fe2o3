@@ -107,6 +107,9 @@ pub(super) fn emit(
                             matches!(goal, Goal::Observations),
                             out,
                         )?;
+                        if matches!(goal, Goal::Heap) {
+                            hint.emit_write_normalization(root, out)?;
+                        }
                         if hint.frame_preserving && matches!(goal, Goal::Heap) {
                             emit!(
                                 out,

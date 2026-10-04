@@ -22,6 +22,41 @@ pub(super) struct ThreadWriteCall {
 }
 
 impl ThreadWriteCall {
+    pub(super) fn normalization_coordinates(self) -> Option<(usize, u32)> {
+        let (local, moved, bits) = self.value.scalar_local_coordinates()?;
+        (!moved
+            && local != self.input
+            && local != self.index
+            && matches!(self.recipe.width, 1 | 2 | 4 | 8)
+            && (bits == 8 * u32::from(self.recipe.width) || bits == 1 && self.recipe.width == 1))
+            .then_some((local, bits))
+    }
+
+    pub(super) fn emit_normalization(
+        self,
+        root: usize,
+        instance: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        out.budget.reserve_storage(
+            size_of::<Self>()
+                + 4 * size_of::<usize>()
+                + 3 * size_of::<&()>()
+                + size_of::<Option<(usize, u32)>>()
+                + size_of::<Result<(usize, u32)>>(),
+        )?;
+        out.budget.charge_work(6)?;
+        let (local, bits) = self.normalization_coordinates().ok_or_else(mismatch)?;
+        write!(
+            out,
+            " hide(invocation_source_thread_write_v88);\n let normalized_write = "
+        )
+        .map_err(|_| out.error())?;
+        self.emit_literal(out)?;
+        write!(out, ";\n invocation_thread_write_local_normal_form_v93(source, normalized_write, {local}, {bits}, {root}, {instance}, invocation_runtime_little_endian_v36());\n")
+            .map_err(|_| out.error())
+    }
+
     pub(super) fn derive(
         slots: &SourceSlots<'_, '_>,
         plan: &InvocationPlan<'_, '_>,
@@ -219,7 +254,22 @@ impl ThreadWriteCall {
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
         out.budget.charge_work(1)?;
-        write!(out, " let event = InvocationSourceByteEventV36::ThreadWrite(InvocationSourceThreadWriteV88 {{ destination: {}, input: {}, index: {}, recipe: ", self.destination, self.input, self.index).map_err(|_| out.error())?;
+        write!(
+            out,
+            " let event = InvocationSourceByteEventV36::ThreadWrite("
+        )
+        .map_err(|_| out.error())?;
+        self.emit_literal(out)?;
+        write!(out, ");\n let after = invocation_source_byte_step_v36(cursor.source, event, {root}, {instance}, little_endian);\n let observations = cursor.observations.push(InvocationSourceStatementObservationV36 {{ root: {root}, instance: {instance}, block: {block}, statement: cursor.next_statement, event: Some(event), before: cursor.source, after }});\n let source = invocation_source_byte_pc_v36(after, {});\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations, operands: seq![], returned: None }}\n", self.continuation).map_err(|_| out.error())
+    }
+
+    fn emit_literal(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        write!(
+            out,
+            "InvocationSourceThreadWriteV88 {{ destination: {}, input: {}, index: {}, recipe: ",
+            self.destination, self.input, self.index
+        )
+        .map_err(|_| out.error())?;
         self.recipe.emit(out)?;
         write!(
             out,
@@ -228,7 +278,7 @@ impl ThreadWriteCall {
         )
         .map_err(|_| out.error())?;
         self.value.emit(out)?;
-        write!(out, " }});\n let after = invocation_source_byte_step_v36(cursor.source, event, {root}, {instance}, little_endian);\n let observations = cursor.observations.push(InvocationSourceStatementObservationV36 {{ root: {root}, instance: {instance}, block: {block}, statement: cursor.next_statement, event: Some(event), before: cursor.source, after }});\n let source = invocation_source_byte_pc_v36(after, {});\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations, operands: seq![], returned: None }}\n", self.continuation).map_err(|_| out.error())
+        write!(out, " }}").map_err(|_| out.error())
     }
 }
 

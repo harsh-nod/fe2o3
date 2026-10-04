@@ -289,6 +289,9 @@ fn generate_refinement_inner_v49(
     byte_source
         .emit_cut_frame_proofs_v93(out)
         .map_err(|error| out.source_section_error(error, "original source cut frame proofs"))?;
+    byte_source
+        .emit_thread_write_normal_proofs_v94(out)
+        .map_err(|error| out.source_section_error(error, "original source write normal forms"))?;
     if let Some(tail) = tail {
         byte_bindings.emit_carrier_extensionality_v48(out)?;
         tail.emit(
