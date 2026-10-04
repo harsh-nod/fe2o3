@@ -1,0 +1,31 @@
+{
+  "schema": "fe2o3-physical-v7-diagnostic-fixtures-v1",
+  "native_result": {
+    "schema": "fe2o3-physical-v6-diagnostic-fixture-v1",
+    "production": "src/amd-dbgapi-one-stop-native-v1.h",
+    "extracted": "tests/diagnostic-core.inc",
+    "extracted_pin": {
+      "bytes": 1280,
+      "sha256": "9094bea1143a9569742fb8b573a78e31374449808c0b0ec418127f2c9e0609e8"
+    },
+    "controls": 12,
+    "scope": "Exact portable note body only; no target memory, GDB, provider, loader, physical capture or retained DWARF claim."
+  },
+  "checkpoint": {
+    "production": "src/amd-dbgapi-one-stop-native-v1.h",
+    "extracted": [
+      {
+        "path": "tests/checkpoint-core.inc",
+        "bytes": 1889,
+        "sha256": "a44c1ddf9d2aae6be8d4417361ae0435c51dd6d0845d2a017ee7a7000ef3525b"
+      },
+      {
+        "path": "tests/checkpoint-helper.inc",
+        "bytes": 529,
+        "sha256": "d6a46d2e7cb0d0e572819ca82b615baa5e2a0ddf4beca8638f28937b84005d60"
+      }
+    ],
+    "controls": 56,
+    "scope": "Exact production diagnostic note/helper with mocked owner/refusal and scratch declaration. No native GDB callback, target, provider, loader, physical capture or actual layout proof."
+  }
+}

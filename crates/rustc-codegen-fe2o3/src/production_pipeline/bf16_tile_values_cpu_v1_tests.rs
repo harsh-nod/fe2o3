@@ -20,6 +20,7 @@ enum NominalQueryProfileV1 {
     OwnedFormal { requested_return: [u8; 4] },
     OwnedRankedFormal { requested_return: [u8; 4] },
     OwnedFormalStage { requested_return: [u8; 4] },
+    OwnedTargetStage { requested_return: [u8; 4] },
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -169,6 +170,23 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )
     }
 
+    /// Separate private geometry/actual target-binding observer. It retains the
+    /// actual formal stage and both accounts; ordinary/LLVM routes stay closed.
+    pub(crate) fn observe_bf16_owned_target_stage_for_test_v1(
+        self,
+        requested_return: [u8; 4],
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<(), Error>,
+    ) -> (Result<(), Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_for_test_v1(
+            NominalQueryProfileV1::OwnedTargetStage { requested_return },
+            inspect,
+        )
+    }
+
     /// Actual private production formal stage, retained across consuming maps.
     pub(crate) fn observe_bf16_owned_formal_stage_for_test_v1(
         self,
@@ -273,7 +291,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                              | NominalQueryProfileV1::OwnedAttached { .. }
                                              | NominalQueryProfileV1::OwnedFormal { .. }
                                              | NominalQueryProfileV1::OwnedRankedFormal { .. }
-                                             | NominalQueryProfileV1::OwnedFormalStage { .. } => Ok(()),
+                                             | NominalQueryProfileV1::OwnedFormalStage { .. }
+                                             | NominalQueryProfileV1::OwnedTargetStage { .. } => Ok(()),
                                         },
                                     )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
@@ -353,6 +372,57 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             // Keep the actual same account after the source callback returns.
             // This entry is opt-in and test-only; the default stack-backed
             // preparation helper and ordinary nominal refusal are unchanged.
+            if let NominalQueryProfileV1::OwnedTargetStage { requested_return } = profile {
+                return prepared
+                    .try_map(|prepared, budget| {
+                        let before = phase.get().expect("successful nominal phase");
+                        assert_eq!(budget.work(), before.work);
+                        assert_eq!(budget.storage(), before.final_storage);
+                        assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                        budget.check_prior_denials_v1()
+                            .map_err(materialization_resource_error_v29)?;
+                        let PreparedMaterializationV29 {
+                            materialized: (materialized, observed), ranked_roots, bindings,
+                        } = prepared;
+                        let checked = MaterializedNeutralProductionCompilation {
+                            materialized, ranked_roots, bindings,
+                        }.verify_private_nominal_kernel_checks_v1().map_err(Box::new)?;
+                        Ok((checked, observed))
+                    })?
+                    .try_map(|(checked, observed), _original_materialization_account| {
+                        let stage = checked.admit_private_bf16_formal_memory_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(formal, observed), _original_materialization_account| {
+                        let target = formal.bind_private_bf16_target_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((target, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        stage.revalidate_private_bf16_target_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(mut stage, observed), budget| {
+                        // All paid observations are created only now, after all
+                        // consuming transitions, inside the surviving target.
+                        stage.bound.observe_private_bf16_target_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots,
+                            stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        drop(stage);
+                        let before = phase.get().expect("successful nominal phase");
+                        assert_eq!(budget.work(), before.work);
+                        assert_eq!(budget.storage(), before.final_storage);
+                        assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                        budget.check_prior_denials_v1()
+                            .map_err(materialization_resource_error_v29)?;
+                        eprintln!("fe2o3-bf16-private-target-entry-v1 completed=true materialization_account_unchanged=true normal_admission=false optimizer=false llvm=false launch_authenticated=false");
+                        Ok(observed)
+                    })
+                    .map(|finished| finished.finish_copy());
+            }
             if let NominalQueryProfileV1::OwnedFormalStage { requested_return } = profile {
                 // Keep the actual callback result account-bound beside the
                 // actual production stage, even on any consuming failure.

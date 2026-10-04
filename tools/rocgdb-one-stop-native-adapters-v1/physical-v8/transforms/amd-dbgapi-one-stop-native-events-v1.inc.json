@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v8-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+  "before": {
+    "bytes": 26341,
+    "sha256": "c3680125e342df708682dd82a479ba574ddb2c7d1ebf4e6560d777f580623624"
+  },
+  "after": {
+    "bytes": 26367,
+    "sha256": "edf4ff611cac67f4f16038ea6d1de85873719a8a7d3c190d3e84a026589a8df6"
+  },
+  "changes": [
+    {
+      "beforeOffset": 21198,
+      "afterOffset": 21198,
+      "before": "    require (thread==m_host\n             && m_owner.host_stop_output_completed\n                  (current_identity (),regcache_read_pc (get_thread_regcache (thread))),\n             failure::checkpoint_changed)",
+      "after": "    checkpoint_require (checkpoint_site::checkpoint_stop_output, [&] { return thread==m_host\n             && m_owner.host_stop_output_completed\n                  (current_identity (),regcache_read_pc (get_thread_regcache (thread))); })"
+    }
+  ]
+}

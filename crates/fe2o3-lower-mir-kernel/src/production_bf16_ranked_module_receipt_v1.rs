@@ -1657,3 +1657,238 @@ mod private_formal_owner_resource_tests {
         }
     }
 }
+
+fn private_bf16_target_frame_storage_v1<I>() -> Result<usize, ProductionSemanticKirErrorV1> {
+    std::mem::size_of::<Option<I>>()
+        .checked_add(std::mem::size_of::<Result<(), PrivateBf16FormalOwnerErrorV1>>())
+        .ok_or_else(|| ArgumentResourceV1::Arithmetic.into())
+}
+
+fn reserve_private_bf16_target_frame_v1<I>(
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    budget.check_prior_denials_v1()?;
+    budget.charge_work(1)?;
+    let storage = private_bf16_target_frame_storage_v1::<I>()?;
+    budget.reserve_storage(storage)?;
+    Ok(storage)
+}
+
+impl ProductionPrivateBf16FormalMemoryOwnerV1 {
+    /// Lends the actual executable graph, selected source function and retained
+    /// obligations only after a fresh full nominal/formal replay on this owner's
+    /// original account. No source owner, report or authority token is returned.
+    ///
+    /// The callback returns unit. Any separately retained target output must
+    /// already have its own caller-paid reservation and remain owned with this
+    /// source and account. Callback storage must return to its incoming floor.
+    /// Geometry, target cloning/verification and their existing tree/payload
+    /// domains are not made globally metered by this fixed callback frame.
+    #[doc(hidden)]
+    pub fn with_private_bf16_target_source_v1<'work, I>(
+        &self,
+        expected_root: SemanticFunctionIdV1,
+        expected_return: [u8; 4],
+        budget: &mut ArgumentBudgetV1<'work>,
+        inspect: I,
+    ) -> Result<(), crate::ProductionFormalMemoryErrorV1>
+    where
+        I: FnOnce(
+            &fe2o3_kernel_ir::Module,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+            &FormalMemoryObligations,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    {
+        check_private_bf16_formal_owner_account_v1(
+            self.attached.ledger,
+            self.retained_floor,
+            budget,
+        )
+        .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let floor = budget.storage();
+        let slot = budget as *const _ as usize;
+        let ledger = budget.work_ledger_identity_v1();
+        let storage = reserve_private_bf16_target_frame_v1::<I>(budget)
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)?;
+        let protected = floor
+            .checked_add(storage)
+            .ok_or_else(|| private_bf16_formal_owner_resource_v1(ArgumentResourceV1::Arithmetic))?;
+        let mut inspect = Some(inspect);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.verify_private_bf16_formal_memory_with_budget_v1(
+                expected_root,
+                expected_return,
+                budget,
+            )?;
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            budget
+                .charge_work(4)
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            let semantic = self
+                .attached
+                .receipt
+                .materialized
+                .semantic_ssa()
+                .source_semantic();
+            let [root] = semantic.roots() else {
+                return Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ));
+            };
+            if *root != expected_root {
+                return Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ));
+            }
+            let function = semantic
+                .functions()
+                .get(expected_root.index() as usize)
+                .ok_or(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                ))?;
+            let callback = inspect.take().ok_or_else(|| {
+                private_bf16_formal_owner_resource_v1(ArgumentResourceV1::Accounting)
+            })?;
+            callback(
+                self.attached.receipt.materialized.executable.module(),
+                function,
+                self.analysis.obligations(),
+                budget,
+            )
+            .map_err(PrivateBf16FormalOwnerErrorV1::SemanticKir)
+        }));
+        // In particular, an early replay refusal must destroy the unused
+        // captured callback before its paid Option<I> representation is refunded.
+        drop(inspect);
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                drop(payload);
+                Err(PrivateBf16FormalOwnerErrorV1::SemanticKir(
+                    private_bf16_attachment_panic_error_v1(budget),
+                ))
+            }
+        };
+        if budget as *const _ as usize != slot
+            || budget.work_ledger_identity_v1() != ledger
+            || budget.storage() != protected
+        {
+            drop(result);
+            budget
+                .check_prior_denials_v1()
+                .map_err(private_bf16_formal_owner_resource_v1)?;
+            // Do not refund unknown callback surplus or a violated original floor.
+            return Err(private_bf16_formal_owner_resource_v1(
+                ArgumentResourceV1::Accounting,
+            ));
+        }
+        // Consume the paid Result representation before its frame refund.
+        // A typed diagnostic payload is the same declared excluded error domain
+        // as existing formal/target errors, not a retained authority record.
+        match result {
+            Ok(()) => {
+                budget
+                    .release_storage(storage)
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                Ok(())
+            }
+            Err(error) => {
+                budget
+                    .release_storage(storage)
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(private_bf16_formal_owner_resource_v1)?;
+                Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod private_target_frame_resource_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+
+    #[test]
+    fn private_target_frame_exact_and_one_short() {
+        let frame = private_bf16_target_frame_storage_v1::<[u8; 32]>().unwrap();
+        for (work_limit, storage_limit, accepted) in [
+            (1, 7 + frame, true),
+            (0, 7 + frame, false),
+            (1, 7 + frame - 1, false),
+        ] {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = reserve_private_bf16_target_frame_v1::<[u8; 32]>(&mut budget);
+            assert_eq!(result.is_ok(), accepted);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            if accepted {
+                assert_eq!(result.unwrap(), frame);
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (1, 7 + frame, 7 + frame)
+                );
+                budget.release_storage(frame).unwrap();
+            } else {
+                assert_eq!(budget.storage(), 7);
+                assert_eq!(budget.failed_work().is_some(), work_limit == 0);
+                assert_eq!(budget.failed_storage().is_some(), work_limit != 0);
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn private_target_frame_preserves_original_denials_at_exhausted_work() {
+        for kind in 0..3 {
+            let mut work = Work::new(5);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            budget.charge_work(5).unwrap();
+            if kind != 1 {
+                assert!(budget.charge_work(9).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let original = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(matches!(
+                    reserve_private_bf16_target_frame_v1::<[u8; 32]>(&mut budget),
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error))
+                        if error == original
+                ));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+}

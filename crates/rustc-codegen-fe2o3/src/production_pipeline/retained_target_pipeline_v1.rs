@@ -270,3 +270,36 @@ impl RetainedMaterializationPhaseV1<PrivateBf16FormalMemoryCompilationV1> {
         })
     }
 }
+
+impl RetainedMaterializationPhaseV1<PrivateBf16FormalMemoryCompilationV1> {
+    /// Actual private binding retains both original accounts. Existing ordinary
+    /// target gates are unchanged; no V12 optimizer or LLVM route is selected.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn bind_private_bf16_target_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<RetainedMaterializationPhaseV1<PrivateBf16TargetBoundCompilationV1>> {
+        self.try_map(|owner, _original_materialization_account| {
+            owner
+                .bind_private_bf16_target_v1(requested_return)
+                .map_err(Box::new)
+        })
+    }
+}
+
+impl RetainedMaterializationPhaseV1<PrivateBf16TargetBoundCompilationV1> {
+    /// Fresh source/formal replay and full geometry/target rebinding on the
+    /// original projection phase, with materialization postflight still required.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn revalidate_private_bf16_target_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .revalidate_private_bf16_target_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}

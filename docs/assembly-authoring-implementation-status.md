@@ -11,6 +11,59 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 target binding and scalar debugger rebuild — 2026-10-04
+
+The private owning compilation path now derives launch geometry from the actual
+retained module, binds its selected production target, and retains the resulting
+target-bound module together with its intact formal/source owner. Fresh replay
+checks the complete bound graph, geometry, kernel/entry names and authenticated
+compilation bindings. It does not reconstruct a legacy connected owner.
+
+Fresh Identity and swapped-input frontend sessions in **debug and release**
+successfully constructed and replayed this stage for `gfx942:xnack-`, Wave64,
+rank one and workgroup 64×1×1. Wrong Return, expected target, kernel, entry,
+binding and changed bound-module controls refused admission; unused callbacks
+were dropped. All eight original formal reasons, one bounds obligation and two
+alias obligations remain retained. Source geometry is not launch-time address
+authentication.
+
+The target header reserves 3,992 bytes and the temporary observation 552 bytes
+on the original projection account. Their combined retained storage was
+909,891,635 bytes, with a 911,193,425-byte phase peak. The enclosing materialization
+account remains distinct. Fixed-state reservations do not bound inherited
+geometry construction, module cloning, formal/verifier allocation, formatting,
+allocator overhead or whole-process RSS.
+
+The seven-source change passed **3,938 compiler library tests** (231 ignored),
+73 extractor tests and two API tests in each build mode, **2,082 lowerer tests**
+in each mode, the release product build, 12 parent controls and four separately
+supervised genuine frontend processes. Initial accessor and test-macro compile
+failures were corrected without broadening admission; their evidence remains
+preserved. Qualified whole-source census:
+`5df748bb46513b7b5492d6127fe857622f3cf6913405996b5968994d0d7948f2`.
+
+The additive, disabled `physical-v8` debugger adapter package includes the
+scalar-host presentation correction while preserving `physical-v7`. Both the
+isolated package and repository copy passed 72 Node controls, strict C++ groups
+of 12/56/300 checks, UBSan groups of 56/300, exact 63-source qualification and
+forward/reverse patch checks. Activation, capture and publication stay disabled.
+
+A fresh private scalar debugger completed all four build phases. Its new
+ELF/object passed the eighteen-type layout measurement, preserving the older
+sixteen types and measuring an 18,904-byte logical reservation. Fresh static
+checks matched 80 named runtime candidates, 78 data files, nine directories and
+54 generated/source Python joins. Startup preparation passed 25 Node, 28
+collector and seven preparation groups; toolchain controls and its separate
+90-file/eight-alias census passed. These are build/static/CPU observations,
+not a new startup, physical capture, GPU-dispatch result or native retry.
+
+Next compiler work is the real checked V12 optimizer continuation and sound
+matrix-helper context/convergence support in native LLVM lowering. Neither
+optimizer invocation nor LLVM/artifact/ordinary compilation is enabled by this
+checkpoint. Fresh debugger startup and native qualification remain separate.
+No milestone or tutorial is completed here; accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 owning formal stage and native checkpoint diagnosis — 2026-10-04
 
 The private compilation path now retains the actual formal memory analysis

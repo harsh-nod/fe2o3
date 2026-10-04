@@ -4994,3 +4994,43 @@ impl PrivateBf16FormalMemoryCompilationV1 {
             .map_err(ProductionPipelineError::RankedVerification)
     }
 }
+
+/// Private exact geometry and actual target binding. The first field owns the
+/// bound output before the intact formal/source pair and projection phase.
+/// Original authenticated bindings and the outer materialization account stay
+/// unchanged. This is not optimizer, LLVM, artifact or launch admission.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16TargetBoundCompilationV1 {
+    bound: crate::production_ranked_projection_v1::PrivateBf16TargetBoundV1,
+    bindings: AuthenticatedProductionBindings,
+}
+
+impl PrivateBf16FormalMemoryCompilationV1 {
+    #[allow(dead_code)]
+    fn bind_private_bf16_target_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16TargetBoundCompilationV1, ProductionPipelineError> {
+        let Self { admitted, bindings } = self;
+        let bound = admitted.bind_private_bf16_target_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16TargetBoundCompilationV1 { bound, bindings })
+    }
+}
+
+impl PrivateBf16TargetBoundCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_target_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.bound.revalidate_private_bf16_target_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
