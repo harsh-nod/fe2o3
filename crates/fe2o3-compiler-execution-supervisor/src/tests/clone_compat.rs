@@ -18,6 +18,29 @@ impl Drop for OwnedChild {
 }
 
 #[test]
+fn child_namespace_corruption_rejects_before_exec_and_reaps() {
+    let fixture = Fixture::with_code("namespace-corruption", &launched_probe_code(true));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    for index in 0..10 {
+        let (_reserved, child, _control, accepted) = accepted_handoff(&supervisor);
+        let _child = OwnedChild(child);
+        let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
+        let children = fs::read_to_string("/proc/thread-self/children").unwrap();
+        crate::process::corrupt_next_child_namespace_for_test(index);
+        assert!(matches!(
+            supervisor.launch_inner::<false>(prepared, Duration::from_secs(2)),
+            Err(ProtectedIssuerLaunchErrorV1::ChildStage(13))
+        ));
+        assert_eq!(
+            fs::read_to_string("/proc/thread-self/children").unwrap(),
+            children
+        );
+    }
+}
+
+#[test]
 fn filtered_atomic_pidfd_launch_cases() {
     for case in [
         "enosys",

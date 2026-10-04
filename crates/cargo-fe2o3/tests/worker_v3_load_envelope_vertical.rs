@@ -1519,6 +1519,62 @@ fn v3_fast_failure_hostile_runner_command(
 }
 
 #[test]
+#[ignore = "private UID1000 helper for the isolated composed application startup campaign"]
+fn composed_production_application_startup_helper() {
+    assert_eq!(rustix::process::geteuid().as_raw(), 1000);
+    assert_eq!(rustix::process::getegid().as_raw(), 1000);
+    let case = std::env::var("FE2O3_COMPOSED_CASE").unwrap();
+    assert!(matches!(
+        case.as_str(),
+        "descriptor" | "roster" | "delayed" | "fallback" | "cancelled"
+    ));
+    let application = PathBuf::from(std::env::var_os("FE2O3_COMPOSED_STATIC_CONSUMER").unwrap());
+    assert!(application.is_absolute());
+    let fixture = prepared_v3_application_fixture();
+    let report_path = fixture.directory.0.join("composed-report.json");
+    let completed = v3_application_runner_command_for_context(&fixture, &application, "3")
+        .arg(&fixture.kernel)
+        .arg("gfx942:xnack-")
+        .arg(&report_path)
+        .arg(if case == "roster" {
+            "--fe2o3-test-register-roster"
+        } else {
+            "--fe2o3-test-register-application"
+        })
+        .output()
+        .unwrap();
+    let report_bytes = fs::read(&report_path).unwrap_or_default();
+    println!(
+        "COMPOSED {case}: status={} report={}\nstdout={}\nstderr={}",
+        completed.status,
+        String::from_utf8_lossy(&report_bytes),
+        String::from_utf8_lossy(&completed.stdout),
+        String::from_utf8_lossy(&completed.stderr),
+    );
+    assert_eq!(completed.status.success(), case != "cancelled");
+    if case != "cancelled" {
+        let report: serde_json::Value = serde_json::from_slice(&report_bytes).unwrap();
+        for field in [
+            "host_consumer",
+            "loader_environment_clear",
+            "admitted",
+            "current",
+        ] {
+            assert_eq!(report[field], true, "{case}: {field}");
+        }
+        if case == "roster" {
+            assert_eq!(report["roster"], true);
+        }
+    } else if !report_bytes.is_empty() {
+        let report: serde_json::Value = serde_json::from_slice(&report_bytes).unwrap();
+        assert_ne!(report["admitted"], true);
+    }
+    let recovered =
+        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
 fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     let fixture = prepared_v3_application_fixture();
     let report = fixture.directory.0.join("v3-application-report.json");

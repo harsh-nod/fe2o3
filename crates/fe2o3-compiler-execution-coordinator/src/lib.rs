@@ -73,6 +73,10 @@ mod provisioning;
 #[allow(unsafe_code)]
 mod provisioning_entrypoint;
 
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod composed_startup;
+
 pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
 
 pub use inherited::{

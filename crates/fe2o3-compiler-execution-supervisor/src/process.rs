@@ -244,6 +244,7 @@ struct StagedLaunchV1 {
     profile_ready_writer: OwnedFd,
     gate_reader: OwnedFd,
     exec_status_writer: OwnedFd,
+    namespaces: NamespaceSetV1,
 }
 
 /// Stable failure launching, admitting, or terminating one protected issuer process.
@@ -806,9 +807,9 @@ impl ProtectedIssuerSupervisorV1 {
     ///
     /// Production launch requires the calling supervisor thread to already
     /// possess the complete locked service profile. The child inherits that
-    /// profile, verifies it with direct syscalls while gated, and cannot execute
-    /// the launcher until the parent independently checks procfs and every
-    /// namespace. The returned value is not ready issuer authority.
+    /// profile and verifies its own namespaces with direct syscalls while gated.
+    /// The parent independently checks procfs credentials and its own namespace
+    /// continuity before releasing the gate. The returned value is not ready issuer authority.
     pub fn launch(
         &self,
         prepared: PreparedProtectedIssuerLaunchV1,
@@ -850,6 +851,7 @@ impl ProtectedIssuerSupervisorV1 {
             &profile_ready_writer,
             &gate_reader,
             &exec_status_writer,
+            namespaces,
         )?;
         let child_profile = profile.as_ref().map(ExactProcessProfileV1::child_profile);
         let expected_parent_pid = prepared.static_manifest().parent_pid();
@@ -966,7 +968,6 @@ impl ProtectedIssuerSupervisorV1 {
                     deadline,
                 )?;
                 namespaces.revalidate_self()?;
-                namespaces.revalidate_child(pid)?;
                 if let Some(profile) = &profile {
                     profile.revalidate_current()?;
                     profile.revalidate_child(pid)?;
@@ -1067,6 +1068,7 @@ impl StagedLaunchV1 {
         profile_ready_writer: &OwnedFd,
         gate_reader: &OwnedFd,
         exec_status_writer: &OwnedFd,
+        namespaces: NamespaceSetV1,
     ) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
         let mut next = STAGED_DESCRIPTOR_FLOOR;
         let launcher = duplicate_above(&prepared.launcher, &mut next, "stage static launcher")?;
@@ -1108,6 +1110,14 @@ impl StagedLaunchV1 {
         let gate_reader = duplicate_above(gate_reader, &mut next, "stage launch-gate reader")?;
         let exec_status_writer =
             duplicate_above(exec_status_writer, &mut next, "stage exec-status writer")?;
+        #[cfg(test)]
+        let namespaces = {
+            let mut namespaces = namespaces;
+            if let Some(index) = CHILD_NAMESPACE_CORRUPTION.with(|value| value.take()) {
+                namespaces.identities[index].inode ^= 1;
+            }
+            namespaces
+        };
         Ok(Self {
             launcher,
             descriptors,
@@ -1115,6 +1125,7 @@ impl StagedLaunchV1 {
             profile_ready_writer,
             gate_reader,
             exec_status_writer,
+            namespaces,
         })
     }
 }
@@ -1189,6 +1200,11 @@ unsafe fn child_exec(
             && validate_child_profile(profile) != 0
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 3);
+        }
+        // A non-dumpable child's proc namespace links cannot be inspected by this
+        // empty-capability parent. The fixed cloned code checks itself before readiness.
+        if validate_child_namespaces(&staged.namespaces) != 0 {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 13);
         }
         let ready = PROFILE_READY_V1;
         if write(
@@ -1900,18 +1916,29 @@ fn parse_octal(value: &str) -> Result<u32, ProtectedIssuerLaunchErrorV1> {
         .map_err(|_| ProtectedIssuerLaunchErrorV1::ProcessProfile("proc umask field overflows"))
 }
 
-const NAMESPACE_NAMES_V1: [&str; 10] = [
-    "user",
-    "mnt",
-    "pid",
-    "pid_for_children",
-    "net",
-    "ipc",
-    "uts",
-    "cgroup",
-    "time",
-    "time_for_children",
+const NAMESPACES_V1: [(&str, &std::ffi::CStr); 10] = [
+    ("user", c"/proc/self/ns/user"),
+    ("mnt", c"/proc/self/ns/mnt"),
+    ("pid", c"/proc/self/ns/pid"),
+    ("pid_for_children", c"/proc/self/ns/pid_for_children"),
+    ("net", c"/proc/self/ns/net"),
+    ("ipc", c"/proc/self/ns/ipc"),
+    ("uts", c"/proc/self/ns/uts"),
+    ("cgroup", c"/proc/self/ns/cgroup"),
+    ("time", c"/proc/self/ns/time"),
+    ("time_for_children", c"/proc/self/ns/time_for_children"),
 ];
+
+#[cfg(test)]
+thread_local! {
+    static CHILD_NAMESPACE_CORRUPTION: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn corrupt_next_child_namespace_for_test(index: usize) {
+    assert!(index < NAMESPACES_V1.len());
+    CHILD_NAMESPACE_CORRUPTION.with(|value| value.set(Some(index)));
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NamespaceIdentityV1 {
@@ -1919,14 +1946,15 @@ struct NamespaceIdentityV1 {
     inode: u64,
 }
 
+#[derive(Clone, Copy)]
 struct NamespaceSetV1 {
-    identities: [NamespaceIdentityV1; NAMESPACE_NAMES_V1.len()],
+    identities: [NamespaceIdentityV1; NAMESPACES_V1.len()],
 }
 
 impl NamespaceSetV1 {
     fn capture_self() -> Result<Self, ProtectedIssuerLaunchErrorV1> {
-        let identities = NAMESPACE_NAMES_V1
-            .map(|name| namespace_identity(&format!("/proc/self/ns/{name}")))
+        let identities = NAMESPACES_V1
+            .map(|(_, path)| namespace_identity(path.to_str().expect("constant ASCII path")))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
@@ -1941,26 +1969,13 @@ impl NamespaceSetV1 {
     }
 
     fn revalidate_self(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        for (index, name) in NAMESPACE_NAMES_V1.iter().enumerate() {
-            let observed = namespace_identity(&format!("/proc/self/ns/{name}"))?;
+        for (index, (name, path)) in NAMESPACES_V1.iter().enumerate() {
+            let observed = namespace_identity(path.to_str().expect("constant ASCII path"))?;
             if observed != self.identities[index] {
                 return Err(ProtectedIssuerLaunchErrorV1::Namespace(name));
             }
         }
         self.require_children_unchanged()
-    }
-
-    fn revalidate_child(
-        &self,
-        pid: rustix::process::Pid,
-    ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-        for (index, name) in NAMESPACE_NAMES_V1.iter().enumerate() {
-            let observed = namespace_identity(&format!("/proc/{}/ns/{name}", pid.as_raw_pid()))?;
-            if observed != self.identities[index] {
-                return Err(ProtectedIssuerLaunchErrorV1::Namespace(name));
-            }
-        }
-        Ok(())
     }
 
     fn require_children_unchanged(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
@@ -1972,6 +1987,36 @@ impl NamespaceSetV1 {
         }
         Ok(())
     }
+}
+
+unsafe fn validate_child_namespaces(expected: &NamespaceSetV1) -> c_int {
+    for ((_, path), expected) in NAMESPACES_V1.iter().zip(&expected.identities) {
+        // SAFETY: constant NUL-terminated paths and stack-only stat storage; no allocation,
+        // locking or callbacks are permitted between clone and the private readiness record.
+        let fd = unsafe {
+            syscall(
+                libc::SYS_openat,
+                libc::AT_FDCWD,
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return -1;
+        }
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe { syscall(libc::SYS_fstat, fd, stat.as_mut_ptr()) };
+        let closed = unsafe { close(fd as c_int) };
+        if result != 0 || closed != 0 {
+            return -1;
+        }
+        // SAFETY: successful fstat initialized the complete x86-64 stat record.
+        let stat = unsafe { stat.assume_init() };
+        if (stat.st_dev, stat.st_ino) != (expected.device, expected.inode) {
+            return -1;
+        }
+    }
+    0
 }
 
 fn namespace_identity(path: &str) -> Result<NamespaceIdentityV1, ProtectedIssuerLaunchErrorV1> {
@@ -2444,6 +2489,47 @@ mod tests {
     fn current_namespace_snapshot_revalidates_without_drift() {
         let namespaces = NamespaceSetV1::capture_self().unwrap();
         namespaces.revalidate_self().unwrap();
+        // SAFETY: this leaf uses only fixed-path syscalls and stack storage.
+        assert_eq!(unsafe { validate_child_namespaces(&namespaces) }, 0);
+    }
+
+    #[test]
+    fn child_namespace_check_rejects_each_changed_device_and_inode() {
+        let original = NamespaceSetV1::capture_self().unwrap();
+        for index in 0..NAMESPACES_V1.len() {
+            for device in [false, true] {
+                let mut changed = original;
+                if device {
+                    changed.identities[index].device ^= 1;
+                } else {
+                    changed.identities[index].inode ^= 1;
+                }
+                // SAFETY: identity mutations only change the fixed comparison, not syscall inputs.
+                assert_eq!(unsafe { validate_child_namespaces(&changed) }, -1);
+            }
+        }
+    }
+
+    #[test]
+    fn nondumpable_child_checks_its_own_namespaces_before_exec() {
+        use std::os::unix::process::CommandExt;
+        let namespaces = NamespaceSetV1::capture_self().unwrap();
+        let mut command = std::process::Command::new("/bin/true");
+        // SAFETY: the child only changes its own dumpability and runs the syscall-only check.
+        unsafe {
+            command.pre_exec(move || {
+                if prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
+                    || validate_child_namespaces(&namespaces) != 0
+                {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                Ok(())
+            });
+        }
+        let status =
+            fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.status())
+                .unwrap();
+        assert!(status.success());
     }
 
     #[test]
