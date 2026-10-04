@@ -8,6 +8,8 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
+include!("original_semantic_mir_original_model_reuse_v59_tests.rs");
+
 fn fixture_error(error: impl std::error::Error + 'static) -> Error {
     let mut chain: &(dyn std::error::Error + 'static) = &error;
     loop {

@@ -525,6 +525,19 @@ fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_res
         };
         let measured = run(floor, LIMIT, LIMIT, generate);
         let expected = measured.0.unwrap();
+        for function in prefix.input().functions() {
+            if function.function.body.is_none() {
+                continue;
+            }
+            let namespace = function.coordinate.0;
+            assert!(expected.contains(&format!("open spec fn byte_inputs_{namespace}_v55(")));
+            assert!(!expected.contains(&format!(" as byte_inputs_{namespace}_v55,")));
+            for operation in function.operations.clone() {
+                assert!(expected.contains(&format!(
+                    "open spec fn byte_operation_{namespace}_{operation}_v30("
+                )));
+            }
+        }
         for text in [
             "TypedPrefixCursorV49",
             "byte_micro_step_",

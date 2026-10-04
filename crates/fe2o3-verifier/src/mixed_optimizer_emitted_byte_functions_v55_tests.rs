@@ -644,3 +644,77 @@ fn emitted_byte_functions_refuse_foreign_ledger_and_released_retention() {
         }
     });
 }
+
+#[test]
+fn emitted_original_models_reject_rederived_inventory_and_physical_before_import() {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
+        run(floor, LIMIT, LIMIT, |out| {
+            let allocations = NoAllocations(inventory.owner());
+            let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+            let context = ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 1);
+            let mut emitted =
+                EmittedByteFunctionsV55::new(inventory, physical, &allocations, context, out)?;
+            let model = ByteFunctionV30::derive(
+                inventory,
+                physical,
+                Function(0),
+                context,
+                &allocations,
+                out,
+            )?;
+            emitted.emit(&model, 7, out)?;
+            let original_bytes = out.text.len();
+            let limits = fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                max_boundaries: 4096,
+            };
+            let (other_physical, receipt) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    inventory, limits, out.budget,
+                )?;
+            out.budget.reserve_storage(receipt.retained_storage())?;
+            let wrong_physical = ByteFunctionV30::derive(
+                inventory,
+                &other_physical,
+                Function(0),
+                context,
+                &allocations,
+                out,
+            )?;
+            assert!(matches!(
+                emitted.emit_parent_aliases(&wrong_physical, 0, out),
+                Err(Error::Statement(_))
+            ));
+            assert_eq!(out.text.len(), original_bytes);
+            let (other_inventory, receipt) = Inventory::derive_v18(inventory.owner(), out.budget)?;
+            out.budget.reserve_storage(receipt.retained_storage())?;
+            let (other_analysis, receipt) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    &other_inventory,
+                    limits,
+                    out.budget,
+                )?;
+            out.budget.reserve_storage(receipt.retained_storage())?;
+            let wrong_inventory = ByteFunctionV30::derive(
+                &other_inventory,
+                &other_analysis,
+                Function(0),
+                context,
+                &allocations,
+                out,
+            )?;
+            assert!(matches!(
+                emitted.emit_parent_aliases(&wrong_inventory, 0, out),
+                Err(Error::Statement(_))
+            ));
+            assert_eq!(out.text.len(), original_bytes);
+            emitted.emit_parent_aliases(&model, 0, out)?;
+            assert!(
+                out.text[original_bytes..]
+                    .contains("byte_operation_7_0_v30 as byte_operation_0_0_v30,")
+            );
+            Ok(())
+        })
+        .0
+        .unwrap();
+    });
+}
