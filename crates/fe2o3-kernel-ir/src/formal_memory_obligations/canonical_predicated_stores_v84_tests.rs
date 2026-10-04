@@ -452,40 +452,58 @@ fn predicated_store_v84_foreign_refunded_and_exhausted_queries_are_sticky_before
     let at = predicated_coordinate(&module);
     let (graph, credit) = owner(&module);
     for mode in 0..3 {
-        let error = run_predicated(&graph, credit, |view, budget| {
-            let CanonicalGuardedGlobalStoreOutcomeV24::ProvedLocalConditions(store) =
-                view.store_at(at, budget)?
-            else {
-                panic!()
-            };
-            let first = match mode {
-                0 => {
-                    let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000_000);
-                    let mut foreign = Budget::new(&mut work, 100_000_000);
-                    foreign.reserve_storage(budget.storage())?;
-                    let error = store.invocation_projection(&mut foreign).unwrap_err();
-                    assert_eq!(foreign.work(), 0);
-                    error
-                }
-                1 => {
-                    budget.release_storage(1)?;
-                    let before = budget.work();
-                    let error = store.invocation_projection(budget).unwrap_err();
-                    assert_eq!(budget.work(), before);
-                    budget.reserve_storage(1)?;
-                    error
-                }
-                _ => {
-                    budget.charge_work(100_000_000 - budget.work() - 5)?;
-                    store.invocation_projection(budget).unwrap_err()
-                }
-            };
-            let after = budget.work();
-            assert_eq!(store.invocation_projection(budget).unwrap_err(), first);
-            assert_eq!(budget.work(), after);
-            Ok(())
-        })
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000_000);
+        let mut budget = Budget::new(&mut work, 100_000_000);
+        budget.reserve_storage(credit + 17).unwrap();
+        let retained = Cell::new(0);
+        let error = with_canonical_predicated_global_stores_v84(
+            &graph,
+            Default::default(),
+            &mut budget,
+            |view, budget| {
+                retained.set(budget.storage());
+                let CanonicalGuardedGlobalStoreOutcomeV24::ProvedLocalConditions(store) =
+                    view.store_at(at, budget)?
+                else {
+                    panic!()
+                };
+                let first = match mode {
+                    0 => {
+                        let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000_000);
+                        let mut foreign = Budget::new(&mut work, 100_000_000);
+                        foreign.reserve_storage(budget.storage())?;
+                        let error = store.invocation_projection(&mut foreign).unwrap_err();
+                        assert_eq!(foreign.work(), 0);
+                        error
+                    }
+                    1 => {
+                        budget.release_storage(1)?;
+                        let before = budget.work();
+                        let error = store.invocation_projection(budget).unwrap_err();
+                        assert_eq!(budget.work(), before);
+                        budget.reserve_storage(1)?;
+                        error
+                    }
+                    _ => {
+                        budget.charge_work(100_000_000 - budget.work() - 5)?;
+                        store.invocation_projection(budget).unwrap_err()
+                    }
+                };
+                let after = budget.work();
+                assert_eq!(store.invocation_projection(budget).unwrap_err(), first);
+                assert_eq!(budget.work(), after);
+                Ok(())
+            },
+        )
         .unwrap_err();
+        assert_eq!(
+            budget.storage(),
+            if mode == 1 {
+                retained.get()
+            } else {
+                credit + 17
+            }
+        );
         assert!(matches!(
             error,
             Failure::Resource(ResourceError::Accounting | ResourceError::Work(_))
