@@ -70,9 +70,9 @@ These Rust transport checks are not a new formal proof.
 ## Next Multi-GPU Work
 
 1. Qualify that complete application/manager/controller/auditor composition.
-2. Join the remote artifact to conditional charged argument preparation and the
-   existing mandatory per-device native fill constraint, retaining shared custody
-   through both invocations' settlement or quarantine.
+2. The [conditional native invocation join](runtime-conditional-fill-invocation-v1.md)
+   is implemented. Qualify its shared proof custody and mandatory per-device fill
+   constraint through both real invocations' settlement or quarantine.
 3. Package the complete proof deployment and switch ordinary host/supervisor routing.
 4. Run ordinary N=65/G=128 fill on two free MI300X GPUs, then completed-output
    staging, settled upload, PUBLIC XGMI and guarded readback in both directions.

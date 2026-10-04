@@ -587,6 +587,18 @@ struct GeneratedWorkerV3KfdExecutionAuthority<K> {
     device_unique_id: u64,
 }
 
+impl<K: CompilerGeneratedKernelExpectationV1>
+    crate::generated_runtime_carrier::GeneratedRuntimeAuthorityV1
+    for GeneratedWorkerV3KfdExecutionAuthority<K>
+{
+    fn artifact_bytes(&self) -> &[u8] {
+        self.binding
+            .authenticated
+            .current_publication_token()
+            .exact_artifact_bytes()
+    }
+}
+
 impl<K> GeneratedWorkerV3KfdExecutionAuthority<K> {
     fn from_application(
         authenticated: AuthenticatedWorkerV3ExecutableV1<K>,

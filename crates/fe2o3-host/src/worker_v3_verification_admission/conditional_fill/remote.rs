@@ -26,12 +26,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod invocation;
+pub use invocation::WorkerV3ConditionalFillInvocationErrorV1;
+
 /// Retains the application controller, original startup publication token and production
 /// FD195 audit. Proof ownership stays in the independent controller.
 ///
-/// This is not an unconditional executable or native launch permit. Actual argument
-/// coverage, per-device storage and completion still require a conditional invocation
-/// path. Neither bytes nor a copied subject can construct this owner. Drop sends no
+/// This is not an unconditional executable or native launch permit. The conditional
+/// invocation method separately checks actual argument coverage and binds per-device
+/// storage/completion. Neither bytes nor a copied subject can construct this owner. Drop sends no
 /// Release and establishes no GPU settlement.
 ///
 /// ```

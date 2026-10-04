@@ -16,6 +16,7 @@ mod generated_context_arguments;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
 mod generated_runtime_arguments;
+mod generated_runtime_carrier;
 mod generated_runtime_results;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod generated_worker_v3_dispatch;
@@ -335,7 +336,8 @@ pub use worker_v3_verification_admission::{
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use worker_v3_verification_admission::{
-    RemoteConditionalFillArtifactV1, WorkerV3RemoteConditionalFillErrorV1,
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
+    WorkerV3RemoteConditionalFillErrorV1,
 };
 #[cfg(feature = "worker-v3-verifier-test-support")]
 #[doc(hidden)]

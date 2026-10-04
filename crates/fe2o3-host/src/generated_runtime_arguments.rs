@@ -357,7 +357,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     }
 }
 
-fn prepare_charged_with_plan<A>(
+pub(crate) fn prepare_charged_with_plan<A>(
     arguments: A,
     plan: &GeneratedArgumentPackingPlanV1,
     limits: GeneratedRuntimeArgumentLimitsV1,
@@ -923,11 +923,35 @@ impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
         GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
         Gfx942RuntimeProjectionErrorV1,
     > {
+        self.project(hsaco, false)
+    }
+
+    pub(crate) fn project_conditional_fill(
+        self,
+        hsaco: &[u8],
+    ) -> Result<
+        GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
+        Gfx942RuntimeProjectionErrorV1,
+    > {
+        self.project(hsaco, true)
+    }
+
+    fn project(
+        self,
+        hsaco: &[u8],
+        conditional_fill: bool,
+    ) -> Result<
+        GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
+        Gfx942RuntimeProjectionErrorV1,
+    > {
         // A closed failure cannot detach consumed storage from its retained decoder.
-        let payload = self
-            .payload
-            .into_persistent_projection_v1(hsaco)?
-            .into_generated_storage_v1();
+        let projection = self.payload.into_persistent_projection_v1(hsaco)?;
+        let payload = if conditional_fill {
+            projection.require_conditional_fill_v1()
+        } else {
+            projection
+        }
+        .into_generated_storage_v1();
         Ok(GeneratedRuntimeStorageV1 {
             payload,
             readback: self.readback,

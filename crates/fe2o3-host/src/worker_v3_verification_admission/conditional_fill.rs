@@ -30,7 +30,10 @@ pub use subject::InertWorkerV3ConditionalFillSubjectV1;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod remote;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use remote::{RemoteConditionalFillArtifactV1, WorkerV3RemoteConditionalFillErrorV1};
+pub use remote::{
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
+    WorkerV3RemoteConditionalFillErrorV1,
+};
 
 #[cfg(target_os = "linux")]
 mod retained;

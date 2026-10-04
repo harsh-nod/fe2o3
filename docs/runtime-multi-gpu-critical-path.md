@@ -6,12 +6,21 @@ existing MI300X evidence independently. Primary owns edits, integration and test
 
 ## Immediate Priority
 
+The [conditional native invocation join](runtime-conditional-fill-invocation-v1.md)
+is now implemented: exact charged generated packing, full64 coverage, selected
+finalized entry, mandatory native storage constraint and shared remote custody
+through the existing completion carrier. Production application admission and
+two-GPU execution are still unqualified. The next blocker is explicit
+Cargo/supervisor custodian routing plus the installed proof deployment, followed
+by a fresh real-issuer compile-to-application campaign. The old composed-startup
+fixture uses synthetic carriage and cannot qualify production FD195 verification.
+
 The [independent proof manager](runtime-proof-manager-v1.md) now implements the
 authenticated registered-owner/controller join and cooperative coordinator
 bootstrap. Its fixed manager owns controller launch, ReadyOffered custody and
 post-coordinator-loss retention. The public launcher no longer accepts arbitrary
-raw registration tuples. Ordinary host/supervisor route selection, the remote
-conditional native-invocation owner and two-GPU application qualification remain
+raw registration tuples. Ordinary host/supervisor route selection, composed
+production admission and two-GPU application qualification remain
 the next gates; do not equate manager activation with proof or GPU execution.
 The standard compiler-only deployment bundle still excludes the manager/controller
 closure and its approval records. Package and activate those resources before
@@ -27,8 +36,8 @@ The [consuming application proof client](runtime-application-proof-client-v1.md)
 and explicit host remote conditional artifact are now implemented. Transport
 qualification includes cross-UID failure controls and the exact Cargo syscall
 allowlist installed after helper entry. The composed observed manager / actual
-proof / production FD195 host path is not yet qualified. Next complete that
-composition and the conditional invocation join to per-device native preparation.
+proof / production FD195 host path is not yet qualified. The conditional invocation
+join to per-device native preparation is implemented; qualify it in that composition.
 The [fixed-controller execution campaign](evidence/dev-proof-controller-execution-2026-10-04/README.md)
 now passes real post-exec analysis/proof, retained-owner probing, three mismatch
 controls and live-Verus cancellation. Do not substitute another isolated identity
@@ -41,8 +50,8 @@ Its [pollable lifecycle](runtime-proof-custodian-polling-v1.md) supports coopera
 startup, proof execution and cancellation on the originating root thread. The
 independent manager now consumes the broker's authenticated registered owner and
 uses that lifecycle for a staged application session. The consuming host client
-and remote conditional artifact now exist; qualify their composition and complete
-the per-device native invocation join.
+and remote conditional artifact now exist; qualify their composition with the
+implemented per-device native invocation join.
 Keep general performance work and additional GPU counts out of this critical path.
 
 The [staged application controller](runtime-application-proof-controller-v1.md)
@@ -51,8 +60,8 @@ retained proof probing and quarantine. Its root staging primitive now requires t
 manager's authenticated received registration; the staged capsule alone cannot
 authenticate that observation. The generated-only
 multi-device native-peer constructor is also implemented without granting generic
-compute authority. Next priorities are composed host proof qualification, the
-remote conditional native-invocation join and two-GPU application qualification.
+compute authority. Next priorities are composed host proof qualification and
+two-GPU conditional application qualification.
 The [application-controller campaign](evidence/dev-application-proof-controller-2026-10-04/README.md)
 now passes genuine proof/probe/EOF-quarantine and three application rejection cases,
 plus all 18 existing launcher regressions. Its registration records are component
@@ -175,14 +184,15 @@ Only root sends Ready. After successful Ready delivery, activate the custodian
 and retire root's peer alias; proof packets then require that custodian's exact
 per-message credentials and fresh nonce. The staged controller protocol is now
 implemented, as is the authenticated coordinator/manager handoff. The ordinary
-application's consuming proof client and production route selection remain open.
+application's consuming proof client is implemented; production route selection
+and composed qualification remain open.
 The first small guarded-buffer pipeline can reuse direct context polling or the
 existing current-thread engine. This does not qualify larger or threaded variants:
 shared-memory initialization/verification at 64 MiB or above can spawn scoped
 workers, and the threaded async engines also conflict with the current profile.
 Keep proof execution outside the 30-second registration/ACK path. The inherited
 compiler auditor's separate 30-second absolute deadline begins at admission, not
-its first request; admit it immediately before the audit, after proving. Bound
+its first request; admit it immediately before the audit, before the long proof. Bound
 custodian startup, analyzer execution, proof and audit together within the existing
 300-second issuer/observer sessions. A 180-second proof bound alone is insufficient.
 The current-record audit reads the protected issuer ledger and anchor; it does not

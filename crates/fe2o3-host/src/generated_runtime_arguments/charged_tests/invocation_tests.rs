@@ -1,5 +1,6 @@
 use super::*;
 
+mod carrier_tests;
 mod readback_tests;
 
 // Reuse the loader's structural builder without introducing executable or verifier evidence.

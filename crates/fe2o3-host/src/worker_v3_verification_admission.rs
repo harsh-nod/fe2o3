@@ -58,7 +58,10 @@ pub use conditional_fill::{
     WorkerV3ConditionalFillRetainedErrorV1, execute_retained_worker_v3_conditional_fill_v1,
 };
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use conditional_fill::{RemoteConditionalFillArtifactV1, WorkerV3RemoteConditionalFillErrorV1};
+pub use conditional_fill::{
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
+    WorkerV3RemoteConditionalFillErrorV1,
+};
 
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;

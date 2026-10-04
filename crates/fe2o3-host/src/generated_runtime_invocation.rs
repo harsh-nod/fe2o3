@@ -9,10 +9,7 @@ use fe2o3_runtime::{
     KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
     PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1, RuntimeAsyncPreparationV1,
     RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1,
-    RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCompletionCarrierV1,
-    RuntimeGfx942GeneratedCompletionViewV1, RuntimeGfx942GeneratedSourceMutV1,
-    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
-    RuntimeGfx942ReadbackErrorV1,
+    RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
 };
 
 use super::{
@@ -46,12 +43,11 @@ pub struct GeneratedWorkerV3RuntimeInvocationV1<K> {
     owner_local: PhantomData<Rc<()>>,
 }
 
-struct GeneratedContextPreparationV1<K, P = PreparedGfx942RuntimeDispatchV1> {
-    storage: GeneratedRuntimeStorageV1<P>,
-    authority: GeneratedWorkerV3KfdExecutionAuthority<K>,
-    footprint: GeneratedRuntimeArgumentFootprintV1,
-    result_budget: GeneratedRuntimeResultBudgetV1,
-}
+type GeneratedContextPreparationV1<K, P = PreparedGfx942RuntimeDispatchV1> =
+    crate::generated_runtime_carrier::GeneratedRuntimeCarrierV1<
+        GeneratedWorkerV3KfdExecutionAuthority<K>,
+        P,
+    >;
 
 impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
     fn project_persistent(
@@ -76,124 +72,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
             footprint: self.footprint,
             result_budget: self.result_budget,
         })
-    }
-}
-
-impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
-    for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
-{
-    type CurrentnessError = crate::RecoveredWorkerV3AdmissionErrorV1;
-    type Readback = crate::generated_runtime_arguments::GeneratedRuntimeReadbackOwnerV1;
-
-    fn source(&self) -> RuntimeGfx942GeneratedSourceV1<'_, Self::CurrentnessError> {
-        RuntimeGfx942GeneratedSourceV1::from_generated_storage(
-            self.storage.prepared(),
-            self.authority
-                .binding
-                .authenticated
-                .current_publication_token()
-                .exact_artifact_bytes(),
-            &self.authority,
-        )
-    }
-
-    fn source_mut(
-        &mut self,
-    ) -> Option<RuntimeGfx942GeneratedSourceMutV1<'_, Self::CurrentnessError>> {
-        Some(RuntimeGfx942GeneratedSourceMutV1::new(
-            self.storage.prepared_mut(),
-            self.authority
-                .binding
-                .authenticated
-                .current_publication_token()
-                .exact_artifact_bytes(),
-            &self.authority,
-        ))
-    }
-
-    fn prepare_readback(&self) -> Result<Self::Readback, RuntimeGfx942ReadbackErrorV1> {
-        self.storage
-            .prepare_readback()
-            .map_err(|error| match error {
-                GeneratedRuntimeArgumentErrorV1::ResultCredit(error) => {
-                    RuntimeGfx942ReadbackErrorV1::Credit(error)
-                }
-                GeneratedRuntimeArgumentErrorV1::Allocation => {
-                    RuntimeGfx942ReadbackErrorV1::Allocation
-                }
-                GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput => {
-                    RuntimeGfx942ReadbackErrorV1::AlreadyReserved
-                }
-                _ => RuntimeGfx942ReadbackErrorV1::InvalidStorage,
-            })
-    }
-
-    fn install_readback(&mut self, readback: Self::Readback) {
-        self.storage.install_readback(readback);
-    }
-}
-
-// SAFETY: the private storage binds the original source, charged destinations,
-// gate and decoder. The runtime path preserves the original allocations; the
-// consuming decoder commits only after complete validation and disposal-credit
-// settlement. The metadata domain retains that exact existing gate allocation.
-unsafe impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCompletionCarrierV1
-    for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
-{
-    fn completion_domain_v1(
-        &self,
-    ) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
-        self.storage
-            .completion_domain_v1()
-            .map_err(|_| RuntimeGfx942ReadbackErrorV1::InvalidStorage)
-    }
-
-    fn with_completion_view_v1(
-        &mut self,
-        callback: impl for<'a> FnOnce(
-            RuntimeGfx942GeneratedCompletionViewV1<'a, Self::CurrentnessError>,
-        ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
-    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
-        let (payload, destinations) = self.storage.borrow_reserved_readback_v1().map_err(|_| {
-            RuntimeErrorV1::Validation(
-                fe2o3_runtime::RuntimeValidationErrorV1::InvalidBackendDescription,
-            )
-        })?;
-        let source = RuntimeGfx942GeneratedSourceV1::from_generated_storage(
-            payload,
-            self.authority
-                .binding
-                .authenticated
-                .current_publication_token()
-                .exact_artifact_bytes(),
-            &self.authority,
-        );
-        callback(RuntimeGfx942GeneratedCompletionViewV1::new(
-            source,
-            destinations,
-        ))
-    }
-
-    fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
-        let Self {
-            storage,
-            authority,
-            footprint: _,
-            result_budget,
-        } = self;
-        drop(authority);
-        drop(result_budget);
-        storage
-            .decode_reserved_readback()
-            .map_err(|error| match error {
-                GeneratedRuntimeArgumentErrorV1::ResultCredit(error) => {
-                    RuntimeGfx942ReadbackErrorV1::Credit(error)
-                }
-                GeneratedRuntimeArgumentErrorV1::Allocation => {
-                    RuntimeGfx942ReadbackErrorV1::Allocation
-                }
-                _ => RuntimeGfx942ReadbackErrorV1::InvalidStorage,
-            })
     }
 }
 
