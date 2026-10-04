@@ -50,16 +50,18 @@ impl<'a> TransitionBodyV56<'a> {
         // retains its exact type and compares it with the charged type walker.
         out.budget.charge_work(32)?;
         Ok(match (self, other) {
-            (Self::Pointer(a), Self::Pointer(b)) => a == b,
-            (Self::Alloca(a), Self::Alloca(b)) => a == b,
-            (Self::Storage(a), Self::Storage(b)) => a == b,
-            (Self::View(a), Self::View(b)) => a == b,
-            (Self::IntegralCast(a), Self::IntegralCast(b)) => a == b,
-            (Self::Checked(a), Self::Checked(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => a == b,
-            (Self::TaggedSelect(a), Self::TaggedSelect(b)) => a.same_body_v56(&b, out)?,
-            (Self::Index(a), Self::Index(b)) => a == b,
-            (Self::Trap, Self::Trap) => true,
+            (Self::Pointer(a), TransitionBodyV56::Pointer(b)) => a == b,
+            (Self::Alloca(a), TransitionBodyV56::Alloca(b)) => a == b,
+            (Self::Storage(a), TransitionBodyV56::Storage(b)) => a == b,
+            (Self::View(a), TransitionBodyV56::View(b)) => a == b,
+            (Self::IntegralCast(a), TransitionBodyV56::IntegralCast(b)) => a == b,
+            (Self::Checked(a), TransitionBodyV56::Checked(b)) => a == b,
+            (Self::Float(a), TransitionBodyV56::Float(b)) => a == b,
+            (Self::TaggedSelect(a), TransitionBodyV56::TaggedSelect(b)) => {
+                a.same_body_v56(&b, out)?
+            }
+            (Self::Index(a), TransitionBodyV56::Index(b)) => a == b,
+            (Self::Trap, TransitionBodyV56::Trap) => true,
             _ => false,
         })
     }
