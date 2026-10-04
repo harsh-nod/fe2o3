@@ -175,7 +175,7 @@ fn forbidden_schedule_and_wrong_version_leave_output_unpublished() {
 #[test]
 fn aggregate_storage_is_rejected_instead_of_discarding_layouts() {
     let files = fixture::Files::new(
-        &fixture::bytes(&fixture::storage_module(true)),
+        &fixture::bytes(&fixture::union_storage_module(true)),
         &fixture::storage_request(),
     );
     error(

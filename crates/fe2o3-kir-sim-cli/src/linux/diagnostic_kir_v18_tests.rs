@@ -309,9 +309,9 @@ fn serialized_resource_tags_remain_precise_without_changing_report_shape() {
 }
 
 #[test]
-fn storage_objects_and_operations_remain_explicit_preflight_refusals() {
+fn union_storage_objects_and_operations_remain_explicit_preflight_refusals() {
     for operations in [false, true] {
-        let bytes = fixture::bytes(&fixture::storage_module(operations));
+        let bytes = fixture::bytes(&fixture::union_storage_module(operations));
         with_input(&bytes, &fixture::storage_request(), |input| {
             let error = input
                 .module
