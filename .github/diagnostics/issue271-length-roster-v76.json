@@ -1,0 +1,292 @@
+{
+  "head": "7fb6f3eba9655602e9fd3f3ee6289f3a28d8a9f7",
+  "package": "fe2o3-lower-mir-kernel",
+  "filters": [
+    "allocation_receiver_binding_cannot_change_owner_carrier_or_physical_type",
+    "allocation_receiver_existing_entry_disposition_rechecks_original_local_and_activation_kind",
+    "allocation_receiver_existing_entry_keeps_original_restarts_raw_and_field_borrows_addressable",
+    "allocation_receiver_existing_group_has_independent_exact_and_short_work",
+    "allocation_receiver_existing_index_reuses_original_loans_and_exact_local_groups",
+    "allocation_receiver_existing_representation_does_not_erase_wrapper_field_observation",
+    "allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_first_failure",
+    "allocation_receiver_keeps_ordinary_slice_receiver_path_without_checked_references",
+    "allocation_receiver_moved_wrapper_field_keeps_real_backing_demand",
+    "allocation_receiver_original_access_fixture_distinguishes_promoted_and_retained_carriers",
+    "allocation_receiver_profiled_pending_rejects_one_short_preexisting_occurrence_reservation",
+    "allocation_receiver_promoted_moved_wrapper_field_requires_an_archived_aggregate",
+    "allocation_receiver_rejects_equal_cloned_call_wrong_argument_and_block",
+    "allocation_receiver_retained_moved_wrapper_field_requires_object_materialization",
+    "allocation_receiver_source_contract_has_independent_exact_work_bound",
+    "allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapper_storage",
+    "allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and_role",
+    "anchored_owner_carrier_keeps_one_value_across_reference_cfg_transport",
+    "anchored_owner_carrier_query_preserves_exact_resource_and_owner_checks",
+    "anchored_owner_carrier_rejects_changed_value_type_shape_and_root_anchor",
+    "checked_allocation_receiver_emits_original_borrow_and_len_without_synthetic_deref",
+    "descriptor_length_headers_have_exact_independent_query_and_transport_oracles",
+    "descriptor_length_scalar_leaves_bind_both_original_forms_and_exact_optimized_parameters",
+    "descriptor_length_scalar_leaves_have_exact_and_one_short_whole_resources",
+    "descriptor_length_scalar_leaves_reject_cloned_rvalue_wrong_site_type_and_instance",
+    "descriptor_length_scalar_leaves_reject_foreign_budget_and_latch_retry",
+    "descriptor_length_source_completion_covers_both_original_metadata_forms_without_memory_accesses",
+    "descriptor_length_source_completion_has_exact_and_one_short_whole_resources",
+    "descriptor_length_source_completion_rejects_another_same_typed_source_receiver",
+    "descriptor_length_source_completion_rejects_copied_locator_and_wrong_exact_definition_or_type",
+    "issued_global_origin_batches_complete_distinct_actual_roots_with_shared_nested_helpers",
+    "issued_helper_calls_keep_distinct_issuer_and_access_instances_across_nested_roots",
+    "issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_pointer",
+    "issued_pointer_ordered_store_retains_exact_issuer_access_and_resource_census",
+    "issued_pointer_original_effect_replay_rejects_added_dropped_store_bit_independently",
+    "issued_pointer_original_get_mut_reaches_complete_pending_source",
+    "issued_pointer_original_issuers_and_accesses_grow_independently",
+    "issued_pointer_original_read_and_write_keep_separate_issuer_census_from_private_loans",
+    "issued_pointer_original_source_rejects_changed_actual_argument_tail_and_some_edge",
+    "issued_pointer_retained_complete_source_transaction_has_exact_resource_boundaries",
+    "issued_pointer_retained_original_roster_includes_used_and_unused_issuers",
+    "issued_pointer_retained_replay_authenticates_foreign_custody_before_debit",
+    "issued_pointer_retained_replay_header_cut_preserves_first_failure_and_cleanup",
+    "issued_pointer_retained_replay_rejects_copied_source_identity_and_guard_mutations",
+    "issued_pointer_reused_original_discriminator_remains_an_explicit_admission_gap",
+    "issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap",
+    "issued_pointer_unused_original_issuer_still_checks_actual_input_index_and_tail",
+    "mixed_native_completion_cannot_swallow_invalid_report_or_history_queries",
+    "mixed_native_completion_covers_every_original_root_and_nested_source_helper",
+    "source_length_call_and_replay_headers_match_independent_live_shapes",
+    "source_length_call_discriminator_does_not_issue_get_mut_access_authority",
+    "source_length_calls_complete_unused_and_duplicate_nominal_metadata_without_access_authority",
+    "source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries",
+    "source_length_query_refuses_foreign_budget_without_debit_or_refund",
+    "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial"
+  ],
+  "rows": [
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_calls_complete_unused_and_duplicate_nominal_metadata_without_access_authority"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_query_refuses_foreign_budget_without_debit_or_refund"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_call_and_replay_headers_match_independent_live_shapes"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
+      "name": "source_length_call_discriminator_does_not_issue_get_mut_access_authority"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
+      "name": "mixed_native_completion_covers_every_original_root_and_nested_source_helper"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
+      "name": "mixed_native_completion_cannot_swallow_invalid_report_or_history_queries"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_checks_v30_tests.rs",
+      "name": "descriptor_length_headers_have_exact_independent_query_and_transport_oracles"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
+      "name": "issued_helper_calls_keep_distinct_issuer_and_access_instances_across_nested_roots"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
+      "name": "issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_pointer"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
+      "name": "issued_global_origin_batches_complete_distinct_actual_roots_with_shared_nested_helpers"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_retained_original_roster_includes_used_and_unused_issuers"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_original_issuers_and_accesses_grow_independently"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_reused_original_discriminator_remains_an_explicit_admission_gap"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_retained_replay_rejects_copied_source_identity_and_guard_mutations"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_retained_complete_source_transaction_has_exact_resource_boundaries"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_retained_replay_authenticates_foreign_custody_before_debit"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_retained_replay_header_cut_preserves_first_failure_and_cleanup"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_ordered_store_retains_exact_issuer_access_and_resource_census"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
+      "name": "issued_pointer_original_effect_replay_rejects_added_dropped_store_bit_independently"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
+      "name": "descriptor_length_source_completion_covers_both_original_metadata_forms_without_memory_accesses"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
+      "name": "descriptor_length_source_completion_has_exact_and_one_short_whole_resources"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
+      "name": "descriptor_length_source_completion_rejects_copied_locator_and_wrong_exact_definition_or_type"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
+      "name": "descriptor_length_source_completion_rejects_another_same_typed_source_receiver"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
+      "name": "descriptor_length_scalar_leaves_bind_both_original_forms_and_exact_optimized_parameters"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
+      "name": "descriptor_length_scalar_leaves_reject_cloned_rvalue_wrong_site_type_and_instance"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
+      "name": "descriptor_length_scalar_leaves_reject_foreign_budget_and_latch_retry"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
+      "name": "descriptor_length_scalar_leaves_have_exact_and_one_short_whole_resources"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "checked_allocation_receiver_emits_original_borrow_and_len_without_synthetic_deref"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_profiled_pending_rejects_one_short_preexisting_occurrence_reservation"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_existing_representation_does_not_erase_wrapper_field_observation"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_existing_entry_keeps_original_restarts_raw_and_field_borrows_addressable"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapper_storage"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_promoted_moved_wrapper_field_requires_an_archived_aggregate"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_retained_moved_wrapper_field_requires_object_materialization"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and_role"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_original_access_fixture_distinguishes_promoted_and_retained_carriers"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_moved_wrapper_field_keeps_real_backing_demand"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_existing_entry_disposition_rechecks_original_local_and_activation_kind"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_existing_index_reuses_original_loans_and_exact_local_groups"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_existing_group_has_independent_exact_and_short_work"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_rejects_equal_cloned_call_wrong_argument_and_block"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_keeps_ordinary_slice_receiver_path_without_checked_references"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_binding_cannot_change_owner_carrier_or_physical_type"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_source_contract_has_independent_exact_work_bound"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_first_failure"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "anchored_owner_carrier_keeps_one_value_across_reference_cfg_transport"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "anchored_owner_carrier_rejects_changed_value_type_shape_and_root_anchor"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
+      "name": "anchored_owner_carrier_query_preserves_exact_resource_and_owner_checks"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
+      "name": "issued_pointer_original_get_mut_reaches_complete_pending_source"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
+      "name": "issued_pointer_original_read_and_write_keep_separate_issuer_census_from_private_loans"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
+      "name": "issued_pointer_original_source_rejects_changed_actual_argument_tail_and_some_edge"
+    },
+    {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
+      "name": "issued_pointer_unused_original_issuer_still_checks_actual_input_index_and_tail"
+    }
+  ],
+  "ignored_not_selected": [
+    "actual_registered_scalar_reference_length_calls_retain_cumulative_custody",
+    "actual_registered_scalar_reference_proves_in_range_and_empty_domain_completion",
+    "actual_registered_scalar_reference_rejects_value_coverage_and_guard_mutants",
+    "actual_registered_scalar_reference_retains_exact_budget_and_custody_boundaries",
+    "actual_write_only_source_length_calls_retain_cumulative_custody",
+    "registered_reference_execution_child",
+    "registered_reference_refusal_child"
+  ]
+}
