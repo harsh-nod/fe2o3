@@ -1,8 +1,9 @@
 {
-  "head": "5631b1d4f8b7314a53067483bf4b136a15e4e266",
-  "tree": "a5ce7267dada95cb16a4b391299a0d109f4c6a6b",
+  "head": "d1b364182b7232f4806ca8eef99cd8a051aac63e",
+  "tree": "1d05610aac82624952cf1ad153463ce446cb4b73",
   "package": "fe2o3-lower-mir-kernel",
-  "filters": [
+  "expected_total": 4644,
+  "required_normal_leaves": [
     "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination",
     "actual_memory_transport_rejects_wrong_row_order_prefix_occurrence_and_same_typed_value",
     "actual_payload_scopes_preserve_live_root_growth_headers_first_error_and_raw_panic",
@@ -247,1000 +248,30 @@
     "source_length_query_refuses_foreign_budget_without_debit_or_refund",
     "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial",
     "typed_source_guard_v85_preserves_cfg_identity_without_inventing_explicit_edge",
+    "typed_source_guard_v86_transports_all_definition_kinds_without_v26_admission",
     "whole_and_projected_array_moves_keep_distinct_original_ssa_occurrences"
   ],
-  "rows": [
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_defined_and_intrinsic_call_results_capture_the_returned_scalar_before_destination"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_memory_transport_rejects_wrong_row_order_prefix_occurrence_and_same_typed_value"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_payload_scopes_preserve_live_root_growth_headers_first_error_and_raw_panic"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_promoted_reference_reads_need_no_memory_payloads"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_reference_cell_reads_keep_full_source_prefix_and_distinct_entry_initialization"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "actual_scalar_payload_pipeline_retains_exact_and_one_short_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_exact_and_one_short_resources_restore_floor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_independent_functions_have_linear_work_and_constant_check_scratch"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_intersects_all_reachable_parallel_paths"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_interval_order_keeps_full_width_offsets"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_keeps_allocation_function_and_entry_lifetimes_distinct"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_loop_allocation_resets_current_execution_bytes"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_real_chain_uses_exact_function_local_domains"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_requires_every_byte_not_just_an_overlapping_write"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_unresolved_events_supply_no_initialization"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_byte_init_v32_tests.rs",
-      "name": "aggregate_byte_init_vector_write_does_not_initialize_alignment_padding"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_initial_callback_v30_tests.rs",
-      "name": "aggregate_initial_callback_lost_floor_and_foreign_ledger_veto_all_refunds"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_initial_callback_v30_tests.rs",
-      "name": "aggregate_initial_callback_preflight_refusal_survives_panicking_capture_drop"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_initial_callback_v30_tests.rs",
-      "name": "aggregate_initial_callback_preserves_paid_success_and_panic_payloads"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_initial_callback_v30_tests.rs",
-      "name": "aggregate_initial_callback_refusal_preserves_owned_error_side_payload"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_initial_source_nested_accounting_denies_refund_before_outer_settlement"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_initial_source_nested_binding_keeps_exact_error_and_settles_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_initial_source_nested_nonaccounting_refusal_settles_exact_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_chain_binds_every_exact_endpoint_and_promoted_original_slot"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_chain_header_and_capacity_oracle_are_exact"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_chain_keeps_unmodeled_events_explicit_and_keys_function_qualified"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_chain_refuses_missing_reordered_foreign_and_changed_allocation_state"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_chain_unwind_drops_retained_rows_before_scope_refund"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_chain_v31_tests.rs",
-      "name": "aggregate_memory_key_order_preserves_full_width_offsets_and_coordinates"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_complete_native_has_exact_and_one_short_resources"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_completes_actual_private_stages_and_final_native_reports"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_final_consumer_rejects_incomplete_foreign_and_missing_occurrence_state"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_funded_foreign_account_cannot_query_or_refund_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_header_oracles_include_owned_arguments_and_result_envelopes"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_rejoins_genuine_external_occurrences_after_every_actual_stage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_stage_fold_visits_the_entire_ordered_nominal_chain"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_stage_transport_rejects_wrong_owner_and_reordered_stage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_stage_unwind_drops_owned_transport_before_scope_refund"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_sticky_work_refusal_settles_only_its_owned_rows"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_runtime_v30_tests.rs",
-      "name": "aggregate_runtime_typed_nested_resource_errors_survive_pending_scope_cleanup"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_binding_keeps_first_exact_refusal_through_later_queries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_owner_exact_and_one_short_complete_source_resources"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_owner_rejects_equal_bytes_foreign_original_and_settles_owned_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_owner_retains_real_private_chain_and_exact_original_source"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_owner_sticky_work_refusal_preserves_exact_error_after_disposal"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_source_typed_nested_resource_classification_keeps_every_payload"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_owner_v30_tests.rs",
-      "name": "aggregate_storage_policy_preserves_scalar_handoff_layout_and_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_vector_credit_v30_tests.rs",
-      "name": "aggregate_vector_credit_covers_actual_capacity_and_exact_storage_limit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_vector_credit_v30_tests.rs",
-      "name": "aggregate_vector_credit_one_short_constructor_or_backing_still_refuses"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_vector_credit_v30_tests.rs",
-      "name": "aggregate_vector_credit_replacement_preserves_the_live_successor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_vector_credit_v30_tests.rs",
-      "name": "aggregate_vector_credit_retains_empty_constructor_envelopes"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_binding_cannot_change_owner_carrier_or_physical_type"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_existing_entry_disposition_rechecks_original_local_and_activation_kind"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_existing_entry_keeps_original_restarts_raw_and_field_borrows_addressable"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_existing_group_has_independent_exact_and_short_work"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_existing_index_reuses_original_loans_and_exact_local_groups"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_existing_representation_does_not_erase_wrapper_field_observation"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_first_failure"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_keeps_ordinary_slice_receiver_path_without_checked_references"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_moved_wrapper_field_keeps_real_backing_demand"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_original_access_fixture_distinguishes_promoted_and_retained_carriers"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_profiled_pending_rejects_one_short_preexisting_occurrence_reservation"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_promoted_moved_wrapper_field_requires_an_archived_aggregate"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_rejects_equal_cloned_call_wrong_argument_and_block"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_retained_moved_wrapper_field_requires_object_materialization"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_source_contract_has_independent_exact_work_bound"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapper_storage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and_role"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "anchored_owner_carrier_keeps_one_value_across_reference_cfg_transport"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "anchored_owner_carrier_query_preserves_exact_resource_and_owner_checks"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "anchored_owner_carrier_rejects_changed_value_type_shape_and_root_anchor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_allocation_receiver_v29_tests.rs",
-      "name": "checked_allocation_receiver_emits_original_borrow_and_len_without_synthetic_deref"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "checked_failure_truncates_anchors_but_retains_capacity_and_restores_frames"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84_tests.rs",
-      "name": "checked_write_payload_live_header_keeps_the_value_until_store_emission"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84_tests.rs",
-      "name": "checked_write_payloads_are_distinct_from_stores_and_call_results"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_write_payload_v84_tests.rs",
-      "name": "checked_write_payloads_name_exact_original_value_operands"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85_tests.rs",
-      "name": "checked_write_suffix_precharges_exact_work_and_borrows_storage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85_tests.rs",
-      "name": "checked_write_suffix_rejects_changed_operands_types_effects_and_ssa"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_checked_write_tail_v85_tests.rs",
-      "name": "checked_write_suffix_replays_both_guard_shapes_and_scalar_layouts"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "composed_source_and_physical_history_obeys_exact_shared_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_checks_v30_tests.rs",
-      "name": "descriptor_length_headers_have_exact_independent_query_and_transport_oracles"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
-      "name": "descriptor_length_scalar_leaves_bind_both_original_forms_and_exact_optimized_parameters"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
-      "name": "descriptor_length_scalar_leaves_have_exact_and_one_short_whole_resources"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
-      "name": "descriptor_length_scalar_leaves_reject_cloned_rvalue_wrong_site_type_and_instance"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_leaves_v40_tests.rs",
-      "name": "descriptor_length_scalar_leaves_reject_foreign_budget_and_latch_retry"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
-      "name": "descriptor_length_source_completion_covers_both_original_metadata_forms_without_memory_accesses"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
-      "name": "descriptor_length_source_completion_has_exact_and_one_short_whole_resources"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
-      "name": "descriptor_length_source_completion_rejects_another_same_typed_source_receiver"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_descriptor_length_native_v30_tests.rs",
-      "name": "descriptor_length_source_completion_rejects_copied_locator_and_wrong_exact_definition_or_type"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_native_v28_tests.rs",
-      "name": "genuine_mixed_licm_final_native_custody_loss_cannot_refund_restored_owner_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_native_v28_tests.rs",
-      "name": "genuine_mixed_licm_final_native_has_exact_and_one_short_post_relocation_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_native_v28_tests.rs",
-      "name": "genuine_mixed_licm_final_native_refuses_omitted_and_same_count_substituted_join_rows"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_native_v28_tests.rs",
-      "name": "genuine_mixed_licm_final_native_resource_matcher_retains_guarded_work_and_storage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_native_v28_tests.rs",
-      "name": "genuine_mixed_licm_final_owner_rechecks_all_native_stages_and_relocated_occurrences"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_v28_tests.rs",
-      "name": "genuine_mixed_source_licm_has_exact_and_one_short_post_prefix_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_v28_tests.rs",
-      "name": "genuine_mixed_source_licm_observed_custody_loss_never_refunds_restored_tail_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_v28_tests.rs",
-      "name": "genuine_mixed_source_licm_preserves_unproved_equality_loop_progress_refusal"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_v28_tests.rs",
-      "name": "genuine_mixed_source_licm_rejects_omitted_rebound_and_foreign_projection_rows"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_licm_v28_tests.rs",
-      "name": "genuine_mixed_source_licm_relocates_live_loop_values_and_rebuilds_exact_memory"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "index_witness_reader_abi_does_not_admit_unknown_intrinsic_effects"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "index_witness_readers_keep_exact_read_only_effects_and_resource_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "index_witness_readers_reject_dead_or_replaced_original_referents"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "index_witness_readers_require_exact_shared_loan_identity_and_operand_role"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "issued_descriptor_fixture_covers_every_original_root_without_rebinding_exports"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
-      "name": "issued_global_origin_batches_complete_distinct_actual_roots_with_shared_nested_helpers"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
-      "name": "issued_helper_calls_keep_distinct_issuer_and_access_instances_across_nested_roots"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
-      "name": "issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_pointer"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_ordered_store_retains_exact_issuer_access_and_resource_census"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_original_effect_replay_rejects_added_dropped_store_bit_independently"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
-      "name": "issued_pointer_original_get_mut_reaches_complete_pending_source"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_original_issuers_and_accesses_grow_independently"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
-      "name": "issued_pointer_original_read_and_write_keep_separate_issuer_census_from_private_loans"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
-      "name": "issued_pointer_original_source_rejects_changed_actual_argument_tail_and_some_edge"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_retained_complete_source_transaction_has_exact_resource_boundaries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_retained_original_roster_includes_used_and_unused_issuers"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_retained_replay_authenticates_foreign_custody_before_debit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_retained_replay_header_cut_preserves_first_failure_and_cleanup"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_retained_replay_rejects_copied_source_identity_and_guard_mutations"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_reused_original_discriminator_remains_an_explicit_admission_gap"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_roles_v29_tests.rs",
-      "name": "issued_pointer_reused_original_option_local_remains_an_explicit_admission_gap"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_pointer_source_v29_tests.rs",
-      "name": "issued_pointer_unused_original_issuer_still_checks_actual_input_index_and_tail"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26.rs",
-      "name": "mixed_contract_diagnostic_preserves_wire_reason_and_resource_kind"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
-      "name": "mixed_native_completion_cannot_swallow_invalid_report_or_history_queries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_native_mixed_v26_tests.rs",
-      "name": "mixed_native_completion_covers_every_original_root_and_nested_source_helper"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_pure_cse_contract_emits_shared_rmw_multiroot_and_nested_helper_occurrences"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_pure_cse_contract_has_exact_and_one_short_transaction_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_pure_cse_contract_refuses_same_count_substitutions_and_missing_premises"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_source_contract_v26_descriptor_admission_rejects_noncanonical_component_and_layout_substitution"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_source_contract_v26_keeps_selected_root_and_nested_helper_occurrences_distinct"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_source_contract_v26_preserves_exact_and_one_short_whole_transaction_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_source_contract_v26_projects_actual_shared_and_rmw_policy9_handoffs"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_mixed_contract_v26_tests.rs",
-      "name": "mixed_source_contract_v26_refuses_same_count_kernel_type_launch_and_output_substitution"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "moving_through_alias_does_not_invalidate_the_alias_or_pointee_slot"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_expression_namespace_keeps_private_reads_and_legacy_values_separate"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_arithmetic_completes_exact_native_value_join"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_completion_rejects_substituted_instance_value_root_and_guard"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_authenticates_foreign_failed_account_before_headers"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_cannot_swallow_callback_resource_denial"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_keeps_unsupported_source_operators_pending"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_requires_original_and_optimized_rhs_equality"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_retains_early_header_and_prior_work_denials"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_expression_scope_settles_exact_and_one_short_work"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_expressions_v23_tests.rs",
-      "name": "original_global_store_value_follows_actual_mutable_loan_and_nested_scalar_callers"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_checked_output_rejects_foreign_result_use_and_same_typed_input"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_fixture_correction_records_distinct_source_identities"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_installer_header_cut_precedes_all_role_publication"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_roles_check_unused_address_dependencies"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_scalar_scratch_denies_refund_below_its_live_fixed_floor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_scalar_scratch_has_independent_exact_and_short_bounds"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_denials"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_descriptor_store_recipe_checks_both_unchanged_endpoints"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_role_fixture_v18_tests.rs",
-      "name": "original_issued_ordered_only_and_mixed_users_have_exact_transaction_boundaries"
-    },
-    {
-      "name": "original_thread_write_copied_recipe_cannot_change_source_facts",
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
-    },
-    {
-      "name": "original_thread_write_rejects_consistent_physical_tail_with_wrong_source_inputs",
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
-    },
-    {
-      "name": "original_thread_write_replays_receiver_witness_value_and_bool_result",
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
-    },
-    {
-      "name": "original_thread_write_transaction_has_exact_resource_boundaries",
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_calls_v86_tests.rs"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "payload_census_rejects_result_rhs_role_prefix_type_and_occurrence_substitution"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_queries_v18_tests.rs",
-      "name": "pending_global_access_headers_have_an_independent_exact_and_one_short_equation"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_authenticate_exact_correspondence_before_new_debits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_deny_refund_after_higher_floor_loss_on_all_dispositions"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_do_not_bypass_volatile_load_namespace_refusal"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_keep_complete_transaction_exact_and_one_short_boundaries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_keep_same_type_wrong_store_value_refusal_before_publication"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_leave_unused_issuers_and_ordered_stores_unclaimed"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_preserve_same_candidate_descriptor_refusals_before_publication"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_preserve_selected_error_and_foreign_ledger_custody"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_retain_actual_source_output_guard_and_rhs_without_native_authority"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_unwind_drops_rows_before_restoring_the_original_floor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_accesses_use_the_existing_logarithmic_index_without_query_storage_growth"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_commoned_issuer_metadata_has_exact_original_use_and_native_store_joins"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_commoned_issuer_metadata_preserves_whole_exact_and_short_resource_cuts"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_commoned_issuer_metadata_rejects_substituted_source_use_receiver_and_kind"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_issued_metadata_v18_tests.rs",
-      "name": "pending_global_commoned_metadata_has_independent_header_equation_and_exact_cuts"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_commoned_metadata_keeps_unreachable_and_rewritten_consumers_closed"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_commoned_metadata_rejects_genuine_foreign_function_coordinates"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_generic_helper_accesses_preserve_actual_space_and_exact_issuer"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_generic_helper_domains_have_exact_and_one_short_transaction_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_native_keeps_actual_formation_and_helper_access_pointers_distinct"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_deny_refund_after_higher_floor_loss_on_every_disposition"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_commands_v18_tests.rs",
-      "name": "pending_global_read_conditions_fixed_frames_have_independent_exact_and_one_short_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_foreign_query_is_no_debit_and_denies_original_refund"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_fresh_owners_have_equal_complete_transaction_work"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_join_genuine_issued_reads_and_leave_stores_pending"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_join_real_assertion_representation_chain"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_keep_genuine_query_error_before_callback_drop_or_later_error"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_never_refund_same_or_higher_foreign_ledger_credits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_normalized_complete_scope_exact_and_one_short_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_normalized_same_type_index_pointer_and_guard_substitutions"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_observe_exact_issued_bool_switch_transport"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_preserve_exact_full_transaction_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_preserve_selected_error_unwind_and_first_error_before_drop"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_refuse_same_type_roots_indices_pointers_and_other_domain_changes"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_reject_actual_selector_operand_and_edge_substitutions"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_reject_exact_foreign_formal_owner"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_require_the_actual_same_root_length_occurrence"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_read_conditions_v18_tests.rs",
-      "name": "pending_global_read_conditions_retain_header_and_work_refusals_without_retry_debit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18_tests.rs",
-      "name": "pending_global_source_construction_destroys_only_temporary_capability_credits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_conservatively_preserves_genuine_load_store_back"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_foreign_replacement_never_refunds_same_or_higher_credits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_frame_refusal_survives_released_padding_and_retry"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_genuine_optimizer_load_store_and_rhs_join"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_genuine_shared_slice_read_joins_without_write_authority"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_v18_tests.rs",
-      "name": "pending_global_source_native_headers_have_independent_exact_and_one_short_boundaries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_keeps_both_normalized_and_emitted_index_identity"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_no_debit_accessor_rejects_equal_but_foreign_correspondence"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_v18_tests.rs",
-      "name": "pending_global_source_native_pair_frames_have_an_independent_equation"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_rejects_changed_rhs_pointer_index_root_guard_and_direction"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_native_fixtures_v18_tests.rs",
-      "name": "pending_global_source_native_successful_custody_accessor_is_zero_debit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "reading_a_moved_pointee_without_reinitialization_is_rejected_before_emission"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_payloads_v29_tests.rs",
-      "name": "real_repeated_scalar_instances_capture_load_results_and_pre_move_store_sources"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_lost_floor_or_foreign_ledger_cannot_refund_any_ancestor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_ordinary_callback_refusal_settles_only_its_scoped_credit"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_preserves_paid_success_error_and_panic_payloads"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_refuses_foreign_final_owner_in_the_real_callback"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_refuses_missing_duplicate_and_stale_stages_before_callback"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_aggregate_memory_visit_v31_tests.rs",
-      "name": "scoped_aggregate_memory_visits_the_actual_rewritten_chain_without_legacy_completion"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "self_move_reads_then_invalidates_then_reinitializes_each_instance"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "separate_source_kills_at_one_gap_are_not_collapsed"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_intrinsic_capabilities_read_only_their_original_referents"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_intrinsic_witness_is_not_a_generic_intrinsic_or_thread_operand_permission"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_intrinsic_witness_keeps_dead_and_replaced_original_loan_refusals"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_intrinsic_witness_plan_exact_and_one_short_resources_restore_the_outer_floor"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_intrinsic_witness_requires_exact_original_loan_node_type_and_role"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_shared_intrinsic_witness_v29_tests.rs",
-      "name": "shared_write_only_capabilities_preserve_descriptor_write_only_effects"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_slice_completion_commands_v25_tests.rs",
-      "name": "slice_pairwise_summary_accepts_identical_global_projections_in_every_order"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_slice_completion_commands_v25_tests.rs",
-      "name": "slice_pairwise_summary_refuses_counter_overflow"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_slice_completion_commands_v25_tests.rs",
-      "name": "slice_pairwise_summary_refuses_read_only_writes_and_retains_unprojected_reads"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_slice_completion_commands_v25_tests.rs",
-      "name": "slice_pairwise_summary_rejects_different_or_unknown_projections_before_and_after_stores"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_slice_completion_commands_v25_tests.rs",
-      "name": "slice_parameter_census_headers_match_independent_exact_and_one_short_oracle"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "source_census_rejects_missing_duplicate_foreign_or_displaced_anchors"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_width_v30_tests.rs",
-      "name": "source_domain_join_legacy_switch_all_integer_widths_reads_and_stores"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_width_v30_tests.rs",
-      "name": "source_domain_join_legacy_switch_widths_preserve_exact_transaction_limits"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_width_v30_tests.rs",
-      "name": "source_domain_join_legacy_switch_widths_reject_exact_guard_substitutions"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_domain_join_v30_tests.rs",
-      "name": "source_global_domain_join_frames_have_exact_and_one_short_storage"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "source_kills_alias_store_cannot_restart_a_dead_original_lifetime"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "source_kills_reinitialized_alias_reads_complete_original_physical_admission"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "source_kills_reject_alias_reads_after_zero_operation_invalidations_and_moves"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_call_and_replay_headers_match_independent_live_shapes"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_call_discriminator_does_not_issue_get_mut_access_authority"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_calls_complete_unused_and_duplicate_nominal_metadata_without_access_authority"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_calls_preserve_exact_and_one_short_whole_resource_boundaries"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_query_refuses_foreign_budget_without_debit_or_refund"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_length_native_v76_tests.rs",
-      "name": "source_length_retained_rows_refuse_substitution_and_preserve_the_first_denial"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_guard_v85.rs",
-      "name": "typed_source_guard_v85_preserves_cfg_identity_without_inventing_explicit_edge"
-    },
-    {
-      "path": "crates/fe2o3-lower-mir-kernel/src/production_scoped_memory_anchors_v29_tests.rs",
-      "name": "whole_and_projected_array_moves_keep_distinct_original_ssa_occurrences"
-    }
-  ],
-  "ignored_not_selected": [
-    "actual_registered_scalar_reference_length_calls_retain_cumulative_custody",
-    "actual_registered_scalar_reference_proves_in_range_and_empty_domain_completion",
-    "actual_registered_scalar_reference_rejects_value_coverage_and_guard_mutants",
-    "actual_registered_scalar_reference_retains_exact_budget_and_custody_boundaries",
-    "actual_write_only_source_length_calls_retain_cumulative_custody",
-    "registered_reference_execution_child",
-    "registered_reference_refusal_child"
-  ],
   "source_pins": [
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/lib.rs",
+      "sha256": "480562a5f964b61c5bdcc8d85cde384385d3f960ce22f6246010e8cf531f8b3c"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_guard_v86.rs",
+      "sha256": "b753b11bf44f88c507382b29018db3a15f2e63e6b71f4fdb379bb3c1c37f7e68"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v26.rs",
+      "sha256": "0e301cd5ea00bfe9ac4ad0ac5c581b4d00d550195600d7e19846779b760d868a"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v86_tests.rs",
+      "sha256": "ece6b17d03fbf7f21b8fa3d45288d621822b2e896a4576b419d0371a8fab0d33"
+    },
+    {
+      "path": "crates/fe2o3-kernel-descriptor/src/mixed_conditional_v86.rs",
+      "sha256": "66f45d41a4f9e11b663048a48d42aa6fc2f9ca743ac33ea028cd358a473523d0"
+    },
     {
       "path": "crates/fe2o3-kernel-ir/src/formal_memory_obligations.rs",
       "sha256": "8da5927e6d4fc90a5abe5c3842e2b629feaaa517503ca7b7f0bc453264a70ad9"
@@ -1291,7 +322,7 @@
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_access_v18.rs",
-      "sha256": "ee22eb607aa079e6fbafd23aa23953892c4ef3cdef8e0ec2474340309f8751a7"
+      "sha256": "1142ea6b8c6672f01207f9362d821cf2f1d0353ae0f57a97b496c67c978f8edb"
     },
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_optimized_source_global_completion_v26.rs",
@@ -1370,6 +401,10 @@
       "sha256": "0d9fcea77d422f9fc8cc2a4b891fe56a5bab7edfaf722237663dc9b0ce18d187"
     },
     {
+      "path": "crates/fe2o3-lower-mir-kernel/src/production_source_global_guard_v86.rs",
+      "sha256": "97dc80a9cc483bb12374e40639c201d6775b2624754ccd7ec954b9f881e0f324"
+    },
+    {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_issued_call_owner_v26_tests.rs",
       "sha256": "050af561b30e0e31df7f7036776d6e9aa5d73d98f7468bfe1943388411321681"
     },
@@ -1416,13 +451,75 @@
     {
       "path": "crates/fe2o3-lower-mir-kernel/src/production_source_write_replay_v86.rs",
       "sha256": "3a666a929495a75b58bb3f0ef38997eb5d2ec4007e1b602680a8a005f78c28bd"
+    },
+    {
+      "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_pending_v18_tests.rs",
+      "sha256": "ce25ffc06730dd44900448b6ee2fc6b3e412d63eac34fb1c9b8b7308d5dfe08a"
+    },
+    {
+      "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_pending_v18.rs",
+      "sha256": "b3d9b6a884fd147278002b450672326c52498d852fb9f4530810ec3cdb8893cc"
+    },
+    {
+      "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_predicate_v86_tests.rs",
+      "sha256": "2d80698ee03722ef3564f8caf39b64f073d1c575fada74fff07e886792640e9f"
+    },
+    {
+      "path": "crates/fe2o3-pliron/src/production_analysis/canonical_global_predicate_v86.rs",
+      "sha256": "ba5ec4989b154c19da87fac39a6c249a19a062b3ebd4da971e8295335e821486"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_generate_v36.rs",
+      "sha256": "c1b0345ea76230436effa04de14c17bbd561551000d534d57357ac70327c0bd1"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36_tests.rs",
+      "sha256": "1894d07e5b79f0b869f255c4febf92ec3931270f629e39fe5b28a353116c94c3"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_paired_v36.rs",
+      "sha256": "541c903a339d594b6ee40a481d238cca82029a7c6c75bf36a49274330fef52f2"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_bytes_v36.rs",
+      "sha256": "002f1e44fe07d5a8b513c2d178c602e6664df38d5eccf5f5b9af7de3e49b0cd5"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_enter_v36.rs",
+      "sha256": "557a6b2edb4ab470c6d1fee819793a9a7259dde80be1c95a38a1512cac4d38e8"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_source_function_v36.rs",
+      "sha256": "49e8dd7ade7b2a72b5b8b83e086e88b4df8fb1963479a65cba5e953668e4bb57"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_generate_v85.rs",
+      "sha256": "c46015740732588b00e3802363a2862b39bd5fd77abafffe95afadc14e4ea4e3"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocation_step_v85_tests.rs",
+      "sha256": "54253db96d4c9043dbc54dc98ea2d7ca5cb9b18c338cac856c5a388975b768c1"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_invocations_v32_tests.rs",
+      "sha256": "36ec0a61082599d4474df6edd9fa55478a40e3b6679270e7ed6abdbd7a597dcc"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_conservation_generate_v81.rs",
+      "sha256": "800f329dbd18a566f83c31fb9efba6b584c02d55b433a80b6bad53550b26081e"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_enter_laws_v85.vrs",
+      "sha256": "006da92b38b545471a4845ee3aee6a62b37e80a2e038a5ebf28bb22867c6a18f"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85_tests.rs",
+      "sha256": "9bc497c7c9ad63139f99f041400a9a207607502b124d4d4561218a50e97fcef4"
+    },
+    {
+      "path": "crates/fe2o3-verifier/src/original_semantic_mir_source_step_hints_v85.rs",
+      "sha256": "3bb450fc04b289ea4c9adf5730d9088b9758fd6417a4172192c2cf1d47352475"
     }
   ],
-  "union": {
-    "prior_joint": 241,
-    "original_thread_write": 4,
-    "duplicate_rows_removed": 0,
-    "distinct": 245
-  },
-  "scope": "Joint lowerer regression only. Typed explicit-predicate endpoints still refuse V26 completion; checked-write suffix validates emitted physical equations, not original source authority. No proof or activation credit."
+  "mode": "All lowerer lib tests with default ignored exclusion; discovery from the exact compiled binary. No protected/owning bodies selected."
 }
