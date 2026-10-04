@@ -92,7 +92,10 @@ fn guarded_byte_store_retains_exact_conditional_effect_and_conservative_physical
                         let space = pointer_space(space).unwrap();
                         let bytes = scalar_bytes(scalar, width).unwrap();
                         let index = scalar_bytes(ScalarType::Index, width).unwrap();
-                        assert!(source.contains("s.valid && match s.values[1] { MemoryValueV30::Scalar(0) => true, MemoryValueV30::Scalar(1) => match (s.values[0], s.values[2])"));
+                        assert!(source.contains("s.valid && match s.values[1] { MemoryValueV30::Scalar(predicate) => if predicate == 0 { true } else if predicate == 1 { match (s.values[0], s.values[2])"));
+                        assert!(source.contains(", _ => false } } else { false }, _ => false };"));
+                        assert!(!source.contains("MemoryValueV30::Scalar(0) =>"));
+                        assert!(!source.contains("MemoryValueV30::Scalar(1) =>"));
                         assert!(source.contains(&format!("byte_pointer_type_v30(p, {space}, {index}) && byte_range_aligned_v30(s.memory, p, {bytes}, 1)")));
                         assert!(source.contains("if !valid { MemoryOperationEffectV30::Refused } else if s.values[1] == MemoryValueV30::Scalar(1)"));
                         assert!(source.contains("} else { MemoryOperationEffectV30::Pure }"));
