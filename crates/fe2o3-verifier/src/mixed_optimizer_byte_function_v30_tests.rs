@@ -32,6 +32,7 @@ include!("mixed_optimizer_byte_value_types_v57_tests.rs");
 include!("mixed_optimizer_byte_state_results_v58_tests.rs");
 include!("mixed_optimizer_verus_compatibility_v62_tests.rs");
 include!("mixed_optimizer_verus_warning_cleanup_v65_tests.rs");
+include!("mixed_optimizer_guarded_store_v90_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -685,6 +686,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
         + size_of::<PointerByteEffectV30>()
         + size_of::<Range<usize>>()
         + size_of::<FormalIndexWidth>()
+        + size_of::<(usize, bool)>()
         + size_of::<(
             Option<usize>,
             [usize; 18],

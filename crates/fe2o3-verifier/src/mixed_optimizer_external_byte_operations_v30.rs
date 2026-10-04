@@ -80,6 +80,13 @@ pub(super) enum PointerByteEffectV30 {
         alignment: u32,
         value: usize,
     },
+    GuardedWrite {
+        pointer: usize,
+        predicate: usize,
+        bytes: usize,
+        alignment: u32,
+        value: usize,
+    },
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -115,6 +122,16 @@ enum Action {
         alignment: u32,
         boolean: bool,
         writing: bool,
+    },
+    GuardedStore {
+        pointer: usize,
+        predicate: usize,
+        value: usize,
+        bytes: usize,
+        index_bytes: usize,
+        space: usize,
+        alignment: u32,
+        boolean: bool,
     },
 }
 
@@ -293,14 +310,25 @@ impl PointerByteOperationV30 {
                     space: pointer_space(from.address_space)?,
                 }
             }
-            OperationKind::Load { access, .. } | OperationKind::Store { access, .. } => {
+            OperationKind::Load { access, .. }
+            | OperationKind::Store { access, .. }
+            | OperationKind::GuardedStore { access, .. } => {
+                let guarded = matches!(row.operation.kind, OperationKind::GuardedStore { .. });
+                if guarded && !external(access.address_space) {
+                    return Err(Error::Statement(
+                        "byte guarded store requires external memory",
+                    ));
+                }
                 if !pointer_memory(access.address_space) {
                     return Ok(None);
                 }
                 if access.volatile {
                     return Err(Error::Statement("byte volatile operation is not modeled"));
                 }
-                let writing = matches!(row.operation.kind, OperationKind::Store { .. });
+                let writing = matches!(
+                    row.operation.kind,
+                    OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+                );
                 let pointer = input(0)?;
                 let Type::Pointer(pointer_type) = ty(pointer)? else {
                     return Err(Error::Statement("byte memory pointer type"));
@@ -313,8 +341,8 @@ impl PointerByteOperationV30 {
                     return Err(Error::Statement("byte memory permission or address space"));
                 }
                 let value = if writing {
-                    let value = input(1)?;
-                    if uses.len() != 2
+                    let value = input(if guarded { 2 } else { 1 })?;
+                    if uses.len() != if guarded { 3 } else { 2 }
                         || !row.results.is_empty()
                         || ty(value)? != pointer_type.pointee.as_ref()
                     {
@@ -328,6 +356,27 @@ impl PointerByteOperationV30 {
                     }
                     output
                 };
+                if guarded {
+                    out.budget.charge_work(4)?;
+                    let predicate = input(1)?;
+                    if ty(predicate)? != &Type::BOOL {
+                        return Err(Error::Statement(
+                            "byte guarded store requires exact Bool predicate",
+                        ));
+                    }
+                    return Ok(Some(Self {
+                        action: Action::GuardedStore {
+                            pointer,
+                            predicate,
+                            value,
+                            bytes: scalar_bytes(scalar, width)?,
+                            index_bytes: scalar_bytes(ScalarType::Index, width)?,
+                            space: pointer_space(pointer_type.address_space)?,
+                            alignment: access.alignment,
+                            boolean: scalar == ScalarType::Bool,
+                        },
+                    }));
+                }
                 Action::Memory {
                     pointer,
                     value,
@@ -346,6 +395,20 @@ impl PointerByteOperationV30 {
 
     pub(super) fn effect(&self) -> PointerByteEffectV30 {
         match self.action {
+            Action::GuardedStore {
+                pointer,
+                predicate,
+                value,
+                bytes,
+                alignment,
+                ..
+            } => PointerByteEffectV30::GuardedWrite {
+                pointer,
+                predicate,
+                bytes,
+                alignment,
+                value,
+            },
             Action::Memory {
                 pointer,
                 value,
@@ -389,6 +452,37 @@ impl PointerByteOperationV30 {
         let valid = before.valid;
         let endian = context.little_endian;
         match self.action {
+            Action::GuardedStore {
+                pointer,
+                predicate,
+                value,
+                bytes,
+                index_bytes,
+                space,
+                alignment,
+                boolean,
+            } => {
+                // A false predicate skips only this access, never an earlier
+                // pointer/value computation or its already-invalid state.
+                emit!(
+                    out,
+                    " let {} = {valid} && match {values}[{predicate}] {{ MemoryValueV30::Scalar(0) => true, MemoryValueV30::Scalar(1) => match ({values}[{pointer}], {values}[{value}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(v)) => byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_aligned_v30({memory}, p, {bytes}, {alignment}) && 0 <= v < ",
+                    after.valid
+                );
+                if boolean {
+                    emit!(out, "2");
+                } else {
+                    emit!(out, "memory_value_modulus_v30({bytes})");
+                }
+                emit!(out, ", _ => false }}, _ => false }};\n");
+                emit!(
+                    out,
+                    " let {} = if {} && {values}[{predicate}] == MemoryValueV30::Scalar(1) {{ match ({values}[{pointer}], {values}[{value}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(v)) => byte_store_v30({memory}, p, {bytes}, v, {endian}), _ => {memory} }} }} else {{ {memory} }};\n let {} = {values};\n",
+                    after.memory,
+                    after.valid,
+                    after.values
+                );
+            }
             Action::Slice {
                 input,
                 output,
@@ -538,6 +632,7 @@ pub(super) fn headers() -> usize {
         + size_of::<PointerByteEffectV30>()
         + size_of::<Range<usize>>()
         + size_of::<FormalIndexWidth>()
+        + size_of::<(usize, bool)>()
         + size_of::<(
             Option<usize>,
             [usize; 18],
