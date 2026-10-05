@@ -50,6 +50,10 @@ name = "kfd-peer-dependency-sentinel"
 required-features = ["engineering-gfx950"]
 
 [[example]]
+name = "kfd-peer-dependency-terminal-join"
+required-features = ["engineering-gfx950"]
+
+[[example]]
 name = "kfd-sdma-xgmi-peer-benchmark"
 required-features = ["live-validation"]
 

@@ -94,6 +94,17 @@ reported elapsed interval includes host checks and that diagnostic delay; it
 is not GPU duration or a performance benchmark. External device exclusivity,
 process bounds and pre/post audits remain the caller's responsibility.
 
+The separate `dispatch_peer_dependency_terminal_join_unchecked_v2()` diagnostic
+adds `wait(both C1)` at slot seven of each queue. Its
+`kfd-peer-dependency-terminal-join` example uses distinct V2 request/result
+schemas and requires sixteen completions. The original seven packets and V1
+example are unchanged. The terminal barrier is not a guaranteed queue-cursor
+flush: success still requires every completion and both actual read/write
+frontiers to match the reserved end. Errors include the first sixteen changed
+signal/frontier/header snapshots, the latest sample, a dropped-change count,
+and the first observed all-zero time. These are sequential host observations,
+not simultaneous GPU timestamps, and cannot authorize storage reuse.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

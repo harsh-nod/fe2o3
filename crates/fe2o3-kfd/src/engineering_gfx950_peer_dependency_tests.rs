@@ -1,6 +1,363 @@
 use super::*;
 use std::collections::VecDeque;
 
+fn terminal_arenas<const N: usize>() -> [Arena<N>; 2] {
+    std::array::from_fn(|rank| Arena {
+        token: Gfx950EngineeringPeerBufferV1 {
+            group: 1,
+            id: rank as u64 + 1,
+            owner: rank,
+            bytes: ARENA_BYTES as u64,
+        },
+        local: rank as u64 + 1,
+        allocation: [
+            rank as u64 + 1,
+            0x100_0000 + rank as u64 * 0x100_0000,
+            ARENA_BYTES as u64,
+            ARENA_BYTES as u64,
+        ],
+        participant: [rank as u64 + 1, rank as u64 + 10, 1, rank as u64 + 20],
+        peer_gpu: 11 - rank as u32,
+    })
+}
+
+fn terminal_prepared() -> Vec<PreparedDispatch> {
+    (0..4)
+        .map(|index| PreparedDispatch {
+            bytes: vec![index as u8; 16],
+            geometry: AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            descriptor: 0x400_0000 + index * 64,
+            alignment: 16,
+            group_bytes: 0,
+        })
+        .collect()
+}
+
+struct TerminalCapture<const N: usize> {
+    bodies: [Option<[u8; 64]>; N],
+    headers: Vec<(u32, u16)>,
+}
+
+impl<const N: usize> TerminalCapture<N> {
+    fn new() -> Self {
+        Self {
+            bodies: [None; N],
+            headers: Vec::new(),
+        }
+    }
+
+    fn body(&mut self, index: u32, bytes: [u8; 64]) -> Result<()> {
+        assert!(self.headers.is_empty());
+        assert!(self.bodies[index as usize].replace(bytes).is_none());
+        Ok(())
+    }
+}
+
+impl<const N: usize> AqlPeerPacketBatchPublicationTargetV1 for TerminalCapture<N> {
+    type Error = String;
+
+    fn write_unpublished_kernel(
+        &mut self,
+        index: u32,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<()> {
+        self.body(index, packet.encode_unpublished_le())
+    }
+
+    fn write_unpublished_barrier(
+        &mut self,
+        index: u32,
+        packet: &AqlPeerBarrierAndPacketV1,
+    ) -> Result<()> {
+        self.body(index, packet.encode_unpublished_le())
+    }
+
+    fn publish_release_header(&mut self, index: u32, header: u16) -> Result<()> {
+        assert!(self.bodies.iter().all(Option::is_some));
+        assert_eq!(index as usize, self.headers.len());
+        self.headers.push((index, header));
+        Ok(())
+    }
+}
+
+fn terminal_graph<const N: usize>() -> [TerminalCapture<N>; 2] {
+    let arenas = terminal_arenas::<N>();
+    std::array::from_fn(|rank| {
+        let mut capture = TerminalCapture::new();
+        make_batch::<N>(rank, terminal_prepared(), &arenas)
+            .unwrap()
+            .publish_with(&mut capture)
+            .unwrap();
+        capture
+    })
+}
+
+fn terminal_word(bytes: &[u8; 64], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+#[test]
+fn terminal_join_only_seven_and_eight_packet_shapes_are_admitted() {
+    assert!(require_packet_count::<7>().is_ok());
+    assert!(require_packet_count::<8>().is_ok());
+    assert!(require_packet_count::<0>().is_err());
+    assert!(require_packet_count::<1>().is_err());
+    assert!(require_packet_count::<6>().is_err());
+    assert!(require_packet_count::<9>().is_err());
+    assert!(require_packet_count::<64>().is_err());
+    assert!(require_packet_count::<{ usize::MAX }>().is_err());
+    assert!(make_batch::<0>(0, terminal_prepared(), &terminal_arenas::<0>()).is_err());
+    assert!(make_batch::<9>(0, terminal_prepared(), &terminal_arenas::<9>()).is_err());
+}
+
+#[test]
+fn terminal_join_preserves_first_seven_packet_bodies_and_headers_exactly() {
+    let original = terminal_graph::<7>();
+    let terminal = terminal_graph::<8>();
+    for rank in 0..2 {
+        assert_eq!(&terminal[rank].bodies[..7], &original[rank].bodies);
+        assert_eq!(&terminal[rank].headers[..7], &original[rank].headers);
+        assert_eq!(terminal[rank].headers[7], (7, 0x1503));
+    }
+}
+
+#[test]
+fn terminal_join_real_batches_have_two_c1_dependencies_and_sixteen_distinct_slots() {
+    let arenas = terminal_arenas::<8>();
+    let graph = terminal_graph::<8>();
+    let mut completions = BTreeSet::new();
+    for rank in 0..2 {
+        assert_eq!(graph[rank].headers.len(), 8);
+        for slot in 0..8 {
+            let body = graph[rank].bodies[slot].unwrap();
+            assert_eq!(&body[..2], &1_u16.to_le_bytes());
+            let completion = terminal_word(&body, 56);
+            assert_eq!(completion, arenas[rank].signal(slot).unwrap().raw());
+            assert!(completions.insert(completion));
+        }
+        let body = graph[rank].bodies[7].unwrap();
+        assert_eq!(&body[2..8], &[0; 6]);
+        assert_eq!(&body[24..56], &[0; 32]);
+        let completion = terminal_word(&body, 56);
+        for source_rank in 0..2 {
+            let dependency = terminal_word(&body, 8 + source_rank * 8);
+            assert_eq!(dependency, arenas[source_rank].signal(6).unwrap().raw());
+            assert_ne!(dependency, completion);
+        }
+        assert_ne!(terminal_word(&body, 8), terminal_word(&body, 16));
+    }
+    assert_eq!(completions.len(), 16);
+}
+
+#[test]
+fn terminal_join_signal_slot_uses_existing_arena_without_kernarg_overlap() {
+    let original = terminal_arenas::<7>();
+    let terminal = terminal_arenas::<8>();
+    assert_eq!(ARENA_BYTES, PAGE_BYTES + 4 * MAX_KERNARG_BYTES_V1 as usize);
+    assert!(8 * AMD_SIGNAL_BYTES_V1 <= PAGE_BYTES);
+    for rank in 0..2 {
+        assert_eq!(terminal[rank].allocation, original[rank].allocation);
+        assert_eq!(terminal[rank].token.bytes, original[rank].token.bytes);
+        assert!(original[rank].signal(7).is_err());
+        assert_eq!(
+            terminal[rank].signal(7).unwrap().raw(),
+            terminal[rank].allocation[1] + 7 * AMD_SIGNAL_BYTES_V1 as u64,
+        );
+        assert!(terminal[rank].signal(8).is_err());
+        assert!(terminal[rank].signal(usize::MAX).is_err());
+    }
+}
+
+#[test]
+fn terminal_join_witness_requires_all_fifteen_other_signals_pending() {
+    let mut values = [[1; 8]; 2];
+    assert!(!witness_ready::<8>(values, [true, false]).unwrap());
+    values[0][0] = 0;
+    assert!(witness_ready::<8>(values, [true, false]).unwrap());
+    for rank in 0..2 {
+        for slot in 0..8 {
+            if (rank, slot) != (0, 0) {
+                let mut early = values;
+                early[rank][slot] = 0;
+                assert!(witness_ready::<8>(early, [true, false]).is_err());
+            }
+            for invalid in [-1, 2, i64::MIN, i64::MAX] {
+                let mut bad = values;
+                bad[rank][slot] = invalid;
+                assert!(witness_ready::<8>(bad, [true, false]).is_err());
+            }
+        }
+    }
+    for published in [[false, false], [false, true], [true, true]] {
+        assert!(witness_ready::<8>(values, published).is_err());
+    }
+}
+
+#[test]
+fn terminal_join_completion_requires_all_sixteen_not_only_terminal_signals() {
+    assert!(signals_complete::<8>([[0; 8]; 2]).unwrap());
+    let mut finals_only = [[1; 8]; 2];
+    finals_only[0][7] = 0;
+    finals_only[1][7] = 0;
+    assert!(!signals_complete::<8>(finals_only).unwrap());
+    for rank in 0..2 {
+        for slot in 0..8 {
+            let mut pending = [[0; 8]; 2];
+            pending[rank][slot] = 1;
+            assert!(!signals_complete::<8>(pending).unwrap());
+            for invalid in [-1, 2, i64::MIN, i64::MAX] {
+                pending[rank][slot] = invalid;
+                assert!(signals_complete::<8>(pending).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn terminal_join_completion_keeps_exact_publication_and_frontier_requirements() {
+    let complete = [[0; 8]; 2];
+    assert!(complete_at_frontiers::<8>(complete, [(8, 8); 2], [8; 2], [true; 2]).unwrap());
+    for published in [[false, false], [false, true], [true, false]] {
+        assert!(!complete_at_frontiers::<8>(complete, [(8, 8); 2], [8; 2], published).unwrap());
+    }
+    for rank in 0..2 {
+        for frontier in [(8, 0), (8, 3), (8, 7), (7, 7), (9, 8), (8, 9)] {
+            let mut frontiers = [(8, 8); 2];
+            frontiers[rank] = frontier;
+            assert!(!complete_at_frontiers::<8>(complete, frontiers, [8; 2], [true; 2]).unwrap());
+        }
+        let mut pending_terminal = complete;
+        pending_terminal[rank][7] = 1;
+        assert!(
+            !complete_at_frontiers::<8>(pending_terminal, [(8, 8); 2], [8; 2], [true; 2],).unwrap()
+        );
+        pending_terminal[rank][7] = -1;
+        assert!(
+            complete_at_frontiers::<8>(pending_terminal, [(8, 8); 2], [8; 2], [true; 2]).is_err()
+        );
+    }
+    // The retained seven-packet failure is still a refusal, not new authority.
+    assert!(!complete_at_frontiers::<7>([[0; 7]; 2], [(7, 3); 2], [7; 2], [true; 2]).unwrap());
+}
+
+#[test]
+fn terminal_join_completion_uses_actual_nonzero_frontiers_not_packet_count() {
+    let expected = [123, 456];
+    let frontiers = [(123, 123), (456, 456)];
+    assert!(complete_at_frontiers::<8>([[0; 8]; 2], frontiers, expected, [true; 2]).unwrap());
+    assert!(!complete_at_frontiers::<8>([[0; 8]; 2], [(8, 8); 2], expected, [true; 2]).unwrap());
+    for rank in 0..2 {
+        let mut stale = frontiers;
+        stale[rank].1 -= 1;
+        assert!(!complete_at_frontiers::<8>([[0; 8]; 2], stale, expected, [true; 2]).unwrap());
+    }
+}
+
+fn terminal_trace_state<const N: usize>() -> TraceState<N> {
+    TraceState {
+        values: [[1; N]; 2],
+        frontiers: [(0, 0); 2],
+        headers: Some(std::array::from_fn(|_| {
+            std::array::from_fn(|slot| (slot as u32, 1, 0))
+        })),
+        published: [false; 2],
+    }
+}
+
+#[test]
+fn terminal_join_trace_deduplicates_state_but_keeps_latest_observation_time() {
+    let mut trace = DependencyTrace::<8>::default();
+    assert!(trace.changes.is_empty() && trace.last.is_none());
+    assert_eq!(trace.first_all_zero_elapsed_ns, None);
+    assert_eq!(trace.dropped_changes, 0);
+    let state = terminal_trace_state::<8>();
+    trace.record(10, state);
+    trace.record(20, state);
+    assert_eq!(trace.changes.len(), 1);
+    assert_eq!(trace.changes[0].elapsed_ns, 10);
+    assert_eq!(trace.changes[0].state, state);
+    assert_eq!(trace.last.as_ref().unwrap().elapsed_ns, 20);
+    assert_eq!(trace.last.as_ref().unwrap().state, state);
+    assert_eq!(trace.dropped_changes, 0);
+}
+
+#[test]
+fn terminal_join_trace_detects_each_state_field_and_missing_header_observation() {
+    let mut trace = DependencyTrace::<8>::default();
+    let mut state = terminal_trace_state::<8>();
+    trace.record(0, state);
+    state.values[0][0] = 0;
+    trace.record(1, state);
+    state.frontiers[0] = (8, 3);
+    trace.record(2, state);
+    state.headers.as_mut().unwrap()[0][7] = (7, 0x1503, 0);
+    trace.record(3, state);
+    state.published[0] = true;
+    trace.record(4, state);
+    state.headers = None;
+    trace.record(5, state);
+    assert_eq!(trace.changes.len(), 6);
+    assert_eq!(trace.last.as_ref().unwrap().state.headers, None);
+    assert_eq!(trace.first_all_zero_elapsed_ns, None);
+    assert_eq!(trace.dropped_changes, 0);
+}
+
+#[test]
+fn terminal_join_trace_caps_changes_but_preserves_last_and_first_zero_after_cap() {
+    assert_eq!(TRACE_CHANGE_LIMIT, 16);
+    let mut trace = DependencyTrace::<8>::default();
+    let mut state = terminal_trace_state::<8>();
+    for index in 0..20 {
+        state.frontiers[0] = (index, 0);
+        trace.record(index, state);
+    }
+    assert_eq!(trace.changes.len(), 16);
+    assert_eq!(trace.dropped_changes, 4);
+    for (index, retained) in trace.changes.iter().enumerate() {
+        assert_eq!(retained.elapsed_ns, index as u64);
+        assert_eq!(retained.state.frontiers[0], (index as u64, 0));
+    }
+    trace.record(100, state);
+    assert_eq!(trace.dropped_changes, 4);
+    state.values = [[0; 8]; 2];
+    trace.record(101, state);
+    assert_eq!(trace.first_all_zero_elapsed_ns, Some(101));
+    assert_eq!(trace.dropped_changes, 5);
+    trace.record(102, state);
+    assert_eq!(trace.dropped_changes, 5);
+    state.frontiers[0].0 = 20;
+    trace.record(103, state);
+    assert_eq!(trace.changes.len(), 16);
+    assert_eq!(trace.dropped_changes, 6);
+    assert_eq!(trace.first_all_zero_elapsed_ns, Some(101));
+    assert_eq!(trace.last.as_ref().unwrap().elapsed_ns, 103);
+    assert_eq!(trace.last.as_ref().unwrap().state, state);
+}
+
+#[test]
+fn terminal_join_trace_first_zero_time_does_not_imply_frontier_retirement() {
+    let mut trace = DependencyTrace::<8>::default();
+    let mut state = terminal_trace_state::<8>();
+    state.values = [[0; 8]; 2];
+    state.frontiers = [(8, 3); 2];
+    state.published = [true; 2];
+    trace.record(0, state);
+    assert_eq!(trace.first_all_zero_elapsed_ns, Some(0));
+    assert!(
+        !complete_at_frontiers::<8>(state.values, state.frontiers, [8; 2], state.published)
+            .unwrap()
+    );
+    trace.record(50, state);
+    assert_eq!(trace.changes.len(), 1);
+    state.frontiers = [(8, 8); 2];
+    trace.record(100, state);
+    assert_eq!(trace.first_all_zero_elapsed_ns, Some(0));
+    assert_eq!(trace.changes.len(), 2);
+    assert!(
+        complete_at_frontiers::<8>(state.values, state.frontiers, [8; 2], state.published).unwrap()
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event {
     Fence,
