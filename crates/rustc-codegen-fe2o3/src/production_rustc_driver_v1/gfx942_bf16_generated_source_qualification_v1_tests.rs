@@ -4,11 +4,11 @@ use super::gfx942_bf16_publication_tap_v1_tests as tap;
 use super::gfx942_tiled_region_qualification_v1_tests::observation::cpu::observed as original_cpu;
 use super::{Callbacks, Compilation, Compiler, TyCtxt};
 use crate::production_tiled_region_source_v1::{
-    Bf16SourcePublicationProgressV1, Bf16TileReturnOrderV1, Bf16TileSourcePublishRequestV1,
-    PublishedBf16TileSourceV1, publish_bf16_tile_helper_source_v1,
+    publish_bf16_tile_helper_source_v1, Bf16SourcePublicationProgressV1, Bf16TileReturnOrderV1,
+    Bf16TileSourcePublishRequestV1, PublishedBf16TileSourceV1,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -2506,5 +2506,200 @@ fn actual_generated_owning_descriptor_source() {
     assert!(
         collected && final_deadline,
         "private owning descriptor refused; no Worker/ordinary/launch qualification"
+    );
+}
+
+/// Separate callback type: existing LLVM/guard/raw endpoint selection is
+/// byte-for-byte unchanged and cannot accidentally enable descriptor work.
+struct HandoffBody<'a> {
+    config: &'a Config,
+    record: &'a inputs::Record,
+    calls: usize,
+    completed: bool,
+    phase: Option<Value>,
+    failure: Option<String>,
+}
+impl Callbacks for HandoffBody<'_> {
+    fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        self.calls += 1;
+        if self.calls != 1 {
+            self.failure = Some("more than one actual descriptor analysis callback".into());
+            return Compilation::Stop;
+        }
+        match super::transaction_in_active_session_v1(
+            tcx,
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        ) {
+            Ok(transaction) => {
+                let (result, phase) = transaction.observe_bf16_owned_handoff_for_test_v1(
+                    owning_requested_permutation(self.config.session)
+                        .expect("selected Identity/Swap01"),
+                    |source, emission, budget| {
+                        use fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1 as E;
+                        budget.charge_work(256)?;
+                        if source.source().bytes().len() as u64 != self.record.spec.source.bytes
+                            || super::lower_hex_v1(source.source().sha256())
+                                != self.record.spec.source.sha256
+                            || Some(emission.return_permutation())
+                                != owning_requested_permutation(self.config.session)
+                        {
+                            return Err(E::Unavailable("actual handoff source/Return differs"));
+                        }
+                        Ok(())
+                    },
+                );
+                self.phase = phase.map(|phase| serde_json::to_value(phase).unwrap());
+                self.completed = result.is_ok();
+                self.failure = result.err().map(|error| diagnostic(&error));
+            }
+            Err(error) => self.failure = Some(diagnostic(&error)),
+        }
+        Compilation::Stop
+    }
+}
+
+#[test]
+#[ignore = "one isolated fresh BF16 private handoff owner only; root owns finite process/output supervision"]
+fn actual_generated_owning_handoff_source() {
+    let started = Instant::now();
+    let config: Config = read_config().expect("closed owning session config");
+    // Reuse exact existing fresh-input configuration/preflight, not a new
+    // frontend or source reconstruction. Both fresh orders get independent runs.
+    assert!(matches!(config.session, 1 | 3));
+    let cwd = checked_config(&config).unwrap();
+    let record = inputs::read_record(&cwd, &config.record, &config.record_sha256).unwrap();
+    assert_eq!(record.spec.cwd, config.cwd);
+    assert_eq!(record.spec.source.path, config.candidate);
+    inputs::environment(&record).unwrap();
+    let mut copied_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(4_000_000);
+    let mut copied_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut copied_work,
+        64 * 1024 + FRAME_CAP,
+    );
+    copied_budget
+        .reserve_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    copied_budget.charge_work(1_000_000).unwrap();
+    let mut body = HandoffBody {
+        config: &config,
+        record: &record,
+        calls: 0,
+        completed: false,
+        phase: None,
+        failure: None,
+    };
+    timely(started).unwrap();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(&record.args, &mut body))
+    }));
+    let compiler_clean = matches!(run, Ok(Ok(())));
+    let recheck = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inputs::derive(&record.spec)
+    }));
+    let unchanged = matches!(&recheck, Ok(Ok(actual)) if actual == &record);
+    let deadline = timely(started).is_ok();
+    let analysis_empty =
+        std::fs::read_dir(cwd.join(&record.spec.directory).join("analysis-output"))
+            .is_ok_and(|mut entries| entries.next().is_none());
+    // Success requires genuine source/O/LLVM custody, consuming descriptor
+    // construction, opposite Return plus two full-byte replay refusals, clean
+    // replay and stage drop. Runtime-allocation and Worker/launch fences remain.
+    let sidecar_absent = inputs::absent_output(&cwd, &config.sidecar).is_ok();
+    let collected = compiler_clean
+        && unchanged
+        && deadline
+        && analysis_empty
+        && sidecar_absent
+        && body.calls == 1
+        && body.completed
+        && body.failure.is_none()
+        && body.phase.as_ref().is_some_and(completed_owning_phase);
+    let mut frame = json!({
+        "schema":"fe2o3-bf16-private-owning-handoff-observation-v1",
+        "session":config.session,
+        "requested_order":if config.session == 1 {"identity"}else{"swap01"},
+        "record_sha256":config.record_sha256, "source_pin":record.spec.source,
+        "actual_rustc_callbacks":body.calls, "compiler_clean":compiler_clean,
+        "inputs_unchanged":unchanged, "deadline_met":deadline,
+        "analysis_output_empty":analysis_empty, "sidecar_absent":sidecar_absent,
+        "handoff_owner_entry_completed":body.completed,
+        "handoff_owner_collection_completed":collected,
+        "guarded_consumer_completed":body.completed,
+        "actual_output_guard_proved":body.completed,
+        "raw_output_analysis_collected":body.completed,
+        "full_partial_obligations_in_stderr":body.completed,
+        "exact_output_reason_rows_in_stderr":body.completed,
+        "raw_incomplete_preserved":body.completed,
+        "geometry_target_completed":body.completed,
+        "llvm22_layout_bound":body.completed,
+        "retained_text_replayed":body.completed,
+        "canonical_descriptor_bytes_replayed":body.completed,
+        "descriptor_bound_text_replayed":body.completed,
+        "descriptor_bytes_mutation_refused":body.completed,
+        "descriptor_text_mutation_refused":body.completed,
+        "descriptor_replay_storage_restored":body.completed,
+        "original_materialization_account_retained":body.completed,
+        "runtime_bounds_alias_duties_preserved":body.completed,
+        "production_stage_constructed":body.completed,
+    });
+    let serde_json::Value::Object(output_fields) = json!({
+        "production_stage_replayed":body.completed,
+        "consuming_stage_boundaries_completed":body.completed,
+        "wrong_return_refused":body.completed,
+        "optimizer_invoked":body.completed,
+        "checked_v12_output_retained":body.completed,
+        "fresh_occurrence_relation_rechecked":body.completed,
+        "phase":body.phase, "failure":body.failure,
+        "root_supervision_required":true, "qualification_accepted":false,
+        "worker_invoked":false, "descriptor_constructed":body.completed,
+        "formal_admission":false, "optimized_formal_admission":false,
+        "normal_qualified":false, "legacy_connected":false,
+        "legacy_lowerer_attached":false, "hardware_observed":false,
+        "numerical_cpu_qualified":false, "llvm_emitted":body.completed,
+        "launch_inputs_authenticated":false, "source_authority_in_report":false,
+        "grants_artifact_or_launch_authority":false
+    }) else {
+        unreachable!("object literal");
+    };
+    frame.as_object_mut().unwrap().extend(output_fields);
+    let serde_json::Value::Object(handoff_fields) = json!({
+        "handoff_constructed":body.completed,
+        "canonical_handoff_bytes_replayed":body.completed,
+        "handoff_module_bytes_replayed":body.completed,
+        "handoff_manifest_replayed":body.completed,
+        "handoff_bytes_mutation_refused":body.completed,
+        "handoff_foreign_module_refused":body.completed,
+        "handoff_foreign_manifest_refused":body.completed,
+        "handoff_constructor_refusals_proved":body.completed,
+        "handoff_replay_storage_restored":body.completed,
+        "handoff_owner_drop_completed":body.completed,
+    }) else {
+        unreachable!("object literal");
+    };
+    frame.as_object_mut().unwrap().extend(handoff_fields);
+    integral_strings(&mut frame, 0, &mut 0).unwrap();
+    let encoded = serde_json::to_vec(&frame).unwrap();
+    assert!(encoded.len() <= FRAME_CAP);
+    super::publish_new_inert_output(
+        &cwd.join(&config.observation),
+        &encoded,
+        FRAME_CAP,
+        "BF16 private owning handoff observation",
+    )
+    .unwrap();
+    println!(
+        "\nFE2O3_BF16_PRIVATE_OWNING_HANDOFF_V1 {}",
+        std::str::from_utf8(&encoded).unwrap()
+    );
+    let final_deadline = timely(started).is_ok();
+    drop(encoded);
+    drop(frame);
+    drop(body);
+    copied_budget
+        .release_storage(64 * 1024 + FRAME_CAP)
+        .unwrap();
+    assert!(
+        collected && final_deadline,
+        "private owning handoff refused; no Worker/ordinary/launch qualification"
     );
 }
