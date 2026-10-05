@@ -1,8 +1,9 @@
-//! Original compiler custody behind an unopened exec gate. No resume API.
+//! Original compiler custody; the production request still refuses at its gate.
 use super::*;
 use crate::{
     compiler_child_channel::CompilerTrace,
     native_launch::{self as native, Channels, CompilerExecutionLaunchErrorV2 as NativeError},
+    native_runtime_controller::NativeRuntimeController as Controller,
     native_runtime_inventory::NativeCompilerExecutableInventory as Executables,
     proof_helper_backing::ProofHelperBackingError,
     proof_helper_launch::{ManagedProofHelper as Helper, ProofHelperLaunchError as Failure},
@@ -22,6 +23,9 @@ use std::{mem::size_of_val, os::fd::BorrowedFd};
 
 type AttemptResult<T> = std::result::Result<T, Failure>;
 type Trace<'work> = CompilerTrace<'work, Helper>;
+#[path = "native_compiler_attempt_runtime.rs"]
+mod runtime;
+use runtime::{Owner, Phase};
 const INVOCATION_FD: i32 = fe2o3_compiler_closure_capability::RUSTC_INVOCATION_CHILD_FD_V1;
 const BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
 const OUTPUT_FD: i32 = fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
@@ -38,12 +42,15 @@ pub(super) const FRAME: usize = 4 * size_of::<Attempt<'static>>()
 
 pub(super) struct Attempt<'work> {
     // Foreground trace cancellation precedes stage/gate descriptor retirement.
-    trace: Trace<'work>,
+    owner: Option<Owner<'work>>,
     executables: Executables,
-    stage: Stage,
-    _gate_reader: OwnedFd,
-    _gate_writer: OwnedFd,
+    controller: Option<Controller>,
+    phase: Phase,
+    stage: Option<Stage>,
+    gate_reader: Option<OwnedFd>,
+    gate_writer: Option<OwnedFd>,
     _exec_reader: OwnedFd,
+    deadline: Instant,
     retained: usize,
 }
 
@@ -56,10 +63,17 @@ impl Attempt<'_> {
 
     pub(super) fn revalidate(&self, received: &Receiver, b: &mut Budget<'_>) -> AttemptResult<()> {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
-            self.trace.with_backing(b, |helper, b| {
+            self.gated_trace()?.with_backing(b, |helper, b| {
                 helper.with_compiler(b, |compiler, b| {
                     self.executables.revalidate(compiler, b)?;
-                    validate(compiler, received, &self.stage, b)
+                    validate(
+                        compiler,
+                        received,
+                        self.stage
+                            .as_ref()
+                            .ok_or(Failure::Invalid("compiler staging aliases are closed"))?,
+                        b,
+                    )
                 })
             })
         })
@@ -68,27 +82,44 @@ impl Attempt<'_> {
     pub(super) fn cancel(&mut self) -> CleanupPollV1 {
         // The original compiler slot retains Helper until aggregate retirement;
         // its Drop then cancels the helper in the SAME independently funded pool.
-        self.trace.cancel()
+        self.phase = Phase::Cancelled;
+        self.owner
+            .as_mut()
+            .map_or(CleanupPollV1::Pending, Owner::cancel)
     }
 
     pub(super) fn needs_foreground_cancellation(&self) -> bool {
-        self.trace.needs_foreground_cancellation()
+        self.owner
+            .as_ref()
+            .is_some_and(Owner::needs_foreground_cancellation)
     }
 
     pub(super) fn cancellation_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
-        Ok(Trace::cancellation_quota()?)
+        let inner = crate::native_v3::NativeAttempt::<Helper>::runtime_cancellation_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: native::sum(&[FRAME, inner.scratch()])?,
+        })
     }
 
     pub(super) fn cancel_step(&mut self, b: &mut Budget<'_>) -> AttemptResult<bool> {
-        let _domain_disposition = self.trace.cancel_step(b)?;
-        // A deferred domain's disposition is cached. Only the original pool
-        // can establish its later completion; do not wait for this to say Reaped.
-        Ok(!self.trace.needs_foreground_cancellation())
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            let owner = self
+                .owner
+                .as_mut()
+                .ok_or(Failure::Invalid("compiler ownership transfer failed"))?;
+            let _domain_disposition = owner.cancel_step(b)?;
+            // A deferred domain's disposition is cached. Only the original pool
+            // can establish its later completion; do not wait for this to say Reaped.
+            Ok(!owner.needs_foreground_cancellation())
+        })
     }
 
     #[cfg(test)]
     pub(super) fn pid(&self) -> rustix::process::Pid {
-        self.trace.pid()
+        self.gated_trace()
+            .expect("test observes gated original compiler")
+            .pid()
     }
 }
 
@@ -175,12 +206,15 @@ pub(super) unsafe fn launch<'work>(
         ])?;
         b.reserve_storage(Attempt::ENVELOPE)?;
         let attempt = Attempt {
-            trace,
+            owner: Some(Owner::Gated(trace)),
             executables,
-            stage,
-            _gate_reader: gate_reader,
-            _gate_writer: gate_writer,
+            controller: None,
+            phase: Phase::Gated,
+            stage: Some(stage),
+            gate_reader: Some(gate_reader),
+            gate_writer: Some(gate_writer),
             _exec_reader: exec_reader,
+            deadline,
             retained,
         };
         attempt.revalidate(received, b)?;

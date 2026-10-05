@@ -293,6 +293,27 @@ impl ManagedProofHelper {
         .map_err(E::from)?
     }
 
+    pub(crate) fn checkpoint_access_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::{
+            RetainedResourcesV2 as Resources,
+            native_spawn::RootOwnedProtectedServiceChildV2 as PlainChild,
+        };
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[
+                LOCAL_WORK,
+                Resources::<Payload>::ACCESS_WORK,
+                observations::PROCESS_VALIDATE_WORK,
+                PlainChild::OPERATION_WORK,
+            ])?,
+            scratch: native::sum(&[
+                FRAME,
+                Resources::<Payload>::ACCESS_SCRATCH,
+                observations::PROCESS_VALIDATE_SCRATCH,
+                PlainChild::OPERATION_SCRATCH,
+            ])?,
+        })
+    }
+
     fn lock_child(&self) -> Result<MutexGuard<'_, HelperChild>> {
         match self.child.try_lock() {
             Ok(child) => Ok(child),
