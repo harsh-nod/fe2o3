@@ -1382,55 +1382,59 @@ fn validate_sensitive_registers_with_policy(
         Ok(PRCTL_SYSCALL) => Err(process_failure(
             "prctl request is outside exact Rust thread naming",
         )),
-        Ok(MMAP_SYSCALL) => {
+        Ok(MMAP_SYSCALL) if !validate_mappings => {
             if registers.rdx & PROT_EXEC == 0 {
                 return Ok(());
             }
             if registers.rdx & PROT_WRITE != 0 {
                 return Err(process_failure("writable executable mmap is not admitted"));
             }
-            if !validate_mappings {
-                return Ok(());
-            }
-            if registers.r10 & MAP_ANONYMOUS != 0 || registers.r8 as i64 == -1 {
-                return Err(process_failure(
-                    "anonymous executable mmap is outside the retained runtime closure",
-                ));
-            }
-            let descriptor = i32::try_from(registers.r8)
-                .map_err(|_| process_failure("executable mmap uses a noncanonical descriptor"))?;
-            let file = File::open(format!("/proc/{process}/fd/{descriptor}"))
-                .map_err(|_| io_process_failure("open executable mmap descriptor"))?;
-            let identity =
-                ObjectSnapshotV2::capture(&file, "executable mmap descriptor")?.object_identity();
-            if !executable_object_range_is_allowed(identity, registers.r9, registers.rsi, allowed)?
-            {
-                return Err(process_failure(
-                    "executable mmap object or file range is outside the retained runtime closure",
-                ));
-            }
             Ok(())
         }
-        Ok(MPROTECT_SYSCALL) | Ok(PKEY_MPROTECT_SYSCALL) => {
-            if registers.rdx & PROT_EXEC == 0 {
-                return Ok(());
+        Ok(MREMAP_SYSCALL | REMAP_FILE_PAGES_SYSCALL) if !validate_mappings => Ok(()),
+        Ok(
+            MMAP_SYSCALL
+            | MPROTECT_SYSCALL
+            | PKEY_MPROTECT_SYSCALL
+            | MREMAP_SYSCALL
+            | REMAP_FILE_PAGES_SYSCALL,
+        ) => {
+            use runtime_policy::memory::{MappingRequirement, mapping_requirement};
+            match mapping_requirement(
+                registers.orig_rax,
+                [
+                    registers.rdi,
+                    registers.rsi,
+                    registers.rdx,
+                    registers.r10,
+                    registers.r8,
+                    registers.r9,
+                ],
+            )
+            .map_err(|error| process_failure(error.message()))?
+            {
+                MappingRequirement::NoAddedExecution => Ok(()),
+                MappingRequirement::ExecutableFile {
+                    descriptor,
+                    offset,
+                    length,
+                } => {
+                    let file = File::open(format!("/proc/{process}/fd/{descriptor}"))
+                        .map_err(|_| io_process_failure("open executable mmap descriptor"))?;
+                    let identity = ObjectSnapshotV2::capture(&file, "executable mmap descriptor")?
+                        .object_identity();
+                    if !executable_object_range_is_allowed(identity, offset, length, allowed)? {
+                        return Err(process_failure(
+                            "executable mmap object or file range is outside the retained runtime closure",
+                        ));
+                    }
+                    Ok(())
+                }
+                MappingRequirement::NonExecutableRegion { start, length } => {
+                    validate_nonexecutable_mapping_range(process, start, length)
+                }
             }
-            // File identity cannot authenticate privately dirtied pages. The supported
-            // loader must map text RX initially, never add or restore EXEC with mprotect.
-            Err(process_failure("executable mprotect is not admitted"))
         }
-        Ok(MREMAP_SYSCALL) if validate_mappings => {
-            validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
-        }
-        Ok(REMAP_FILE_PAGES_SYSCALL) if validate_mappings => {
-            if registers.rdx != 0 || registers.r8 != 0 {
-                return Err(process_failure(
-                    "remap_file_pages uses noncanonical protection or flags",
-                ));
-            }
-            validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
-        }
-        Ok(MREMAP_SYSCALL) | Ok(REMAP_FILE_PAGES_SYSCALL) => Ok(()),
         _ => Err(process_failure(
             "unexpected syscall reached the sensitive-syscall admission checkpoint",
         )),
