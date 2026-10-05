@@ -60,6 +60,8 @@ pub(super) enum Phase {
     HeldExec,
     ConfirmedExec,
     Issued,
+    RootExitHeld,
+    PublicationObserved,
     Cancelled,
 }
 
@@ -460,7 +462,7 @@ impl<'work> Attempt<'work> {
         b: &mut Budget<'_>,
     ) -> AttemptResult<crate::native_runtime_controller::Progress> {
         let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
-            if self.phase != Phase::Issued {
+            if !matches!(self.phase, Phase::Issued | Phase::RootExitHeld) {
                 return Err(Failure::Invalid(
                     "compiler checkpoint lacks original issued attempt",
                 ));
@@ -473,11 +475,15 @@ impl<'work> Attempt<'work> {
                 .as_mut()
                 .ok_or(Failure::Invalid("compiler controller is absent"))?;
             let inventory = &self.executables;
-            attempt.with_runtime_backing(b, |runtime, helper, b| {
+            let progress = attempt.with_runtime_backing(b, |runtime, helper, b| {
                 helper.with_compiler_checkpoint(b, |backing, b| -> AttemptResult<_> {
                     Ok(controller.step(runtime, backing, inventory, b)?)
                 })
-            })
+            })?;
+            if progress == crate::native_runtime_controller::Progress::RootExitHeld {
+                self.phase = Phase::RootExitHeld;
+            }
+            Ok(progress)
         });
         if result.is_err() {
             // This wrapper owns the genuine trace; no supplied runtime can be
@@ -486,6 +492,104 @@ impl<'work> Attempt<'work> {
             self.cancel();
         }
         result
+    }
+
+    /// Publication must be captured before the original compiler can exit and
+    /// close its FDs/locks. Recheck the actual held exit before consuming the same
+    /// existing issuer owner; preserve its original late-custody cleanup contract.
+    pub(in super::super) fn observe_publication(
+        &mut self,
+        cleanup: &mut Cleanup,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<usize> {
+        let result = (|| {
+            if self.phase != Phase::RootExitHeld {
+                return Err(Failure::Invalid(
+                    "publication requires original held root exit",
+                ));
+            }
+            if self.step_runtime(b)? != crate::native_runtime_controller::Progress::RootExitHeld {
+                return Err(Failure::Invalid("publication lost original held root exit"));
+            }
+            b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+                let Some(Owner::Issued(attempt)) = self.owner.take() else {
+                    return Err(Failure::Invalid("publication lost original issued owner"));
+                };
+                self.phase = Phase::Cancelled;
+                let (attempt, growth) =
+                    attempt.observe_publication(cleanup, maximum_handoff_bytes, b)?;
+                self.owner = Some(Owner::Issued(attempt));
+                b.reserve_storage(growth.additional_storage())?;
+                self.retained = native::sum(&[self.retained, growth.additional_storage()])?;
+                self.phase = Phase::PublicationObserved;
+                Ok(growth.additional_storage())
+            })
+        })();
+        if result.is_err() {
+            self.cancel();
+        }
+        result
+    }
+
+    /// Revalidate the actual owned publication while its original root remains
+    /// held, then let only that exact terminal syscall proceed. This returns no
+    /// completion or publication authority; consuming terminal waits are next.
+    pub(in super::super) fn release_root_exit(&mut self, b: &mut Budget<'_>) -> AttemptResult<()> {
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::PublicationObserved {
+                return Err(Failure::Invalid(
+                    "root exit lacks original publication custody",
+                ));
+            }
+            let Some(Owner::Issued(attempt)) = &mut self.owner else {
+                return Err(Failure::Invalid("root exit lost original issued owner"));
+            };
+            attempt.revalidate_publication(b)?;
+            let controller = self
+                .controller
+                .as_mut()
+                .ok_or(Failure::Invalid("root exit lost original controller"))?;
+            let inventory = &self.executables;
+            attempt.with_runtime_backing(b, |runtime, helper, b| {
+                helper.with_compiler_checkpoint(b, |backing, b| -> AttemptResult<_> {
+                    Ok(controller.resume_root_exit(runtime, backing, inventory, b)?)
+                })
+            })?;
+            self.phase = Phase::Issued;
+            Ok(())
+        });
+        if result.is_err() {
+            self.cancel();
+        }
+        result
+    }
+
+    pub(in super::super) fn publication_observation_quota(
+        maximum_handoff_bytes: usize,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let held = Self::runtime_step_quota()?;
+        let publication = Issued::<Helper>::publication_observation_quota(maximum_handoff_bytes)?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[held.work(), LOCAL_WORK, publication.work()])?,
+            scratch: native::sum(&[held.scratch(), FRAME, publication.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn root_exit_release_quota(
+        &self,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let Some(Owner::Issued(attempt)) = &self.owner else {
+            return Err(Failure::Invalid("root exit has no original issued owner"));
+        };
+        let publication = attempt.publication_revalidation_quota()?;
+        // The same fixed step ceiling conservatively funds the exact held-entry
+        // recheck, fresh census, mapping validation and selected syscall step.
+        let step = Self::runtime_step_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[step.work(), publication.work()])?,
+            scratch: native::sum(&[step.scratch(), publication.scratch()])?,
+        })
     }
 
     pub(in super::super) fn runtime_step_quota()

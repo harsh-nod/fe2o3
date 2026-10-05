@@ -24,7 +24,7 @@ use std::mem::size_of;
 
 #[path = "native_runtime_controller_state.rs"]
 mod state;
-use state::{EntryKind, TaskImages, TaskKey};
+use state::{EntryKind, HeldRootExit, TaskImages, TaskKey};
 type Result<T> = std::result::Result<T, Error>;
 const _: () = assert!(state::CAPACITY == MAX_RUNTIME_TASKS);
 
@@ -40,6 +40,7 @@ pub(crate) struct NativeRuntimeController {
     tasks: TaskImages<NativeKernelImage>,
     pending: Option<Pending>,
     confinement: Option<CompilerConfinement>,
+    held_root_exit: Option<HeldRootExit>,
     refused: bool,
 }
 
@@ -55,6 +56,7 @@ struct Pending {
 pub(crate) enum Progress {
     Pending,
     Advanced,
+    RootExitHeld,
     RootTerminal {
         exit_code: Option<i32>,
         signal: Option<i32>,
@@ -150,6 +152,7 @@ impl NativeRuntimeController {
                 }),
                 pending: None,
                 confinement: None,
+                held_root_exit: None,
                 refused: false,
             })
         })
@@ -244,6 +247,11 @@ impl NativeRuntimeController {
                 return Err(Error::Invalid(
                     "native observation predates its acquired task generation",
                 ));
+            }
+            if self.held_root_exit.is_some() {
+                self.check_held_root_exit(event, key, runtime, b)?;
+                self.validate_all(runtime, backing, inventory, b)?;
+                return Ok(Progress::RootExitHeld);
             }
             if event.is_checkpoint() {
                 return self.entry(event, key, runtime, backing, inventory, b);
@@ -367,8 +375,111 @@ impl NativeRuntimeController {
             descriptor,
             child: None,
         });
+        if kind == EntryKind::Exit && key.pid == self.root {
+            if self.tasks.count() != 1 {
+                return Err(Error::Invalid(
+                    "root exit requires all descendant terminal waits before publication",
+                ));
+            }
+            // Parking may advance the global epoch; bind the freshly observed
+            // still-selected entry, not the event copied before that census.
+            let held = runtime.poll(b)?.ok_or(Error::Invalid(
+                "root exit lost its original held checkpoint",
+            ))?;
+            if !held.is_checkpoint() || held.pid() != event.pid() {
+                return Err(Error::Invalid("root exit changed its selected checkpoint"));
+            }
+            self.held_root_exit = Some(HeldRootExit {
+                task: key,
+                generation: held.generation(),
+                number: entry.number,
+                arguments: entry.arguments,
+            });
+            return Ok(Progress::RootExitHeld);
+        }
         runtime.step_syscall(b)?;
         Ok(Progress::Advanced)
+    }
+
+    fn check_held_root_exit(
+        &self,
+        event: Event,
+        key: TaskKey,
+        runtime: &mut Runtime<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let held = self
+            .held_root_exit
+            .as_ref()
+            .ok_or(Error::Invalid("compiler publication has no held root exit"))?;
+        if !event.is_checkpoint()
+            || key.pid != self.root
+            || !self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.task == key && pending.kind == EntryKind::Exit)
+        {
+            return Err(Error::Invalid(
+                "original held root exit observation changed",
+            ));
+        }
+        let entry = runtime.syscall_entry(b)?;
+        held.validate(
+            HeldRootExit {
+                task: key,
+                generation: event.generation(),
+                number: entry.number,
+                arguments: entry.arguments,
+            },
+            self.tasks.count(),
+        )
+        .map_err(Error::Invalid)
+    }
+
+    /// Private original Attempt calls this only after actual publication custody
+    /// is observed and revalidated while the root remains stopped. No supplied
+    /// event, Boolean, PID or terminal status can release this held syscall.
+    pub(crate) fn resume_root_exit(
+        &mut self,
+        runtime: &mut Runtime<'_>,
+        backing: &Backing,
+        inventory: &Inventory,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let mut associated = false;
+        let result = b.with_prepaid_scope(Self::STORAGE, 8, LOCAL_WORK, FRAME, |b| {
+            if self.refused
+                || runtime.pid().as_raw_pid() != self.root
+                || b.work_ledger_identity_v1() != self.ledger
+                || b as *const Budget<'_> as usize != self.address
+                || !runtime.matches_original_identity(&self.identity, b)?
+            {
+                return Err(Error::Invalid(
+                    "root exit lost original owner/account association",
+                ));
+            }
+            associated = true;
+            let event = runtime.poll(b)?.ok_or(Error::Invalid(
+                "root exit lacks its held original observation",
+            ))?;
+            let key = self
+                .tasks
+                .key(event.pid().as_raw_pid())
+                .map_err(Error::Invalid)?;
+            self.check_held_root_exit(event, key, runtime, b)?;
+            runtime.park_all_bounded(PARK_OPERATIONS, b)?;
+            self.validate_all(runtime, backing, inventory, b)?;
+            runtime.step_syscall(b)?;
+            self.held_root_exit = None;
+            Ok(())
+        });
+        if result.is_err() {
+            self.refused = true;
+            if associated {
+                runtime.mark_cancellation();
+            }
+        }
+        result
     }
 
     fn bind_pending(&self, event: Event, key: TaskKey) -> Result<()> {

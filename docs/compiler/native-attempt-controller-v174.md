@@ -50,6 +50,20 @@ Trace retirement, issuer cleanup, publication observation, and aggregate pool
 emptiness are distinct. A consuming transition that cannot preserve unresolved
 runtime custody must fail-stop under the dedicated-process contract.
 
+The controller holds the original root's exit syscall before stepping it and
+reports `RootExitHeld`. Repeated steps cannot release that stop. The current
+completion path requires all descendant terminal waits to have been consumed
+first; live-sibling `exit_group` remains an explicit unsupported case, not a
+claim that all Rust compiler thread lifecycles are admitted.
+
+While that original root remains stopped, the Attempt rechecks its exact task,
+observation epoch and all syscall arguments, then acquires the existing original
+issuer's publication custody. Only the Attempt's separate release transition,
+after actual publication revalidation and another exact held-entry/image/census
+check, steps the terminal syscall. Terminal status, full trace retirement and
+downstream publication acceptance are still separate checks; holding an exit or
+observing publication cannot manufacture successful compiler completion.
+
 These private transitions do not change the production request's refusal
 selection. Actual device attachment and the joined positive native route still
 need an admitted privileged qualification lane. Ordinary
