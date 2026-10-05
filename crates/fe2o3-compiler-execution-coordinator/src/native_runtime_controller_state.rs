@@ -192,6 +192,30 @@ pub(super) fn require_exit_binding(
     }
 }
 
+/// Inert copies only. The controller obtains both observations from its same
+/// privately retained owner; this value cannot stop, select or resume a task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HeldRootExit {
+    pub(super) task: TaskKey,
+    pub(super) generation: u64,
+    pub(super) number: u64,
+    pub(super) arguments: [u64; 6],
+}
+
+impl HeldRootExit {
+    pub(super) fn validate(&self, actual: Self, tasks: usize) -> Result<()> {
+        if tasks == 1
+            && matches!(self.number, 60 | 231)
+            && self.generation >= self.task.birth
+            && *self == actual
+        {
+            Ok(())
+        } else {
+            Err("original held root exit task, generation or registers changed")
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "native_runtime_controller_state_tests.rs"]
 mod tests;

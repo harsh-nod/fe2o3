@@ -179,3 +179,14 @@ fn confinement_receipt_quotes_original_identity_and_actual_domain_not_stage_flag
         Controller::INITIAL_IMAGE_SCRATCH + CompilerConfinement::VALIDATE_SCRATCH
     );
 }
+
+#[test]
+fn publication_quote_includes_fresh_held_entry_and_original_consuming_custody() {
+    let maximum = 4096;
+    let quote = Attempt::publication_observation_quota(maximum).unwrap();
+    let held = Attempt::runtime_step_quota().unwrap();
+    let inner =
+        crate::native_v3::NativeAttempt::<Helper>::publication_observation_quota(maximum).unwrap();
+    assert_eq!(quote.work(), held.work() + LOCAL_WORK + inner.work());
+    assert_eq!(quote.scratch(), held.scratch() + FRAME + inner.scratch());
+}

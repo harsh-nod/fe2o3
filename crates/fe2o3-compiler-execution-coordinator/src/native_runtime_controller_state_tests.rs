@@ -144,3 +144,73 @@ fn clone_policy_accepts_native_threads_and_fork_but_refuses_unowned_effects() {
     }
     assert_eq!(entry_kind(57, [0; 6], 1), Ok(EntryKind::Birth));
 }
+
+#[test]
+fn held_root_exit_requires_same_task_epoch_every_argument_and_sole_remaining_task() {
+    let original = HeldRootExit {
+        task: task(41, 3),
+        generation: 7,
+        number: 231,
+        arguments: [0, 2, 3, 4, 5, 6],
+    };
+    original.validate(original, 1).unwrap();
+    for tasks in [0, 2, CAPACITY] {
+        assert!(original.validate(original, tasks).is_err());
+    }
+    for changed in [
+        HeldRootExit {
+            task: task(42, 3),
+            ..original
+        },
+        HeldRootExit {
+            task: task(41, 4),
+            ..original
+        },
+        HeldRootExit {
+            generation: 6,
+            ..original
+        },
+        HeldRootExit {
+            generation: 8,
+            ..original
+        },
+        HeldRootExit {
+            number: 60,
+            ..original
+        },
+    ] {
+        assert!(original.validate(changed, 1).is_err());
+    }
+    for index in 0..6 {
+        let mut changed = original;
+        changed.arguments[index] ^= 1;
+        assert!(original.validate(changed, 1).is_err());
+    }
+}
+
+#[test]
+fn held_root_exit_is_not_a_generic_checkpoint_or_stale_identity_match() {
+    for number in [60, 231] {
+        let original = HeldRootExit {
+            task: task(7, 9),
+            generation: 9,
+            number,
+            arguments: [0; 6],
+        };
+        original.validate(original, 1).unwrap();
+        let stale = HeldRootExit {
+            generation: 8,
+            ..original
+        };
+        assert!(stale.validate(stale, 1).is_err());
+    }
+    for number in [0, 2, 9, 56, 257, u64::MAX] {
+        let other = HeldRootExit {
+            task: task(7, 9),
+            generation: 9,
+            number,
+            arguments: [0; 6],
+        };
+        assert!(other.validate(other, 1).is_err());
+    }
+}
