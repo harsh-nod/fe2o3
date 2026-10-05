@@ -222,3 +222,20 @@ matching runs subsequently passed all 54 provider controls and, after the
 separate identity-reference forwarding repair, all 32 context-vecadd source
 checks. See `docs/issue272-context-vecadd-source-handoff-v1.md` for the exact
 scope, failures, results and remaining checked-materialization refusal.
+
+## 2026-10-05 LDS release-store correction
+
+`LdsTile16x16::write_wave_fragment` now executes its store before the debug
+assertion. Previously an assertion-disabled build removed the store itself.
+The existing fragment-order test reproduced the failure under `--release`; its
+updated fixture uses a sentinel and 256 distinct component values. The public
+API, diagnostic items, layout and typestate transitions are unchanged.
+
+The reviewed source roster remains 34 leaves. The new canonical closure is
+`652640fdc354f5e235197c12f92477793a9e2642410ccb36d460947b33ce592d`;
+the Cargo-vendor closure is
+`8f2994bdb55bf8c8a7ceef8c98265b845bebb695f683d9fe73732905d422d5bd`.
+They replace the preceding accepted images; no old-image fallback is added.
+Both manifests and the length-framed hash algorithm are unchanged. Host-side
+release testing checks the store semantics, not GPU execution or native LDS
+admission.
