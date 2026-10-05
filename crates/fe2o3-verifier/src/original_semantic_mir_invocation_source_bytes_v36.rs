@@ -1500,6 +1500,14 @@ impl Context<'_, '_, '_> {
 }
 
 impl TypedOperand {
+    pub(super) fn emit_scalar_value_v161(self, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.charge_work(1)?;
+        let OperandKind::Scalar { value, .. } = self.kind else {
+            return Err(unsupported());
+        };
+        emit_value(value, out)
+    }
+
     pub(super) const fn ty(self) -> TypeId {
         self.ty
     }
@@ -1766,6 +1774,7 @@ fn headers() -> usize {
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
+    include_str!("original_semantic_mir_source_tile_v161.vrs"),
     include_str!("original_semantic_mir_source_thread_write_v88.vrs"),
     include_str!("original_semantic_mir_source_descriptor_indices_v52.vrs"),
     include_str!("original_semantic_mir_source_memory_values_v51.vrs"),
@@ -1899,6 +1908,8 @@ enum InvocationSourceByteEventV36 {
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Descriptor(InvocationSourceDescriptorEventV51),
     ThreadWrite(InvocationSourceThreadWriteV88),
+    TileLoad(InvocationSourceTileLoadV161),
+    TileTransport(InvocationSourceTileTransportV161),
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
         value: InvocationSourceByteValueV36, bits: int },
@@ -2265,6 +2276,10 @@ spec fn invocation_source_byte_step_v36(
             invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined),
         InvocationSourceByteEventV36::ThreadWrite(write) =>
             invocation_source_thread_write_v88(source, write, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::TileLoad(load) =>
+            invocation_source_tile_load_v161(source, load, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::TileTransport(transfer) =>
+            invocation_source_tile_transport_v161(source, transfer).source,
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }
@@ -2313,3 +2328,7 @@ spec fn invocation_source_byte_step_v36(
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_source_bytes_v36_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_tile_v161_tests.rs"]
+mod tile_model_tests;

@@ -1,0 +1,68 @@
+proof fn source_tile_blocked_coordinates_v161(lanes: int, elements: int, lane: int, item: int)
+    ensures invocation_source_tile_offset_v161(
+        InvocationSourceTileLayoutV161::Blocked, lanes, elements, lane, item) == lane * elements + item,
+{
+    reveal(invocation_source_tile_offset_v161);
+}
+
+proof fn source_tile_striped_coordinates_v161(lanes: int, elements: int, lane: int, item: int)
+    ensures invocation_source_tile_offset_v161(
+        InvocationSourceTileLayoutV161::Striped, lanes, elements, lane, item) == item * lanes + lane,
+{
+    reveal(invocation_source_tile_offset_v161);
+}
+
+proof fn source_tile_inactive_item_has_no_read_v161(
+    source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
+    slice: MemorySliceV30, base: int, lane: int, item: int, little_endian: bool,
+)
+    requires source.machine.valid, 0 <= item < load.elements,
+        !((0 <= base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < memory_value_modulus_v30(8))
+            && base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+                load.elements, lane, item) < slice.length),
+    ensures ({
+        let result = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item, little_endian);
+        let tail = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item + 1, little_endian);
+        result.values == seq![MemoryValueV30::Scalar(0)] + tail.values
+            && result.masks == seq![MemoryValueV30::Scalar(0)] + tail.masks
+            && result.source == tail.source && result.observations == tail.observations
+    }),
+{
+    reveal(invocation_source_tile_components_v161);
+}
+
+proof fn source_tile_active_item_preserves_read_before_tail_v161(
+    source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
+    slice: MemorySliceV30, base: int, lane: int, item: int, little_endian: bool,
+)
+    requires source.machine.valid, 0 <= item < load.elements,
+        0 <= base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < memory_value_modulus_v30(8),
+        base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < slice.length,
+        byte_range_aligned_v30(source.machine.memory, slice.pointer, 4 * slice.length, 4),
+        slice.pointer.byte_offset + 4 * slice.length < memory_value_modulus_v30(8),
+        invocation_source_read_enabled_v36(source.machine, MemoryPointerV30 {
+            byte_offset: slice.pointer.byte_offset + 4 * (base + invocation_source_tile_offset_v161(
+                load.layout, load.lanes, load.elements, lane, item)), ..slice.pointer }, 4, 4),
+    ensures ({
+        let pointer = MemoryPointerV30 {
+            byte_offset: slice.pointer.byte_offset + 4 * (base + invocation_source_tile_offset_v161(
+                load.layout, load.lanes, load.elements, lane, item)), ..slice.pointer };
+        let value = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, 4, little_endian));
+        let result = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item, little_endian);
+        let tail = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item + 1, little_endian);
+        result.values == seq![value] + tail.values
+            && result.masks == seq![MemoryValueV30::Scalar(1)] + tail.masks
+            && result.observations == invocation_source_observe_effects_v39(
+                seq![MemoryOperationEffectV30::Read { address: MemoryValueV30::Pointer(pointer),
+                    width: 4, alignment: 4, value }], source, source) + tail.observations
+    }),
+{
+    reveal(invocation_source_tile_components_v161);
+}
