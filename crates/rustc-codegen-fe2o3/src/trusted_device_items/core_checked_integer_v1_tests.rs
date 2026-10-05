@@ -171,10 +171,12 @@ impl Callbacks for FixtureCallbacks {
                     body.basic_blocks.as_mut()[block].is_cleanup = true;
                 });
                 reject_mutation(tcx, instance, body, "extra operation", |body| {
-                    body.basic_blocks.as_mut()[block].statements.push(rustc_middle::mir::Statement {
-                        source_info: original.terminator().source_info,
-                        kind: StatementKind::Nop,
-                    });
+                    let mut extra = body.basic_blocks.iter()
+                        .find_map(|block| block.statements.first())
+                        .expect("actual integer statement").clone();
+                    extra.source_info = original.terminator().source_info;
+                    extra.kind = StatementKind::Nop;
+                    body.basic_blocks.as_mut()[block].statements.push(extra);
                 });
                 results.operations += 2;
                 reject_mutation(tcx, instance, body, "missing terminator", |body| {
