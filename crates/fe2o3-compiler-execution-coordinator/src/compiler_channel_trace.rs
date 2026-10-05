@@ -5,10 +5,15 @@ use crate::native_v3::root_intake::RootCompilerRequest;
 use fe2o3_protected_service_spawn::{
     RetainedDependencyV2 as Dependency, RetainedResourceAccessErrorV2 as AccessError,
     cleanup_bridge::CleanupPollV1 as CleanupPoll,
-    native_spawn::{RootRetainedTaskTraceV2 as Trace, RootTaskTraceEventV2 as Event},
+    native_spawn::{RootRetainedTaskTraceV2 as Trace, RootRuntimeTraceV1},
 };
 
-const FRAME: usize = super::FRAME + 4096;
+#[path = "compiler_channel_trace_owner.rs"]
+mod owner;
+pub(crate) use owner::CompilerTraceEvent as Event;
+use owner::TraceOwner;
+
+const FRAME: usize = super::FRAME + 4 * size_of::<TraceOwner<'static, ()>>() + 4096;
 const LOCAL_WORK: usize = 8 + 32 * 1088 + 64 * TRANSFER_BYTES;
 
 /// One originating-thread owner of compiler trace, channel and transitive backing.
@@ -16,10 +21,11 @@ const LOCAL_WORK: usize = 8 + 32 * 1088 + 64 * TRANSFER_BYTES;
 /// Deferred cancellation retains the child's original payload in its original pool;
 /// channel escrow is closed only after foreground trace cancellation starts.
 pub(crate) struct CompilerTrace<'work, T: Send + 'static> {
-    trace: Trace<'work, T>,
+    trace: TraceOwner<'work, T>,
     channel: Option<CompilerChildChannel>,
     phase: Phase,
     retained: usize,
+    deadline: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,8 +51,9 @@ impl Phase {
 impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
     pub(crate) const PUBLICATION_FRAME_WORK: usize = LOCAL_WORK;
     pub(crate) const PUBLICATION_FRAME_SCRATCH: usize = FRAME;
-    pub(crate) const OBSERVATION_WORK: usize =
-        LOCAL_WORK + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_WORK;
+    pub(crate) const OBSERVATION_WORK: usize = LOCAL_WORK
+        + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_WORK
+        + RootRuntimeTraceV1::ROOT_OBSERVATION_WORK;
     pub(crate) const OBSERVATION_SCRATCH: usize =
         FRAME + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_SCRATCH;
     const ENVELOPE: usize = size_of::<(Self, usize)>()
@@ -89,10 +96,11 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
             b.reserve_storage(Self::ENVELOPE)?;
             Ok((
                 Self {
-                    trace,
+                    trace: TraceOwner::Original(trace),
                     channel: Some(channel),
                     phase: Phase::Gated,
                     retained,
+                    deadline,
                 },
                 retained,
             ))
@@ -103,22 +111,164 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         self.retained
     }
 
+    /// Only trace retirement permits handing the remaining domain cleanup to
+    /// the original pool. This is not an empty-pool or completion observation.
+    pub(crate) fn needs_foreground_cancellation(&self) -> bool {
+        match &self.trace {
+            TraceOwner::Original(_) => false,
+            TraceOwner::Runtime(trace) => !trace.observation().is_trace_retired(),
+        }
+    }
+
+    pub(crate) fn cancellation_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, RootRuntimeTraceV1::OPERATION_WORK])?,
+            scratch: native::sum(&[FRAME, RootRuntimeTraceV1::OPERATION_SCRATCH])?,
+        })
+    }
+
+    /// Fixed consuming-takeover work and extra peak above the original owner.
+    /// Interrupt/poll turns before takeover are funded separately; no new ledger
+    /// or execution deadline is created by this inert schedule.
+    pub(crate) fn runtime_takeover_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, RootRuntimeTraceV1::OPERATION_WORK])?,
+            scratch: native::sum(&[
+                FRAME,
+                RootRuntimeTraceV1::STORAGE_GROWTH,
+                RootRuntimeTraceV1::OPERATION_SCRATCH,
+            ])?,
+        })
+    }
+
+    /// Stop the original gated task; arming still requires its consumed stop.
+    pub(crate) fn interrupt_for_runtime(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Gated || Instant::now() >= self.deadline {
+                return Err(Error::Invalid(
+                    "runtime takeover requires the original live gate",
+                ));
+            }
+            match &mut self.trace {
+                TraceOwner::Original(trace) => Ok(trace.interrupt(b)?),
+                TraceOwner::Runtime(_) => Err(Error::Invalid("compiler runtime already armed")),
+            }
+        })
+    }
+
+    /// Consume the same channel/backing and original held interrupt. Returned
+    /// FULL storage is unreserved; retire the input reservation before retaining
+    /// the output. The unchanged receive deadline is used, never a fresh timeout.
+    ///
+    /// # Safety
+    /// Keep the original exec gate closed and satisfy RootRuntimeTraceV1's
+    /// dedicated-process/outside-custodian and exclusive custody contract.
+    /// Authenticate the typed stage and complete runtime policy before release.
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn arm_runtime(self, b: &mut Budget<'_>) -> Result<(Self, usize)> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Gated {
+                return Err(Error::Invalid("compiler runtime takeover is closed"));
+            }
+            let TraceOwner::Original(trace) = self.trace else {
+                return Err(Error::Invalid("compiler runtime already armed"));
+            };
+            let retained = self
+                .retained
+                .checked_add(RootRuntimeTraceV1::STORAGE_GROWTH)
+                .ok_or(Resource::Arithmetic)?;
+            b.reserve_storage(RootRuntimeTraceV1::STORAGE_GROWTH)?;
+            // SAFETY: the caller retains the closed gate and original dedicated
+            // custodian. The consuming primitive validates the actual held stop.
+            let trace = unsafe { trace.into_runtime_trace(self.deadline, b) }?;
+            Ok((
+                Self {
+                    trace: TraceOwner::Runtime(trace),
+                    channel: self.channel,
+                    phase: self.phase,
+                    retained,
+                    deadline: self.deadline,
+                },
+                retained,
+            ))
+        })
+    }
+
+    /// Trusted private controller composition, not an execution admission API.
+    /// Every operation still charges/checks the original account and deadline.
+    pub(crate) fn with_runtime<R>(
+        &mut self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&mut RootRuntimeTraceV1<'work>, &mut Budget<'_>) -> Result<R>,
+    ) -> Result<R> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase == Phase::Cancelled {
+                return Err(Error::Invalid("compiler runtime execution is cancelled"));
+            }
+            operation(self.trace.runtime()?, b)
+        })
+    }
+
+    /// The private checkpoint controller uses the actual runtime and its
+    /// original locked backing together. Callback work/scratch is additional;
+    /// returned observations grant no permission to resume or publish.
+    pub(crate) fn with_runtime_backing<R>(
+        &mut self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&mut RootRuntimeTraceV1<'work>, &T, &mut Budget<'_>) -> Result<R>,
+    ) -> Result<R> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase == Phase::Cancelled {
+                return Err(Error::Invalid("compiler runtime execution is cancelled"));
+            }
+            match &mut self.trace {
+                TraceOwner::Runtime(trace) => trace.with_runtime_resources(b, operation),
+                TraceOwner::Original(_) => {
+                    Err(Error::Invalid("compiler runtime trace is not armed"))
+                }
+            }
+        })
+    }
+
+    pub(crate) fn runtime_backing_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::RetainedResourcesV2 as Resources;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, Resources::<T>::ACCESS_WORK])?,
+            scratch: native::sum(&[FRAME, Resources::<T>::ACCESS_SCRATCH])?,
+        })
+    }
+
+    /// Drive original funded cancellation; Pending preserves foreground custody.
+    /// A terminal trace is necessary but not sufficient for domain retirement.
+    pub(crate) fn cancel_step(&mut self, b: &mut Budget<'_>) -> Result<CleanupPoll> {
+        self.phase = Phase::Cancelled;
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            match &mut self.trace {
+                TraceOwner::Original(trace) => Ok(trace.cancel()),
+                TraceOwner::Runtime(trace) => {
+                    let runtime = trace.runtime();
+                    runtime.mark_cancellation();
+                    if !runtime.is_trace_retired() && !runtime.cancel_step(b)? {
+                        return Ok(CleanupPoll::Pending);
+                    }
+                    Ok(runtime.cleanup_after_retirement()?)
+                }
+            }
+        })
+    }
+
     /// Mechanical transfer envelope above the prepaid trace, including one
     /// consuming observation and full dependency overlap. The callback's work,
     /// scratch, retained outputs and independent cleanup funding are additional.
     /// This inert query neither opens input access nor checks execution authority.
     pub(crate) fn issuer_inputs_quota(&self) -> Result<native::CompilerExecutionLaunchQuotaV2> {
-        use fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2;
         let dependency = self.trace.dependency_quota()?;
+        let (operation_work, operation_scratch) = self.trace.operation_quota();
         Ok(native::CompilerExecutionLaunchQuotaV2 {
-            work: native::sum(&[
-                LOCAL_WORK,
-                RootTaskTraceV2::OPERATION_WORK,
-                dependency.work(),
-            ])?,
+            work: native::sum(&[LOCAL_WORK, operation_work, dependency.work()])?,
             scratch: native::sum(&[
                 FRAME,
-                RootTaskTraceV2::OPERATION_SCRATCH,
+                operation_scratch,
                 dependency.scratch(),
                 dependency.retained_storage(),
             ])?,
@@ -144,7 +294,9 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         operation: impl FnOnce(&T, &mut Budget<'_>) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
-        E: From<Resource> + From<AccessError>,
+        E: From<Resource>
+            + From<AccessError>
+            + From<fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2>,
     {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
             self.trace.with_resources(b, operation)
@@ -192,14 +344,18 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
     )> {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
             self.require_publication_phase()?;
-            Ok(
-                fe2o3_broker_authority_service::RootPublicationCustodyV3::observe_with_limit(
-                    &mut self.trace,
+            use fe2o3_broker_authority_service::RootPublicationCustodyV3 as Publication;
+            Ok(match &mut self.trace {
+                TraceOwner::Original(trace) => {
+                    Publication::observe_with_limit(trace, cleanup, maximum_handoff_bytes, b)?
+                }
+                TraceOwner::Runtime(trace) => Publication::observe_runtime_with_limit(
+                    trace.runtime(),
                     cleanup,
                     maximum_handoff_bytes,
                     b,
                 )?,
-            )
+            })
         })
     }
 
@@ -211,7 +367,12 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         let floor = native::sum(&[self.retained, publication.retained_storage()])?;
         b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
             self.require_publication_phase()?;
-            Ok(publication.revalidate(&self.trace, b)?)
+            Ok(match &self.trace {
+                TraceOwner::Original(trace) => publication.revalidate(trace, b)?,
+                TraceOwner::Runtime(trace) => {
+                    publication.revalidate_runtime(trace.observation(), b)?
+                }
+            })
         })
     }
 
@@ -326,7 +487,7 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
                     "compiler issuer inputs have not been consumed",
                 ));
             }
-            Ok(self.trace.resume(b)?)
+            self.trace.resume_original(b)
         })
     }
 
@@ -338,7 +499,7 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
 }
 
 struct InputAttempt<'a, 'work, T: Send + 'static> {
-    trace: &'a mut Trace<'work, T>,
+    trace: &'a mut TraceOwner<'work, T>,
     phase: &'a mut Phase,
     channel: Option<CompilerChildChannel>,
 }

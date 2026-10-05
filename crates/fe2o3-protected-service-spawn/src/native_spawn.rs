@@ -51,12 +51,15 @@ use std::{
 #[path = "native_child.rs"]
 mod child;
 pub use child::{
-    RootOwnedProtectedServiceChildV2, RootTaskIdentityV2, RootTaskObservationV2,
-    RootTaskTraceEventV2, RootTaskTraceV2,
+    MAX_RUNTIME_TASKS, RootOwnedProtectedServiceChildV2, RootRuntimeTraceV1, RootTaskIdentityV2,
+    RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2, RuntimeSyscallEntryV1,
+    RuntimeTaskObservationV1, RuntimeTraceEventV1,
 };
 #[path = "native_retained_child.rs"]
 mod retained_child;
-pub use retained_child::{RootOwnedRetainedServiceChildV2, RootRetainedTaskTraceV2};
+pub use retained_child::{
+    RootOwnedRetainedServiceChildV2, RootRetainedRuntimeTraceV1, RootRetainedTaskTraceV2,
+};
 #[path = "native_domain_spawn.rs"]
 mod domain_spawn;
 use domain_spawn::Placement;
@@ -192,6 +195,8 @@ impl StagedProtectedServiceExecV2 {
         + observations::CAPABILITY_CEILING_SCRATCH
         + syscall::COMPILER_CHANNEL_SCRATCH
         + syscall::COMPILER_RESTRICTION_SCRATCH
+        + syscall::COMPILER_TRACE_SCRATCH
+        + syscall::COMPILER_FILESYSTEM_SCRATCH
         + syscall::NAMESPACE_RESTRICTION_SCRATCH
         + 8192
         + crate::clone_compat::SCRATCH;

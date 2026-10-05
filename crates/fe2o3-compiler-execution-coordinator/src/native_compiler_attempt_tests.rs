@@ -14,10 +14,11 @@ fn launch_consumes_actual_helper_and_preserves_original_work_lifetime() {
 }
 
 #[test]
-fn envelope_accounts_for_trace_stage_and_all_three_unreleased_gate_status_owners() {
+fn envelope_accounts_for_inventory_trace_stage_and_all_three_unreleased_gate_status_owners() {
     assert_eq!(
         Attempt::ENVELOPE
             + size_of::<Trace<'static>>()
+            + size_of::<Executables>()
             + size_of::<Stage>()
             + 3 * size_of::<OwnedFd>(),
         size_of::<Attempt<'static>>(),

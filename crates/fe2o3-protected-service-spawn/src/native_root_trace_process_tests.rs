@@ -15,12 +15,16 @@ use std::{
 
 const MARKER: &str = "FE2O3_NATIVE_ROOT_TRACE_CASE";
 const COMPLETE: &str = "FE2O3_NATIVE_ROOT_TRACE_COMPLETE";
+const RUNTIME_FIXTURE: &str = "FE2O3_NATIVE_RUNTIME_FIXTURE";
 
 #[path = "native_root_trace_confirmation_tests.rs"]
 mod confirmation;
 
 #[path = "native_root_observation_tests.rs"]
 mod observation;
+
+#[path = "native_runtime_trace_process_tests.rs"]
+mod runtime;
 
 #[test]
 fn real_root_trace_schedules_in_bounded_subprocesses() {
@@ -45,6 +49,26 @@ fn real_root_trace_schedules_in_bounded_subprocesses() {
 }
 
 #[test]
+fn runtime_trace_original_takeover_and_retirement_are_bounded() {
+    for mode in [
+        "runtime-cancel",
+        "runtime-account",
+        "runtime-census",
+        "runtime-expired",
+    ] {
+        subprocess(mode);
+    }
+}
+
+#[test]
+#[ignore = "requires the separately compiled, pinned runtime-checkpoint-v1 component fixture"]
+fn runtime_trace_observes_repeated_thread_lifecycles() {
+    assert!(std::env::var_os(RUNTIME_FIXTURE).is_some());
+    subprocess("runtime-lifecycle");
+    subprocess("runtime-tree-cancel");
+}
+
+#[test]
 fn moved_budget_refuses_original_ledger_at_another_address() {
     subprocess("confirm-budget-address");
 }
@@ -63,7 +87,8 @@ fn confirm_exec_requires_owned_stop_and_exact_funding() {
 
 fn subprocess(mode: &str) {
     let completion = tempfile::NamedTempFile::new().unwrap();
-    let mut process = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args([
             "--exact",
             "native_spawn::child::trace::tests::processes::root_trace_subprocess",
@@ -74,9 +99,11 @@ fn subprocess(mode: &str) {
         .env(COMPLETE, completion.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    if matches!(mode, "runtime-lifecycle" | "runtime-tree-cancel") {
+        command.env(RUNTIME_FIXTURE, std::env::var_os(RUNTIME_FIXTURE).unwrap());
+    }
+    let mut process = command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     while process.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
@@ -87,6 +114,9 @@ fn subprocess(mode: &str) {
         std::thread::sleep(Duration::from_millis(2));
     }
     let output = process.wait_with_output().unwrap();
+    if matches!(mode, "runtime-lifecycle" | "runtime-tree-cancel") {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
     assert!(
         output.status.success(),
         "{mode}: {}",
@@ -102,14 +132,27 @@ fn subprocess(mode: &str) {
 // This fixture adopts a direct Command child only in tests. Its second exec is
 // gated on stdin; it is not evidence for the production clone/credential path.
 fn spawn(slot: crate::process_reaper::ReapSlotV1<'static>) -> (Owner, OwnedFd, OwnedFd) {
+    spawn_fixture(slot, false)
+}
+
+fn spawn_fixture(
+    slot: crate::process_reaper::ReapSlotV1<'static>,
+    runtime: bool,
+) -> (Owner, OwnedFd, OwnedFd) {
     let lease = fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1().unwrap();
     let (read, gate) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
     let (ready, report_ready) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )
     .unwrap();
-    let mut process = Command::new("/bin/sh")
-        .args(["-c", "printf r; read token; exec /bin/true"])
+    let mut command = if runtime {
+        Command::new(std::env::var_os(RUNTIME_FIXTURE).unwrap())
+    } else {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf r; read token; exec /bin/true"]);
+        command
+    };
+    let mut process = command
         .env_clear()
         .stdin(Stdio::from(File::from(read)))
         .stdout(Stdio::from(File::from(report_ready)))
@@ -196,10 +239,19 @@ fn root_trace_subprocess() {
         return;
     };
     let mut service = pool();
-    let mut work = Work::new(LIMIT);
-    let mut b = Budget::new(&mut work, LIMIT);
+    // This explicitly bounded component schedule reserves for at most 256
+    // kernel events; it does not alter any production work or runtime limit.
+    let limit = if matches!(mode.as_str(), "runtime-lifecycle" | "runtime-tree-cancel") {
+        LIMIT + 256 * 16 * crate::native_spawn::RootRuntimeTraceV1::OPERATION_WORK
+    } else {
+        LIMIT
+    };
+    let mut work = Work::new(limit);
+    let mut b = Budget::new(&mut work, limit);
     if mode.starts_with("observe-") {
         observation::run(&mode, &mut service, &mut b);
+    } else if mode.starts_with("runtime-") {
+        runtime::run(&mode, &mut service, &mut b);
     } else if mode.starts_with("confirm-") {
         confirmation::run(&mode, &mut service, &mut b);
     } else if mode.starts_with("retained") {

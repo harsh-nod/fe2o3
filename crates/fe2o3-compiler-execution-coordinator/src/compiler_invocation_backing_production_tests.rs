@@ -20,6 +20,46 @@ use fixture::{HARNESS, STORAGE, WORK, account, admit, history};
 
 #[test]
 #[ignore = "requires installed immutable approved compiler runtime; run serially"]
+fn native_executable_inventory_is_bound_to_original_backing_and_account() {
+    use crate::native_runtime_inventory::{
+        Error as InventoryError, NativeCompilerExecutableInventory as Inventory,
+    };
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    account(|b| {
+        let (inputs, witness) = admit(b, false);
+        let (owner, charge) = inputs.prepare(b).unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        let floor = b.storage();
+        let inventory = Inventory::capture(&owner, b).unwrap();
+        assert_eq!(b.storage(), floor);
+        let retained = inventory.retained_storage();
+        assert!(retained <= Inventory::MAX_STORAGE);
+        b.reserve_storage(retained).unwrap();
+        inventory.revalidate(&owner, b).unwrap();
+        assert_eq!(
+            inventory.ranges().count(),
+            owner.inventory_sources().entries().len() - 1
+        );
+        let mut other_work = Work::new(usize::MAX);
+        let mut other = Budget::new(&mut other_work, usize::MAX);
+        other.reserve_storage(b.storage()).unwrap();
+        assert!(matches!(
+            inventory.revalidate(&owner, &mut other),
+            Err(InventoryError::Resource(Resource::Accounting))
+        ));
+        witness.assert_live();
+        let before_drop = history(b);
+        drop(inventory);
+        assert_eq!(history(b), before_drop);
+        b.release_storage(retained).unwrap();
+        drop(owner);
+        witness.assert_dropped();
+        b.release_storage(charge.retained_storage()).unwrap();
+    });
+}
+
+#[test]
+#[ignore = "requires installed immutable approved compiler runtime; run serially"]
 fn approved_runtime_retains_received_inert_capture_and_drops_on_original_account() {
     account(|b| {
         let (inputs, witness) = admit(b, false);

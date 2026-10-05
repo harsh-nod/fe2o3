@@ -41,6 +41,8 @@ impl RootTaskObservationV2<'_, '_> {
         size_of::<(File, Storage)>() + 256 + Self::CONTINUITY_SCRATCH;
     /// Full identity extraction work, including original live-trace validation.
     pub const IDENTITY_WORK: usize = ENTRY + Self::CONTINUITY_WORK;
+    /// Full retained identity handle, output metadata and shared allocation.
+    pub const IDENTITY_STORAGE: usize = RootTaskIdentityV2::STORAGE;
     /// Full output handle/allocation overlap plus the live validation frame.
     pub const IDENTITY_SCRATCH: usize = RootTaskIdentityV2::STORAGE + Self::CONTINUITY_SCRATCH;
     /// Enclosing view work; the callback must separately fund all of its work.

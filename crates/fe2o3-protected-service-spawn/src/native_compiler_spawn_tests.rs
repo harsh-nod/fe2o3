@@ -99,6 +99,201 @@ fn transfer_pair(kind: rustix::net::SocketType) -> (OwnedFd, OwnedFd) {
 }
 
 #[test]
+fn runtime_checkpoints_require_original_channel_stage_and_prepay_child_work() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(SOURCE).unwrap();
+    let (plain, charge) = f.stage(f.streams(), &[], &f.cwd, &mut b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    assert!(!plain.has_runtime_checkpoints());
+    assert!(plain.require_runtime_checkpoints(&mut b).is_err());
+    b.release_storage(charge.additional_storage()).unwrap();
+
+    let (stage, charge) = f
+        .stage_channel(f.streams(), &[], transfer.as_fd(), &mut b)
+        .unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    let before = stage.spawn_work(63).unwrap();
+    assert!(!stage.has_runtime_checkpoints());
+    let stage = stage.require_runtime_checkpoints(&mut b).unwrap();
+    assert!(stage.has_runtime_checkpoints());
+    assert_eq!(
+        stage.spawn_work(63).unwrap(),
+        before + Stage::RUNTIME_CHECKPOINT_CHILD_WORK
+    );
+    assert_eq!(stage.compiler_arguments(), Some(f.arguments.as_slice()));
+    assert_eq!(stage.compiler_environment(), Some(f.environment.as_slice()));
+    assert!(stage.require_runtime_checkpoints(&mut b).is_err());
+    b.release_storage(charge.additional_storage()).unwrap();
+}
+
+#[test]
+fn runtime_checkpoint_transition_refuses_unfunded_original_stage() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(SOURCE).unwrap();
+    let (stage, charge) = f
+        .stage_channel(f.streams(), &[], transfer.as_fd(), &mut b)
+        .unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    let mut empty_work = Work::new(0);
+    let mut empty = Budget::new(&mut empty_work, LIMIT);
+    empty.reserve_storage(charge.additional_storage()).unwrap();
+    assert!(matches!(
+        stage.require_runtime_checkpoints(&mut empty),
+        Err(Error::Resource(_))
+    ));
+    // The input descriptors and invocation remain owned by the original fixture.
+    assert!(rustix::fs::fstat(&f.file).is_ok());
+    assert!(rustix::fs::fstat(&f.cwd).is_ok());
+    b.release_storage(charge.additional_storage()).unwrap();
+}
+
+#[test]
+fn runtime_checkpoint_transition_checks_exact_floor_work_and_scratch() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    for case in 0..4 {
+        let mut staging_work = Work::new(LIMIT);
+        let mut staging = Budget::new(&mut staging_work, LIMIT);
+        staging.reserve_storage(SOURCE).unwrap();
+        let (stage, charge) = f
+            .stage_channel(f.streams(), &[], transfer.as_fd(), &mut staging)
+            .unwrap();
+        staging
+            .reserve_storage(charge.additional_storage())
+            .unwrap();
+        let floor = stage.retained_storage();
+        let work_limit = Stage::RUNTIME_CHECKPOINT_STAGING_WORK - usize::from(case == 1);
+        let reserved = floor - usize::from(case == 2);
+        let peak = floor + Stage::RUNTIME_CHECKPOINT_STAGING_SCRATCH;
+        let mut work = Work::new(work_limit);
+        let mut b = Budget::new(&mut work, peak - usize::from(case == 3));
+        b.reserve_storage(reserved).unwrap();
+        let result = stage.require_runtime_checkpoints(&mut b);
+        assert_eq!(b.storage(), reserved);
+        match case {
+            0 => {
+                let stage = result.unwrap();
+                assert!(stage.has_runtime_checkpoints());
+                assert_eq!(b.work(), Stage::RUNTIME_CHECKPOINT_STAGING_WORK);
+                assert_eq!(b.peak_storage(), peak);
+                assert!(b.failed_work().is_none());
+                assert!(b.failed_storage().is_none());
+            }
+            1 => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
+            2 => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
+            3 => assert!(matches!(result, Err(Error::Resource(Resource::Storage(_))))),
+            _ => unreachable!(),
+        }
+        assert!(charge.additional_storage() > 0);
+        assert!(rustix::fs::fstat(&f.file).is_ok());
+        assert!(rustix::fs::fstat(&f.cwd).is_ok());
+    }
+}
+
+#[test]
+fn output_confinement_requires_original_checkpointed_directory_and_is_irreversible() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let path_only = File::from(
+        rustix::fs::open(
+            f.directory.path(),
+            rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap(),
+    );
+    for case in 0..5 {
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(SOURCE).unwrap();
+        let binding = Binding::new(
+            match case {
+                1 => f.file.as_fd(),
+                4 => path_only.as_fd(),
+                _ => f.cwd.as_fd(),
+            },
+            if case == 2 { 196 } else { 197 },
+        )
+        .unwrap();
+        let (stage, charge) = f
+            .stage_channel(f.streams(), &[binding], transfer.as_fd(), &mut b)
+            .unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        let stage = if case == 3 {
+            stage
+        } else {
+            stage.require_runtime_checkpoints(&mut b).unwrap()
+        };
+        assert!(!stage.has_output_write_confinement());
+        let before = stage.spawn_work(63).unwrap();
+        let result = stage.require_output_write_confinement(&mut b);
+        if matches!(case, 1..=4) {
+            assert!(result.is_err());
+        } else {
+            let stage = result.unwrap();
+            assert!(stage.has_output_write_confinement());
+            assert_eq!(
+                stage.spawn_work(63).unwrap(),
+                before + Stage::OUTPUT_CONFINEMENT_CHILD_WORK
+            );
+            assert_eq!(stage.compiler_arguments(), Some(f.arguments.as_slice()));
+            assert_eq!(stage.compiler_environment(), Some(f.environment.as_slice()));
+            assert!(stage.require_output_write_confinement(&mut b).is_err());
+        }
+        b.release_storage(charge.additional_storage()).unwrap();
+        assert!(rustix::fs::fstat(&f.cwd).is_ok());
+    }
+}
+
+#[test]
+fn output_confinement_checks_exact_floor_work_and_scratch() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    for case in 0..4 {
+        let mut staging_work = Work::new(LIMIT);
+        let mut staging = Budget::new(&mut staging_work, LIMIT);
+        staging.reserve_storage(SOURCE).unwrap();
+        let (stage, charge) = f
+            .stage_channel(
+                f.streams(),
+                &[Binding::new(f.cwd.as_fd(), 197).unwrap()],
+                transfer.as_fd(),
+                &mut staging,
+            )
+            .unwrap();
+        staging
+            .reserve_storage(charge.additional_storage())
+            .unwrap();
+        let stage = stage.require_runtime_checkpoints(&mut staging).unwrap();
+        let floor = stage.retained_storage();
+        let peak = floor + Stage::OUTPUT_CONFINEMENT_STAGING_SCRATCH;
+        let mut work = Work::new(Stage::OUTPUT_CONFINEMENT_STAGING_WORK - usize::from(case == 1));
+        let mut b = Budget::new(&mut work, peak - usize::from(case == 3));
+        let reserved = floor - usize::from(case == 2);
+        b.reserve_storage(reserved).unwrap();
+        let result = stage.require_output_write_confinement(&mut b);
+        assert_eq!(b.storage(), reserved);
+        match case {
+            0 => {
+                assert!(result.unwrap().has_output_write_confinement());
+                assert_eq!(b.work(), Stage::OUTPUT_CONFINEMENT_STAGING_WORK);
+                assert_eq!(b.peak_storage(), peak);
+            }
+            1 => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
+            2 => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
+            3 => assert!(matches!(result, Err(Error::Resource(Resource::Storage(_))))),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn actual_stage_constructors_and_mapping_gate_select_mandatory_confinement() {
     let f = Fixture::new();
     let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);

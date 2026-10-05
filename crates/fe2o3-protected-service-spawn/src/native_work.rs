@@ -17,6 +17,11 @@ pub(crate) const COMPILER_RESTRICTION_WORK: usize = crate::syscall::COMPILER_PER
     + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64
     + CONTROL_WORK;
 
+// Additional fixed SET_SECCOMP after the retained gate, without a post-install
+// prctl query that would itself require runtime mediation. Traced stages only.
+pub(crate) const COMPILER_TRACE_WORK: usize =
+    OPERATION_WORK + crate::syscall::COMPILER_TRACE_INSTRUCTIONS * 64 + CONTROL_WORK;
+
 // GET_NO_NEW_PRIVS, SET_SECCOMP, GET_SECCOMP and immutable filter validation.
 // Worst-case allowance paid on the original parent ledger before every clone,
 // including unmapped service stages that do not install this filter.

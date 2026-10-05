@@ -25,6 +25,8 @@ struct Fake {
     busy: usize,
     shutdowns: usize,
     intake: bool,
+    foreground: bool,
+    foreground_pending: usize,
 }
 impl Fake {
     fn new() -> Self {
@@ -41,6 +43,8 @@ impl Fake {
             busy: 0,
             shutdowns: 0,
             intake: false,
+            foreground: false,
+            foreground_pending: 0,
         }
     }
     fn effect(&self, name: &'static str) -> Result<()> {
@@ -90,6 +94,18 @@ impl<'work> Runtime<'work> for Fake {
     }
     fn cancel(&mut self) {
         self.trace.borrow_mut().events.push("cancel");
+    }
+    fn retire_foreground(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+        if !self.foreground {
+            return Ok(true);
+        }
+        self.request("foreground", b)?;
+        if self.foreground_pending == 0 {
+            Ok(true)
+        } else {
+            self.foreground_pending -= 1;
+            Ok(false)
+        }
     }
     fn pump(&mut self) -> Result<()> {
         self.trace
@@ -243,6 +259,124 @@ fn bounded_pending_or_quarantined_custody_never_restores_the_mask() {
     assert_eq!(trace.events.iter().filter(|&&e| e == "shutdown").count(), 3);
     assert_eq!(trace.events.iter().filter(|&&e| e == "pump").count(), 2);
     assert_eq!(trace.events.last(), Some(&"drop"));
+}
+
+#[test]
+fn foreground_wait_custody_retires_before_original_pool_shutdown() {
+    let mut fake = Fake::new();
+    fake.foreground = true;
+    fake.foreground_pending = 2;
+    let (result, trace, request) = run(fake, 1, 2);
+    result.unwrap();
+    assert_eq!(
+        trace.borrow().events,
+        [
+            "start",
+            "publish",
+            "wait",
+            "cancel",
+            "foreground",
+            "wait",
+            "pump",
+            "foreground",
+            "wait",
+            "pump",
+            "foreground",
+            "shutdown",
+            "restore",
+            "drop"
+        ]
+    );
+    assert_eq!(request.failed_work(), None);
+    assert_eq!(
+        trace.borrow().cleanup.work(),
+        2 * Cleanup::pump_work(CAPACITY).unwrap()
+    );
+}
+
+#[test]
+fn unreaped_foreground_trace_never_closes_pool_or_restores_mask() {
+    let mut fake = Fake::new();
+    fake.foreground = true;
+    fake.foreground_pending = usize::MAX;
+    let (result, trace, _) = run(fake, 1, 2);
+    assert!(matches!(result, Err(Failure::Cleanup(CleanupError::Busy))));
+    let trace = trace.borrow();
+    assert_eq!(
+        trace.events.iter().filter(|&&e| e == "foreground").count(),
+        3
+    );
+    assert_eq!(trace.events.iter().filter(|&&e| e == "pump").count(), 2);
+    assert!(!trace.events.contains(&"shutdown"));
+    assert!(!trace.events.contains(&"restore"));
+}
+
+#[test]
+fn foreground_refusal_prevents_shutdown_and_restoration() {
+    let mut fake = Fake::new();
+    fake.foreground = true;
+    fake.fail = Some("foreground");
+    let (result, trace, _) = run(fake, 1, 2);
+    assert!(matches!(
+        result,
+        Err(Failure::Invalid {
+            role: "foreground",
+            ..
+        })
+    ));
+    assert_eq!(
+        trace.borrow().events,
+        ["start", "publish", "wait", "cancel", "foreground", "drop"]
+    );
+}
+
+#[test]
+fn trace_retirement_alone_does_not_finish_pending_domain_cleanup() {
+    let mut fake = Fake::new();
+    fake.foreground = true;
+    fake.foreground_pending = 1;
+    fake.busy = 1;
+    let (result, trace, _) = run(fake, 1, 2);
+    result.unwrap();
+    assert_eq!(
+        trace.borrow().events,
+        [
+            "start",
+            "publish",
+            "wait",
+            "cancel",
+            "foreground",
+            "wait",
+            "pump",
+            "foreground",
+            "shutdown",
+            "wait",
+            "pump",
+            "foreground",
+            "shutdown",
+            "restore",
+            "drop"
+        ]
+    );
+}
+
+#[test]
+fn exhausted_original_request_cannot_claim_foreground_retirement() {
+    let mut fake = Fake::new();
+    fake.foreground = true;
+    let trace = fake.trace.clone();
+    let limit = 2 * root::LOCAL_WORK + 2 * root::TURN_WORK + 4 * EFFECT_WORK - 1;
+    let mut account = Account::new(Work::new(limit), FRAME + RETAINED);
+    let result = account.with_budget(|b| run_scoped(b, 1, 1, || Ok(fake)));
+    assert!(matches!(
+        result,
+        Err(Failure::Resource(Resource::Work { .. }))
+    ));
+    assert!(account.failed_work().is_some());
+    assert_eq!(
+        trace.borrow().events,
+        ["start", "publish", "wait", "cancel", "drop"]
+    );
 }
 
 #[test]
@@ -444,6 +578,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
     let request = RootCompilerRequest::preparation_quota().unwrap();
     let refusal = RootCompilerRequest::refusal_quota().unwrap();
     let launch = RootCompilerRequest::launch_quota().unwrap();
+    let cancellation = RootCompilerRequest::cancellation_quota().unwrap();
     let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
     assert_eq!(root.cleanup_work(), old.cleanup_work() + cleanup_work);
     assert_eq!(
@@ -457,6 +592,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
             + fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2::WORK
             + request.work()
             + launch.work()
+            + 2 * cancellation.work()
             + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work())
     );
     assert!(
@@ -469,10 +605,29 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
                 + request.scratch()
                 + launch.scratch()
                 + refusal.scratch()
+                + cancellation.scratch()
     );
     assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
     assert!(Deployment::original_root_startup_quota(1, usize::MAX).is_err());
     assert!(Deployment::original_root_startup_quota(0, 1).is_err());
+}
+
+#[test]
+fn every_additional_cleanup_turn_funds_one_foreground_step_on_original_request() {
+    let first = Deployment::original_root_startup_quota(1, 1).unwrap();
+    let next = Deployment::original_root_startup_quota(1, 2).unwrap();
+    let old_first = Deployment::startup_quota(1, 1).unwrap();
+    let old_next = Deployment::startup_quota(1, 2).unwrap();
+    let cancellation = RootCompilerRequest::cancellation_quota().unwrap();
+    assert_eq!(
+        next.request_work() - first.request_work(),
+        old_next.request_work() - old_first.request_work() + cancellation.work()
+    );
+    assert_eq!(next.request_storage(), first.request_storage());
+    assert_eq!(
+        next.cleanup_work() - first.cleanup_work(),
+        old_next.cleanup_work() - old_first.cleanup_work()
+    );
 }
 
 // Exercise the real entry scheduling and real scope with inert effects only.
