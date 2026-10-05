@@ -78,9 +78,12 @@ pub(super) fn derive(
             }
             return Ok(None);
         }
+        if next <= current {
+            return Ok(None);
+        }
         current = next;
     }
-    // A repeated non-cut block cannot reach the child boundary on this closed path.
+    // Forward non-cut edges are visited at most once; other paths use the old proof.
     Ok(None)
 }
 
