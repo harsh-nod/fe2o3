@@ -6,12 +6,31 @@ stay with that same outer owner. There is no independently supplied runtime,
 PID-based trace reconstruction, provider guard, or second tracing pipeline.
 
 The implemented transitions are original gate interrupt, consuming interrupt
-observation, original runtime takeover, non-resuming first-exec image/census
+observation, original runtime takeover, confined bootstrap gate release, exact
+original first-exec observation, non-resuming first-exec image/census
 capture, alias closure followed by native exec EOF and confirmation, existing
 issuer launch/readiness, and original controller stepping. Typed checkpoint and
 output-confinement modes are both required by final staging validation. The
 unchanged original deadline is retained throughout; issuer launch receives only
 its remaining duration.
+
+Gate release revalidates the original captured inputs and staged aliases, then
+requires the actual original Domain's installed device-denial program while the
+original bootstrap interrupt is held. The trusted pre-READY path already
+installed inherited, irreversible Landlock output-write confinement. Only a
+successful gate write and original bootstrap resume create the private
+`CompilerConfinement` receipt. It has no public constructor, setter, cloning API,
+or provider interface; it retains the original move-stable identity and account.
+The gate poll accepts only Pending or the exact original root Exec, with no
+deadline renewal. Release, resume or polling errors cancel the genuine Attempt.
+
+First-exec capture consumes that receipt after repeating original identity and
+live device-domain checks. Later open checkpoints require the same receipt and
+actual Domain check before syscall execution, with all sharers held through the
+returned-descriptor check. Plain controller constructors remain unconfined and
+refuse opens. The receipt does not replace executable mapping, inherited-FD,
+descriptor-import, ioctl, issuer or publication checks, and decoded stage flags
+alone can never construct it.
 
 First-exec confirmation closes the complete Stage and both retained gate aliases
 before reading the original status pipe. It requires actual clean EOF, held
@@ -31,9 +50,9 @@ Trace retirement, issuer cleanup, publication observation, and aggregate pool
 emptiness are distinct. A consuming transition that cannot preserve unresolved
 runtime custody must fail-stop under the dedicated-process contract.
 
-This patch does not open the compiler gate or change the production request's
-refusal selection. Device confinement must be authenticated through the actual
-original cgroup observation before a separate gate-release integration. Ordinary
+These private transitions do not change the production request's refusal
+selection. Actual device attachment and the joined positive native route still
+need an admitted privileged qualification lane. Ordinary
 compilation, exact/one-short joined controller accounting, actual first-exec/EOF
 ordering, issuer readiness and end-to-end native compilation still require
 qualification; source and mechanical quote tests do not establish those results.

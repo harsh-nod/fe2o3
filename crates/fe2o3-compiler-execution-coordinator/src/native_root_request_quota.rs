@@ -216,12 +216,12 @@ pub(super) fn runtime_capture() -> Result<Quota> {
         work: sum(&[
             validation.work(),
             trace.work(),
-            Controller::INITIAL_IMAGE_WORK,
+            Controller::CONFINED_IMAGE_WORK,
         ])?,
         scratch: sum(&[
             validation.scratch(),
             trace.scratch(),
-            Controller::INITIAL_IMAGE_SCRATCH,
+            Controller::CONFINED_IMAGE_SCRATCH,
         ])?,
     })
 }

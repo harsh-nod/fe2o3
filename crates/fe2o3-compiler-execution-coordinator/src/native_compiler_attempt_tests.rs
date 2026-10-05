@@ -96,10 +96,86 @@ fn runtime_poll_confirmation_and_capture_have_closed_finite_quotes() {
     let trace = Trace::runtime_backing_quota().unwrap();
     assert_eq!(
         capture.work(),
-        validation.work() + trace.work() + Controller::INITIAL_IMAGE_WORK
+        validation.work() + trace.work() + Controller::CONFINED_IMAGE_WORK
     );
     assert_eq!(
         capture.scratch(),
-        validation.scratch() + trace.scratch() + Controller::INITIAL_IMAGE_SCRATCH
+        validation.scratch() + trace.scratch() + Controller::CONFINED_IMAGE_SCRATCH
+    );
+}
+
+#[test]
+fn gate_quote_funds_original_device_custody_identity_and_every_interrupted_write() {
+    use fe2o3_protected_service_spawn::native_spawn::{
+        RootRuntimeTraceV1 as Runtime, RootTaskObservationV2 as View,
+    };
+    let quote = Attempt::runtime_gate_quota().unwrap();
+    let trace = Trace::runtime_backing_quota().unwrap();
+    assert_eq!(
+        quote.work(),
+        LOCAL_WORK
+            + trace.work()
+            + 2 * Runtime::OPERATION_WORK
+            + Runtime::ROOT_OBSERVATION_WORK
+            + View::VIEW_WORK
+            + View::DEVICE_CONFINEMENT_WORK
+            + View::IDENTITY_WORK
+            + launch_io::MAX_GATE_ATTEMPTS * launch_io::Boundary::GateRelease.work()
+    );
+    assert_eq!(
+        quote.scratch(),
+        FRAME
+            + CompilerConfinement::STORAGE
+            + trace.scratch()
+            + Runtime::OPERATION_SCRATCH
+            + View::VIEW_SCRATCH
+            + View::DEVICE_CONFINEMENT_SCRATCH
+            + View::IDENTITY_SCRATCH
+            + View::IDENTITY_STORAGE
+    );
+}
+
+#[test]
+fn released_gate_poll_and_policy_identity_keep_original_account_wrappers() {
+    use fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1 as Runtime;
+    let poll = Attempt::first_exec_poll_quota().unwrap();
+    let trace = Trace::runtime_backing_quota().unwrap();
+    assert_eq!(
+        poll.work(),
+        LOCAL_WORK + trace.work() + Runtime::OPERATION_WORK
+    );
+    assert_eq!(
+        poll.scratch(),
+        FRAME + trace.scratch() + Runtime::OPERATION_SCRATCH
+    );
+    let identity = Attempt::original_policy_identity_quota().unwrap();
+    let inner = crate::native_v3::NativeAttempt::<Helper>::original_policy_identity_quota();
+    assert_eq!(identity.work(), LOCAL_WORK + inner.work());
+    assert_eq!(identity.scratch(), FRAME + inner.scratch());
+}
+
+#[test]
+fn confinement_receipt_quotes_original_identity_and_actual_domain_not_stage_flags() {
+    use fe2o3_protected_service_spawn::native_spawn::{
+        RootRuntimeTraceV1 as Runtime, RootTaskObservationV2 as View,
+    };
+    assert_eq!(
+        CompilerConfinement::VALIDATE_WORK,
+        8 + Runtime::IDENTITY_COMPARISON_WORK
+            + Runtime::ROOT_OBSERVATION_WORK
+            + View::VIEW_WORK
+            + View::DEVICE_CONFINEMENT_WORK
+    );
+    assert_eq!(
+        CompilerConfinement::STORAGE,
+        size_of::<CompilerConfinement>() + View::IDENTITY_STORAGE
+    );
+    assert_eq!(
+        Controller::CONFINED_IMAGE_WORK,
+        Controller::INITIAL_IMAGE_WORK + CompilerConfinement::VALIDATE_WORK
+    );
+    assert_eq!(
+        Controller::CONFINED_IMAGE_SCRATCH,
+        Controller::INITIAL_IMAGE_SCRATCH + CompilerConfinement::VALIDATE_SCRATCH
     );
 }
