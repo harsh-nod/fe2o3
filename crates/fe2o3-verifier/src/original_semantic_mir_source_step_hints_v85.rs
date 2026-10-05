@@ -92,6 +92,8 @@ pub(super) fn derive(
                 operands,
                 call,
                 frame_preserving: !conserves_heap && cut_frames::supports(function, block, out)?,
+                needs_scalar_store_facts: !conserves_heap
+                    && cut_may_store(function, functions, block, out)?,
                 descriptor_wf: if !conserves_heap && source_wf::supports(function, block, out)? {
                     match row.end {
                         End::Descriptor(call) => Some((block, call)),
@@ -117,6 +119,50 @@ pub(super) fn derive(
         entries,
         cuts,
     }))
+}
+
+fn cut_may_store(
+    function: &SourceByteFunction<'_, '_, '_>,
+    functions: &[Option<SourceByteFunction<'_, '_, '_>>],
+    block: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<bool> {
+    out.budget.reserve_storage(
+        size_of::<Event>()
+            + size_of::<Result<Event>>()
+            + 2 * size_of::<Result<bool>>()
+            + 4 * size_of::<usize>()
+            + 6 * size_of::<&()>(),
+    )?;
+    out.budget.charge_work(1)?;
+    let row = function.control.get(block).ok_or_else(mismatch)?;
+    for statement in 0..row.statements {
+        out.budget.charge_work(2)?;
+        let event = function.body.event_at(block, statement, out)?;
+        if !conservation::event_supported(event) && !event.descriptor_frame_shape_v93() {
+            return Ok(true);
+        }
+    }
+    // Calls enter a frame at this cut; the callee body has independent cuts.
+    // Unknown effects keep the store lemmas, never a new proof premise.
+    Ok(match &row.end {
+        End::Unreachable | End::Goto(_) | End::Descriptor(_) => false,
+        End::Switch { operand, .. } => !operand.scalar_local_for_conservation(),
+        End::Return => !function.returned.heap_conservation_shape(out)?,
+        End::Call { child, arguments } => {
+            out.budget.charge_work(arguments.len())?;
+            match functions.get(*child).and_then(Option::as_ref) {
+                Some(callee) => {
+                    !callee.enter.heap_conservation_shape(out)?
+                        || !arguments
+                            .iter()
+                            .all(|operand| operand.scalar_local_for_conservation())
+                }
+                None => true,
+            }
+        }
+        _ => true,
+    })
 }
 
 fn headers() -> usize {

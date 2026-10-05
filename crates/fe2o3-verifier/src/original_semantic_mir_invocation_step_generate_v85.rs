@@ -101,6 +101,7 @@ pub(super) fn emit(
                 header(root, Some(cut.source), goal, out)?;
                 match goal {
                     Goal::Relation => {
+                        compose_opaquely(root, out)?;
                         for part in [Goal::Map, Goal::Heap, Goal::Residual] {
                             invoke(root, cut.source, part, out)?;
                         }
@@ -155,6 +156,7 @@ pub(super) fn emit(
         if summary.is_some() {
             summaries::compose(root, cut.source, out)?;
         } else if partition {
+            compose_opaquely(root, out)?;
             for goal in [
                 Goal::Relation,
                 Goal::Observations,
@@ -169,6 +171,15 @@ pub(super) fn emit(
         }
         emit!(out, "}}\n");
     }
+    Ok(())
+}
+
+fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(7)?;
+    emit!(
+        out,
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_byte_states_related_v36);\n"
+    );
     Ok(())
 }
 
@@ -361,8 +372,12 @@ fn unfold(
     } else {
         emit!(
             out,
-            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n invocation_scalar_store_facts_v92();\n"
+            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n"
         );
+        out.budget.charge_work(1)?;
+        if cut.needs_scalar_store_facts {
+            emit!(out, " invocation_scalar_store_facts_v92();\n");
+        }
     }
     Ok(())
 }

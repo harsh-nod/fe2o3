@@ -66,6 +66,7 @@ pub(super) struct SourceCutHintsV85 {
     pub(super) operands: usize,
     pub(super) call: Option<SourceCallHintsV85>,
     pub(super) frame_preserving: bool,
+    pub(super) needs_scalar_store_facts: bool,
     descriptor_wf: Option<(usize, descriptor_calls::DescriptorCall)>,
     normalization: Option<thread_write::ThreadWriteCall>,
 }

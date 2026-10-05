@@ -24,6 +24,7 @@ fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
                                 })
                                 .unwrap();
                             assert_eq!(hint.statements, row.statements);
+                            assert!(!hint.needs_scalar_store_facts);
                             if let End::Call { child, arguments } = &row.end {
                                 let call = hint.call.as_ref().unwrap();
                                 assert_eq!(call.child, *child);

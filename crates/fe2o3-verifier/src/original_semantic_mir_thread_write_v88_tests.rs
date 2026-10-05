@@ -418,6 +418,14 @@ fn run_write_shape_attempt(
                             let original = plan.instance(root, 0, out)?;
                             let write_pc = original.blocks.end - 1;
                             assert!(
+                                hints
+                                    .cuts
+                                    .iter()
+                                    .find(|cut| cut.pc == write_pc)
+                                    .unwrap()
+                                    .needs_scalar_store_facts
+                            );
+                            assert!(
                                 !hints
                                     .cuts
                                     .iter()
@@ -429,7 +437,11 @@ fn run_write_shape_attempt(
                                 assert!(hints.fuels[cut.instance] > cut.statements);
                                 if cut.has_descriptor_wf() {
                                     assert!(cut.frame_preserving);
+                                    assert!(!cut.needs_scalar_store_facts);
                                     assert_ne!(cut.pc, write_pc);
+                                }
+                                if cut.statements == 0 && cut.call.is_some() {
+                                    assert!(!cut.needs_scalar_store_facts);
                                 }
                             }
                         }
@@ -480,6 +492,53 @@ fn run_write_shape_attempt(
         assert_eq!(reached.get(), 2);
     }
     result
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "exports complete diagnostic models without executing or approving a proof"]
+fn diagnostic_complete_thread_write_models_export_without_execution_v91() {
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("FE2O3_DIAGNOSTIC_THREAD_WRITE_EXPORT")
+            .expect("owned diagnostic output directory"),
+    );
+    assert!(destination.is_absolute());
+    assert!(
+        std::fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_dir()
+    );
+    for (disjoint, copied, label) in [
+        (false, false, "plain_move"),
+        (false, true, "plain_copy"),
+        (true, false, "disjoint_move"),
+    ] {
+        let path = destination.join(format!("{label}.rs"));
+        let mut exported = false;
+        let result = run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert!(!text.is_empty() && text.len() <= 16 * 1024 * 1024);
+            let input = crate::CanonicalGeneratedVerusProofInputV3::new(text.as_bytes().to_vec())
+                .expect("identical complete canonical proof input");
+            drop(input);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .expect("fresh diagnostic export file");
+            std::io::Write::write_all(&mut file, text.as_bytes()).expect("complete export");
+            file.sync_all().expect("retain diagnostic bytes");
+            assert_eq!(std::fs::read(&path).unwrap(), text.as_bytes());
+            println!(
+                "DIAGNOSTIC_ONLY_THREAD_WRITE_MODEL_EXPORT variant={label} bytes={}",
+                text.len()
+            );
+            exported = true;
+        });
+        result.0.expect("generate the complete source-write proof");
+        assert!(exported);
+        assert_eq!(result.2, 37);
+    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -608,6 +667,56 @@ fn original_thread_write_partitions_every_authentic_cut_without_heap_conservatio
             assert!(text.contains(" invocation_scalar_store_facts_v92();"));
             assert!(!text.contains("invocation_paired_source_preserved_"));
         }).0.unwrap();
+    }
+}
+
+#[test]
+fn original_thread_write_composition_consumes_opaque_steps_without_store_facts() {
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            let mut checked = 0;
+            let mut store_cuts = 0;
+            let mut no_store_cuts = 0;
+            for proof in text.split("proof fn invocation_paired_cut_").skip(1) {
+                let (name, theorem) = proof.split_once('(').unwrap();
+                let (root, _) = name.split_once('_').unwrap();
+                let body = theorem
+                    .split_once("\n{\n")
+                    .unwrap()
+                    .1
+                    .split("proof fn ")
+                    .next()
+                    .unwrap();
+                if name.ends_with("_relation_v85")
+                    || (name.ends_with("_all_v85")
+                        && body.contains("_relation_v85(source, target);"))
+                {
+                    for hidden in [
+                        format!("invocation_paired_source_step_{root}_v36"),
+                        format!("invocation_paired_actual_step_{root}_v36"),
+                        format!("invocation_source_byte_map_{root}_v36"),
+                    ] {
+                        assert!(
+                            body.contains(&format!(" hide({hidden});")),
+                            "{name}: {hidden}"
+                        );
+                    }
+                    assert!(!body.contains("reveal_with_fuel("));
+                    assert!(!body.contains(" invocation_scalar_store_facts_v92();"));
+                    checked += 1;
+                }
+                if name.ends_with("_map_v85") {
+                    if body.contains(" invocation_scalar_store_facts_v92();") {
+                        store_cuts += 1;
+                    } else {
+                        no_store_cuts += 1;
+                    }
+                }
+            }
+            assert!(checked > 0 && store_cuts > 0 && no_store_cuts > 0);
+        })
+        .0
+        .unwrap();
     }
 }
 
