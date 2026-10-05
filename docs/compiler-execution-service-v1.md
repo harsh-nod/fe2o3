@@ -183,6 +183,20 @@ without custody. The qualification owner must finish its existing scoped
 teardown before a fresh run. Unit and profile tests do not establish live
 service readiness; the exact rebuilt bundle still needs the root-only VM gate.
 
+The qualification helper also keeps nspawn's image-root pathname inside its
+own private mount namespace. A fresh 64 KiB, 16-inode, root-only tmpfs covers
+the existing empty staging `state` directory there, and the exact retained
+composed root is bind-mounted at `state/root`. The inherited image descriptor
+names this alias. Normal nspawn adjacent image locking remains enabled; its
+`.#root.lck` is confined to the child-private tmpfs and never becomes an extra
+entry in the parent's closed staging inventory. No lock-file allowlist or
+parent inventory relaxation is used. The alias, source identity, original
+empty state, namespace, mount flags and bounds are revalidated before exec.
+Existing descendant shutdown and reaping release the private namespace on
+success and failure; the parent still requires its original state to be empty.
+The root namespace regression covers visibility and cleanup, but only the
+canonical rebuilt-bundle VM run can establish live readiness.
+
 The service consumes one admitted issuer and its retained unnamed Unix
 `SOCK_SEQPACKET` peer. It polls that peer together with the admitted client's
 pidfd. The peer, pidfd, signing key, issuer journal, Worker journal, occurrence,
