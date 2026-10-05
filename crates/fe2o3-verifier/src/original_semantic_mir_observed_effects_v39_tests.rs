@@ -275,7 +275,14 @@ fn original_execution_loan_effect_projection_is_exhaustive_and_checks_transition
                     alternatives(case, output, absent);
                 }
             }
-            syn::Pat::Path(path) if path.path.is_ident("None") => *absent += 1,
+            syn::Pat::Ident(pattern)
+                if pattern.ident == "None"
+                    && pattern.by_ref.is_none()
+                    && pattern.mutability.is_none()
+                    && pattern.subpat.is_none() =>
+            {
+                *absent += 1;
+            }
             syn::Pat::TupleStruct(some) if some.path.is_ident("Some") => {
                 assert_eq!(some.elems.len(), 1);
                 let path = match &some.elems[0] {

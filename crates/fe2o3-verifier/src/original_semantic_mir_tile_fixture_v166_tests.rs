@@ -651,7 +651,18 @@ fn generate_actual_tile_source_v168(
         out.text
             .matches("InvocationSourceOperandV36::Execution(")
             .count(),
-        2
+        2 * shared_entries,
+        "each argument appears in evaluation and its independent observation"
+    );
+    assert_eq!(
+        out.text.matches("invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Execution(").count(),
+        shared_entries,
+    );
+    assert_eq!(
+        out.text
+            .matches("operand: InvocationSourceOperandV36::Execution(")
+            .count(),
+        shared_entries,
     );
     assert_eq!(
         out.text
