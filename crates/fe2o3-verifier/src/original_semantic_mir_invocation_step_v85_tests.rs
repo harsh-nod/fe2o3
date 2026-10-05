@@ -131,6 +131,20 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(target_state.contains(&format!("MemoryStateV30 {{ pc: {current}, values, valid: true, ..target }}")));
                                     let state = theorem(&out.text, &state_name);
                                     assert_leading_opacity_headers(state);
+                                    assert!(state.contains(&format!("hide(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(state.contains(&format!("hide(invocation_byte_boundary_{root}_v36);")));
+                                    assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 1);
+                                    assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
+                                    let source_projection = state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
+                                    assert!(source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(!source_projection.contains("invocation_byte_boundary_"));
+                                    let target_projection = state.split_once(&format!(" assert(invocation_byte_boundary_{root}_v36(target).state ==")).unwrap().1.split_once("\n }\n").unwrap().0;
+                                    assert!(target_projection.contains(&format!("reveal(invocation_byte_boundary_{root}_v36);")));
+                                    assert!(!target_projection.contains("invocation_source_block_runtime_"));
+                                    for side in ["source", "actual"] {
+                                        let argument = if side == "source" { "source" } else { "target" };
+                                        assert!(state.contains(&format!("assert(!invocation_paired_{side}_step_{root}_v36({argument}).halted) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
+                                    }
                                     let (premises, conclusions) = state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
                                     assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
                                     let contract = conclusions.split_once("\n{\n").unwrap().0;
