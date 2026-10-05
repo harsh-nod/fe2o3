@@ -91,6 +91,12 @@ pub use root_intake_v3::{
     CompilerExecutionRootIntakeKindV3, CompilerExecutionRootIntakeRecordV3,
     CompilerExecutionRootIntakeRoleV3,
 };
+mod root_completion_v1;
+pub use root_completion_v1::{
+    COMPILER_EXECUTION_ROOT_COMPLETION_BYTES_V1, COMPILER_EXECUTION_ROOT_COMPLETION_STORAGE_V1,
+    COMPILER_EXECUTION_ROOT_COMPLETION_WORK_V1, CompilerExecutionRootCompletionErrorV1,
+    CompilerExecutionRootCompletionRecordV1, CompilerExecutionRootTerminationV1,
+};
 mod root_intake_v4;
 pub use root_intake_v4::{
     COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V4, COMPILER_EXECUTION_ROOT_INTAKE_OUTPUT_FD_V4,
