@@ -70,7 +70,12 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
                                 }
                                 assert!(!control.contains("hide(invocation_paired_actual_step_"));
-                                assert!(control.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
+                                assert!(control.contains(&format!("hide(invocation_source_enter_{root}_{index}_v36);")));
+                                assert!(out.text.contains(&format!("spec fn invocation_source_enter_{root}_{index}_v36(")));
+                                assert_eq!(control.matches("hide(invocation_source_enter_").count(), 1);
+                                if index != child {
+                                    assert!(!control.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
+                                }
                                 for predicate in ["invocation_byte_states_related_v36", "invocation_source_byte_state_well_formed_v36", "byte_memory_well_formed_v30", "byte_frame_runtime_well_formed_v30", "byte_private_frames_live_v30", "private_generation_counters_valid_v30"] {
                                     assert!(control.contains(&format!(" hide({predicate});")));
                                 }

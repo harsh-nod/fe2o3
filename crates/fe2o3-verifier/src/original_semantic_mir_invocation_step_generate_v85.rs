@@ -120,9 +120,7 @@ pub(super) fn emit(
                             );
                         }
                         if constructor.is_some() && matches!(goal, Goal::Control) {
-                            let End::Call(child) = cut.end else {
-                                return Err(mismatch());
-                            };
+                            let child = constructor.ok_or_else(mismatch)?.0.child;
                             out.budget.charge_work(14)?;
                             emit!(
                                 out,
