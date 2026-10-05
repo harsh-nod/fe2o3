@@ -692,7 +692,8 @@ checkpoints include executable-memory operations and descriptor imports;
 `creat`, `openat2`, and replacement `seccomp` calls are denied. Only the same
 retained parent trace may mediate those checkpoints. Staging and filter
 installation alone do not establish runtime enforcement or authorize a gate
-release. Selection of the staged mode is not permission to execute a compiler.
+release. The gated production attempt selects this mode, but retains its closed
+gate; original-trace arming and the complete runtime guard are still required.
 
 The original-trace runtime adapter consumes the retained root owner instead of
 creating another tracer or accepting a PID. Its one unsafe constructor requires

@@ -183,6 +183,8 @@ without custody. The qualification owner must finish its existing scoped
 teardown before a fresh run. Unit and profile tests do not establish live
 service readiness; the exact rebuilt bundle still needs the root-only VM gate.
 
+### Private Image Root
+
 The qualification helper keeps nspawn's image-root pathname inside its
 own private mount namespace. A fresh 64 KiB, 16-inode, root-only tmpfs covers
 the existing empty staging `state` directory there, and the exact retained
