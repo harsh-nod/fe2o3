@@ -88,6 +88,7 @@ pub(crate) enum ProofHelperLaunchError {
     Record(RecordError),
     Inventory(crate::native_runtime_inventory::Error),
     Descriptor(crate::native_runtime_descriptors::Error),
+    Runtime(crate::native_runtime_guard::Error),
     Invalid(&'static str),
 }
 macro_rules! errors {
@@ -100,6 +101,7 @@ macro_rules! errors {
 errors!(Resource => Resource, BackingError => Backing, NativeError => Native, RecordError => Record);
 errors!(crate::native_runtime_inventory::Error => Inventory);
 errors!(crate::native_runtime_descriptors::Error => Descriptor);
+errors!(crate::native_runtime_guard::Error => Runtime);
 impl From<SpawnError> for ProofHelperLaunchError {
     fn from(e: SpawnError) -> Self {
         Self::Native(NativeError::Spawn(e))
@@ -132,6 +134,7 @@ impl fmt::Display for ProofHelperLaunchError {
             Self::Record(e) => e.fmt(f),
             Self::Inventory(e) => e.fmt(f),
             Self::Descriptor(e) => e.fmt(f),
+            Self::Runtime(e) => e.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
     }
@@ -143,6 +146,7 @@ impl std::error::Error for ProofHelperLaunchError {
             Self::Backing(e) => Some(e),
             Self::Native(e) => Some(e),
             Self::Record(e) => Some(e),
+            Self::Runtime(e) => Some(e),
             Self::Inventory(e) => Some(e),
             Self::Descriptor(e) => Some(e),
             Self::Invalid(_) => None,
@@ -251,6 +255,37 @@ impl ManagedProofHelper {
                     return Err(
                         launch_io::Failure::ChildExited("proof helper backing access").into(),
                     );
+                }
+                Ok(operation(backing.backing.compiler(), b))
+            })
+        })
+        .map_err(E::from)?
+    }
+
+    /// Borrow the same compiler for a stopped-task checkpoint. Complete content
+    /// validation belongs at capture and ownership transitions; the controller
+    /// must retain immutable backing and inspect its original inventory objects.
+    /// This checks helper lifecycle/custody, not compiler or device admission.
+    pub(crate) fn with_compiler_checkpoint<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&Compiler, &mut Budget<'_>) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<ProofHelperLaunchError>,
+    {
+        lifecycle_scope(self.retained, b, |b| {
+            let child = self.lock_child()?;
+            child.phase.require_ready()?;
+            child.child.with_resources(b, |backing, b| -> Result<_> {
+                if backing.backing.runtime_identity() != self.runtime {
+                    return Err(ProofHelperLaunchError::Invalid(
+                        "checkpoint helper runtime association changed",
+                    ));
+                }
+                validate_process(&child.child, backing.backing.credentials(), b)?;
+                if !child.child.is_live(b)? {
+                    return Err(launch_io::Failure::ChildExited("proof helper checkpoint").into());
                 }
                 Ok(operation(backing.backing.compiler(), b))
             })

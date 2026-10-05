@@ -137,7 +137,7 @@ pub(crate) struct NativeAttempt<'work, T: Send + 'static> {
     // Never send the foreground launch owner or imply a Send escape for the trace.
     _creator: PhantomData<(&'work Budget<'work>, Rc<()>)>,
 }
-impl<T: Send + 'static> NativeAttempt<'_, T> {
+impl<'work, T: Send + 'static> NativeAttempt<'work, T> {
     const ENVELOPE: usize = size_of::<(Self, Storage)>()
         - size_of::<CompilerTrace<'static, T>>()
         - size_of::<RootSession<'static>>()
@@ -267,6 +267,43 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
     pub(crate) fn cancel_compiler_step(&mut self, b: &mut Budget<'_>) -> Result<CleanupPoll> {
         self.account
             .with(self.retained, b, |b| self.trace.cancel_step(b))
+    }
+
+    pub(crate) fn needs_foreground_cancellation(&self) -> bool {
+        self.trace.needs_foreground_cancellation()
+    }
+
+    /// The same retained compiler and payload, without exposing an old mutable
+    /// trace or a PID-based reconstruction. Callback policy/retention is additional;
+    /// issuer readiness and publication remain separate checked transitions.
+    pub(crate) fn with_runtime_backing<R, E>(
+        &mut self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(
+            &mut fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1<'work>,
+            &T,
+            &mut Budget<'_>,
+        ) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Error>
+            + From<Resource>
+            + From<fe2o3_protected_service_spawn::RetainedResourceAccessErrorV2>
+            + From<fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2>,
+    {
+        self.account
+            .with(self.retained, b, |b| {
+                Ok(self.trace.with_runtime_backing(b, operation))
+            })
+            .map_err(E::from)?
+    }
+
+    pub(crate) fn runtime_backing_quota() -> Result<Quota> {
+        let inner = CompilerTrace::<T>::runtime_backing_quota()?;
+        Ok(Quota {
+            work: sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: sum(&[FRAME, inner.scratch()])?,
+        })
     }
 
     /// Uses the issuer's original cleanup slot without touching compiler/session.
