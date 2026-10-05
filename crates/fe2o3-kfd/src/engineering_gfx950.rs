@@ -144,6 +144,9 @@ struct Context {
     ordered64_wait_policy: Ordered64WaitPolicy,
     active_poll_counters: ActivePollCounters,
     token_program_enabled: bool,
+    token_program_native: bool,
+    token_program_storage: ordered_batch::native_program::ProgramStorage,
+    token_program_counters: TokenProgramCountersV1,
     next_token_program: u64,
     token_program: Option<token_program::RegisteredProgram>,
 }
@@ -354,6 +357,9 @@ impl Context {
             ordered64_wait_policy: Ordered64WaitPolicy::default(),
             active_poll_counters: ActivePollCounters::default(),
             token_program_enabled: false,
+            token_program_native: false,
+            token_program_storage: Default::default(),
+            token_program_counters: Default::default(),
             next_token_program: 1,
             token_program: None,
         };
@@ -1084,6 +1090,7 @@ impl Context {
         let disabled = self.destroy_queue()?;
         // The old queue is destroyed before its ring, signals, kernargs, EOP,
         // and CWSR are released. Completion never fabricates a hardware read.
+        self.release_token_program_storage()?;
         while let Some(allocation) = self.internal.pop() {
             self.release_resource(allocation)?;
         }
@@ -1108,6 +1115,7 @@ impl Context {
 
     fn close_inner(&mut self) -> Result<()> {
         let disabled = self.destroy_queue()?;
+        self.release_token_program_storage()?;
         while let Some((_, kernel)) = self.kernels.pop_last() {
             self.release_resource(kernel.code)?;
         }
@@ -1390,7 +1398,9 @@ fn patch_pointer_arguments(
 /// ```
 pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Result<()> {
     // SAFETY: retain the same dedicated-process and trusted-code obligations.
-    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, false) }
+    unsafe {
+        run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, false, false)
+    }
 }
 
 /// Runs the engineering worker with diagnostic-only bounded active ordered64 waits.
@@ -1411,7 +1421,14 @@ pub unsafe fn run_gfx950_engineering_worker_active_poll_10ms_unchecked_v1(
     unique_id: u64,
 ) -> Result<()> {
     // SAFETY: this additive entry preserves the legacy expert trust boundary.
-    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::ActivePoll10msV1, false) }
+    unsafe {
+        run_worker_with_wait_policy(
+            unique_id,
+            Ordered64WaitPolicy::ActivePoll10msV1,
+            false,
+            false,
+        )
+    }
 }
 
 /// Runs the separate default-off owned token-program engineering experiment.
@@ -1429,13 +1446,31 @@ pub unsafe fn run_gfx950_engineering_worker_token_program_unchecked_v1(
     unique_id: u64,
 ) -> Result<()> {
     // SAFETY: the caller accepts the same terminal expert execution boundary.
-    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true) }
+    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true, false) }
+}
+
+/// Runs the default-off, single-publication native token-program experiment.
+/// No cached dispatch validation or active polling is enabled.
+///
+/// # Safety
+/// The caller must satisfy all trusted-code, dedicated disposable-process and
+/// terminal-error obligations of [`run_gfx950_engineering_worker_unchecked_v1`].
+///
+/// ```compile_fail
+/// fe2o3_kfd::run_gfx950_engineering_worker_token_program_native_unchecked_v1(1).unwrap();
+/// ```
+pub unsafe fn run_gfx950_engineering_worker_token_program_native_unchecked_v1(
+    unique_id: u64,
+) -> Result<()> {
+    // SAFETY: this additive entry retains the same expert execution boundary.
+    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true, true) }
 }
 
 unsafe fn run_worker_with_wait_policy(
     unique_id: u64,
     wait_policy: Ordered64WaitPolicy,
     token_program_enabled: bool,
+    token_program_native: bool,
 ) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
@@ -1448,6 +1483,7 @@ unsafe fn run_worker_with_wait_policy(
     // Immutable for the worker lifetime, selected before Ready or any command.
     context.ordered64_wait_policy = wait_policy;
     context.token_program_enabled = token_program_enabled;
+    context.token_program_native = token_program_native;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut fatal_response_written = false;
@@ -1473,6 +1509,13 @@ unsafe fn run_worker_with_wait_policy(
             let command_started = context.profile_started();
             let mut response_payload = Vec::new();
             let response = match command {
+                CommandV1::DescribeTokenProgramBackendV1 {} => ResponseV1::TokenProgramBackendV1 {
+                    backend: context.token_program_backend().into(),
+                },
+                CommandV1::TokenProgramSnapshotV1 {} => ResponseV1::TokenProgramSnapshotV1 {
+                    backend: context.token_program_backend().into(),
+                    counters: context.token_program_counters,
+                },
                 CommandV1::RegisterTokenProgram {
                     definition_bytes,
                     kernarg_bytes,

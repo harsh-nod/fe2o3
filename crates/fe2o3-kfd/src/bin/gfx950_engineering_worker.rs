@@ -11,6 +11,7 @@ enum WorkerMode {
     Default,
     ActivePoll,
     TokenProgram,
+    NativeTokenProgram,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -18,7 +19,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((unique_id, mode)) = parse_args(&args) else {
         eprintln!(
-            "usage: fe2o3-gfx950-engineering-worker --device-unique-id N --allow-unauthenticated-machine-code [--diagnostic-active-poll-10ms | --diagnostic-token-program-v1]"
+            "usage: fe2o3-gfx950-engineering-worker --device-unique-id N --allow-unauthenticated-machine-code [--diagnostic-active-poll-10ms | --diagnostic-token-program-v1 | --diagnostic-token-program-native-v1]"
         );
         std::process::exit(2);
     };
@@ -43,6 +44,11 @@ fn main() {
             WorkerMode::TokenProgram => {
                 fe2o3_kfd::run_gfx950_engineering_worker_token_program_unchecked_v1(unique_id)
             }
+            WorkerMode::NativeTokenProgram => {
+                fe2o3_kfd::run_gfx950_engineering_worker_token_program_native_unchecked_v1(
+                    unique_id,
+                )
+            }
             WorkerMode::Default => fe2o3_kfd::run_gfx950_engineering_worker_unchecked_v1(unique_id),
         }
     };
@@ -63,6 +69,16 @@ fn parse_args(args: &[String]) -> Option<(u64, WorkerMode)> {
         }
         [selector, value, acknowledgement, policy] if policy == "--diagnostic-token-program-v1" => {
             (selector, value, acknowledgement, WorkerMode::TokenProgram)
+        }
+        [selector, value, acknowledgement, policy]
+            if policy == "--diagnostic-token-program-native-v1" =>
+        {
+            (
+                selector,
+                value,
+                acknowledgement,
+                WorkerMode::NativeTokenProgram,
+            )
         }
         _ => return None,
     };

@@ -282,6 +282,9 @@ impl Context {
             ordered64_wait_policy: super::Ordered64WaitPolicy::default(),
             active_poll_counters: super::ActivePollCounters::default(),
             token_program_enabled: false,
+            token_program_native: false,
+            token_program_storage: Default::default(),
+            token_program_counters: Default::default(),
             next_token_program: 1,
             token_program: None,
         })

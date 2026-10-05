@@ -137,6 +137,10 @@ pub(crate) fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::R
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandV1 {
+    /// Positive identity for the immutable diagnostic process selection.
+    DescribeTokenProgramBackendV1 {},
+    /// Separate diagnostic surface; does not widen PerformanceCountersV1.
+    TokenProgramSnapshotV1 {},
     /// Available only through the explicit diagnostic token-program process entry.
     RegisterTokenProgram {
         definition_bytes: u32,
@@ -241,7 +245,9 @@ impl CommandV1 {
             {
                 0
             }
-            Self::ReleaseTokenProgram { .. } => 0,
+            Self::ReleaseTokenProgram { .. }
+            | Self::DescribeTokenProgramBackendV1 { .. }
+            | Self::TokenProgramSnapshotV1 { .. } => 0,
             Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
             Self::DispatchOrderedBatch {
                 dispatches,
@@ -363,6 +369,13 @@ pub struct DispatchTimestampTicksV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    TokenProgramBackendV1 {
+        backend: String,
+    },
+    TokenProgramSnapshotV1 {
+        backend: String,
+        counters: TokenProgramCountersV1,
+    },
     TokenProgramRegistered {
         program: u64,
         device_unique_id: u64,
@@ -445,6 +458,21 @@ pub enum ResponseV1 {
         message: String,
         fatal: bool,
     },
+}
+
+/// Token execution only, excluding registration, ordinary prefill and readback.
+/// Enabled by ConfigurePerformance.profile; host staging/wait time is not GPU time.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenProgramCountersV1 {
+    pub executions: u64,
+    pub dispatches: u64,
+    pub publications: u64,
+    pub final_waits: u64,
+    pub retirement_signals: u64,
+    pub staging_ns: u64,
+    /// Stores to the argument arena, including legacy slot clears and copies.
+    pub kernarg_initialized_bytes: u64,
 }
 
 /// Reads one bounded JSON header, distinguishing clean stream EOF from truncation.

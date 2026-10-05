@@ -22,7 +22,7 @@ fn require_identity(id: u64, epoch: u64, expected_id: u64, expected_epoch: u64) 
     Ok(())
 }
 
-fn require_frontier(
+pub(super) fn require_frontier(
     write: u64,
     completed: u64,
     expected: u64,
@@ -110,6 +110,14 @@ pub(super) fn run_prepared_groups<T>(
 }
 
 impl Context {
+    pub(super) fn token_program_backend(&self) -> &'static str {
+        match (self.token_program_enabled, self.token_program_native) {
+            (true, true) => "native-whole-program-v1",
+            (true, false) => "ordered64-groups-v1",
+            _ => "disabled",
+        }
+    }
+
     fn require_token_program_enabled(&self) -> Result<()> {
         require_policy(self.token_program_enabled, self.ordered64_wait_policy)
     }
@@ -215,6 +223,7 @@ impl Context {
             .ok_or("token program not registered")?;
         require_identity(registered.id, registered.epoch, program, epoch)?;
         require_identity(registered.id, self.queue_epoch, program, epoch)?;
+        self.release_token_program_storage()?;
         self.token_program = None;
         Ok(ResponseV1::TokenProgramReleased {
             program,
@@ -259,12 +268,22 @@ impl Context {
             // validation completes before the first group can publish.
             let prepared = self.prepare_token_dispatches(commands, payload, Some(deadline))?;
             self.check_idle()?;
-            let retired = run_prepared_groups(prepared, deadline, |group, deadline| {
-                self.run_prepared_token_group(group, deadline)
-            })?;
+            let retired = if self.token_program_native {
+                let count = prepared.len();
+                self.run_prepared_token_program(prepared, deadline)?;
+                count
+            } else {
+                run_prepared_groups(prepared, deadline, |group, deadline| {
+                    self.run_prepared_token_group(group, deadline)
+                })?
+            };
             self.check_currentness(false)?;
             self.check_idle()?;
             ordered_batch::require_deadline(Instant::now(), deadline)?;
+            if self.profile_started().is_some() {
+                add_counter(&mut self.token_program_counters.executions, 1)?;
+                add_counter(&mut self.token_program_counters.dispatches, retired as u64)?;
+            }
             Ok(ResponseV1::TokenProgramCompleted {
                 program,
                 device_unique_id: self.unique_id,
