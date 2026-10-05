@@ -66,11 +66,17 @@ it cannot satisfy the V91 compilation gate.
 tutorial qualification. The manifest still requires CPU references, exact
 negative diagnostics with absent output artifacts, and semantic simulations.
 The declared `scripts/run-tutorial-compiler-fixture-simulation.py` adapter is
-absent from the tracked tree and history; current simulation contracts request
-BundleV7/KIR12, not the compiler's V18 graphs. This batch does not substitute the
-V18 diagnostic simulator or change those contracts. These requirements remain
-explicit failures, `qualified` remains false, and the driver returns nonzero
-until the complete qualification path exists. Hardware execution is separate.
+absent from the tracked tree and history; those historical simulation contracts
+request BundleV7/KIR12, not the compiler's V18 graphs. The compile-only driver
+does not reinterpret those contracts: `qualified` remains false and its final
+exit is nonzero, even when every positive compilation census passes.
+
+The separate [current V92 runner](tutorial-current-qualification-v92.md) now
+combines this live V91 census with exact captured V18 graphs, same-request CPU
+references, and negative diagnostic/artifact checks. Its
+`currentCompilerSimulationPassed` result is distinct from legacy-contract,
+all-displayed-source, hardware, and final production-activation qualification.
+The runner's implementation does not establish that an actual run has passed.
 
 Tests in `scripts/tests/tutorial_production_census_v91.py` are synthetic parser,
 identity, complete-roster, input-custody and failure controls. They provide no

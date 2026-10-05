@@ -1,4 +1,10 @@
-# Tutorial Default Cargo Census
+# Historical Tutorial Default Cargo Census
+
+This page describes the historical V54 compile/refusal observation. Select it
+explicitly with `--legacy-compile-census`. The same script now defaults to the
+[V91 production census](tutorial-production-census-v91.md); use the
+[V92 end-to-end runner](tutorial-current-qualification-v92.md) for current
+compilation, simulation, and CPU-reference comparison.
 
 `scripts/qualify-tutorial-default-cargo.py` attempts the registered tutorial
 sources through `cargo-fe2o3 authority release build`. It does not invoke the
@@ -15,6 +21,7 @@ actual compilation units; unmatched units remain production refusals.
 
 ```sh
 python3 scripts/qualify-tutorial-default-cargo.py \
+  --legacy-compile-census \
   --repo-root "$PWD" \
   --cargo-fe2o3 /absolute/path/to/cargo-fe2o3 \
   --target-dir /absolute/owned/tutorial-cargo-cache \
