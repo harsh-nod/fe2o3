@@ -62,6 +62,18 @@ fn runtime_event_classification_never_uses_a_generic_resume_fallback() {
             event.group_signal(),
             (stop == Stop::Group(19)).then_some(19)
         );
+        assert_eq!(
+            stop.inspectable(),
+            matches!(
+                stop,
+                Stop::Interrupt
+                    | Stop::Signal(15)
+                    | Stop::Group(19)
+                    | Stop::Exec
+                    | Stop::Seccomp
+                    | Stop::Syscall
+            )
+        );
     }
 }
 

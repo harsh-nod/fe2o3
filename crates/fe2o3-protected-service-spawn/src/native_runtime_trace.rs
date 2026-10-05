@@ -58,6 +58,18 @@ impl Stop {
     fn parked(self) -> bool {
         !matches!(self, Self::Running | Self::Terminal { .. } | Self::Unknown)
     }
+
+    fn inspectable(self) -> bool {
+        matches!(
+            self,
+            Self::Exec
+                | Self::Seccomp
+                | Self::Syscall
+                | Self::Interrupt
+                | Self::Signal(_)
+                | Self::Group(_)
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -82,7 +94,9 @@ impl RuntimeTraceEventV1 {
     pub fn pid(self) -> Pid {
         self.pid
     }
-    /// Original owner's observation generation; inert data, never a selector.
+    /// Original owner's global observation epoch, not a per-task stop identity.
+    /// Other retained-task observations may advance it. This is inert data,
+    /// never an independent selector or process-custody claim.
     pub fn generation(self) -> u64 {
         self.generation
     }

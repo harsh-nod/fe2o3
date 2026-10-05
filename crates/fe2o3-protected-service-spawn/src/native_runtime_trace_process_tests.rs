@@ -141,6 +141,7 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
     let (mut births, mut terminals, mut later_opens, mut events) = (0, 0, 0, 0);
     let mut observed_descendants = [None; 2];
     let mut last_generation = None;
+    let (mut signal_sent, mut signal_observed) = (false, false);
     while !runtime.is_trace_retired() {
         assert!(
             Instant::now() < deadline,
@@ -222,6 +223,27 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
                     Ok(())
                 })
                 .unwrap();
+            if !signal_sent && births == 2 && terminals == 2 && later_opens == 2 {
+                rustix::process::kill_process(root, rustix::process::Signal::CHILD).unwrap();
+                signal_sent = true;
+            }
+            runtime.resume_selected(b).unwrap();
+            runtime.release_interrupts(b).unwrap();
+        } else if event.delivery_signal() == Some(libc::SIGCHLD) {
+            assert!(signal_sent && !signal_observed);
+            runtime.park_all_bounded(8192, b).unwrap();
+            runtime
+                .with_selected_task_observation::<_, Error>(b, |view, b| {
+                    assert_eq!(view.pid(), root);
+                    let (maps, charge) = view.read_maps(b)?;
+                    b.reserve_storage(charge.additional_storage())?;
+                    assert!(!maps.is_empty());
+                    drop(maps);
+                    b.release_storage(charge.additional_storage())?;
+                    Ok(())
+                })
+                .unwrap();
+            signal_observed = true;
             runtime.resume_selected(b).unwrap();
             runtime.release_interrupts(b).unwrap();
         } else if event.is_exit_boundary() {
@@ -247,6 +269,7 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
     } else {
         assert_eq!((births, terminals, later_opens), (2, 2, 2));
         assert!(observed_descendants.iter().all(Option::is_some));
+        assert!(signal_sent && signal_observed);
     }
     assert_eq!(runtime.cleanup_after_retirement().unwrap(), Poll::Reaped);
     runtime.check_budget(b).unwrap();
