@@ -18,6 +18,42 @@ use rustix::{fs::FileType, io::Errno};
 use std::{ffi::CString, fs::File, os::fd::BorrowedFd};
 
 impl Stage {
+    /// Work to irreversibly request runtime checkpoints on this retained stage.
+    pub const RUNTIME_CHECKPOINT_STAGING_WORK: usize = ENTRY;
+    /// Scratch for the consuming stage transition, above its complete backing.
+    pub const RUNTIME_CHECKPOINT_STAGING_SCRATCH: usize = 2 * std::mem::size_of::<Self>();
+
+    /// Require additional inherited syscall checkpoints after the original gate.
+    /// Only a compiler stage with its original child-channel transfer can opt in;
+    /// this consuming transition cannot be reversed or applied twice. Parent
+    /// spawn-work/scratch queries include all added child work before clone.
+    ///
+    /// The owning attempt must arm its SAME retained trace before releasing the
+    /// gate. This request is not runtime enforcement, syscall admission, issuer
+    /// readiness, or authority to release that gate. No compiler has run here.
+    pub fn require_runtime_checkpoints(mut self, b: &mut Budget<'_>) -> Result<Self> {
+        b.with_prepaid_scope(
+            self.retained,
+            ENTRY,
+            Self::RUNTIME_CHECKPOINT_STAGING_WORK,
+            Self::RUNTIME_CHECKPOINT_STAGING_SCRATCH,
+            |_| {
+                if !self.inner.require_runtime_checkpoints() {
+                    return Err(Error::State(
+                        "invalid or repeated compiler checkpoint stage",
+                    ));
+                }
+                Ok(())
+            },
+        )?;
+        Ok(self)
+    }
+
+    /// Actual immutable staging mode, not evidence that the filter has executed.
+    pub fn has_runtime_checkpoints(&self) -> bool {
+        self.inner.has_runtime_checkpoints()
+    }
+
     /// Maximum compiler argv count admitted by this mechanical exec stage.
     pub const MAX_COMPILER_ARGUMENTS: usize = super::compiler_arguments::MAX_ARGUMENTS;
     /// Maximum complete environment entry count; no inherited entries are added.
