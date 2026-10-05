@@ -1,5 +1,6 @@
 //! Original allocation identities through the retained one-to-many tile graph.
 use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::congruence_v27::compare_type;
 use fe2o3_kernel_analysis::CanonicalKirInventoryV18 as Inventory;
 use fe2o3_kernel_ir::{OperationKind, VerifiedCanonicalKernelIrModuleV18 as Owner};
 
@@ -34,6 +35,9 @@ impl<'slots, 'view, 'source> TileAllocationSlotsV164<'slots, 'view, 'source> {
                 return Err(mismatch());
             }
             let original = slots.correspondence(out)?.inventory(out.budget)?;
+            let neutral = tile
+                .neutral_source_v162(out.budget)?
+                .output_inventory(out.budget)?;
             let mut count = 0usize;
             for row in original.operations() {
                 out.budget.charge_work(1)?;
@@ -70,10 +74,41 @@ impl<'slots, 'view, 'source> TileAllocationSlotsV164<'slots, 'view, 'source> {
                     .binary_search_by_key(&operation, |row| row.coordinate)
                     .map_err(|_| mismatch())?;
                 let actual = &output.operations()[at];
+                out.budget.charge_work(
+                    (usize::BITS - neutral.operations().len().leading_zeros()) as usize + 1,
+                )?;
+                let input_at = neutral
+                    .operations()
+                    .binary_search_by_key(&span.input, |row| row.coordinate)
+                    .map_err(|_| mismatch())?;
+                // A checked neutral rewrite may rename the count operand. The
+                // scalar tail must preserve that actual predecessor, not an
+                // obsolete pre-optimization value ID.
+                let predecessor = &neutral.operations()[input_at];
                 out.budget.charge_work(3)?;
-                if actual.operation.kind != row.operation.kind
+                let (
+                    OperationKind::Alloca {
+                        element,
+                        count,
+                        address_space,
+                        alignment,
+                    },
+                    OperationKind::Alloca {
+                        element: actual_element,
+                        count: actual_count,
+                        address_space: actual_space,
+                        alignment: actual_alignment,
+                    },
+                ) = (&predecessor.operation.kind, &actual.operation.kind)
+                else {
+                    return Err(mismatch());
+                };
+                if count != actual_count
+                    || address_space != actual_space
+                    || alignment != actual_alignment
                     || actual.results.len() != 1
                     || row.results.len() != 1
+                    || compare_type(element, actual_element, out)? != std::cmp::Ordering::Equal
                 {
                     return Err(mismatch());
                 }
