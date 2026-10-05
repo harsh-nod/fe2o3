@@ -496,6 +496,7 @@ fn mandatory_output_refuses_wrong_role_object_missing_right_and_omission_without
             assert!(!exchange_turn(&mut receiver, &p, &mut b).unwrap());
         }
         assert_eq!(receiver.phase, Phase::Input(2));
+        let mut delayed_close = None;
         match case {
             0 => send_input(&client, &challenge, Role::OutputDirectory, &wrong, &mut cb),
             1 => send_input(&client, &challenge, Role::OutputDirectory, &cwd, &mut cb),
@@ -526,10 +527,36 @@ fn mandatory_output_refuses_wrong_role_object_missing_right_and_omission_without
                         .unwrap()
                         .is_none()
                 );
+                // CLOEXEC copies may survive a concurrent fork until exec or exit.
+                let inherited = rustix::io::fcntl_dupfd_cloexec(client.as_fd(), 0).unwrap();
                 drop(client);
+                assert!(!exchange_turn(&mut receiver, &p, &mut b).unwrap());
+                delayed_close = Some(std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(20));
+                    drop(inherited);
+                }));
             }
         }
-        assert!(exchange_turn(&mut receiver, &p, &mut b).is_err());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let result = loop {
+            let result = exchange_turn(&mut receiver, &p, &mut b);
+            if !matches!(result, Ok(false)) {
+                break result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "intake refusal timed out in case {case}"
+            );
+            assert_eq!(receiver.phase, Phase::Input(2));
+            assert!(receiver.output.is_none());
+            assert_eq!(b.storage(), Receiver::STORAGE);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        if let Some(delayed_close) = delayed_close {
+            delayed_close.join().unwrap();
+        }
+        assert!(!matches!(&result, Err(Error::Resource(_))));
+        assert!(result.is_err(), "intake accepted invalid case {case}");
         assert_eq!(receiver.phase, Phase::Failed);
         assert!(receiver.output.is_none());
         assert_eq!(
