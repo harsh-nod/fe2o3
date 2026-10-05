@@ -31,6 +31,7 @@ pub use retained_resources::{
     RetainedResourcesV2,
 };
 mod native_cgroup;
+mod native_device_filter;
 #[allow(unsafe_code)]
 mod native_user_namespace;
 mod native_work;

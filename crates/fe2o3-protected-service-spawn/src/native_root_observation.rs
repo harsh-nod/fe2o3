@@ -49,6 +49,12 @@ impl RootTaskObservationV2<'_, '_> {
     pub const VIEW_WORK: usize = 8 + 2 * Self::CONTINUITY_WORK;
     /// Enclosing view and continuity scratch, excluding callback requirements.
     pub const VIEW_SCRATCH: usize = size_of::<Self>() + Self::CONTINUITY_SCRATCH;
+    /// Original live trace plus its retained device-confined cgroup validation.
+    pub const DEVICE_CONFINEMENT_WORK: usize =
+        ENTRY + Self::CONTINUITY_WORK + crate::native_cgroup::NativeCgroupDomainV1::CLONE_FD_WORK;
+    /// Full cgroup metadata and continuity frames above original trace custody.
+    pub const DEVICE_CONFINEMENT_SCRATCH: usize =
+        Self::CONTINUITY_SCRATCH + crate::native_cgroup::NativeCgroupDomainV1::CLONE_FD_SCRATCH;
     /// Full original trace/backing charge; no storage reservation is transferred.
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()
@@ -62,6 +68,22 @@ impl RootTaskObservationV2<'_, '_> {
     /// Original account/thread and non-consuming liveness check. No retry.
     pub fn validate_continuity(&self, b: &mut Budget<'_>) -> Result<()> {
         self.trace.validate_observation(b)
+    }
+
+    /// Require actual pre-clone device denial on this original live child's
+    /// retained domain. No PID/path reopen or caller-provided guard is accepted.
+    /// This neither revokes inherited descriptors nor grants execution authority.
+    pub fn require_device_open_confinement(&self, b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(
+            self.retained_storage(),
+            ENTRY,
+            ENTRY + crate::native_cgroup::NativeCgroupDomainV1::CLONE_FD_WORK,
+            crate::native_cgroup::NativeCgroupDomainV1::CLONE_FD_SCRATCH,
+            |b| {
+                self.validate_continuity(b)?;
+                self.trace.child.require_device_open_confinement()
+            },
+        )
     }
 
     /// Retains this original trace's inert, move-stable allocation identity.
