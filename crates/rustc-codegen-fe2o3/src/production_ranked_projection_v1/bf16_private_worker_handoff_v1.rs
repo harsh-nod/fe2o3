@@ -1444,11 +1444,30 @@ mod genuine_observation {
     }
     impl Observation {
         fn emit(self, requested: [u8; 4], scratch: usize) {
-            eprintln!("fe2o3-bf16-private-owning-handoff-collected-v1 requested={},{},{},{} output_sha256={} output_bytes={} descriptor_sha256={} descriptor_bytes={} final_llvm_sha256={} final_llvm_bytes={} handoff_sha256={} handoff_bytes={} manifest_sha256={} manifest_bytes={} retained_handoff_storage={} retained_descriptor_storage={} retained_llvm_storage={} observer_storage={} work={} storage={} peak={} same_ledger=true actual_output_owner=true full_handoff_replayed=true full_module_replayed=true full_manifest_replayed=true handoff_bytes_mutation_refused=true foreign_module_refused=true foreign_manifest_refused=true constructor_refusals_proved=true replay_storage_restored=true runtime_bounds_alias_duties_preserved=true cleanup_pending=true llvm_emitted=true descriptor_constructed=true handoff_constructed=true worker_invoked=false normal_admission=false launch_authenticated=false artifact_authority=false handoff_authority=false",
-                requested[0],requested[1],requested[2],requested[3],Hex(&self.output_sha),self.output_bytes,
-                Hex(&self.descriptor_sha),self.descriptor_bytes,Hex(&self.final_sha),self.final_bytes,
-                Hex(&self.handoff_sha),self.handoff_bytes,Hex(&self.manifest_sha),self.manifest_bytes,
-                self.retained_handoff,self.retained_descriptor,self.retained_llvm,scratch,self.work,self.storage,self.peak);
+            eprintln!(
+                "fe2o3-bf16-private-owning-handoff-collected-v1 requested={},{},{},{} output_sha256={} output_bytes={} descriptor_sha256={} descriptor_bytes={} final_llvm_sha256={} final_llvm_bytes={} handoff_sha256={} handoff_bytes={} manifest_sha256={} manifest_bytes={} retained_handoff_storage={} retained_descriptor_storage={} retained_llvm_storage={} observer_storage={} work={} storage={} peak={} same_ledger=true actual_output_owner=true full_handoff_replayed=true full_module_replayed=true full_manifest_replayed=true handoff_bytes_mutation_refused=true foreign_module_refused=true foreign_manifest_refused=true constructor_refusals_proved=true replay_storage_restored=true runtime_bounds_alias_duties_preserved=true cleanup_pending=true llvm_emitted=true descriptor_constructed=true handoff_constructed=true worker_invoked=false normal_admission=false launch_authenticated=false artifact_authority=false handoff_authority=false",
+                requested[0],
+                requested[1],
+                requested[2],
+                requested[3],
+                Hex(&self.output_sha),
+                self.output_bytes,
+                Hex(&self.descriptor_sha),
+                self.descriptor_bytes,
+                Hex(&self.final_sha),
+                self.final_bytes,
+                Hex(&self.handoff_sha),
+                self.handoff_bytes,
+                Hex(&self.manifest_sha),
+                self.manifest_bytes,
+                self.retained_handoff,
+                self.retained_descriptor,
+                self.retained_llvm,
+                scratch,
+                self.work,
+                self.storage,
+                self.peak
+            );
         }
     }
     impl PrivateBf16WorkerHandoffV1 {
@@ -1579,3 +1598,7 @@ mod genuine_observation {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bf16_private_worker_observation_v1_tests.rs"]
+mod worker_observation;
