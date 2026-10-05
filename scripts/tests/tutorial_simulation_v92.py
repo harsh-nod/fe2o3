@@ -5,7 +5,9 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("simulation_v92", ROOT / "scripts/tutorial_simulation_v92.py")
@@ -132,6 +134,187 @@ class CurrentSimulation(unittest.TestCase):
         for fixture, refs, neg in rows.values():
             if neg:
                 self.assertEqual(gate.expectation(manifest, {"references": refs})["outputArtifact"], "absent")
+
+
+class CurrentQualificationOrchestration(unittest.TestCase):
+    """Real orchestration and file checks with explicit non-executing tool doubles."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loaded = gate.gate.load_inputs(
+            ROOT, ROOT / "config/tutorial-kernel-manifest-v1.json")
+        _, _, cls.manifest, _, cls.roster = cls.loaded
+        cls.names = sorted({name for fixture, _, negative in cls.roster.values() if not negative
+                            for name in fixture["compilerInput"]["kernelSymbols"]})
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="tutorial-v92-orchestration-")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        tools = {}
+        for name in ["reference", "simulator", "node", "cargo_fe2o3"]:
+            tools[name] = self.directory / name
+            tools[name].write_bytes(b"unit-only executable placeholder; never executed\n")
+            tools[name].chmod(0o700)
+        for name in ["pinned", "current"]:
+            (self.directory / name).mkdir()
+        self.args = SimpleNamespace(
+            repo_root=ROOT, manifest=ROOT / "config/tutorial-kernel-manifest-v1.json",
+            output=self.directory / "output", target_dir=self.directory / "cache",
+            site_pinned=self.directory / "pinned", site_current=self.directory / "current",
+            site_current_commit="a" * 40, compile_timeout=600, simulation_timeout=120,
+            **tools)
+        self.mutate_census = lambda census: None
+        self.mutate_reference = lambda reference: None
+        self.simulated = []
+        self.commands = []
+
+    def runner(self, arguments, cwd, environment, log, timeout, maximum):
+        self.assertEqual(cwd, ROOT)
+        self.assertEqual(environment, {"UNIT_ONLY": "unchanged"})
+        self.assertEqual(arguments[0], str(self.args.reference))
+        self.assertEqual(timeout, 120)
+        self.assertEqual(maximum, sim.MAX_DOCUMENT)
+        self.commands.append(arguments)
+        if arguments[1:] == ["list"]:
+            value = {"schema": "fe2o3-tutorial-reference-corpus-v92",
+                     "kernels": list(self.names), "authority": False}
+            self.mutate_reference(value)
+        else:
+            self.assertEqual(arguments[1], "generate")
+            self.assertIn(arguments[2], self.names)
+            value = {"kernel": arguments[2], "unit_only": True}
+        log.write_text(json.dumps(value))
+        return {"status": "cargo-completed-unqualified", "exitCode": 0,
+                "logComplete": True, "directChildReaped": True}
+
+    def census(self, root, manifest, cargo, cache, output, targets, timeout, maximum, **options):
+        self.assertEqual((root, manifest, cargo, cache, targets, timeout, maximum),
+                         (ROOT, self.args.manifest, self.args.cargo_fe2o3, self.args.target_dir,
+                          ("gfx942", "gfx950"), 600, gate.gate.MAX_LOG_BYTES))
+        self.assertIs(options["production"], True)
+        self.assertIs(options["capture_graphs"], True)
+        self.assertIs(options["isolate_negative_outputs"], True)
+        output.mkdir()
+        cases = []
+        for ordinal, (key, (fixture, references, negative)) in enumerate(sorted(self.roster.items())):
+            case = {"id": key, "fixture": copy.deepcopy(fixture),
+                    "references": [list(reference) for reference in references],
+                    "expectedNegative": negative, "sourceBefore": {"unitOnly": key},
+                    "sourceAfter": {"unitOnly": key}, "capturedGraphsV92": f"graphs-{ordinal}"}
+            (output / case["capturedGraphsV92"]).mkdir()
+            if negative:
+                raw = gate.expectation(self.manifest, case)["diagnosticContains"].encode()
+                case.update(log=f"negative-{ordinal}.log",
+                            negativeArtifactDirectoryV92=f"negative-{ordinal}")
+                (output / case["negativeArtifactDirectoryV92"]).mkdir()
+                (output / case["log"]).write_bytes(raw)
+                case["execution"] = {"status": "cargo-failed", "exitCode": 1,
+                    "logComplete": True, "directChildReaped": True,
+                    "logSha256": hashlib.sha256(raw).hexdigest(), "logBytes": len(raw)}
+            else:
+                case["status"] = "production-compile-census-pass"
+            cases.append(case)
+        value = {"coversAllRegisteredInvocations": True, "cases": cases}
+        self.mutate_census(value)
+        return value
+
+    def simulate(self, case, graph, request, reference, simulator, output, runner, **options):
+        self.assertEqual(reference, self.args.reference)
+        self.assertEqual(simulator, self.args.simulator)
+        self.assertEqual(options["timeout"], 120)
+        self.assertTrue(graph.is_dir())
+        kernel = json.loads(request.read_bytes())["kernel"]
+        self.assertIn(kernel, case["fixture"]["compilerInput"]["kernelSymbols"])
+        self.simulated.append((case["id"], kernel))
+        return {"unit_only": True, "authority": False}
+
+    def execute(self):
+        site = {"site": self.manifest["curriculum"]["site"]}
+        with patch.object(gate, "site_inventory", return_value=site), \
+                patch.object(gate.gate, "load_inputs", return_value=self.loaded), \
+                patch.object(gate.gate, "run_census", side_effect=self.census), \
+                patch.object(gate.simulation, "run_case", side_effect=self.simulate):
+            return gate.run(self.args, runner=self.runner,
+                            environment={"UNIT_ONLY": "unchanged"})
+
+    def test_complete_registered_roster_runs_once_without_claiming_authority(self):
+        report = self.execute()
+        expected = [(key, kernel) for key, (fixture, _, negative) in sorted(self.roster.items())
+                    if not negative for kernel in fixture["compilerInput"]["kernelSymbols"]]
+        self.assertEqual(self.simulated, expected)
+        self.assertEqual(len(report["cases"]), 64)
+        self.assertEqual(sum(case["expectedNegative"] for case in report["cases"]), 3)
+        self.assertTrue(report["complete"] and report["currentCompilerSimulationPassed"])
+        for name in ["qualified", "authority", "hardwareExecuted",
+                     "grantsCompilerOrLaunchAuthority", "legacyBundleContractsReinterpreted"]:
+            self.assertIs(report[name], False)
+        self.assertEqual(json.loads((self.args.output / "report.json").read_bytes()), report)
+
+    def test_positive_failure_is_retained_and_later_cases_still_run(self):
+        def fail_first(census):
+            case = next(case for case in census["cases"] if not case["expectedNegative"])
+            case["status"] = "production-census-refused"
+        self.mutate_census = fail_first
+        report = self.execute()
+        self.assertTrue(report["complete"])
+        self.assertFalse(report["currentCompilerSimulationPassed"])
+        failed = [case for case in report["cases"] if not case["passed"]]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(failed[0]["error"], "production compilation refused")
+        self.assertTrue(self.simulated)
+
+    def test_negative_cannot_pass_with_incomplete_child_output(self):
+        def incomplete(census):
+            case = next(case for case in census["cases"] if case["expectedNegative"])
+            case["execution"]["directChildReaped"] = False
+        self.mutate_census = incomplete
+        report = self.execute()
+        self.assertTrue(report["complete"])
+        self.assertFalse(report["currentCompilerSimulationPassed"])
+        self.assertEqual(sum(not case["passed"] for case in report["cases"]), 1)
+
+    def test_duplicate_or_substituted_census_cannot_keep_full_coverage(self):
+        mutations = [
+            lambda cases: cases.__setitem__(0, copy.deepcopy(cases[1])),
+            lambda cases: cases[0].update(id="substituted"),
+            lambda cases: cases[0]["fixture"].update(target="gfx999"),
+            lambda cases: cases[0].update(references=[]),
+            lambda cases: cases[0].update(expectedNegative=not cases[0]["expectedNegative"]),
+        ]
+        for ordinal, mutate in enumerate(mutations):
+            with self.subTest(mutation=ordinal):
+                self.args.output = self.directory / f"substitution-{ordinal}"
+                self.mutate_census = lambda census: mutate(census["cases"])
+                with self.assertRaisesRegex(ValueError, "changed the registered invocation"):
+                    self.execute()
+                self.assertEqual(self.simulated, [])
+                report = json.loads((self.args.output / "report.json").read_bytes())
+                self.assertFalse(report["complete"] or report["currentCompilerSimulationPassed"])
+
+    def test_short_census_fails_before_any_simulation(self):
+        self.mutate_census = lambda census: census["cases"].pop()
+        with self.assertRaisesRegex(ValueError, "dropped invocations"):
+            self.execute()
+        self.assertEqual(self.simulated, [])
+
+    def test_reference_roster_substitution_stops_before_compilation(self):
+        self.mutate_reference = lambda reference: reference["kernels"].pop()
+        with self.assertRaisesRegex(ValueError, "reference corpus differs"):
+            self.execute()
+        self.assertEqual(self.simulated, [])
+        self.assertFalse((self.args.output / "compilation").exists())
+
+    def test_tool_change_cannot_become_completed_success(self):
+        original = self.simulate
+        def change(*args, **kwargs):
+            self.args.simulator.write_bytes(b"changed unit-only tool\n")
+            return original(*args, **kwargs)
+        self.simulate = change
+        with self.assertRaisesRegex(ValueError, "qualification tools changed"):
+            self.execute()
+        report = json.loads((self.args.output / "report.json").read_bytes())
+        self.assertFalse(report["complete"] or report["currentCompilerSimulationPassed"])
 
 
 if __name__ == "__main__":

@@ -135,6 +135,12 @@ def run(args, *, runner=gate.run_command, environment=None):
                             capture_graphs=True, isolate_negative_outputs=True)
     require(census["coversAllRegisteredInvocations"] and len(census["cases"]) == 64,
             "actual compilation census dropped invocations")
+    for case, (key, (fixture, references, negative)) in zip(
+            census["cases"], sorted(roster.items()), strict=True):
+        require(case["id"] == key and case["fixture"] == fixture
+                and case["references"] == [list(reference) for reference in references]
+                and case["expectedNegative"] is negative,
+                "actual compilation census changed the registered invocation")
     for ordinal, case in enumerate(census["cases"]):
         result = {"id": case["id"], "fixture": case["fixture"], "references": case["references"],
                   "expectedNegative": case["expectedNegative"], "passed": False}
