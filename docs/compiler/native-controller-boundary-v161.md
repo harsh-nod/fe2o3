@@ -13,6 +13,13 @@ controller records the original resource account and budget address. Its fixed
 32-task table holds only metadata obtained through the original trace; PID and
 generation scalars never acquire a process independently.
 
+Event generations are the original owner's global observation epoch, not a
+per-task stop identity. Registry birth generations are recorded only at an
+actual acquired-and-held child transition. Other owned observations may advance
+the epoch, but cannot substitute another task or bypass original syscall-result
+authentication. The private joined controller must retain exclusive runtime
+mutation between its policy transitions.
+
 Each sensitive entry parks the complete original census before policy checks.
 The controller retains that task's acquisition generation and entry observation.
 Only that task advances to its kernel syscall exit. The original trace verifies
@@ -50,8 +57,18 @@ remain necessary after such confinement.
 
 Vfork dependencies, exit-group with live siblings, unsupported task-stop kinds,
 and unknown clone flags refuse explicitly. These are not general Rust lifecycle
-support claims. Existing strict kernel-map policy also continues to refuse a
-legacy vsyscall mapping rather than grant executable authority from its label.
+support claims. The native x86-64 mapping check accepts the fixed kernel-only
+vsyscall gate only at `ffffffffff600000..ffffffffff601000`, with private
+nonwritable `r-xp` or `--xp` permissions and zero offset/device/inode. Duplicates
+refuse. Its name grants no authority; arbitrary anonymous executable mappings
+still refuse. The vDSO remains separately captured and compared at actual exec.
+
+This is an explicit trusted Linux x86-64 kernel ABI contract. The kernel defines
+the read-only-after-init pseudo-VMA at this architecture address and implements
+the emulated entry through its seccomp-aware handler. The existing proof mapping
+entry point is unchanged. See the primary
+[Linux gate implementation](https://github.com/torvalds/linux/blob/v6.8/arch/x86/entry/vsyscall/vsyscall_64.c)
+and [architecture address definition](https://github.com/torvalds/linux/blob/v6.8/arch/x86/include/uapi/asm/vsyscall.h).
 
 Production selection, the actual joined controller execution, complete proof,
 publication, cleanup, and tutorial-kernel end-to-end qualification remain
@@ -61,7 +78,8 @@ separate requirements. Component tests do not establish any of those results.
 
 Spawn tests cover the bounded allowance's exact and one-short cases, closed stop
 classification, real original-owner takeover, repeated acquired thread births
-and consumed terminal waits, and a later sensitive syscall. Controller state
+and consumed terminal waits, a later sensitive syscall, and actual held SIGCHLD
+observation before redelivery. Controller state
 tests cover inherited image lifetimes across exec/exit, exact PID-generation
 reuse, the 32-task bound, entry/exit association, closed dispatch, and clone
 flags. They do not replace a full coordinator build or actual protected kernel.

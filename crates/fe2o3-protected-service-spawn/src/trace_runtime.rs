@@ -157,7 +157,7 @@ pub fn validate_executable_mapping_rows<'a>(
     maps: &str,
     allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
 ) -> Result<()> {
-    executable_mapping_rows(maps, allowed, None)
+    executable_mapping_rows(maps, allowed, None, false)
 }
 
 /// Strict inert policy using separately derived exact kernel-image intervals.
@@ -169,15 +169,30 @@ pub fn validate_executable_mapping_rows_with_kernel_ranges<'a>(
     allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
     kernel_ranges: &[(u64, u64)],
 ) -> Result<()> {
-    executable_mapping_rows(maps, allowed, Some(kernel_ranges))
+    executable_mapping_rows(maps, allowed, Some(kernel_ranges), false)
+}
+
+/// Native Linux x86-64 policy, including its fixed kernel-only vsyscall gate.
+/// The gate must have the exact architecture interval, private nonwritable
+/// permissions and zero object coordinates; neither its name nor caller ranges
+/// grant this exception. This inert check assumes the trusted Linux kernel ABI,
+/// not a userspace executable or an independently admitted runtime guard.
+pub fn validate_native_x86_executable_mapping_rows<'a>(
+    maps: &str,
+    allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
+    kernel_ranges: &[(u64, u64)],
+) -> Result<()> {
+    executable_mapping_rows(maps, allowed, Some(kernel_ranges), true)
 }
 
 fn executable_mapping_rows<'a>(
     maps: &str,
     allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
     kernel_ranges: Option<&[(u64, u64)]>,
+    native_x86_gate: bool,
 ) -> Result<()> {
     let mut executable_count = 0_usize;
+    let mut gate_seen = false;
     for line in maps.lines() {
         let mut fields = line.split_whitespace();
         let range = fields.next().ok_or(PolicyError("malformed process map"))?;
@@ -202,6 +217,22 @@ fn executable_mapping_rows<'a>(
         let device = fields.next().ok_or(PolicyError("malformed process map"))?;
         let inode = fields.next().ok_or(PolicyError("malformed process map"))?;
         let path = fields.next().unwrap_or("");
+        // Linux x86-64's __ro_after_init gate_vma describes a kernel-only
+        // pseudo-VMA, not a user-created mapping or a pathname-based exception.
+        if native_x86_gate
+            && (mapping_start, mapping_end) == (0xffff_ffff_ff60_0000, 0xffff_ffff_ff60_1000)
+        {
+            if gate_seen
+                || !matches!(permissions, "r-xp" | "--xp")
+                || file_offset != 0
+                || device != "00:00"
+                || inode != "0"
+            {
+                return Err(PolicyError("invalid or repeated native x86 kernel gate"));
+            }
+            gate_seen = true;
+            continue;
+        }
         let kernel = if let Some(ranges) = kernel_ranges {
             permissions == "r-xp"
                 && file_offset == 0
