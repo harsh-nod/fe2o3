@@ -120,10 +120,10 @@ pub(super) fn emit(
                             );
                         }
                         if constructor.is_some() && matches!(goal, Goal::Control) {
-                            out.budget.charge_work(6)?;
+                            out.budget.charge_work(5)?;
                             emit!(
                                 out,
-                                " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n"
+                                " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n"
                             );
                         }
                         unfold(
