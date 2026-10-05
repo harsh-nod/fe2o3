@@ -45,7 +45,8 @@ fn source_entry_factor_recomposes_all_original_guards_and_bodies() {
                     writeln!(original, "{header} {{\n if{} {{ invocation_source_byte_refused_v36(source) }} else {{\n{body}\n }}\n}}", guard).unwrap();
                 }
             }
-            let digest = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
+            let digest = |text: &str| Sha256::digest(text.as_bytes()).iter()
+                .map(|byte| format!("{byte:02x}")).collect::<String>();
             assert_eq!(digest(&original), expected);
             let bad_guard = original.replacen("!source.machine.valid", "source.machine.valid", 1);
             let bad_body = original.replacen("invocation_source_byte_put_local_v36(entered,", "invocation_source_byte_put_local_v36(source,", 1);
