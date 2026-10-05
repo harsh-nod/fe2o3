@@ -139,21 +139,34 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert_leading_opacity_headers(state);
                                     assert!(state.contains(&format!("hide(invocation_source_block_runtime_{root}_v36);")));
                                     assert!(state.contains(&format!("hide(invocation_byte_boundary_{root}_v36);")));
-                                    assert!(state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(state.contains(&format!("hide(invocation_constructor_source_{root}_{pc}_v162);")));
+                                    let source_name = format!("invocation_constructor_source_state_{root}_{pc}_v165");
+                                    let source_state = theorem(&out.text, &source_name);
+                                    assert_leading_opacity_headers(source_state);
+                                    assert_eq!(state.matches(&format!(" {source_name}(source);")).count(), 1);
+                                    assert!(!source_state.contains("target"));
+                                    assert!(!source_state.contains("invocation_paired_related_"));
+                                    assert!(!source_state.contains("invocation_paired_source_preserved_"));
+                                    assert!(source_state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}")));
+                                    assert!(source_state.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                    assert!(!state.contains("reveal_with_fuel(invocation_source_micro_run_"));
+                                    assert!(!state.contains("invocation_source_scalar_copy_valid_identity_v164("));
                                     let call = hint.call.as_ref().unwrap();
-                                    assert_eq!(state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
+                                    assert_eq!(source_state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
                                     for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
                                         assert!(!moved);
-                                        assert!(state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
-                                        assert!(state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
+                                        assert!(source_state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
+                                        assert!(source_state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
                                     }
-                                    assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 2);
+                                    assert_eq!(source_state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 2);
+                                    assert!(!state.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
                                     let captured = format!("assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);", call.arguments.len(), call.child, call.arguments.len());
-                                    assert!(state.find(&captured).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
+                                    assert!(source_state.find(&captured).unwrap() < source_state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let valid = format!("assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}");
-                                    assert!(state.find(&valid).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
-                                    let source_projection = state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
+                                    assert!(source_state.find(&valid).unwrap() < source_state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
+                                    let source_projection = source_state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
                                     assert!(source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
                                     assert!(!source_projection.contains("invocation_byte_boundary_"));
                                     let target_projection = state.split_once(&format!(" assert(invocation_byte_boundary_{root}_v36(target).state ==")).unwrap().1.split_once("\n }\n").unwrap().0;
@@ -161,11 +174,17 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!target_projection.contains("invocation_source_block_runtime_"));
                                     for side in ["source", "actual"] {
                                         let argument = if side == "source" { "source" } else { "target" };
-                                        assert!(state.contains(&format!("assert(!invocation_paired_{side}_step_{root}_v36({argument}).halted) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
+                                        let proof = if side == "source" { source_state } else { state };
+                                        assert!(proof.contains(&format!("assert(!invocation_paired_{side}_step_{root}_v36({argument}).halted) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
                                     }
                                     let (premises, conclusions) = state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
                                     assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
                                     let contract = conclusions.split_once("\n{\n").unwrap().0;
+                                    let (source_premises, source_conclusions) = source_state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
+                                    assert_eq!(source_premises.trim(), format!("invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
+                                    let source_contract = source_conclusions.split_once("\n{\n").unwrap().0;
+                                    let expected_source_contract: Vec<_> = contract.lines().filter(|line| !line.contains("target") && !line.trim().is_empty()).collect();
+                                    assert_eq!(source_contract.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>(), expected_source_contract);
                                     for (side, argument, value) in [("source", "source", "source"), ("actual", "target", "target")] {
                                         assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).state == invocation_constructor_{value}_{root}_{pc}_v162({argument})")));
                                         assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).events.len() == 0")));

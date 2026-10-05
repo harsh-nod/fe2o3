@@ -172,6 +172,7 @@ pub(super) fn emit(
         " MemoryStateV30 {{ pc: {}, values, valid: true, ..target }}\n}}\n",
         summary.next
     );
+    source_state(root, pc, hints, hint, call, out)?;
     emit!(
         out,
         "#[verifier::spinoff_prover]\nproof fn invocation_constructor_states_{root}_{pc}_v162(source: InvocationSourceByteStateV36, target: MemoryStateV30)\n requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n"
@@ -200,13 +201,62 @@ pub(super) fn emit(
     out.budget.charge_work(9)?;
     emit!(
         out,
-        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n",
-        call.child
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_constructor_source_{root}_{pc}_v162);\n hide(invocation_actual_observations_v39);\n"
     );
     residual_context(root, out)?;
     emit!(out, " assert(target.pc == {});\n", summary.start);
-    unfold(root, follow_fuel, hints, hint, true, out)?;
-    out.budget.charge_work(6)?;
+    emit!(
+        out,
+        " invocation_constructor_source_state_{root}_{pc}_v165(source);\n reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});\n"
+    );
+    emit!(
+        out,
+        " assert(invocation_byte_boundary_{root}_v36(target).state == invocation_constructor_target_{root}_{pc}_v162(target)\n && invocation_byte_boundary_{root}_v36(target).returned.len() == 0\n && invocation_byte_boundary_{root}_v36(target).observations.len() == 0) by {{\n reveal(invocation_byte_boundary_{root}_v36);\n }}\n"
+    );
+    out.budget.charge_work(3)?;
+    emit!(
+        out,
+        " assert(invocation_paired_actual_step_{root}_v36(target).state == invocation_constructor_target_{root}_{pc}_v162(target)) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n reveal(invocation_actual_observations_v39);\n }}\n assert(!invocation_paired_actual_step_{root}_v36(target).halted) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n}}\n"
+    );
+    Ok(())
+}
+
+// Source validity already follows from source-definedness. Keeping target input
+// relations out of this lemma avoids mixing two independent state equations.
+fn source_state(
+    root: usize,
+    pc: usize,
+    hints: &SourceStepHintsV85,
+    hint: &SourceCutHintsV85,
+    call: &SourceCallHintsV85,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.reserve_storage(12 * size_of::<usize>())?;
+    out.budget.charge_work(20)?;
+    let fuel = add(hint.statements, 1)?;
+    if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
+        return Err(mismatch());
+    }
+    emit!(
+        out,
+        "#[verifier::spinoff_prover]\nproof fn invocation_constructor_source_state_{root}_{pc}_v165(source: InvocationSourceByteStateV36)\n requires invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_paired_source_step_{root}_v36(source).events.len() == 0,\n !invocation_paired_source_step_{root}_v36(source).halted,\n invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_source_block_runtime_{root}_v36(source).returned.is_none(),\n invocation_source_block_runtime_{root}_v36(source).operands.len() == {},\n",
+        call.arguments.len()
+    );
+    for (ordinal, (local, _, _)) in call.arguments.iter().enumerate() {
+        out.budget.charge_work(1)?;
+        emit!(
+            out,
+            " invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}]),\n"
+        );
+    }
+    emit!(
+        out,
+        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        call.child,
+        hint.instance,
+        add(hint.operands, 1)?
+    );
+    out.budget.charge_work(3)?;
     emit!(
         out,
         " assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
@@ -253,20 +303,12 @@ pub(super) fn emit(
     );
     emit!(
         out,
-        " assert(invocation_byte_boundary_{root}_v36(target).state == invocation_constructor_target_{root}_{pc}_v162(target)\n && invocation_byte_boundary_{root}_v36(target).returned.len() == 0\n && invocation_byte_boundary_{root}_v36(target).observations.len() == 0) by {{\n reveal(invocation_byte_boundary_{root}_v36);\n }}\n"
-    );
-    emit!(
-        out,
         " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
     );
+    out.budget.charge_work(3)?;
     emit!(
         out,
-        " assert(invocation_paired_actual_step_{root}_v36(target).state == invocation_constructor_target_{root}_{pc}_v162(target)) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n"
-    );
-    empty_observations(root, call.child, out)?;
-    emit!(
-        out,
-        " assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(!invocation_paired_actual_step_{root}_v36(target).halted) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n}}\n"
+        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
     );
     Ok(())
 }
