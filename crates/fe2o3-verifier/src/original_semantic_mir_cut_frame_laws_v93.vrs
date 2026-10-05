@@ -15,6 +15,7 @@ spec fn invocation_source_constructor_frame_equal_v93(
     invocation_source_frame_equal_v93(before, after) && after.machine.pc == before.machine.pc
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_put_local_pc_v93
 proof fn invocation_cut_frame_put_local_pc_v93(
     source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
 )
@@ -25,6 +26,7 @@ proof fn invocation_cut_frame_put_local_pc_v93(
     hide(invocation_source_logical_write_v38);
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_carrier_pc_v93
 proof fn invocation_cut_frame_carrier_pc_v93(
     source: InvocationSourceByteStateV36, local: int, moved: bool, bits: int,
 )
@@ -36,6 +38,7 @@ proof fn invocation_cut_frame_carrier_pc_v93(
     invocation_cut_frame_put_local_pc_v93(source, local, MemoryValueV30::Undefined);
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_states_related_v93
 proof fn invocation_cut_frame_states_related_v93(
     source: MemoryStateV30, target: MemoryStateV30,
     source_after: MemoryStateV30, target_after: MemoryStateV30,
@@ -55,6 +58,7 @@ proof fn invocation_cut_frame_states_related_v93(
     hide(private_generation_counters_valid_v30);
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_descriptor_install_v93
 proof fn invocation_cut_frame_descriptor_install_v93(
     source: InvocationSourceByteStateV36, destination: int, value: MemoryValueV30,
     reference: InvocationSourceDescriptorReferenceV51,
@@ -67,6 +71,7 @@ proof fn invocation_cut_frame_descriptor_install_v93(
     invocation_cut_frame_put_local_pc_v93(source, destination, value);
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_descriptor_step_v93
 proof fn invocation_cut_frame_descriptor_step_v93(
     source: InvocationSourceByteStateV36, event: InvocationSourceDescriptorEventV51,
 )
@@ -100,6 +105,7 @@ proof fn invocation_cut_frame_descriptor_step_v93(
     }
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_descriptor_length_v93
 proof fn invocation_cut_frame_descriptor_length_v93(
     source: InvocationSourceByteStateV36, destination: int, input: int,
     recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
@@ -125,6 +131,7 @@ proof fn invocation_cut_frame_descriptor_length_v93(
     }
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_issue_witness_v93
 proof fn invocation_cut_frame_issue_witness_v93(
     source: InvocationSourceByteStateV36, destination: int, source_type: int, bits: int,
 )
@@ -145,6 +152,7 @@ proof fn invocation_cut_frame_issue_witness_v93(
     }
 }
 
+// fe2o3_optional_support_v97: invocation_cut_frame_slice_copy_v93
 proof fn invocation_cut_frame_slice_copy_v93(
     source: InvocationSourceByteStateV36, destination: int, local: int, moved: bool,
     operand_bits: int, metadata_bits: int, root: int, instance: int, little_endian: bool,
@@ -165,3 +173,4 @@ proof fn invocation_cut_frame_slice_copy_v93(
     invocation_source_put_local_preserves_heap_v78(evaluated.source, destination, evaluated.value);
     invocation_cut_frame_put_local_pc_v93(evaluated.source, destination, evaluated.value);
 }
+// fe2o3_optional_support_v97: END

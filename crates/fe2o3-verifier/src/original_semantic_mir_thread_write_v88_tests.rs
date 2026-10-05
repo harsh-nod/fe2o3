@@ -790,6 +790,63 @@ fn descriptor_cut_summaries_keep_four_obligations_without_unreachable_partitions
 }
 
 #[test]
+fn thread_write_support_closure_keeps_original_theorems_and_exact_referenced_bodies() {
+    const MARKER: &str = "// fe2o3_optional_support_v97: ";
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            for packet in [
+                include_str!("original_semantic_mir_source_constructor_laws_v81.vrs"),
+                include_str!("original_semantic_mir_cut_frame_laws_v93.vrs"),
+            ] {
+                for item in packet.split(MARKER).skip(1) {
+                    let (name, body) = item.split_once('\n').unwrap();
+                    if name == "END" {
+                        continue;
+                    }
+                    let declaration = format!("proof fn {name}(");
+                    if text.contains(&declaration) {
+                        assert_eq!(text.matches(body).count(), 1, "{name}");
+                    } else {
+                        assert!(!text.contains(name), "omitted referenced support {name}");
+                    }
+                }
+            }
+            for root in 0..2 {
+                for suffix in ["step", "finite_trace", "initial_trace"] {
+                    assert_eq!(
+                        text.matches(&format!("proof fn invocation_paired_{suffix}_{root}_v36("))
+                            .count(),
+                        1
+                    );
+                }
+                assert_eq!(
+                    text.matches(&format!(
+                        "proof fn invocation_paired_cut_{root}_terminal_all_v85("
+                    ))
+                    .count(),
+                    1
+                );
+            }
+            assert_eq!(text.matches("proof fn thread_write_").count(), 3);
+            if !disjoint {
+                for absent in [
+                    "invocation_source_scalar_local_preserves_heap_v78",
+                    "invocation_source_constant_transfer_preserves_heap_v78",
+                    "invocation_source_plain_return_preserves_heap_v78",
+                    "invocation_empty_private_map_has_no_private_source_v78",
+                    "invocation_cut_frame_descriptor_step_v93",
+                    "invocation_cut_frame_issue_witness_v93",
+                ] {
+                    assert!(!text.contains(absent), "{absent}");
+                }
+            }
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
 fn descriptor_cut_summary_laws_keep_values_frames_and_conditional_validity() {
     let laws = include_str!("original_semantic_mir_source_wf_laws_v95.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 5);

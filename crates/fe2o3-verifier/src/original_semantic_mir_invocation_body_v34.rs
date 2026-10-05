@@ -34,6 +34,9 @@ mod source_bytes;
 #[path = "original_semantic_mir_invocation_source_frames_v36.rs"]
 mod source_frames;
 
+#[path = "original_semantic_mir_support_closure_v97.rs"]
+mod support_closure;
+
 #[path = "original_semantic_mir_invocation_source_enter_v36.rs"]
 mod source_enter;
 
@@ -306,6 +309,8 @@ fn generate_refinement_inner_v49(
         .map_err(|error| out.source_section_error(error, "typed optimizer tail"))?;
     }
     reference_consumer::emit(relation, &plan, &slots, references, launches, width, out)?;
+    paired.check_cut_summary_owner_v96(&slots, out)?;
+    support_closure::retain_referenced(out)?;
     write!(out, "}}\n").map_err(|_| out.error())?;
     drop(emitted_original);
     // The typed tail releases only its nested delta; refund this older reservation
