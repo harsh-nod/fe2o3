@@ -69,6 +69,12 @@ spec fn invocation_source_statement_effects_v36(
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
+            Some(InvocationSourceByteEventV36::ContextIssue(issue)) => {
+                let result = invocation_source_context_issue_v161(observation.before, issue);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::TileLoad(load)) => {
                 let result = invocation_source_tile_load_v161(observation.before, load,
                     observation.root, observation.instance, little_endian);

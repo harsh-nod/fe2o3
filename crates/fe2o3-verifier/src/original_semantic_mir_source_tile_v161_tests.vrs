@@ -41,6 +41,16 @@ proof fn source_tile_install_refusal_is_observable_v161(
     reveal(invocation_source_tile_installed_v161);
 }
 
+proof fn source_context_requires_actual_execution_v161(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.frames.execution.is_none(),
+    ensures invocation_source_context_issue_v161(source, issue)
+        == invocation_source_tile_refused_v161(source),
+{
+    reveal(invocation_source_context_issue_v161);
+}
+
 proof fn source_tile_non_slice_input_keeps_base_evaluation_reads_v161(
     source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
     root: int, instance: int, little_endian: bool,

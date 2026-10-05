@@ -1908,6 +1908,7 @@ enum InvocationSourceByteEventV36 {
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Descriptor(InvocationSourceDescriptorEventV51),
     ThreadWrite(InvocationSourceThreadWriteV88),
+    ContextIssue(InvocationSourceContextIssueV161),
     TileLoad(InvocationSourceTileLoadV161),
     TileTransport(InvocationSourceTileTransportV161),
     Pointer(InvocationSourcePointerEventV36),
@@ -2276,6 +2277,8 @@ spec fn invocation_source_byte_step_v36(
             invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined),
         InvocationSourceByteEventV36::ThreadWrite(write) =>
             invocation_source_thread_write_v88(source, write, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::ContextIssue(issue) =>
+            invocation_source_context_issue_v161(source, issue).source,
         InvocationSourceByteEventV36::TileLoad(load) =>
             invocation_source_tile_load_v161(source, load, root, instance, little_endian).source,
         InvocationSourceByteEventV36::TileTransport(transfer) =>

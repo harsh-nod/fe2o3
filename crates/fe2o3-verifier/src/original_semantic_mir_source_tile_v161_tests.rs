@@ -37,7 +37,7 @@ fn original_tile_model_is_in_the_complete_source_step_and_effect_model() {
     let (result, _, floor, _) = run_model(LIMIT, LIMIT, |text| {
         assert_eq!(text.matches(TILE_MODEL).count(), 1);
         assert_eq!(text.matches(TILE_LAWS).count(), 1);
-        for operation in ["TileLoad", "TileTransport"] {
+        for operation in ["ContextIssue", "TileLoad", "TileTransport"] {
             assert_eq!(
                 text.matches(&format!("InvocationSourceByteEventV36::{operation}("))
                     .count(),

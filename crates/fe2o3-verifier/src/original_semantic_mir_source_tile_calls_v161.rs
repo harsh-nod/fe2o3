@@ -8,6 +8,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 
 #[derive(Clone, Copy, Debug)]
 enum Action {
+    ContextIssue,
     Load {
         input: usize,
         moved_input: bool,
@@ -82,10 +83,7 @@ impl TileCall {
         else {
             return Ok(None);
         };
-        if matches!(
-            operation,
-            Execution::ContextIssue { .. } | Execution::WorkgroupDerive { .. }
-        ) {
+        if matches!(operation, Execution::WorkgroupDerive { .. }) {
             return Ok(None);
         }
         out.budget.reserve_storage(headers())?;
@@ -134,6 +132,19 @@ impl TileCall {
                 .ok_or(Resource::Arithmetic)
         };
         let (action, elements) = match *operation {
+            Execution::ContextIssue { context } => {
+                if !call.arguments().is_empty()
+                    || context != output_type
+                    || semantic
+                        .types()
+                        .get(context.index() as usize)
+                        .map(TypeDecl::rust_type_kind)
+                        != Some(RustType::Execution(Role::KernelContext))
+                {
+                    return Err(mismatch());
+                }
+                (Action::ContextIssue, 0)
+            }
             Execution::MaskedTileLoadU32 { tile, .. } => {
                 let [_, input, _] = call.arguments() else {
                     return Err(mismatch());
@@ -201,7 +212,7 @@ impl TileCall {
                     elements,
                 )
             }
-            Execution::ContextIssue { .. } | Execution::WorkgroupDerive { .. } => {
+            Execution::WorkgroupDerive { .. } => {
                 return Err(mismatch());
             }
         };
@@ -228,6 +239,9 @@ impl TileCall {
         out.budget.charge_work(4)?;
         write!(out, " let event = InvocationSourceByteEventV36::").map_err(|_| out.error())?;
         match self.action {
+            Action::ContextIssue => {
+                write!(out, "ContextIssue(InvocationSourceContextIssueV161 {{ destination: {}, source_type: {} }});\n", self.destination, self.output_type.index()).map_err(|_| out.error())?;
+            }
             Action::Load {
                 input,
                 moved_input,

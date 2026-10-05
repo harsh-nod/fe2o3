@@ -3,6 +3,11 @@
 // These equations alone authorize neither source admission nor native execution.
 enum InvocationSourceTileLayoutV161 { Blocked, Striped }
 
+struct InvocationSourceContextIssueV161 {
+    destination: int,
+    source_type: int,
+}
+
 struct InvocationSourceTileLoadV161 {
     destination: int,
     source_type: int,
@@ -89,6 +94,38 @@ spec fn invocation_source_tile_installed_v161(
             invocation_source_observe_effects_v39(
                 seq![MemoryOperationEffectV30::Refused], before, after)
         } }
+}
+
+spec fn invocation_source_context_shape_v161(ty: int) -> bool {
+    invocation_source_aggregate_leaf_count_v42(ty) == 5
+        && (forall|field: int| 0 <= field < 5 ==>
+            invocation_source_aggregate_leaf_path_v42(ty, field) == seq![field]
+                && invocation_source_aggregate_leaf_bits_v42(ty, field) == 0)
+}
+
+// Context issuance constructs the original five marker fields. Its authority is
+// still bound by source admission; shape alone never authenticates issuance.
+spec fn invocation_source_context_issue_v161(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+) -> InvocationSourceTileResultV161 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !invocation_source_context_shape_v161(issue.source_type)
+        || !(0 <= issue.destination < source.machine.values.len())
+        || source.objects.contains_key(issue.destination) {
+        invocation_source_tile_refused_v161(source)
+    } else {
+        match source.machine.frames.execution {
+            Some(execution) if byte_execution_well_formed_v37(execution) => {
+                let leaves = Map::new(
+                    |path: Seq<int>| path.len() == 1 && 0 <= path[0] < 5,
+                    |path: Seq<int>| MemoryValueV30::Unit);
+                let after = invocation_source_aggregate_install_v42(source, issue.destination,
+                    InvocationSourceAggregateV42 { source_type: issue.source_type, leaves });
+                invocation_source_tile_installed_v161(source, after, seq![])
+            },
+            _ => invocation_source_tile_refused_v161(source),
+        }
+    }
 }
 
 spec fn invocation_source_tile_components_v161(
