@@ -74,3 +74,31 @@ fn consuming_preparation_preserves_nested_resource_errors() {
         assert!(matches!(error, Error::Resource(_)));
     }
 }
+
+#[test]
+fn runtime_checkpoint_preserves_nested_resource_errors() {
+    use crate::native_runtime_guard::Error as Guard;
+    use fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2 as Spawn;
+    for error in [
+        Guard::Resource(Resource::Arithmetic),
+        Guard::Spawn(Spawn::Resource(Resource::Accounting)),
+        Guard::Inventory(crate::native_runtime_inventory::Error::Resource(
+            Resource::Allocation,
+        )),
+        Guard::Descriptor(crate::native_runtime_descriptors::Error::Resource(
+            Resource::Accounting,
+        )),
+        Guard::Inventory(crate::native_runtime_inventory::Error::Backing(
+            BackingError::Runtime(RuntimeError::Resource(Resource::Arithmetic)),
+        )),
+    ] {
+        assert!(matches!(
+            helper_error(ProofHelperLaunchError::Runtime(error)),
+            Error::Resource(_)
+        ));
+    }
+    assert!(matches!(
+        helper_error(ProofHelperLaunchError::Runtime(Guard::Invalid("policy"))),
+        Error::Invalid { .. }
+    ));
+}
