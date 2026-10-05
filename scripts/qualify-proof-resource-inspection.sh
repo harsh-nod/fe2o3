@@ -9,6 +9,7 @@ readonly campaign=${FE2O3_PROOF_INSTALL_CAMPAIGN:-resources}
 [[ $campaign == resources || $campaign == genuine || $campaign == genuine-two-gpu ]] || exit 2
 source "$repo/scripts/qualify-two-gpu-mounts.sh"
 source "$repo/scripts/qualify-application-inputs.sh"
+source "$repo/scripts/qualify-host-link.sh"
 FE2O3_GPU_MOUNTS=()
 if [[ $campaign == genuine-two-gpu && -n ${1:-} ]]; then
   configure_two_gpu_mounts
@@ -31,6 +32,7 @@ case "${1:-}" in
   '')
     campaign_mounts=()
     prepare_application_input_bundle
+    prepare_host_link_input
     for name in FE2O3_PROOF_INSTALL_TEST FE2O3_STATIC_PROOF_CUSTODIAN_DIR \
       FE2O3_PROOF_INSTALL_COORDINATOR FE2O3_PROOF_INSTALL_WORKER \
       FE2O3_PROOF_RUNTIME_INPUTS FE2O3_PROOF_VERUS_DIST FE2O3_PROOF_RUST_TOOLCHAIN; do
@@ -119,6 +121,7 @@ case "${1:-}" in
       "${FE2O3_GPU_MOUNTS[@]}" \
       "${FE2O3_APPLICATION_INPUT_MOUNTS[@]}" \
       "${campaign_mounts[@]}" \
+      "${FE2O3_HOST_LINK_INPUT_MOUNTS[@]}" \
       --bind /sys/fs/cgroup /sys/fs/cgroup \
       --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
       --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP --cap-add CAP_SYS_PTRACE \
@@ -274,23 +277,31 @@ case "${1:-}" in
       > "$FE2O3_PRODUCTION_BUILD_CONFIG_V1"
     chmod 0444 "$FE2O3_PRODUCTION_BUILD_CONFIG_V1"
     umask 077
-    campaign_test=provisioning::tests::genuine_application::root_genuine_application_campaign
-    if [[ $campaign == genuine-two-gpu ]]; then
-      campaign_test=provisioning::tests::genuine_application::root_genuine_two_gpu_application_campaign
+    set_genuine_campaign_command
+    configure_host_link_observer
+    if [[ -n ${FE2O3_GENUINE_HOST_LINK_PROXY:-} ]]; then
+      FE2O3_GENUINE_COMMAND=(/bin/bash "$0" genuine-link-run)
     fi
     # Keep Cargo's cache lock private, with existing offline registry content mounted read-only.
     exec bwrap --die-with-parent --bind / / --dev /dev \
       "${FE2O3_GPU_MOUNTS[@]}" \
+      "${FE2O3_HOST_LINK_MOUNTS[@]}" \
       --ro-bind "$FE2O3_GENUINE_CARGO_REGISTRY" /run/application-home/.cargo/registry \
       --ro-bind "$FE2O3_GENUINE_CARGO_GIT" /run/application-home/.cargo/git \
       --cap-drop ALL \
       --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
       --chdir / --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP --cap-add CAP_SYS_PTRACE \
-      /usr/bin/setpriv --bounding-set=-all,+chown,+dac_override,+kill,+setgid,+setpcap,+setuid,+sys_ptrace \
-      --inh-caps=-all --ambient-caps=-all \
-      /usr/libexec/fe2o3/resource-qualification \
-      --exact "$campaign_test" \
-      --ignored --nocapture --test-threads=1
+      "${FE2O3_GENUINE_COMMAND[@]}"
+    ;;
+  genuine-link-run)
+    require_private
+    [[ $campaign != resources && -n ${FE2O3_GENUINE_HOST_LINK_PROXY:-} ]]
+    [[ "$(stat -f -c %T /run/qualification-host-link-records)" == tmpfs ]]
+    chmod 0700 /run/qualification-host-link-records
+    chown 1000:1000 /run/qualification-host-link-records
+    umask 077
+    set_genuine_campaign_command
+    run_host_link_postflight
     ;;
   *) exit 2 ;;
 esac

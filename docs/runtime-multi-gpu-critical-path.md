@@ -46,15 +46,16 @@ two-GPU execution gate.
 
 Current work order:
 
-1. Qualify the remaining host setup/static-link inputs, transport the reviewed
-   application and proof/service inputs, and establish the required real-root
-   private service launch on MI300X. The source/toolchain/offline-cache projection
-   is now implemented and qualified locally. GCC, binutils, CRTs, static archives,
-   linker scripts and their execution dependencies remain an installed-host
-   premise, not part of that bundle. Fresh Windows OpenSSH read-only checks reach
-   `sharkmi300x-1` using the existing trusted host keys, but the fixed services
-   remain absent, noninteractive sudo requires a password and direct root SSH
-   is denied. Do not bypass admission or weaken device permissions.
+1. Transport the reviewed application and proof/service inputs and establish the
+   required real-root private service launch on MI300X. The source/toolchain/
+   offline-cache projection is implemented and qualified locally. The optional
+   [host-link observer](runtime-host-link-observation-v1.md) diagnoses actual GCC/
+   bundled-LLD inputs without changing production admission. Host setup tools and
+   dynamic-loader resolution remain installed-host premises; a new general DSO
+   packager is not a prerequisite for the two-GPU smoke. Windows OpenSSH read-only
+   checks reach `sharkmi300x-1` using the existing trusted host keys, but the fixed
+   services remain absent, noninteractive sudo requires a password and direct
+   root SSH is denied. Do not bypass admission or weaken device permissions.
 2. Select two freshly observed free physical GPUs, resolve their hardware IDs and
    expose only their render nodes plus KFD in the private application namespace.
    The harness preserves application UID1000 and derives necessary numeric GPU
@@ -66,8 +67,39 @@ Current work order:
    native peer completions, complete payload/source checks, separate sentinel
    destinations and intact guards. Require explicit successful drain/release;
    timeouts, process exit and quarantined work are not native settlement.
-4. Exercise second-invocation and transfer-deadline failure controls. Require no
-   hardware success record and inspect owned shutdown/quarantine.
+4. Implement and exercise deliberate second-invocation and transfer-deadline
+   fixture controls after the first positive execution. These hardware injection
+   modes are not yet implemented. Existing failure propagation and absolute
+   deadlines do not substitute for these controls. Require no hardware success
+   record and inspect owned shutdown/quarantine.
+
+The immediate exit is one admitted two-device application with exact output and
+explicit native settlement, not completion of all A1/A2 or A3-A7 acceptance cells.
+Do not expand general loader packaging, opcode coverage, GPU counts, collectives
+or performance work ahead of that exit unless an actual blocker requires it.
+
+Read-only MI300X refresh at **2026-10-05 03:21 UTC**: every GPU still has a live
+KFD process owned by another user, the two fixed units are absent, and `sudo -n
+true` fails because a password is required. Free storage is sufficient (about
+7.5 TiB under `/home` and 602 GiB on `/`); deployment privilege and an unoccupied
+pair are the immediate host blockers, not disk. No remote workload or mutation
+was performed.
+
+The subsequent read-only package inspection found Ubuntu 24.04.4 and all nine
+requested host-tool/CRT/archive paths present, with package versions matching
+the local profile. This is package/layout readiness, not acceptance of remote
+hashes, aliases or runtime dependencies.
+
+The [host-link qualification checkpoint](evidence/dev-qualification-host-link-2026-10-04/README.md)
+now passes the genuine CPU campaign with hidden homes and the final setup checks:
+**1/1 in 478.55 seconds**, **30 audited links**, and identical original/replay
+ELFs. The final application has 36 measured external inputs and the expected
+static CRT order. Deployment/audit/cleanup took 550.46 seconds; the full driver
+including input transport took 588.62 seconds. All 26 focused tests pass in
+their applicable environments, as do 35 real-root application-input and 22
+proof-input controls. Owned cgroups and private storage were removed. This is
+not GPU execution, performance evidence, hermetic loader certification or A3/A7
+closure. Runtime APIs, CLI/backend binaries and authority pins are unchanged.
 
 Latest application-input qualification: **35 Python controls passed as real
 root**, **436 frontend tests passed, 8 ignored**, all three copied-runtime/macro
