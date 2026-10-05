@@ -44,6 +44,22 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
         let before = b.work();
         assert!(runtime.matches_original_identity(&identity, b).unwrap());
         assert_eq!(b.work() - before, Runtime::IDENTITY_COMPARISON_WORK);
+        runtime
+            .with_task_observation(b, |view, b| -> Result<()> {
+                let before = b.work();
+                assert!(matches!(
+                    view.require_device_open_confinement(b),
+                    Err(Error::State(
+                        "compiler has no original device-confined domain"
+                    ))
+                ));
+                assert_eq!(
+                    b.work() - before,
+                    crate::native_spawn::RootTaskObservationV2::DEVICE_CONFINEMENT_WORK
+                );
+                Ok(())
+            })
+            .unwrap();
         let mut moved = Some(runtime);
         let mut runtime = moved.take().unwrap();
         assert!(runtime.matches_original_identity(&identity, b).unwrap());
