@@ -277,14 +277,69 @@ impl Callbacks for FixtureCallbacks {
     }
 }
 
+fn residual_fixture_diagnostic<'tcx>(
+    tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, body: &Body<'tcx>,
+) -> String {
+    use std::fmt::{self, Write as _};
+    struct Bounded(String);
+    impl fmt::Write for Bounded {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            if text.len() > 7168_usize.saturating_sub(self.0.len()) {
+                return Err(fmt::Error);
+            }
+            self.0.try_reserve(text.len()).map_err(|_| fmt::Error)?;
+            self.0.push_str(text);
+            Ok(())
+        }
+    }
+    let mut output = Bounded(String::new());
+    let rendered = (|| -> fmt::Result {
+        writeln!(output, "CORE_RESULT_HOST_RESIDUAL_BEGIN authority=none cap=8192")?;
+        writeln!(output, "instance={instance:?}")?;
+        writeln!(output, "arguments={} locals={} blocks={} scopes={}",
+            body.arg_count, body.local_decls.len(), body.basic_blocks.len(), body.source_scopes.len())?;
+        if body.arg_count != 1 || body.local_decls.len() != 6
+            || body.basic_blocks.len() != 2 || body.source_scopes.len() != 2
+            || body.basic_blocks.iter().any(|block| block.statements.len() > 8 || block.terminator.is_none())
+        {
+            return writeln!(output, "shape_outside_diagnostic_bound=true");
+        }
+        let conversion = residual_signature_v1(tcx, instance)
+            .map(|types| conversion_call_v1(tcx, instance, body, &types));
+        writeln!(output, "conversion_call_v1={conversion:?}")?;
+        for (index, local) in body.local_decls.iter_enumerated() {
+            writeln!(output, "local[{index:?}] raw={:?} normalized={:?} scope={:?}",
+                local.ty, normalize_type_v1(tcx, instance, local.ty), local.source_info.scope)?;
+        }
+        for (index, scope) in body.source_scopes.iter_enumerated() {
+            writeln!(output, "scope[{index:?}]={scope:?}")?;
+        }
+        for (index, block) in body.basic_blocks.iter_enumerated() {
+            writeln!(output, "block[{index:?}] cleanup={}", block.is_cleanup)?;
+            for (statement_index, statement) in block.statements.iter().enumerate() {
+                writeln!(output, "statement[{statement_index}] scope={:?} kind={:?}",
+                    statement.source_info.scope, statement.kind)?;
+            }
+            let terminator = block.terminator();
+            writeln!(output, "terminator scope={:?} kind={:?}",
+                terminator.source_info.scope, terminator.kind)?;
+        }
+        Ok(())
+    })();
+    let status = if rendered.is_ok() { "complete" } else { "truncated_or_render_error" };
+    let body_bytes = output.0.len();
+    // Reserved space keeps the entire failure diagnostic below 8 KiB.
+    let _ = writeln!(output.0, "CORE_RESULT_HOST_RESIDUAL_END status={status} body_bytes={body_bytes} authority=none");
+    output.0
+}
+
 fn inspect_residual_bodies<'tcx>(tcx: TyCtxt<'tcx>, results: &mut Results) {
     for name in ["residual_unit", "residual_u32"] {
         let instance = resolved_call(tcx, name, "from_residual");
         assert!(residual_signature_v1(tcx, instance).is_some(), "residual signature: {instance:?}");
         let body = tcx.instance_mir(instance.def);
         assert!(residual_body_v1(tcx, instance, body),
-            "residual body: {instance:?}; arguments={} locals={} blocks={} scopes={}",
-            body.arg_count, body.local_decls.len(), body.basic_blocks.len(), body.source_scopes.len());
+            "residual body rejected; {}", residual_fixture_diagnostic(tcx, instance, body));
         results.residual_genuine += 1;
         assert!(!authenticate_reviewed_safe_core_result_residual_v1(tcx, instance));
         results.residual_nominal_refusals += 1;
