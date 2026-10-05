@@ -265,6 +265,8 @@ fn each_capability_set_must_be_empty() {
         let from = format!("{name}:\t0000000000000000");
         for (value, reason) in [
             ("1", "a capability set is not empty"),
+            // CAP_SYS_PTRACE is root-coordinator custody, never child authority.
+            ("0000000000080000", "a capability set is not empty"),
             ("nope", "proc capability field is malformed"),
             ("10000000000000000", "proc capability field overflows"),
         ] {

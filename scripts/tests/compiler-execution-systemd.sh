@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly SERVICE="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.service"
+readonly V1_SERVICE="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution-v1.service"
 readonly LEGACY_SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket"
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
 readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf"
@@ -148,7 +149,7 @@ require_line "${SERVICE}" 'RestrictAddressFamilies=AF_UNIX'
 # Source contract only: no effective drop-in, kernel, LSM or service admission.
 # Reject duplicate/reset directives as well as missing exact assignments.
 paired_sandbox_contract() {
-  awk '
+  awk -v version="${1:-v3}" '
     BEGIN {
       expected["User"] = "root"
       expected["Group"] = "root"
@@ -182,6 +183,14 @@ paired_sandbox_contract() {
       expected["KillMode"] = "mixed"
       expected["TimeoutStartSec"] = "300"
       expected["TimeoutStopSec"] = "30"
+      if (version == "v1") {
+        expected["CapabilityBoundingSet"] = "CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
+        expected["ReadWritePaths"] = "/var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor"
+        expected["RestrictNamespaces"] = "yes"
+        delete expected["Slice"]
+        delete expected["Delegate"]
+        delete expected["SystemCallFilter"]
+      }
     }
     /^[[:space:]]*[#;]/ { next }
     /^[[:space:]]*\[/ { section = $0; next }
@@ -195,6 +204,7 @@ paired_sandbox_contract() {
         if (section != "[Service]" || value != expected[key]) bad = 1
       }
       if (key ~ /^(DelegateSubgroup|BindPaths|BindReadOnlyPaths|RootDirectory|RootImage|TemporaryFileSystem|MountImages|ExtensionImages|ExtensionDirectories)$/) bad = 1
+      if (version == "v1" && key ~ /^(Slice|Delegate|SystemCallFilter|ProtectProc|ProcSubset)$/) bad = 1
     }
     END {
       for (key in expected) if (seen[key] != 1) bad = 1
@@ -204,6 +214,23 @@ paired_sandbox_contract() {
 }
 
 paired_sandbox_contract < "${SERVICE}" || fail 'paired creator/subtree sandbox changed'
+paired_sandbox_contract v1 < "${V1_SERVICE}" || fail 'V1 root-only namespace custody sandbox changed'
+for replacement in \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE CAP_SYS_ADMIN' \
+  'AmbientCapabilities=CAP_SYS_PTRACE' \
+  'RestrictNamespaces=no'; do
+  key="${replacement%%=*}"
+  if awk -v key="${key}" -v replacement="${replacement}" \
+      'index($0, key "=") == 1 { print replacement; next } { print }' "${V1_SERVICE}" |
+      paired_sandbox_contract v1; then
+    fail "V1 sandbox oracle accepted ${replacement}"
+  fi
+done
+if awk '{ print } /^CapabilityBoundingSet=/ { print "CapabilityBoundingSet=CAP_SYS_ADMIN" }' "${V1_SERVICE}" |
+    paired_sandbox_contract v1; then
+  fail 'V1 sandbox oracle accepted an additional capability assignment'
+fi
 for replacement in \
   'ReadWritePaths=/sys/fs/cgroup' \
   'ReadWritePaths=/sys/fs/cgroup/system.slice' \
