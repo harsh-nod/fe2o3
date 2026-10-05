@@ -265,7 +265,10 @@ fn validate(
             & (1 << index)
             != 0;
         match (selected, stage.binding(index as i32)) {
-            (true, Some(file)) => same_object(received_fd(received, role)?, file)?,
+            (true, Some(file)) => {
+                same_object(received_fd(received, role)?, file)?;
+                crate::native_runtime_descriptors::inspect(file.as_fd(), b)?;
+            }
             (false, None) => {}
             _ => return Err(invalid()),
         }

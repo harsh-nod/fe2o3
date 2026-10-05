@@ -467,6 +467,9 @@ fn helper_error(error: ProofHelperLaunchError) -> Error {
     match error {
         ProofHelperLaunchError::Resource(e) => e.into(),
         ProofHelperLaunchError::Backing(e) => helper_backing_error(e),
+        ProofHelperLaunchError::Descriptor(crate::native_runtime_descriptors::Error::Resource(
+            e,
+        )) => e.into(),
         ProofHelperLaunchError::Inventory(crate::native_runtime_inventory::Error::Resource(e)) => {
             e.into()
         }

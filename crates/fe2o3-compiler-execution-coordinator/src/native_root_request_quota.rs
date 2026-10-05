@@ -147,6 +147,7 @@ pub(super) fn refusal() -> Result<Quota> {
             EXCHANGE_WORK,
             repeated(4, backing_check_work()?)?,
             Executables::WORK,
+            3 * crate::native_runtime_descriptors::WORK,
             proof_helper_launch::LOCAL_WORK,
             ProofHelperBacking::LOCAL_WORK,
             compiler_attempt::LOCAL_WORK,
@@ -175,6 +176,7 @@ pub(super) fn refusal() -> Result<Quota> {
             ProofHelperBacking::FRAME_STORAGE,
             compiler_attempt::FRAME,
             Executables::FRAME,
+            crate::native_runtime_descriptors::FRAME,
             crate::compiler_child_channel::CompilerTrace::<ManagedProofHelper>::OBSERVATION_SCRATCH,
             Resources::<ManagedProofHelper>::ACCESS_SCRATCH,
             Resources::<proof_helper_launch::Payload>::ACCESS_SCRATCH,
@@ -249,6 +251,9 @@ pub(super) fn launch() -> Result<Quota> {
             // capture checks it twice; final attempt revalidation adds one.
             repeated(5, backing_check_work()?)?,
             repeated(2, Executables::WORK)?,
+            // Stage validation, post-profile validation and final trace-backed
+            // validation each inspect the three actual selected stdio sources.
+            9 * crate::native_runtime_descriptors::WORK,
             proof_helper_launch::LOCAL_WORK,
             ProofHelperBacking::LOCAL_WORK,
             image_check.work(),
