@@ -58,6 +58,10 @@ fn original_trace_identity_lifetime_and_refusals() {
         "retain-short-work",
         "retain-postcheck-short-work",
         "retain-short-storage",
+        "device-exact",
+        "device-short-work",
+        "device-short-storage",
+        "device-missing-floor",
     ] {
         subprocess(mode);
     }
@@ -227,6 +231,7 @@ fn root_identity_subprocess() {
             }
             "account" => account_refusals(&mut trace, &mut b),
             "terminal" => terminal_refusal(&trace, &witness, &mut b),
+            mode if mode.starts_with("device-") => device_quote(mode, &mut trace, &mut b),
             _ => retain_quote(&mode, &trace, &mut b),
         }
         assert_eq!(Rc::strong_count(&trace.identity), 1);
@@ -235,6 +240,50 @@ fn root_identity_subprocess() {
     drop(gate);
     assert_eq!(b.storage(), 0);
     std::fs::write(std::env::var_os(COMPLETE).unwrap(), b"complete").unwrap();
+}
+
+fn device_quote(mode: &str, trace: &mut RootTaskTraceV2<'_>, b: &mut Budget<'_>) {
+    trace.interrupt(b).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while trace.poll(b).unwrap().is_pending() {
+        assert!(
+            Instant::now() < deadline,
+            "device observation interrupt timed out"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if mode == "device-missing-floor" {
+        b.release_storage(1).unwrap();
+        assert!(matches!(
+            (View { trace }).require_device_open_confinement(b),
+            Err(Error::Resource(Resource::Accounting))
+        ));
+        b.reserve_storage(1).unwrap();
+        return;
+    }
+    let scratch = View::DEVICE_CONFINEMENT_SCRATCH;
+    let pressure =
+        LIMIT - trace.retained_storage() - scratch + usize::from(mode == "device-short-storage");
+    b.reserve_storage(pressure).unwrap();
+    let allowance = View::DEVICE_CONFINEMENT_WORK - usize::from(mode == "device-short-work");
+    b.charge_work(LIMIT - b.work() - allowance).unwrap();
+    let before = b.storage();
+    let result = (View { trace }).require_device_open_confinement(b);
+    assert_eq!(b.storage(), before);
+    match (mode, result) {
+        ("device-exact", Err(Error::State("compiler has no original device-confined domain"))) => {
+            assert_eq!(b.work(), LIMIT);
+            assert_eq!(b.peak_storage(), LIMIT);
+        }
+        ("device-short-work", Err(Error::Resource(Resource::Work(_)))) => {
+            assert_eq!(b.failed_work(), Some(LIMIT + 1));
+        }
+        ("device-short-storage", Err(Error::Resource(Resource::Storage(_)))) => {
+            assert_eq!(b.failed_storage(), Some(LIMIT + 1));
+        }
+        (_, result) => panic!("device observation {mode}: {result:?}"),
+    }
+    b.release_storage(pressure).unwrap();
 }
 
 fn lifecycle(
