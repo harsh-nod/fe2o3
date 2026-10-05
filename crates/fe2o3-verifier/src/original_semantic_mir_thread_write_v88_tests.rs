@@ -730,7 +730,8 @@ fn scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit() {
     let laws = include_str!("original_semantic_mir_scalar_store_laws_v92.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 6);
     assert_eq!(
-        laws.matches("#[verifier::spinoff_prover]\nproof fn ").count(),
+        laws.matches("#[verifier::spinoff_prover]\nproof fn ")
+            .count(),
         6
     );
     for required in [
@@ -760,6 +761,26 @@ fn scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit() {
 fn writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains() {
     let frames = include_str!("original_semantic_mir_cut_frame_laws_v93.vrs");
     assert_eq!(frames.matches("proof fn ").count(), 8);
+    assert_eq!(frames.matches("#[verifier::spinoff_prover]").count(), 8);
+    for name in [
+        "put_local_pc",
+        "carrier_pc",
+        "states_related",
+        "descriptor_install",
+        "descriptor_step",
+        "descriptor_length",
+        "issue_witness",
+        "slice_copy",
+    ] {
+        assert_eq!(
+            frames
+                .matches(&format!(
+                    "#[verifier::spinoff_prover]\nproof fn invocation_cut_frame_{name}_v93("
+                ))
+                .count(),
+            1
+        );
+    }
     for required in [
         "source_after.valid, target_after.valid",
         "source_after.memory == source.memory, target_after.memory == target.memory",
@@ -770,7 +791,7 @@ fn writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains()
     ] {
         assert!(frames.contains(required), "{required}");
     }
-    for forbidden in ["assume(", "admit(", "external_body", "spinoff_prover"] {
+    for forbidden in ["assume(", "admit(", "external_body"] {
         assert!(!frames.contains(forbidden), "{forbidden}");
     }
     for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
