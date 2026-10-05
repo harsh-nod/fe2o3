@@ -226,6 +226,14 @@ pub(super) fn emit(
             hint.instance
         );
     }
+    out.budget.charge_work(4)?;
+    emit!(
+        out,
+        " assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);\n",
+        call.arguments.len(),
+        call.child,
+        call.arguments.len()
+    );
     emit!(
         out,
         " assert(invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source)\n && invocation_source_block_runtime_{root}_v36(source).returned.is_none()\n && invocation_source_block_runtime_{root}_v36(source).operands.len() == {}\n",
