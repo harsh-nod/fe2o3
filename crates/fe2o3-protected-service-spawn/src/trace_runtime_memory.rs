@@ -25,12 +25,20 @@ pub enum MappingRequirement {
     /// Duplicate the actual descriptor under stopped file-table custody and
     /// require the whole file interval in its original approved executable range.
     ExecutableFile {
+        /// Actual tracee descriptor number to duplicate under stopped custody.
         descriptor: i32,
+        /// Byte offset in that file, not a virtual address.
         offset: u64,
+        /// Complete requested mapping length in bytes.
         length: u64,
     },
     /// Require complete coverage by current non-executable mapping rows.
-    NonExecutableRegion { start: u64, length: u64 },
+    NonExecutableRegion {
+        /// First virtual byte of the region being remapped.
+        start: u64,
+        /// Complete original region length in bytes, before resizing.
+        length: u64,
+    },
 }
 
 /// Interpret only the fixed native x86-64 memory ABI, without I/O or allocation.
