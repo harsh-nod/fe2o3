@@ -104,8 +104,14 @@ run_auxiliary_tests() { :; }
 run_all_rustc_codegen_shards() { :; }
 "$2"
 '''
-        expected = ["tutorial-default-cargo-harness-tests", "python3", "-I", "-B",
-                    "scripts/tests/tutorial_default_cargo.py"]
+        expected_steps = [
+            ["tutorial-default-cargo-harness-tests", "python3", "-I", "-B",
+             "scripts/tests/tutorial_default_cargo.py"],
+            ["tutorial-production-census-tests", "python3", "-I", "-B",
+             "scripts/tests/tutorial_production_census_v91.py"],
+            ["tutorial-current-simulation-tests", "python3", "-I", "-B",
+             "scripts/tests/tutorial_simulation_v92.py"],
+        ]
         with tempfile.TemporaryDirectory() as temporary:
             environment = {"PATH": os.defpath, "HOME": temporary,
                            "CARGO_TARGET_DIR": str(Path(temporary) / "cache"),
@@ -119,9 +125,12 @@ run_all_rustc_codegen_shards() { :; }
                         timeout=10, check=True,
                     )
                     steps = [line.split("\t") for line in result.stdout.splitlines()]
-                    self.assertEqual([step for step in steps
-                                      if step[0] == expected[0] or expected[-1] in step], [expected])
+                    for expected in expected_steps:
+                        self.assertEqual([step for step in steps
+                                          if step[0] == expected[0] or expected[-1] in step], [expected])
                     self.assertFalse(any("scripts/qualify-tutorial-default-cargo.py" in step
+                                         for step in steps))
+                    self.assertFalse(any("scripts/qualify-tutorial-current-simulation-v92.py" in step
                                          for step in steps))
             self.assertFalse((Path(temporary) / "cache").exists())
             self.assertFalse((Path(temporary) / "logs").exists())

@@ -88,3 +88,7 @@ python3 -I -B scripts/tests/tutorial_cpu_reference.py -v
 These test the harness contracts. Their success is not actual tutorial
 compilation, protected proof execution, simulation/reference qualification, or
 hardware execution.
+
+The standard `generic-core policy` and `generic` validation paths include these
+harness suites. They do not attempt protected runtime or hardware qualification
+on generic CI hosts.
