@@ -755,6 +755,18 @@ runtime view's additional entry charge. One additional isolated channel-test
 block exercises closed-gate takeover and funded cancellation; it never executes
 a compiler and does not qualify runtime admission.
 
+Native image-policy preparation uses those same held-task views for bounded
+read-only auxv and memory copies; no proc descriptor escapes. Kernel-image
+metadata is captured only at an actual exec stop from AT_SYSINFO_EHDR, the
+complete RX mapping, its mapped ELF ranges and a SHA256 digest. Later policy
+checks compare actual layout and bytes. The native maps predicate does not
+exempt mappings by `[vdso]` or `[vsyscall]` labels; unsupported legacy vsyscall
+layouts refuse. Original compiler range visits check the actual retained FD
+identities and original account before and after, while full source revalidation
+remains mandatory at ownership transitions. Continuous immutable-backing and
+write-exclusion obligations remain with the owning controller. These private
+policy results are not enforcement tokens or permission to release the gate.
+
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
 inspect initialized scalar buffers and install outer test-only denial filters.

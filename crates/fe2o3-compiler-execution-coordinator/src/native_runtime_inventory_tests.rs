@@ -172,3 +172,47 @@ fn native_inventory_preserves_original_read_failure() {
         })
     ));
 }
+
+#[test]
+fn scoped_range_identity_refuses_foreign_accounts_changed_objects_and_rosters() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let file = elf_file();
+    let descriptor = entry(Role::Rustc, &file);
+    let entries = derive_entries([(descriptor, &file)].into_iter()).unwrap();
+    let mut work = Work::new(1_000_000);
+    let budget = Budget::new(&mut work, 1_000_000);
+    let inventory = NativeCompilerExecutableInventory {
+        retained: storage_for(entries.capacity()).unwrap(),
+        entries,
+        ledger: budget.work_ledger_identity_v1(),
+        address: &budget as *const Budget<'_> as usize,
+    };
+    inventory.check_original_account(&budget).unwrap();
+    inventory
+        .check_objects([(descriptor, &file)].into_iter())
+        .unwrap();
+    let mut foreign_work = Work::new(1_000_000);
+    let foreign = Budget::new(&mut foreign_work, 1_000_000);
+    assert!(matches!(
+        inventory.check_original_account(&foreign),
+        Err(Error::Resource(Resource::Accounting))
+    ));
+    let replacement = elf_file();
+    assert!(
+        inventory
+            .check_objects([(descriptor, &replacement)].into_iter())
+            .is_err()
+    );
+    assert!(inventory.check_objects(std::iter::empty()).is_err());
+    assert!(
+        inventory
+            .check_objects([(descriptor, &file), (descriptor, &file)].into_iter())
+            .is_err()
+    );
+    file.set_len(descriptor.length - 1).unwrap();
+    assert!(
+        inventory
+            .check_objects([(descriptor, &file)].into_iter())
+            .is_err()
+    );
+}

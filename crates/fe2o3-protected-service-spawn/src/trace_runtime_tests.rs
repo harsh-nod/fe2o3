@@ -139,3 +139,72 @@ fn syscall_exit_requires_kernel_exit_abi_and_exact_register_agreement() {
         assert!(validate_syscall_exit(&exit_info(restart), 9, 9, restart as u64).is_err());
     }
 }
+
+#[test]
+fn strict_kernel_mapping_policy_requires_exact_derived_coordinates_not_names() {
+    let row = "8000-a000 r-xp 00000000 00:00 0 [vdso]\n";
+    assert!(validate_executable_mapping_rows(row, std::iter::empty()).is_ok());
+    assert!(
+        validate_executable_mapping_rows_with_kernel_ranges(row, std::iter::empty(), &[]).is_err()
+    );
+    assert!(
+        validate_executable_mapping_rows_with_kernel_ranges(
+            row,
+            std::iter::empty(),
+            &[(0x8000, 0xa000)]
+        )
+        .is_ok()
+    );
+    for (old, new) in [
+        ("8000-a000", "9000-a000"),
+        ("r-xp", "r-xs"),
+        ("00000000", "00001000"),
+        ("00:00", "08:01"),
+        ("0 [vdso]", "1 [vdso]"),
+    ] {
+        assert!(
+            validate_executable_mapping_rows_with_kernel_ranges(
+                &row.replace(old, new),
+                std::iter::empty(),
+                &[(0x8000, 0xa000)]
+            )
+            .is_err()
+        );
+    }
+    let renamed = row.replace("[vdso]", "not-an-authority");
+    assert!(
+        validate_executable_mapping_rows_with_kernel_ranges(
+            &renamed,
+            std::iter::empty(),
+            &[(0x8000, 0xa000)]
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_executable_mapping_rows_with_kernel_ranges(
+            "ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0 [vsyscall]\n",
+            std::iter::empty(),
+            &[]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn direct_object_ranges_keep_identity_and_whole_interval_requirements() {
+    let device = rustix::fs::makedev(8, 7);
+    let ranges = [(0x1000, 0x3000)];
+    let allowed = || [ExecutableObjectRanges::new(device, 42, &ranges)];
+    assert!(executable_object_range_is_allowed(device, 42, 0x1000, 0x2000, allowed()).unwrap());
+    for (dev, inode, offset, length) in [
+        (device + 1, 42, 0x1000, 1),
+        (device, 43, 0x1000, 1),
+        (device, 42, 0x1000, 0),
+        (device, 42, 0x2000, 0x2000),
+    ] {
+        assert!(
+            !executable_object_range_is_allowed(dev, inode, offset, length, allowed()).unwrap()
+        );
+    }
+    assert!(executable_object_range_is_allowed(device, 42, u64::MAX, 2, allowed()).is_err());
+}

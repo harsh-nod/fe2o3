@@ -81,6 +81,7 @@ mod native_provisioner;
 mod native_provisioning;
 mod native_root_source;
 mod native_runtime_descriptors;
+mod native_runtime_guard;
 mod native_runtime_inventory;
 mod native_trust_adapter;
 mod native_trust_v2;
