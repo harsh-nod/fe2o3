@@ -5437,3 +5437,1433 @@ mod private_owning_llvm_observer_v1 {
         }
     }
 }
+
+// Private descriptor continuation: neither checked-output policy admission nor
+// a signed-source Worker stage. The source/formal and actual O owners stay live.
+struct PrivateBf16DescriptorPayloadV1 {
+    canonical_descriptor: Box<[u8]>,
+    final_llvm: Box<str>,
+    retained: usize,
+}
+
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16DescriptorV1 {
+    // New bytes die before both LLVM strings, actual O/B/source/formal owners,
+    // and their original projection account.
+    descriptor: PrivateBf16DescriptorPayloadV1,
+    llvm: PrivateBf16LlvmV1,
+}
+
+type PrivateBf16DescriptorResultV1 = Result<PrivateBf16DescriptorPayloadV1, PrivateBf16LlvmErrorV1>;
+
+fn private_bf16_descriptor_context_v1(reason: &'static str) -> PrivateBf16LlvmErrorV1 {
+    PrivateBf16LlvmErrorV1::DescriptorEvidence(
+        crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(reason),
+    )
+}
+
+fn private_bf16_descriptor_caps_v1() -> Result<usize, E> {
+    sum(
+        dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES,
+        fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES,
+    )
+}
+
+/// The caller prepays the two returned boxed payload ceilings before lending
+/// source or O. The inherited descriptor/geometry/module-symbol engines and
+/// their temporary trees remain excluded; this is not total stack/heap/RSS.
+#[allow(clippy::too_many_arguments)]
+fn construct_private_bf16_descriptor_payload_prepaid_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    worker: &str,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    source_launch: &fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+    obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    budget: &mut Budget<'_>,
+) -> PrivateBf16DescriptorResultV1 {
+    use crate::production_worker_handoff::ProductionWorkerHandoffError as HandoffError;
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    budget
+        .charge_work(
+            worker
+                .len()
+                .checked_add(8)
+                .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+        )
+        .map_err(private_bf16_target_resource_v1)?;
+    #[cfg(test)]
+    private_descriptor_constructor_failure_controls::constructor_entered();
+    let target = fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-")
+        .expect("closed private BF16 target");
+    let compiler_module =
+        crate::kernel_ir_codegen::retain_private_bf16_checked_compiler_module_text_v1(
+            output,
+            worker.to_owned(),
+        )
+        .map_err(|error| {
+            PrivateBf16LlvmErrorV1::WorkerHandoff(HandoffError::CompilerModule(error))
+        })?;
+    let envelope = crate::production_worker_handoff::derive_production_compiler_ffi_envelope(
+        target,
+        output.module(),
+        &compiler_module,
+        None,
+        *output.canonical().identity().digest(),
+    )
+    .map_err(PrivateBf16LlvmErrorV1::WorkerHandoff)?;
+    let descriptor =
+        crate::compiler_descriptor::private_bf16_v1::construct_private_bf16_descriptor_source_v1(
+            &envelope,
+            &compiler_module,
+            typed_roots,
+            semantic,
+            source_launch,
+            output,
+            obligations,
+        )
+        .map_err(PrivateBf16LlvmErrorV1::DescriptorEvidence)?;
+    if descriptor.canonical_bytes().len() > fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES {
+        return Err(private_bf16_descriptor_context_v1(
+            "private BF16 descriptor byte ceiling",
+        ));
+    }
+    budget
+        .charge_work(
+            descriptor
+                .canonical_bytes()
+                .len()
+                .checked_mul(8)
+                .and_then(|n| n.checked_add(compiler_module.llvm_ir().len()))
+                .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+        )
+        .map_err(private_bf16_target_resource_v1)?;
+    let compiler_module =
+        crate::kernel_ir_codegen::bind_compiler_descriptor_source_v1(compiler_module, &descriptor)
+            .map_err(|error| {
+                PrivateBf16LlvmErrorV1::WorkerHandoff(HandoffError::CompilerModule(error))
+            })?;
+    if compiler_module.llvm_ir().len() > dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES {
+        return Err(private_bf16_descriptor_context_v1(
+            "private BF16 final LLVM byte ceiling",
+        ));
+    }
+    budget
+        .charge_work(
+            descriptor
+                .canonical_bytes()
+                .len()
+                .checked_add(compiler_module.llvm_ir().len())
+                .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+        )
+        .map_err(private_bf16_target_resource_v1)?;
+    let canonical_descriptor = descriptor.canonical_bytes().to_vec().into_boxed_slice();
+    let final_llvm = compiler_module.llvm_ir().to_owned().into_boxed_str();
+    let retained = std::mem::size_of::<PrivateBf16DescriptorV1>()
+        .checked_add(canonical_descriptor.len())
+        .and_then(|n| n.checked_add(final_llvm.len()))
+        .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+    // The decoded table and temporary compiler module drop before this boxed
+    // inert payload escapes. Neither is an admitted owner or runtime witness.
+    #[cfg(test)]
+    private_descriptor_constructor_failure_controls::payload_made();
+    Ok(PrivateBf16DescriptorPayloadV1 {
+        canonical_descriptor,
+        final_llvm,
+        retained,
+    })
+}
+
+/// No caller callback and no generic budget-scoped returning wrapper: retained
+/// reservations remain charged continuously while either payload is live.
+#[allow(clippy::too_many_arguments)]
+fn derive_private_bf16_descriptor_v1(
+    owner: &fe2o3_lower_mir_kernel::ProductionPrivateBf16FormalMemoryOwnerV1,
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    semantic_root: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    requested_return: [u8; 4],
+    worker: &str,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    budget: &mut Budget<'_>,
+) -> PrivateBf16DescriptorResultV1 {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let slot = budget as *const Budget<'_> as usize;
+    let mut prepaid = 0usize;
+    let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prepaid = reserve_private_bf16_descriptor_output_v1(budget)?;
+        let mut observed: Option<PrivateBf16DescriptorResultV1> = None;
+        let source_loan = owner.with_private_bf16_descriptor_source_v1(
+            semantic_root,
+            requested_return,
+            budget,
+            |_source, _function, _source_obligations, semantic, source_launch, budget| {
+                let output_loan = owner.with_private_bf16_checked_output_guarded_formal_v1(
+                    output,
+                    semantic_root,
+                    requested_return,
+                    budget,
+                    |attempt, guard, budget| {
+                        if let (Ok(analysis), Ok(())) = (attempt, guard) {
+                            // Exactly the fresh raw report's obligations; no
+                            // Complete relabel and no source-coordinate substitute.
+                            observed = Some(construct_private_bf16_descriptor_payload_prepaid_v1(
+                                output,
+                                worker,
+                                semantic,
+                                source_launch,
+                                analysis.obligations(),
+                                typed_roots,
+                                budget,
+                            ));
+                        }
+                        Ok(())
+                    },
+                );
+                if let Err(error) = output_loan {
+                    drop(observed.take());
+                    observed = Some(Err(PrivateBf16LlvmErrorV1::FormalMemoryAdmission(error)));
+                }
+                Ok(())
+            },
+        );
+        if let Err(error) = source_loan {
+            drop(observed);
+            return Err(PrivateBf16LlvmErrorV1::FormalMemoryAdmission(error));
+        }
+        #[cfg(test)]
+        if observed.as_ref().is_some_and(Result::is_ok) {
+            // Both borrowed source/actual-O guard frames have closed. A test
+            // panic now must drop the captured real payload before reconciliation.
+            private_descriptor_constructor_failure_controls::after_capture();
+        }
+        observed.ok_or_else(|| private_bf16_target_resource_v1(Resource::Accounting))?
+    }));
+    let result = match attempted {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(private_bf16_descriptor_context_v1(
+                "private BF16 descriptor construction panicked",
+            ))
+        }
+    };
+    finish_private_bf16_descriptor_attempt_v1(result, floor, ledger, slot, prepaid, budget)
+}
+
+// Exact private result reconciliation, extracted unchanged for denial/drop tests.
+// It accepts only this inert payload Result; no callback, owner or generic escape.
+fn finish_private_bf16_descriptor_attempt_v1(
+    result: PrivateBf16DescriptorResultV1,
+    floor: usize,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    slot: usize,
+    prepaid: usize,
+    budget: &mut Budget<'_>,
+) -> PrivateBf16DescriptorResultV1 {
+    let prior = budget.check_prior_denials_v1();
+    if slot != budget as *const Budget<'_> as usize
+        || ledger != budget.work_ledger_identity_v1()
+        || budget.storage().checked_sub(floor) != Some(prepaid)
+    {
+        drop(result);
+        prior.map_err(private_bf16_target_resource_v1)?;
+        // Never refund an unknown callback surplus or a foreign account.
+        return Err(private_bf16_target_resource_v1(Resource::Accounting));
+    }
+    match (result, prior) {
+        (Ok(payload), Ok(())) => {
+            let Some(unused) = prepaid.checked_sub(payload.retained) else {
+                drop(payload);
+                budget
+                    .release_storage(prepaid)
+                    .map_err(private_bf16_target_resource_v1)?;
+                return Err(private_bf16_target_resource_v1(Resource::Accounting));
+            };
+            if let Err(error) = budget.release_storage(unused) {
+                drop(payload);
+                return Err(private_bf16_target_resource_v1(error));
+            }
+            Ok(payload)
+        }
+        (result, prior) => {
+            let error = match (result, prior) {
+                (Ok(payload), Err(error)) => {
+                    drop(payload);
+                    private_bf16_target_resource_v1(error)
+                }
+                (Err(error), Ok(())) => error,
+                (Err(_), Err(error)) => private_bf16_target_resource_v1(error),
+                (Ok(_), Ok(())) => unreachable!("success handled above"),
+            };
+            // Every new box/callback has already dropped before this refund.
+            budget
+                .release_storage(prepaid)
+                .map_err(private_bf16_target_resource_v1)?;
+            Err(error)
+        }
+    }
+}
+
+fn compare_private_bf16_descriptor_payload_v1(
+    retained: &PrivateBf16DescriptorPayloadV1,
+    fresh: &PrivateBf16DescriptorPayloadV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), PrivateBf16LlvmErrorV1> {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let work = retained
+        .canonical_descriptor
+        .len()
+        .checked_add(fresh.canonical_descriptor.len())
+        .and_then(|n| n.checked_add(retained.final_llvm.len()))
+        .and_then(|n| n.checked_add(fresh.final_llvm.len()))
+        .and_then(|n| n.checked_add(3))
+        .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+    budget
+        .charge_work(work)
+        .map_err(private_bf16_target_resource_v1)?;
+    if retained.retained != fresh.retained
+        || retained.canonical_descriptor != fresh.canonical_descriptor
+        || retained.final_llvm != fresh.final_llvm
+    {
+        return Err(private_bf16_descriptor_context_v1(
+            "private BF16 descriptor/final LLVM bytes differ from owned replay",
+        ));
+    }
+    Ok(())
+}
+
+impl PrivateBf16LlvmV1 {
+    #[allow(dead_code)]
+    pub(crate) fn prepare_private_bf16_descriptor_v1(
+        mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<PrivateBf16DescriptorV1, PrivateBf16LlvmErrorV1> {
+        self.revalidate_private_bf16_llvm_v1(requested_return, typed_roots, profile)?;
+        let owner = &self.optimized.target.formal.owner;
+        let output = self.optimized.optimization.checked.owner();
+        let worker = &self.llvm.worker;
+        let [root] = self.optimized.target.formal.verification.roots.as_ref() else {
+            return Err(private_bf16_descriptor_context_v1(
+                "private BF16 descriptor root custody",
+            ));
+        };
+        let semantic_root = root.semantic_root;
+        let result = self
+            .optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .with_budget(|budget| {
+                Ok(derive_private_bf16_descriptor_v1(
+                    owner,
+                    output,
+                    semantic_root,
+                    requested_return,
+                    worker,
+                    typed_roots,
+                    budget,
+                ))
+            });
+        self.optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        let descriptor = result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)??;
+        Ok(PrivateBf16DescriptorV1 {
+            descriptor,
+            llvm: self,
+        })
+    }
+}
+
+impl PrivateBf16DescriptorV1 {
+    #[allow(dead_code)]
+    pub(crate) fn revalidate_private_bf16_descriptor_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16LlvmErrorV1> {
+        self.llvm
+            .revalidate_private_bf16_llvm_v1(requested_return, typed_roots, profile)?;
+        let owner = &self.llvm.optimized.target.formal.owner;
+        let output = self.llvm.optimized.optimization.checked.owner();
+        let worker = &self.llvm.llvm.worker;
+        let retained = &self.descriptor;
+        let [root] = self
+            .llvm
+            .optimized
+            .target
+            .formal
+            .verification
+            .roots
+            .as_ref()
+        else {
+            return Err(private_bf16_descriptor_context_v1(
+                "private BF16 descriptor replay roots",
+            ));
+        };
+        let semantic_root = root.semantic_root;
+        let result = self
+            .llvm
+            .optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .with_budget(|budget| {
+                let replay_floor = budget.storage();
+                let replay_ledger = budget.work_ledger_identity_v1();
+                let replay_slot = budget as *const Budget<'_> as usize;
+                let fresh = match derive_private_bf16_descriptor_v1(
+                    owner,
+                    output,
+                    semantic_root,
+                    requested_return,
+                    worker,
+                    typed_roots,
+                    budget,
+                ) {
+                    Ok(fresh) => fresh,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let joined = compare_private_bf16_descriptor_payload_v1(retained, &fresh, budget);
+                let storage = fresh.retained;
+                drop(fresh);
+                budget.release_storage(storage).map_err(resource)?;
+                budget.check_prior_denials_v1().map_err(resource)?;
+                if budget.storage() != replay_floor
+                    || budget.work_ledger_identity_v1() != replay_ledger
+                    || budget as *const Budget<'_> as usize != replay_slot
+                {
+                    return Err(resource(Resource::Accounting));
+                }
+                Ok(joined)
+            });
+        self.llvm
+            .optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)?
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod private_bf16_descriptor_byte_controls {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    // Pure byte-comparison controls. These deliberately construct no source,
+    // LLVM, descriptor or compilation owner and establish no source admission.
+    fn bytes() -> PrivateBf16DescriptorPayloadV1 {
+        let canonical_descriptor = vec![0x31, 0x32, 0x33].into_boxed_slice();
+        let final_llvm = "owned llvm plus descriptor".to_owned().into_boxed_str();
+        let retained = std::mem::size_of::<PrivateBf16DescriptorV1>()
+            + canonical_descriptor.len()
+            + final_llvm.len();
+        PrivateBf16DescriptorPayloadV1 {
+            canonical_descriptor,
+            final_llvm,
+            retained,
+        }
+    }
+
+    #[test]
+    fn private_descriptor_comparison_requires_both_complete_bytes_and_storage() {
+        for mutation in 0..4 {
+            let a = bytes();
+            let mut b = bytes();
+            match mutation {
+                1 => b.canonical_descriptor[1] ^= 1,
+                2 => b.final_llvm = "owned llvm plus descriptoR".to_owned().into_boxed_str(),
+                3 => b.retained += 1,
+                _ => {}
+            }
+            let mut work = Work::new(10_000);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            let before = budget.storage();
+            let result = compare_private_bf16_descriptor_payload_v1(&a, &b, &mut budget);
+            assert_eq!(result.is_ok(), mutation == 0);
+            if mutation != 0 {
+                assert!(
+                    matches!(result, Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                    crate::compiler_descriptor::CompilerDescriptorError::
+                        ProductionDescriptorMismatch(
+                            "private BF16 descriptor/final LLVM bytes differ from owned replay",
+                        ),
+                )))
+                );
+            }
+            assert_eq!(budget.storage(), before);
+        }
+    }
+
+    #[test]
+    fn private_descriptor_comparison_exact_work_and_sticky_one_short() {
+        let a = bytes();
+        let b = bytes();
+        let exact = a.canonical_descriptor.len()
+            + b.canonical_descriptor.len()
+            + a.final_llvm.len()
+            + b.final_llvm.len()
+            + 3;
+        for cap in [exact, exact - 1] {
+            let mut work = Work::new(cap);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            let result = compare_private_bf16_descriptor_payload_v1(&a, &b, &mut budget);
+            assert_eq!(result.is_ok(), cap == exact);
+            assert_eq!(budget.storage(), 7);
+            if cap != exact {
+                let before = (budget.work(), budget.failed_work(), budget.failed_storage());
+                assert!(compare_private_bf16_descriptor_payload_v1(&a, &b, &mut budget).is_err());
+                assert_eq!(
+                    (budget.work(), budget.failed_work(), budget.failed_storage()),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_descriptor_prior_storage_denial_precedes_comparison_work() {
+        let a = bytes();
+        let b = bytes();
+        let mut work = Work::new(10_000);
+        let mut budget = Budget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        assert!(budget.reserve_storage(1).is_err());
+        let before = (
+            budget.work(),
+            budget.storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
+        for _ in 0..2 {
+            assert!(compare_private_bf16_descriptor_payload_v1(&a, &b, &mut budget).is_err());
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+        }
+    }
+}
+
+fn reserve_private_bf16_descriptor_output_v1(
+    budget: &mut Budget<'_>,
+) -> Result<usize, PrivateBf16LlvmErrorV1> {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    budget
+        .charge_work(3)
+        .map_err(private_bf16_target_resource_v1)?;
+    let amount = private_bf16_descriptor_caps_v1()
+        .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?
+        .checked_add(std::mem::size_of::<PrivateBf16DescriptorV1>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<Option<PrivateBf16DescriptorResultV1>>()))
+        .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+    budget
+        .reserve_storage(amount)
+        .map_err(private_bf16_target_resource_v1)?;
+    Ok(amount)
+}
+
+#[cfg(test)]
+mod private_descriptor_constructor_reservation_controls {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn constructor_prepayment_exact_storage_and_one_short_do_not_run_engines() {
+        let exact = private_bf16_descriptor_caps_v1().unwrap()
+            + std::mem::size_of::<PrivateBf16DescriptorV1>()
+            + std::mem::size_of::<Option<PrivateBf16DescriptorResultV1>>();
+        for available in [exact, exact - 1] {
+            let mut work = Work::new(100);
+            let mut budget = Budget::new(&mut work, 7 + available);
+            budget.reserve_storage(7).unwrap();
+            let result = reserve_private_bf16_descriptor_output_v1(&mut budget);
+            if available == exact {
+                assert_eq!(result.unwrap(), exact);
+                assert_eq!(budget.storage(), 7 + exact);
+                budget.release_storage(exact).unwrap();
+                assert_eq!(budget.storage(), 7);
+            } else {
+                assert!(result.is_err());
+                assert_eq!(budget.storage(), 7);
+                let before = (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                );
+                assert!(reserve_private_bf16_descriptor_output_v1(&mut budget).is_err());
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn constructor_prepayment_exact_work_and_one_short_preserve_entry_storage() {
+        let storage = private_bf16_descriptor_caps_v1().unwrap()
+            + std::mem::size_of::<PrivateBf16DescriptorV1>()
+            + std::mem::size_of::<Option<PrivateBf16DescriptorResultV1>>();
+        for cap in [3, 2] {
+            let mut work = Work::new(cap);
+            let mut budget = Budget::new(&mut work, 7 + storage);
+            budget.reserve_storage(7).unwrap();
+            let result = reserve_private_bf16_descriptor_output_v1(&mut budget);
+            assert_eq!(result.is_ok(), cap == 3);
+            if let Ok(reserved) = result {
+                budget.release_storage(reserved).unwrap();
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn constructor_prepayment_prior_denial_precedes_any_new_charge() {
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        assert!(budget.reserve_storage(1).is_err());
+        let before = (
+            budget.work(),
+            budget.storage(),
+            budget.failed_work(),
+            budget.failed_storage(),
+        );
+        for _ in 0..2 {
+            assert!(reserve_private_bf16_descriptor_output_v1(&mut budget).is_err());
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod private_owning_descriptor_observer_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as Ledger;
+    use sha2::{Digest, Sha256};
+
+    fn require_byte_refusal(
+        result: Result<(), PrivateBf16LlvmErrorV1>,
+    ) -> Result<(), PrivateBf16LlvmErrorV1> {
+        match result {
+            Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "private BF16 descriptor/final LLVM bytes differ from owned replay",
+                ),
+            )) => Ok(()),
+            Err(error) => Err(error),
+            Ok(()) => Err(private_bf16_descriptor_context_v1(
+                "mutated private BF16 descriptor owner unexpectedly replayed",
+            )),
+        }
+    }
+
+    impl PrivateBf16DescriptorV1 {
+        /// Genuine-owner controls: mutate only the already retained boxed bytes,
+        /// run the complete owning replay, restore bytes before inspecting any
+        /// result (including unwind), then demand a clean complete replay.
+        /// There is no replacement owner, target graph, account or proof token.
+        pub(crate) fn exercise_private_bf16_descriptor_bytes_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+            typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+            profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+        ) -> Result<(), PrivateBf16LlvmErrorV1> {
+            if self.descriptor.canonical_descriptor.is_empty() {
+                return Err(private_bf16_descriptor_context_v1(
+                    "empty owned descriptor control",
+                ));
+            }
+            let last = self.descriptor.canonical_descriptor.len() - 1;
+            self.descriptor.canonical_descriptor[last] ^= 1;
+            let changed_descriptor = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.revalidate_private_bf16_descriptor_v1(requested, typed_roots, profile)
+            }));
+            self.descriptor.canonical_descriptor[last] ^= 1;
+            let changed_descriptor = match changed_descriptor {
+                Ok(result) => result,
+                Err(payload) => {
+                    drop(payload);
+                    return Err(private_bf16_descriptor_context_v1(
+                        "owned descriptor mutation replay panicked after bytes were restored",
+                    ));
+                }
+            };
+            require_byte_refusal(changed_descriptor)?;
+
+            // Mutating this ASCII substring in-place preserves allocation and
+            // UTF-8, while changing actual retained final LLVM target text.
+            let start = self.descriptor.final_llvm.find("gfx942").ok_or_else(|| {
+                private_bf16_descriptor_context_v1("owned final LLVM target text absent")
+            })?;
+            let end = start + "gfx942".len();
+            self.descriptor
+                .final_llvm
+                .get_mut(start..end)
+                .expect("matched ASCII target")
+                .make_ascii_uppercase();
+            let changed_text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.revalidate_private_bf16_descriptor_v1(requested, typed_roots, profile)
+            }));
+            self.descriptor
+                .final_llvm
+                .get_mut(start..end)
+                .expect("same-width ASCII target")
+                .make_ascii_lowercase();
+            let changed_text = match changed_text {
+                Ok(result) => result,
+                Err(payload) => {
+                    drop(payload);
+                    return Err(private_bf16_descriptor_context_v1(
+                        "owned final LLVM mutation replay panicked after bytes were restored",
+                    ));
+                }
+            };
+            require_byte_refusal(changed_text)?;
+            self.revalidate_private_bf16_descriptor_v1(requested, typed_roots, profile)
+        }
+    }
+
+    // Non-Copy row remains prepaid until consumed; no detached report grants
+    // source, descriptor, Worker, artifact, runtime-allocation or launch authority.
+    struct Observation {
+        ledger: Ledger,
+        protected: usize,
+        initial_work: usize,
+        output_sha: [u8; 32],
+        output_bytes: u64,
+        descriptor_sha: [u8; 32],
+        final_sha: [u8; 32],
+        pre_worker_sha: [u8; 32],
+        descriptor_bytes: usize,
+        final_bytes: usize,
+        pre_worker_bytes: usize,
+        retained_descriptor: usize,
+        retained_llvm: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+    struct Hex<'a>(&'a [u8; 32]);
+    impl std::fmt::Display for Hex<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for byte in self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+            Ok(())
+        }
+    }
+    impl Observation {
+        fn emit(self, requested: [u8; 4], scratch: usize) {
+            eprintln!(
+                "fe2o3-bf16-private-owning-descriptor-collected-v1 requested={},{},{},{} output_sha256={} output_bytes={} descriptor_sha256={} descriptor_bytes={} final_llvm_sha256={} final_llvm_bytes={} pre_descriptor_worker_sha256={} pre_descriptor_worker_bytes={} retained_descriptor_storage={} retained_llvm_storage={} observer_storage={} work={} storage={} peak={} same_ledger=true actual_output_owner=true full_descriptor_replayed=true full_text_replayed=true descriptor_bytes_mutation_refused=true descriptor_text_mutation_refused=true replay_storage_restored=true runtime_bounds_alias_duties_preserved=true cleanup_pending=true llvm_emitted=true descriptor_constructed=true worker_invoked=false normal_admission=false launch_authenticated=false artifact_authority=false descriptor_authority=false",
+                requested[0],
+                requested[1],
+                requested[2],
+                requested[3],
+                Hex(&self.output_sha),
+                self.output_bytes,
+                Hex(&self.descriptor_sha),
+                self.descriptor_bytes,
+                Hex(&self.final_sha),
+                self.final_bytes,
+                Hex(&self.pre_worker_sha),
+                self.pre_worker_bytes,
+                self.retained_descriptor,
+                self.retained_llvm,
+                scratch,
+                self.work,
+                self.storage,
+                self.peak,
+            );
+        }
+    }
+
+    fn inspect_bytes(
+        descriptor: &PrivateBf16DescriptorPayloadV1,
+        llvm: &PrivateBf16LlvmPayloadV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), E> {
+        budget.check_prior_denials_v1().map_err(resource)?;
+        let bytes = descriptor
+            .canonical_descriptor
+            .len()
+            .checked_add(descriptor.final_llvm.len())
+            .and_then(|n| n.checked_add(llvm.worker.len()))
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        budget
+            .charge_work(
+                bytes
+                    .checked_mul(8)
+                    .and_then(|n| n.checked_add(128))
+                    .ok_or_else(|| resource(Resource::Arithmetic))?,
+            )
+            .map_err(resource)?;
+        let retained = std::mem::size_of::<PrivateBf16DescriptorV1>()
+            .checked_add(descriptor.canonical_descriptor.len())
+            .and_then(|n| n.checked_add(descriptor.final_llvm.len()))
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        if llvm.worker.is_empty()
+            || descriptor.canonical_descriptor.is_empty()
+            || descriptor.canonical_descriptor.len()
+                > fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES
+            || descriptor.final_llvm.len() > dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES
+            || descriptor.final_llvm.len() <= llvm.worker.len()
+            || descriptor.retained != retained
+            || !descriptor.final_llvm.starts_with(llvm.worker.as_str())
+            || descriptor
+                .final_llvm
+                .matches(".section .fe2o3.kd.v1")
+                .count()
+                != 1
+        {
+            return Err(E::RosterMetadata(
+                "actual retained descriptor byte shape differs",
+            ));
+        }
+        Ok(())
+    }
+
+    impl PrivateBf16DescriptorV1 {
+        /// The private genuine endpoint calls this only after opposite Return,
+        /// two actual-owner byte mutation refusals, and clean full replay.
+        pub(crate) fn observe_private_bf16_descriptor_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), PrivateBf16LlvmErrorV1> {
+            self.llvm
+                .optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+            let output = self.llvm.optimized.optimization.checked.owner();
+            let llvm = &self.llvm.llvm;
+            let descriptor = &self.descriptor;
+            let result = self
+                .llvm
+                .optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .with_budget(|budget| {
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    budget.charge_work(4).map_err(resource)?;
+                    if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3]) {
+                        return Err(E::RosterMetadata(
+                            "unsupported actual descriptor Return request",
+                        ));
+                    }
+                    let scratch = std::mem::size_of::<Observation>();
+                    let floor = budget.storage();
+                    budget.reserve_storage(scratch).map_err(resource)?;
+                    let mut row = Observation {
+                        ledger: budget.work_ledger_identity_v1(),
+                        protected: sum(floor, scratch)?,
+                        initial_work: budget.work(),
+                        output_sha: *output.canonical().identity().digest(),
+                        output_bytes: output.canonical().identity().canonical_length(),
+                        descriptor_sha: [0; 32],
+                        final_sha: [0; 32],
+                        pre_worker_sha: [0; 32],
+                        descriptor_bytes: descriptor.canonical_descriptor.len(),
+                        final_bytes: descriptor.final_llvm.len(),
+                        pre_worker_bytes: llvm.worker.len(),
+                        retained_descriptor: descriptor.retained,
+                        retained_llvm: llvm.retained,
+                        work: 0,
+                        storage: 0,
+                        peak: 0,
+                    };
+                    let inspected = (|| {
+                        inspect_bytes(descriptor, llvm, budget)?;
+                        row.descriptor_sha =
+                            Sha256::digest(descriptor.canonical_descriptor.as_ref()).into();
+                        row.final_sha = Sha256::digest(descriptor.final_llvm.as_bytes()).into();
+                        row.pre_worker_sha = Sha256::digest(llvm.worker.as_bytes()).into();
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        if budget.work_ledger_identity_v1() != row.ledger
+                            || budget.storage() != row.protected
+                            || budget.work() <= row.initial_work
+                            || budget.peak_storage() < budget.storage()
+                        {
+                            return Err(resource(Resource::Accounting));
+                        }
+                        row.work = budget.work();
+                        row.storage = budget.storage();
+                        row.peak = budget.peak_storage();
+                        row.emit(requested, scratch);
+                        Ok(())
+                    })();
+                    budget.release_storage(scratch).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    inspected
+                });
+            self.llvm
+                .optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)
+        }
+    }
+
+    #[test]
+    fn descriptor_refusal_control_rejects_success_and_unrelated_errors() {
+        assert!(
+            require_byte_refusal(Err(private_bf16_descriptor_context_v1(
+                "private BF16 descriptor/final LLVM bytes differ from owned replay",
+            )))
+            .is_ok()
+        );
+        assert!(require_byte_refusal(Ok(())).is_err());
+        assert!(matches!(
+            require_byte_refusal(Err(private_bf16_target_resource_v1(Resource::Accounting))),
+            Err(PrivateBf16LlvmErrorV1::RankedVerification(
+                E::ConditionalResource(Resource::Accounting)
+            ))
+        ));
+        assert!(require_byte_refusal(Err(private_bf16_descriptor_context_v1("other"))).is_err());
+    }
+
+    #[test]
+    fn descriptor_observer_meter_exact_and_one_short_preserve_original_floor() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        // Inert malformed shape, deliberately no real descriptor/LLVM owner.
+        let descriptor = PrivateBf16DescriptorPayloadV1 {
+            canonical_descriptor: vec![1u8, 2, 3].into_boxed_slice(),
+            final_llvm: "not LLVM".to_owned().into_boxed_str(),
+            retained: std::mem::size_of::<PrivateBf16DescriptorV1>() + 3 + 8,
+        };
+        let llvm = PrivateBf16LlvmPayloadV1 {
+            worker: "worker".into(),
+            dialect: "dialect".into(),
+            retained: 0,
+        };
+        let exact = 8 * (3 + 8 + 6) + 128;
+        for cap in [exact, exact - 1] {
+            let mut work = Work::new(cap);
+            let mut budget = Budget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let result = inspect_bytes(&descriptor, &llvm, &mut budget);
+            if cap == exact {
+                assert!(matches!(
+                    result,
+                    Err(E::RosterMetadata(
+                        "actual retained descriptor byte shape differs",
+                    ))
+                ));
+            } else {
+                let prior = budget.check_prior_denials_v1().unwrap_err();
+                assert!(matches!(result, Err(E::ConditionalResource(error)) if error == prior));
+                let before = (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                );
+                assert!(inspect_bytes(&descriptor, &llvm, &mut budget).is_err());
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+            assert_eq!(budget.storage(), 7);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+        }
+    }
+}
+
+#[cfg(test)]
+mod private_descriptor_constructor_failure_controls {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use std::cell::Cell;
+
+    // Test-harness state only, never source evidence or a replacement account.
+    // No hooks exist in non-test builds; no public selector enables them.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct State {
+        entered: usize,
+        made: usize,
+        dropped: usize,
+        panic_after_capture: bool,
+        panics: usize,
+    }
+    std::thread_local! {
+        static STATE: Cell<Option<State>> = const { Cell::new(None) };
+    }
+    struct Scope;
+    impl Scope {
+        fn enter(panic_after_capture: bool) -> Self {
+            STATE.with(|state| {
+                assert!(state.get().is_none(), "no nested descriptor fault scope");
+                state.set(Some(State {
+                    panic_after_capture,
+                    ..State::default()
+                }));
+            });
+            Self
+        }
+        fn snapshot(&self) -> State {
+            STATE.with(|state| state.get().unwrap())
+        }
+    }
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            STATE.with(|state| state.set(None));
+        }
+    }
+    pub(super) fn constructor_entered() {
+        STATE.with(|cell| {
+            if let Some(mut state) = cell.get() {
+                state.entered += 1;
+                cell.set(Some(state));
+            }
+        });
+    }
+    pub(super) fn payload_made() {
+        STATE.with(|cell| {
+            if let Some(mut state) = cell.get() {
+                state.made += 1;
+                cell.set(Some(state));
+            }
+        });
+    }
+    pub(super) fn after_capture() {
+        let panic_now = STATE.with(|cell| {
+            let Some(mut state) = cell.get() else {
+                return false;
+            };
+            if !state.panic_after_capture {
+                return false;
+            }
+            state.panic_after_capture = false;
+            state.panics += 1;
+            cell.set(Some(state));
+            true
+        });
+        if panic_now {
+            // Bypass rustc's global panic hook; exercise only unwind/catch/drop.
+            // This boxed inert test payload is explicitly harness-excluded.
+            std::panic::resume_unwind(Box::new("descriptor control after closed loans"));
+        }
+    }
+    impl Drop for PrivateBf16DescriptorPayloadV1 {
+        fn drop(&mut self) {
+            STATE.with(|cell| {
+                if let Some(mut state) = cell.get() {
+                    state.dropped += 1;
+                    cell.set(Some(state));
+                }
+            });
+        }
+    }
+    // Rust completes both boxed-field destructors before an explicit drop(...)
+    // returns. The counter records the payload Drop; the tested caller still
+    // must sequence that complete drop before any reservation refund.
+    fn inert_payload() -> PrivateBf16DescriptorPayloadV1 {
+        payload_made();
+        PrivateBf16DescriptorPayloadV1 {
+            canonical_descriptor: vec![1, 2, 3].into_boxed_slice(),
+            final_llvm: "not LLVM".to_owned().into_boxed_str(),
+            retained: std::mem::size_of::<PrivateBf16DescriptorV1>() + 3 + 8,
+        }
+    }
+    fn is_accounting(result: &PrivateBf16DescriptorResultV1) -> bool {
+        matches!(
+            result,
+            Err(PrivateBf16LlvmErrorV1::RankedVerification(
+                E::ConditionalResource(Resource::Accounting)
+            ))
+        )
+    }
+
+    #[test]
+    fn descriptor_result_reconciliation_retains_live_bytes_until_explicit_drop() {
+        let scope = Scope::enter(false);
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let slot = &budget as *const Budget<'_> as usize;
+        let prepaid = reserve_private_bf16_descriptor_output_v1(&mut budget).unwrap();
+        let payload = finish_private_bf16_descriptor_attempt_v1(
+            Ok(inert_payload()),
+            7,
+            ledger,
+            slot,
+            prepaid,
+            &mut budget,
+        )
+        .unwrap();
+        let retained = payload.retained;
+        assert_eq!(budget.storage(), 7 + retained);
+        assert_eq!((scope.snapshot().made, scope.snapshot().dropped), (1, 0));
+        drop(payload);
+        assert_eq!(scope.snapshot().dropped, 1);
+        assert_eq!(budget.storage(), 7 + retained);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn descriptor_result_typed_refusal_and_zero_prepayment_restore_only_known_credit() {
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+        budget.reserve_storage(7).unwrap();
+        for charged in [false, true] {
+            let ledger = budget.work_ledger_identity_v1();
+            let slot = &budget as *const Budget<'_> as usize;
+            let prepaid = if charged {
+                reserve_private_bf16_descriptor_output_v1(&mut budget).unwrap()
+            } else {
+                0
+            };
+            let result = finish_private_bf16_descriptor_attempt_v1(
+                Err(private_bf16_descriptor_context_v1(
+                    "inert constructor refusal",
+                )),
+                7,
+                ledger,
+                slot,
+                prepaid,
+                &mut budget,
+            );
+            assert!(
+                matches!(result, Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "inert constructor refusal"))))
+            );
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+
+    #[test]
+    fn descriptor_result_original_denial_drops_payload_then_refunds_known_prepayment() {
+        for kind in 0..3 {
+            let scope = Scope::enter(false);
+            let mut work = Work::new(3);
+            let storage = private_bf16_descriptor_caps_v1().unwrap()
+                + std::mem::size_of::<PrivateBf16DescriptorV1>()
+                + std::mem::size_of::<Option<PrivateBf16DescriptorResultV1>>();
+            let mut budget = Budget::new(&mut work, 7 + storage);
+            budget.reserve_storage(7).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let slot = &budget as *const Budget<'_> as usize;
+            let prepaid = reserve_private_bf16_descriptor_output_v1(&mut budget).unwrap();
+            let payload = inert_payload();
+            if kind != 1 {
+                assert!(budget.charge_work(1).is_err());
+            }
+            if kind != 0 {
+                assert!(budget.reserve_storage(1).is_err());
+            }
+            let prior = budget.check_prior_denials_v1().unwrap_err();
+            let before = (
+                budget.work(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            let result = finish_private_bf16_descriptor_attempt_v1(
+                Ok(payload),
+                7,
+                ledger,
+                slot,
+                prepaid,
+                &mut budget,
+            );
+            assert!(
+                matches!(result, Err(PrivateBf16LlvmErrorV1::RankedVerification(
+                E::ConditionalResource(error))) if error == prior)
+            );
+            assert_eq!(scope.snapshot().dropped, 1);
+            assert_eq!(budget.storage(), 7);
+            assert_eq!(
+                (
+                    budget.work(),
+                    budget.peak_storage(),
+                    budget.failed_work(),
+                    budget.failed_storage()
+                ),
+                before
+            );
+            // Sticky original refusal remains; never clear it to resume a phase.
+            assert_eq!(budget.check_prior_denials_v1().unwrap_err(), prior);
+        }
+    }
+
+    #[test]
+    fn descriptor_result_foreign_ledger_slot_or_surplus_never_guesses_a_refund() {
+        for fault in 0..3 {
+            let scope = Scope::enter(false);
+            let mut work = Work::new(100);
+            let mut foreign_work = Work::new(100);
+            let foreign = Budget::new(&mut foreign_work, 64 * 1024 * 1024);
+            let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+            budget.reserve_storage(7).unwrap();
+            let ledger = if fault == 0 {
+                foreign.work_ledger_identity_v1()
+            } else {
+                budget.work_ledger_identity_v1()
+            };
+            let slot = &budget as *const Budget<'_> as usize + usize::from(fault == 1);
+            let prepaid = reserve_private_bf16_descriptor_output_v1(&mut budget).unwrap();
+            if fault == 2 {
+                budget.reserve_storage(1).unwrap();
+            }
+            let before = budget.storage();
+            let result = finish_private_bf16_descriptor_attempt_v1(
+                Ok(inert_payload()),
+                7,
+                ledger,
+                slot,
+                prepaid,
+                &mut budget,
+            );
+            assert!(is_accounting(&result));
+            assert_eq!(scope.snapshot().dropped, 1);
+            assert_eq!(budget.storage(), before);
+            assert!(budget.check_prior_denials_v1().is_ok());
+            // Isolated fixture teardown knows its own credit. Production did
+            // not infer or release any source/callback/foreign reservation.
+            budget.release_storage(before - 7).unwrap();
+        }
+    }
+
+    #[test]
+    fn descriptor_result_overstated_retention_drops_before_exact_credit_release() {
+        let scope = Scope::enter(false);
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+        budget.reserve_storage(7).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let slot = &budget as *const Budget<'_> as usize;
+        let prepaid = reserve_private_bf16_descriptor_output_v1(&mut budget).unwrap();
+        let mut payload = inert_payload();
+        payload.retained = prepaid + 1;
+        let result = finish_private_bf16_descriptor_attempt_v1(
+            Ok(payload),
+            7,
+            ledger,
+            slot,
+            prepaid,
+            &mut budget,
+        );
+        assert!(is_accounting(&result));
+        assert_eq!(scope.snapshot().dropped, 1);
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
+    fn descriptor_fault_scope_restores_on_unwind() {
+        let run = std::panic::catch_unwind(|| {
+            let _scope = Scope::enter(true);
+            let payload = inert_payload();
+            after_capture();
+            drop(payload);
+        });
+        assert!(run.is_err());
+        let scope = Scope::enter(false);
+        assert_eq!(scope.snapshot(), State::default());
+    }
+
+    struct Capture<'a>(&'a Cell<bool>);
+    impl Drop for Capture<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    impl PrivateBf16LlvmV1 {
+        /// Genuine-source controls on the intact owner and original account.
+        /// This is called only by the ignored private descriptor endpoint.
+        /// Test counters/panic machinery remain excluded harness state, not
+        /// production source, allocator, engine or whole-stack accounting.
+        pub(crate) fn exercise_private_bf16_descriptor_constructor_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+            typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+            profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+        ) -> Result<(), PrivateBf16LlvmErrorV1> {
+            self.revalidate_private_bf16_llvm_v1(requested, typed_roots, profile)?;
+            let owner = &self.optimized.target.formal.owner;
+            let output = self.optimized.optimization.checked.owner();
+            let worker = &self.llvm.worker;
+            let [root] = self.optimized.target.formal.verification.roots.as_ref() else {
+                return Err(private_bf16_descriptor_context_v1(
+                    "constructor control root custody",
+                ));
+            };
+            let semantic_root = root.semantic_root;
+            let wrong = if requested == [0, 1, 2, 3] {
+                [1, 0, 2, 3]
+            } else {
+                [0, 1, 2, 3]
+            };
+            let result = self.optimized.target.formal.verification.phase.with_budget(|budget| {
+                let run = (|| -> Result<(), PrivateBf16LlvmErrorV1> {
+                    let floor = budget.storage();
+                    let ledger = budget.work_ledger_identity_v1();
+                    let slot = budget as *const Budget<'_> as usize;
+                    // An unused captured callback must drop even if source/
+                    // Return replay refuses before lending anything.
+                    let captured_dropped = Cell::new(false);
+                    let called = Cell::new(false);
+                    let captured = Capture(&captured_dropped);
+                    let called_ref = &called;
+                    let refused = owner.with_private_bf16_descriptor_source_v1(
+                        semantic_root, wrong, budget,
+                        move |_, _, _, _, _, _| {
+                            let _held = captured;
+                            called_ref.set(true);
+                            Ok(())
+                        },
+                    );
+                    assert!(matches!(refused, Err(
+                        fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch))));
+                    assert!(captured_dropped.get() && !called.get());
+                    assert_eq!(budget.storage(), floor);
+                    // Direct source-loan callback unwind occurs after replay,
+                    // with no nested guard frame to pretend has been refunded.
+                    let captured_dropped = Cell::new(false);
+                    let called = Cell::new(false);
+                    let called_ref = &called;
+                    let captured = Capture(&captured_dropped);
+                    let refused = owner.with_private_bf16_descriptor_source_v1(
+                        semantic_root, requested, budget,
+                        move |_, _, _, _, _, _| {
+                            let _held = captured;
+                            called_ref.set(true);
+                            std::panic::resume_unwind(Box::new("descriptor source callback control"));
+                        },
+                    );
+                    assert!(matches!(refused, Err(
+                        fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::MirPlironTranslation(_)))));
+                    assert!(captured_dropped.get() && called.get());
+                    assert_eq!(budget.storage(), floor);
+                    budget.check_prior_denials_v1().map_err(private_bf16_target_resource_v1)?;
+                    for fault in 0..4 {
+                        let scope = Scope::enter(fault == 2);
+                        let result = derive_private_bf16_descriptor_v1(
+                            owner, output, semantic_root,
+                            if fault == 0 { wrong } else { requested },
+                            worker, if fault == 1 { &[] } else { typed_roots }, budget,
+                        );
+                        match (fault, result) {
+                            (0, Err(PrivateBf16LlvmErrorV1::FormalMemoryAdmission(
+                                fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                                    fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch)))) => {
+                                assert_eq!((scope.snapshot().entered, scope.snapshot().made, scope.snapshot().dropped), (0, 0, 0));
+                            }
+                            (1, Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                    "private BF16 complete singleton descriptor roster")))) => {
+                                assert_eq!((scope.snapshot().entered, scope.snapshot().made, scope.snapshot().dropped), (1, 0, 0));
+                            }
+                            (2, Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                    "private BF16 descriptor construction panicked")))) => {
+                                assert_eq!((scope.snapshot().entered, scope.snapshot().made, scope.snapshot().dropped, scope.snapshot().panics), (1, 1, 1, 1));
+                            }
+                            (3, Ok(payload)) => {
+                                assert_eq!((scope.snapshot().entered, scope.snapshot().made, scope.snapshot().dropped), (1, 1, 0));
+                                let retained = payload.retained;
+                                assert_eq!(budget.storage(), floor + retained);
+                                drop(payload);
+                                assert_eq!(scope.snapshot().dropped, 1);
+                                assert_eq!(budget.storage(), floor + retained);
+                                budget.release_storage(retained).map_err(private_bf16_target_resource_v1)?;
+                            }
+                            (_, Err(error)) => return Err(error),
+                            (_, Ok(payload)) => {
+                                drop(payload);
+                                return Err(private_bf16_descriptor_context_v1(
+                                    "constructor control unexpectedly returned payload"));
+                            }
+                        }
+                        assert_eq!(budget.storage(), floor);
+                        assert!(budget.work_ledger_identity_v1() == ledger);
+                        assert_eq!(budget as *const Budget<'_> as usize, slot);
+                        budget.check_prior_denials_v1().map_err(private_bf16_target_resource_v1)?;
+                    }
+                    Ok(())
+                })();
+                Ok(run)
+            });
+            self.optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)?
+        }
+    }
+}

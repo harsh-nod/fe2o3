@@ -903,3 +903,26 @@ mod storage_compiler_profile_tests {
         assert_eq!(check_type_depth(&Type::Scalar(ScalarType::U32), 0), Ok(()));
     }
 }
+
+/// Inert symbol/text retention for the private BF16 owning continuation.
+/// The caller has just replayed its actual O/LLVM pair on the original account.
+/// This accepts no authority and performs no generic lowering or fresh-ledger
+/// canonical verification; the immutable V12 owner already supplies structure.
+pub(crate) fn retain_private_bf16_checked_compiler_module_text_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    llvm_ir: String,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    let module = output.module();
+    enforce_compiler_module_bounds(module)?;
+    enforce_llvm_text_bound(&llvm_ir)?;
+    let symbols = compiler_module_symbol_closure_v1(module);
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: symbols.kernel_entries,
+        device_definitions: symbols.device_definitions,
+        internal_helpers: symbols.internal_helpers,
+        device_ffi_exports: symbols.device_ffi_exports,
+        external_declarations: symbols.external_declarations,
+        descriptor_source_identity: None,
+    })
+}

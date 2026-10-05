@@ -11,6 +11,74 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 owning descriptor continuation — 2026-10-05
+
+The private continuation now constructs and retains a canonical compiler
+descriptor and descriptor-bound LLVM text under the existing source, formal,
+checked optimized-output and LLVM owners. It uses the retained typed root and
+exact gfx942:xnack-/code-object-V6 profile. It does not reconstruct source
+authority from serialized bytes or bind the descriptor twice.
+
+Replay compares complete canonical descriptor bytes and complete final LLVM
+text against fresh reconstruction from those owners. Mutating either retained
+payload is rejected; restoring it permits clean replay. Wrong Return requests
+and empty typed-root rosters fail before successful construction. Additional
+controls cover unused callback captures, source-callback unwind, unwind after
+actual payload capture, sticky work/storage denials, foreign ledger/slot,
+unknown surplus, overstated retention, and payload drop before known-credit
+refund. These checks preserve the original account rather than creating a new
+budget. Selected retained-output accounting still excludes the documented
+legacy-engine temporaries and is not allocator or process-RSS accounting.
+
+Four fresh frontend processes (Identity and swapped inputs in debug and
+release) completed descriptor construction, full replay, mutation rejection and
+the genuine-owner failure controls. Each descriptor is 1,197 bytes. Final LLVM
+is 31,952 bytes for Identity and 31,941 for swapped inputs; retained descriptor
+storage is 38,357 and 38,346 bytes, with a 224-byte observation header.
+Projection live storage is 910,792,822 and 910,792,789 bytes respectively;
+peak remains 962,461,661 bytes. After the complete owner chain drops, the
+separate materialization account returns to 816,298,804 bytes.
+
+Twelve further fresh frontend processes repeated the LLVM-only, guarded-output
+and raw-output paths in both modes. All four paths have matching debug/release
+frames, complete diagnostics and byte-identical raw stderr within each path.
+Raw analysis remains Incomplete: three allocations, nine accesses, one
+256-byte bounds obligation, two alias obligations, no reported conflicts and
+eight guarded-access reasons. No runtime allocation, alias or launch
+authentication is inferred from descriptor or structural-guard success.
+The comparison record is
+`bf16-descriptor-current-pair-comparison-root-r68-r1/COMPARISON.json`
+(SHA256 `1c8a36bed0cc1cfe1597f791094b821dbfa24ee58dfaebc2791cdd7f050b4550`).
+
+Validation passed in debug and release: 3,976 compiler library tests (236
+ignored), 19 export-simulation tests, 73 extractor tests, the package's
+non-ignored API/integration tests, 2,088 lowerer tests and 239 model tests
+(three ignored). The 19-control descriptor parent and release product build
+also passed. An initial missing-import compile failure was corrected and its
+failed record preserved. Tested source census before the unrelated upstream
+KFD integration:
+`cb37b51f1feffbd7b2ca1d2badb4018929511694372cd9122ebefd0807068066`.
+
+The unrelated upstream KFD token-serialization change at
+`cea62c79d1622ca5fa53a727611a102e067c4ea2` was fast-forwarded without
+changing these ten descriptor source leaves. Its 28 focused token-program
+controls passed with the engineering feature enabled.
+
+Separately, the paired CPU/wave debugger correction now has a successful
+selective compile/link and an actual 20-type DWARF layout check. The measured
+adapter reservation is 19,976 bytes under the unchanged 65,536-byte limit.
+The failed first compile-validation generation remains preserved; the accepted
+fresh generation validates all four changed includes and the exact unchanged
+configured-header alias. The GNU layout check verified canonical tool/runtime
+content before and after, but does not claim a complete runtime alias/preload
+postflight. This private rebuild has not yet passed fresh debugger startup or
+native resume qualification, and is not a shipped debugger feature.
+
+External compiler-worker execution, protected artifact publication, ordinary
+admission, authenticated launch, hardware/numerical qualification and public
+debugger qualification remain pending. No milestone or tutorial is completed
+by this checkpoint. Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 owning LLVM continuation — 2026-10-05
 
 The private continuation now retains full dialect LLVM and LLVM 22 worker-layout

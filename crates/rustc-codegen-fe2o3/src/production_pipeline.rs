@@ -5156,3 +5156,48 @@ impl PrivateBf16LlvmCompilationV1 {
         )
     }
 }
+
+/// Private descriptor bytes and exact descriptor-bound LLVM, retaining the
+/// actual LLVM/O/source/formal owner and authenticated compiler bindings.
+/// No conversion to TargetLowered, OutputOwnerV1, signed source or Worker stage.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16DescriptorCompilationV1 {
+    descriptor: crate::production_ranked_projection_v1::PrivateBf16DescriptorV1,
+    bindings: AuthenticatedProductionBindings,
+}
+impl PrivateBf16LlvmCompilationV1 {
+    #[allow(dead_code)]
+    fn prepare_private_bf16_descriptor_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16DescriptorCompilationV1, ProductionPipelineError> {
+        let Self { llvm, bindings } = self;
+        let descriptor = llvm.prepare_private_bf16_descriptor_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16DescriptorCompilationV1 {
+            descriptor,
+            bindings,
+        })
+    }
+}
+impl PrivateBf16DescriptorCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_descriptor_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.descriptor.revalidate_private_bf16_descriptor_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+
+    #[allow(dead_code)]
+    const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
