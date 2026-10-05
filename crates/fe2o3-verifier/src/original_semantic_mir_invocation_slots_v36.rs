@@ -870,6 +870,59 @@ mod tests {
 
     const LIMIT: usize = 100_000_000;
 
+    #[test]
+    #[ignore = "diagnostic only: prints original general-fixture convergence refusal"]
+    fn diagnostic_original_mir_tile_general_arrival_v167() {
+        use fe2o3_kernel_analysis::{
+            CanonicalTileConvergenceErrorV160 as Convergence, check_canonical_tile_convergence_v160,
+        };
+        super::super::super::invocations::tests::run_allocation_variant(
+            LIMIT,
+            LIMIT,
+            |plan, out| {
+                let source = plan.source(out)?;
+                let result = source.with_checked_mixed_fixedpoint_optimization_v18(
+                    out.budget,
+                    |_, optimized, budget| {
+                        let cfg = optimized.output_root_cfg_v18(0, budget)?;
+                        let result = check_canonical_tile_convergence_v160(
+                            cfg.inventory(),
+                            cfg.function().coordinate,
+                            budget,
+                        );
+                        let site = match &result {
+                            Err(
+                                Convergence::UnsupportedArrival(site)
+                                | Convergence::VaryingArrival(site)
+                                | Convergence::VaryingTileInput(site)
+                                | Convergence::LaunchMismatch(site),
+                            ) => Some(*site),
+                            _ => None,
+                        };
+                        let operation = site.and_then(|site| {
+                            cfg.inventory()
+                                .operations()
+                                .iter()
+                                .find(|row| row.coordinate == site)
+                                .map(|row| &row.operation.kind)
+                        });
+                        println!("tile_arrival_diagnostic={result:?}; operation={operation:?}");
+                        Ok::<_, Error>(((), 0))
+                    },
+                );
+                match result {
+                    Ok((owner, (), _)) => {
+                        drop(owner);
+                        Ok(())
+                    }
+                    Err(error) => panic!("tile arrival diagnostic preparation: {error:?}"),
+                }
+            },
+        )
+        .0
+        .unwrap();
+    }
+
     pub(super) fn run_tile_slots(
         layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
         examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
