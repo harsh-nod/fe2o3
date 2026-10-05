@@ -416,15 +416,16 @@ fn original_tile_fixture_has_exact_and_one_short_complete_resource_boundaries() 
             (exact.1, exact.2, exact.3),
             (baseline.1, baseline.2, baseline.3)
         );
-        assert!(
-            run_fixture(layout, baseline.1 - 1, baseline.3, check_actual_tile_slots)
-                .0
-                .is_err()
-        );
-        assert!(
-            run_fixture(layout, baseline.1, baseline.3 - 1, check_actual_tile_slots)
-                .0
-                .is_err()
-        );
+        let work = run_fixture(layout, baseline.1 - 1, baseline.3, check_actual_tile_slots).0;
+        let storage = run_fixture(layout, baseline.1, baseline.3 - 1, check_actual_tile_slots).0;
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+        assert!(matches!(work,
+            Err(Error::Resource(Resource::Work(error)))
+                | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                if error.actual() == baseline.1 && error.limit() == baseline.1 - 1));
+        assert!(matches!(storage,
+            Err(Error::Resource(Resource::Storage(error)))
+                | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                if error.actual() == baseline.3 && error.limit() == baseline.3 - 1));
     }
 }
