@@ -134,7 +134,18 @@ fn unsupported_full64_shape_and_coverage_leave_no_output_or_credit() {
     for (n, grid) in [(65, 64), (65, 65), (0, 64)] {
         let budget = GeneratedRuntimeResultBudgetV1::new(520, 1).unwrap();
         let (result, mut observer) = pack_output(n, grid, &budget);
-        assert!(result.is_err(), "accepted N={n}, G={grid}");
+        match (n, grid) {
+            (65, 64) => assert!(matches!(
+                result,
+                Err(WorkerV3ConditionalFillInvocationErrorV1::Coverage(
+                    crate::ConditionalPackedCoverageErrorV1::Underlaunch {
+                        elements: 65,
+                        grid_x: 64
+                    }
+                ))
+            )),
+            _ => assert!(result.is_err(), "accepted N={n}, G={grid}"),
+        }
         assert_eq!(budget.usage().reserved_peak_bytes, 0);
         assert!(matches!(
             observer.try_take(),

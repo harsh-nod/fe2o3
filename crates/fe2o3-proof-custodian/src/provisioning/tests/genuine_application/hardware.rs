@@ -7,8 +7,24 @@ pub(super) const SELECTION_ENV: &str = "FE2O3_GENUINE_GPU_SELECTION";
 pub(super) const SELECTION_TAG: &str = "FE2O3_GPU_SELECTION_V1=";
 const SELECTION_SCHEMA: &str = "fe2o3.genuine-gpu-selection.v1";
 const REPORT_SCHEMA: &str = "fe2o3.genuine-two-gpu.v1";
+const CONTROL_SCHEMA: &str = "fe2o3.genuine-two-gpu-control.v1";
 const CLIENT_UID: u32 = 1000;
 const CLIENT_GID: u32 = 1000;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Control {
+    SecondCoverageReject,
+    PeerDeadlineBeforeSubmit,
+}
+
+impl Control {
+    pub(super) fn token(self) -> &'static str {
+        match self {
+            Self::SecondCoverageReject => "second-coverage-reject",
+            Self::PeerDeadlineBeforeSubmit => "peer-deadline-before-submit",
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -259,6 +275,51 @@ pub(super) fn verify_report(stdout: &[u8], ids: [u64; 2]) -> Result<(), String> 
     };
     if report != expected {
         return Err("two-GPU report does not match the requested successful execution".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ControlReport {
+    schema: String,
+    devices: [String; 2],
+    mode: String,
+    shutdown: String,
+}
+
+pub(super) fn verify_control_report(
+    stdout: &[u8],
+    ids: [u64; 2],
+    control: Control,
+    code: Option<i32>,
+) -> Result<(), String> {
+    // Expected rejection is a successful test; all production post-spawn checks still run.
+    // Status alone is insufficient: only the distinct control record can qualify this case.
+    if code != Some(0) {
+        return Err("negative control requires a successful production application route".into());
+    }
+    let text = std::str::from_utf8(stdout).map_err(|e| e.to_string())?;
+    let mut reports = text.lines().filter(|line| {
+        line.trim_start().starts_with('{') || line.contains("fe2o3.genuine-two-gpu")
+    });
+    let line = reports
+        .next()
+        .ok_or("missing two-GPU negative-control report")?;
+    if reports.next().is_some() {
+        return Err("duplicate or mixed two-GPU control/success records".into());
+    }
+    let report: ControlReport =
+        serde_json::from_str(line).map_err(|e| format!("control report: {e}"))?;
+    if report
+        != (ControlReport {
+            schema: CONTROL_SCHEMA.into(),
+            devices: ids.map(|id| format!("{id:#018x}")),
+            mode: control.token().into(),
+            shutdown: "released".into(),
+        })
+    {
+        return Err("two-GPU control record does not match the requested case".into());
     }
     Ok(())
 }

@@ -142,6 +142,110 @@ fn current_thread_deadline_keeps_same_future_and_credit_for_later_completion() {
 }
 
 #[test]
+fn current_thread_peer_wait_deadline_then_cancel_refunds_only_after_owner_retirement() {
+    use crate::{
+        RuntimeAccessV1, RuntimeAsyncCancelResultV1, RuntimeAsyncOperationPhaseV1,
+        RuntimeMemoryRegionV1,
+    };
+    let state = Arc::new(Mutex::new(MockState {
+        peer_devices: true,
+        ..MockState::default()
+    }));
+    let (mut engine, handle) = start_current_state(
+        state.clone(),
+        Arc::new(Mutex::new(OwnerTrace::default())),
+        RuntimeAsyncEngineConfigV1::default(),
+    );
+    let (stream, source, destination) = drive(
+        &mut engine,
+        handle
+            .observer()
+            .enqueue_with_context(|context| {
+                let first = context.devices()[0].id();
+                let second = context.devices()[1].id();
+                let stream = context.create_stream(second).unwrap();
+                let source = context
+                    .allocate(first, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+                    .unwrap();
+                let destination = context
+                    .allocate(second, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+                    .unwrap();
+                (stream, source, destination)
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let mut future = handle
+        .peer_copy_tracked(
+            stream,
+            RuntimeMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            RuntimeMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            Vec::new(),
+        )
+        .unwrap();
+    let control = future.control();
+    assert_eq!(control.phase(), RuntimeAsyncOperationPhaseV1::Queued);
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    assert!(matches!(
+        engine.drive_until_ready(Pin::new(&mut future), Instant::now()),
+        Err(RuntimeAsyncDriveErrorV1::DeadlineExceeded)
+    ));
+    assert_eq!(control.phase(), RuntimeAsyncOperationPhaseV1::Queued);
+    assert_eq!(
+        control.cancel_before_submission(),
+        RuntimeAsyncCancelResultV1::CancelledBeforeSubmission
+    );
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    assert!(matches!(
+        engine.drive_until_ready(
+            Pin::new(&mut future),
+            Instant::now() + Duration::from_secs(2)
+        ),
+        Ok(Err(
+            RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission
+        ))
+    ));
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    drop(future);
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+    assert!(state.lock().unwrap().copy_issues.is_empty());
+    assert!(state.lock().unwrap().issues.is_empty());
+    assert!(state.lock().unwrap().statuses.is_empty());
+    drive(
+        &mut engine,
+        handle
+            .observer()
+            .enqueue_with_context(move |context| {
+                context.release_allocation(destination).unwrap();
+                context.release_allocation(source).unwrap();
+                context.destroy_stream(stream).unwrap();
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let shutdown = engine.shutdown();
+    assert_eq!(
+        shutdown.disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    assert!(shutdown.cleanup.unwrap().is_complete());
+    assert!(shutdown.native_failure.is_none());
+    assert!(!shutdown.worker_panicked);
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+}
+
+#[test]
 fn current_thread_ready_result_wins_over_expired_deadline() {
     let (mut engine, _) = start_current(
         Arc::new(Mutex::new(OwnerTrace::default())),

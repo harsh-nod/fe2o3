@@ -3,12 +3,15 @@ use std::{fmt::Debug, future::Future, pin::Pin, sync::Arc, time::Instant};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_conditional_custodian_application::fill_write_only_gpu;
 use fe2o3_host::{
-    ChargedTypedResultV1, GeneratedRuntimeArgumentLimitsV1, GeneratedRuntimeChargedResultV1,
-    GeneratedRuntimeResultBudgetV1, GeneratedRuntimeWriteSlice, RemoteConditionalFillArtifactV1,
+    ChargedTypedResultV1, ConditionalPackedCoverageErrorV1, GeneratedRuntimeArgumentLimitsV1,
+    GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1, GeneratedRuntimeWriteSlice,
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
 };
 use fe2o3_runtime::*;
 
-use crate::native_case::{self, ELEMENTS, FRAME_BYTES, GUARD_BYTES, PAYLOAD_BYTES};
+use crate::native_case::{
+    self, ELEMENTS, FRAME_BYTES, GUARD_BYTES, HardwareCase, Mode, PAYLOAD_BYTES,
+};
 
 type Backend = KfdMultiDeviceRuntimeBackendV1;
 type Context = RuntimeContextV1<Backend>;
@@ -46,7 +49,8 @@ fn with_context<T: Send + 'static>(
     checked("context operation", drive(engine, future, deadline)?)?
 }
 
-pub fn run(artifact: Arc<Artifact>, ids: [u64; 2], deadline: Instant) -> Result<()> {
+pub fn run(artifact: Arc<Artifact>, case: HardwareCase, deadline: Instant) -> Result<()> {
+    let ids = case.devices;
     let budget = checked(
         "result budget",
         GeneratedRuntimeResultBudgetV1::new(1040, 2),
@@ -69,7 +73,7 @@ pub fn run(artifact: Arc<Artifact>, ids: [u64; 2], deadline: Instant) -> Result<
             RuntimeAsyncProgressConfigV1::default(),
         ),
     )?;
-    let work = execute(&mut engine, &handle, &artifact, &budget, ids, deadline);
+    let work = execute(&mut engine, &handle, &artifact, &budget, case, deadline);
     // Never propagate an operation error before inspecting owned shutdown. A timeout is not
     // settlement; the owner retains uncertain native custody instead of dropping it as quiescent.
     let shutdown = engine.shutdown();
@@ -80,6 +84,8 @@ pub fn run(artifact: Arc<Artifact>, ids: [u64; 2], deadline: Instant) -> Result<
             .is_some_and(|report| report.is_complete())
         && !shutdown.worker_panicked
         && shutdown.native_failure.is_none()
+        && handle.observer().reply_cells_in_use() == 0
+        && handle.observer().snapshot_bytes_in_use() == 0
     {
         Ok(())
     } else {
@@ -114,7 +120,7 @@ fn execute(
     handle: &Handle,
     artifact: &Arc<Artifact>,
     budget: &GeneratedRuntimeResultBudgetV1,
-    ids: [u64; 2],
+    case: HardwareCase,
     deadline: Instant,
 ) -> Result<Arc<Vec<ChargedTypedResultV1<u32>>>> {
     let (devices, streams) = with_context(engine, handle, deadline, move |context| {
@@ -125,7 +131,7 @@ fn execute(
             return Err("native fixture requires two gfx942:xnack- devices".into());
         }
         let devices = [first.id(), second.id()];
-        for (device, expected) in devices.into_iter().zip(ids) {
+        for (device, expected) in devices.into_iter().zip(case.devices) {
             let observed = checked(
                 "hardware identity",
                 context.with_gfx942_preparation_device_v1(device, |owner| {
@@ -143,7 +149,7 @@ fn execute(
         Ok((devices, streams))
     })?;
     let mut pending = Vec::with_capacity(2);
-    for (device, stream) in devices.into_iter().zip(streams) {
+    for (index, (device, stream)) in devices.into_iter().zip(streams).enumerate() {
         let (output, observer) =
             GeneratedRuntimeWriteSlice::new_charged(vec![u32::MAX; ELEMENTS].into_boxed_slice());
         let prepare = checked(
@@ -154,7 +160,7 @@ fn execute(
                 device,
                 checked(
                     "fill geometry",
-                    AqlDispatchGeometryV1::new([128, 1, 1], [64, 1, 1]),
+                    AqlDispatchGeometryV1::new([case.mode.grid_x(index), 1, 1], [64, 1, 1]),
                 )?,
                 0,
                 30_000,
@@ -163,10 +169,25 @@ fn execute(
                 deadline,
             ),
         )?;
-        let prepared = checked(
-            "prepare fill",
-            checked("prepare reply", drive(engine, prepare, deadline)?)?,
-        )?;
+        let prepared = checked("prepare reply", drive(engine, prepare, deadline)?)?;
+        if case.mode == Mode::SecondCoverageReject && index == 1 {
+            match prepared {
+                Err(RuntimeGfx942PreparationErrorV1::Preparation(
+                    WorkerV3ConditionalFillInvocationErrorV1::Coverage(
+                        ConditionalPackedCoverageErrorV1::Underlaunch {
+                            elements: 65,
+                            grid_x: 64,
+                        },
+                    ),
+                )) => break,
+                other => {
+                    return Err(format!(
+                        "second invocation did not reject exact undercoverage: {other:?}"
+                    ));
+                }
+            }
+        }
+        let prepared = checked("prepare fill", prepared)?;
         let reserve = handle
             .try_reserve_prepared_v1(prepared)
             .map_err(|e| format!("reserve fill: {:?}", e.error))?;
@@ -190,7 +211,11 @@ fn execute(
         results.push(result);
     }
     let results = Arc::new(results);
-    transport(engine, handle, devices, streams, &results, deadline)?;
+    if case.mode != Mode::SecondCoverageReject {
+        transport(
+            engine, handle, devices, streams, &results, case.mode, deadline,
+        )?;
+    }
     checked(
         "retained artifact after transport",
         artifact.revalidate(deadline),
@@ -253,7 +278,12 @@ fn region(
 fn finish_transfer<A: Send + 'static>(
     engine: &mut Engine,
     handle: &Handle,
-    future: RuntimeAsyncOperationFutureV1<A, KfdRuntimeBackendErrorV1>,
+    future: impl Future<
+        Output = std::result::Result<
+            RuntimeAsyncOperationResultV1<A, KfdRuntimeBackendErrorV1>,
+            RuntimeAsyncEngineCallErrorV1,
+        >,
+    > + Unpin,
     deadline: Instant,
 ) -> Result<()> {
     let outcome = checked("transfer reply", drive(engine, future, deadline)?)?;
@@ -284,6 +314,7 @@ fn transport(
     devices: [RuntimeDeviceIdV1; 2],
     streams: [RuntimeStreamIdV1; 2],
     results: &Arc<Vec<ChargedTypedResultV1<u32>>>,
+    mode: Mode,
     deadline: Instant,
 ) -> Result<()> {
     // Keep caller custody even when the queued staging command is rejected or abandoned.
@@ -370,9 +401,9 @@ fn transport(
         }
     }
     for destination in 0..2 {
-        let peer = checked(
+        let mut peer = checked(
             "enqueue native peer",
-            handle.peer_copy(
+            handle.peer_copy_tracked(
                 streams[destination],
                 region(
                     buffers[1 - destination].source,
@@ -389,6 +420,31 @@ fn transport(
                 Vec::new(),
             ),
         )?;
+        if mode == Mode::PeerDeadlineBeforeSubmit {
+            let control = peer.control();
+            if control.phase() != RuntimeAsyncOperationPhaseV1::Queued {
+                return Err("new peer operation was not queued".into());
+            }
+            if !matches!(
+                engine.drive_until_ready(Pin::new(&mut peer), Instant::now()),
+                Err(RuntimeAsyncDriveErrorV1::DeadlineExceeded)
+            ) {
+                return Err("queued peer did not reach the expected wait deadline".into());
+            }
+            if control.phase() != RuntimeAsyncOperationPhaseV1::Queued
+                || control.cancel_before_submission()
+                    != RuntimeAsyncCancelResultV1::CancelledBeforeSubmission
+            {
+                return Err("peer cancellation did not precede submission".into());
+            }
+            if !matches!(
+                drive(engine, peer, deadline)?,
+                Err(RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission)
+            ) {
+                return Err("peer owner did not acknowledge cancellation before submission".into());
+            }
+            break;
+        }
         finish_transfer(engine, handle, peer, deadline)?;
         with_context(engine, handle, deadline, move |context| {
             if context.backend().completed_compute_xgmi_copies_v1() != destination as u64 + 1 {
@@ -410,7 +466,20 @@ fn transport(
                 context.read_allocation(buffers[index].destination, 0, &mut destinations[index]),
             )?;
         }
-        native_case::check_transport(&payloads, &sources, &destinations)?;
+        if mode == Mode::PeerDeadlineBeforeSubmit {
+            if context.backend().completed_compute_xgmi_copies_v1() != 0
+                || sources != payloads
+                || destinations
+                    != [
+                        native_case::destination_frame(0),
+                        native_case::destination_frame(1),
+                    ]
+            {
+                return Err("cancelled peer changed data or completed natively".into());
+            }
+        } else {
+            native_case::check_transport(&payloads, &sources, &destinations)?;
+        }
         for buffers in buffers.into_iter().rev() {
             for allocation in [
                 buffers.destination,

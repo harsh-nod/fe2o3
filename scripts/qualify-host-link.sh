@@ -49,7 +49,12 @@ configure_host_link_observer() {
 set_genuine_campaign_command() {
     local test=provisioning::tests::genuine_application::root_genuine_application_campaign
     if [[ $campaign == genuine-two-gpu ]]; then
-        test=provisioning::tests::genuine_application::root_genuine_two_gpu_application_campaign
+        case "${FE2O3_GENUINE_TWO_GPU_CASE-positive}" in
+            positive) test=provisioning::tests::genuine_application::root_genuine_two_gpu_application_campaign ;;
+            second-coverage-reject) test=provisioning::tests::genuine_application::root_genuine_two_gpu_second_coverage_control ;;
+            peer-deadline-before-submit) test=provisioning::tests::genuine_application::root_genuine_two_gpu_peer_deadline_control ;;
+            *) printf 'invalid two-GPU case\n' >&2; return 1 ;;
+        esac
     fi
     FE2O3_GENUINE_COMMAND=(
         /usr/bin/setpriv '--bounding-set=-all,+chown,+dac_override,+kill,+setgid,+setpcap,+setuid,+sys_ptrace'

@@ -2,6 +2,32 @@
 set -euo pipefail
 readonly repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$repo/scripts/qualify-two-gpu-mounts.sh"
+source "$repo/scripts/qualify-host-link.sh"
+unset FE2O3_GENUINE_TWO_GPU_CASE
+campaign=resources
+validate_two_gpu_case
+for campaign in resources genuine; do
+  FE2O3_GENUINE_TWO_GPU_CASE=positive
+  if validate_two_gpu_case 2>/dev/null; then exit 1; fi
+done
+campaign=genuine-two-gpu
+for FE2O3_GENUINE_TWO_GPU_CASE in positive second-coverage-reject peer-deadline-before-submit; do
+  validate_two_gpu_case
+  set_genuine_campaign_command
+  case "$FE2O3_GENUINE_TWO_GPU_CASE" in
+    positive) expected_test=root_genuine_two_gpu_application_campaign ;;
+    second-coverage-reject) expected_test=root_genuine_two_gpu_second_coverage_control ;;
+    peer-deadline-before-submit) expected_test=root_genuine_two_gpu_peer_deadline_control ;;
+  esac
+  [[ ${FE2O3_GENUINE_COMMAND[6]} == "provisioning::tests::genuine_application::$expected_test" ]]
+done
+for FE2O3_GENUINE_TWO_GPU_CASE in '' POSITIVE peer-timeout 'second-coverage-reject ' $'positive\n'; do
+  if validate_two_gpu_case 2>/dev/null; then exit 1; fi
+  if set_genuine_campaign_command 2>/dev/null; then exit 1; fi
+done
+unset FE2O3_GENUINE_TWO_GPU_CASE
+set_genuine_campaign_command
+[[ ${FE2O3_GENUINE_COMMAND[6]} == provisioning::tests::genuine_application::root_genuine_two_gpu_application_campaign ]]
 FE2O3_GENUINE_JQ=${FE2O3_GENUINE_JQ:-$(command -v jq)}
 readonly good='{"schema":"fe2o3.genuine-gpu-selection.v1","devices":["0xffffffffffffffff","0x0000000000000001"],"render_minors":[255,128]}'
 selection=$(printf 'libtest preamble\nFE2O3_GPU_SELECTION_V1=%s\nlibtest epilogue\n' "$good" | read_two_gpu_selection)

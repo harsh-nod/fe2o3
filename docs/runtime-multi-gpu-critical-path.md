@@ -67,28 +67,42 @@ Current work order:
    native peer completions, complete payload/source checks, separate sentinel
    destinations and intact guards. Require explicit successful drain/release;
    timeouts, process exit and quarantined work are not native settlement.
-4. Implement and exercise deliberate second-invocation and transfer-deadline
-   fixture controls after the first positive execution. These hardware injection
-   modes are not yet implemented. Existing failure propagation and absolute
-   deadlines do not substitute for these controls. Require no hardware success
-   record and inspect owned shutdown/quarantine.
+4. After the first positive execution, qualify the now-implemented
+   [second-coverage-rejection and queued-peer-deadline controls](evidence/dev-two-gpu-controls-2026-10-04/README.md).
+   They require exact expected errors, control-only records and inspected release/
+   refund. The peer control explicitly cancels before submission; it is not a
+   native in-flight GPU timeout. Actual native failure/timeout and quarantine
+   coverage remains additional hardware work, not implied by these CPU controls.
 
 The immediate exit is one admitted two-device application with exact output and
 explicit native settlement, not completion of all A1/A2 or A3-A7 acceptance cells.
 Do not expand general loader packaging, opcode coverage, GPU counts, collectives
 or performance work ahead of that exit unless an actual blocker requires it.
 
-Read-only MI300X refresh at **2026-10-05 03:21 UTC**: every GPU still has a live
+Read-only MI300X refresh at **2026-10-05 04:15 UTC**: every GPU still has a live
 KFD process owned by another user, the two fixed units are absent, and `sudo -n
 true` fails because a password is required. Free storage is sufficient (about
 7.5 TiB under `/home` and 602 GiB on `/`); deployment privilege and an unoccupied
-pair are the immediate host blockers, not disk. No remote workload or mutation
+pair are the immediate host blockers, not disk (storage figures are from the
+earlier inspection). No remote workload or mutation
 was performed.
 
 The subsequent read-only package inspection found Ubuntu 24.04.4 and all nine
 requested host-tool/CRT/archive paths present, with package versions matching
 the local profile. This is package/layout readiness, not acceptance of remote
 hashes, aliases or runtime dependencies.
+
+The [two-GPU control checkpoint](evidence/dev-two-gpu-controls-2026-10-04/README.md)
+implements exact second-invocation undercoverage rejection and a queued peer wait
+deadline followed by acknowledged pre-submission cancellation. Both use the existing
+proof/native APIs, retain exact cleanup/result-credit checks, and require distinct
+control-only reports through the full successful Cargo route. Five fixture, 39
+custodian, 41 current-thread and four conditional-packing tests pass, along with
+eight shell integration tests and selector checks. A fresh genuine admission-only
+campaign passes **1/1 in 487.36 seconds**, **501.51 seconds** including deployment/
+cleanup. **The GPU paths remain unexecuted.** The device kernel, runtime APIs and
+production authority policy are unchanged; in-flight timeout, A3/A7 and performance
+acceptance remain open.
 
 The [host-link qualification checkpoint](evidence/dev-qualification-host-link-2026-10-04/README.md)
 now passes the genuine CPU campaign with hidden homes and the final setup checks:

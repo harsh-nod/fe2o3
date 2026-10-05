@@ -245,7 +245,7 @@ fn authority_child_does_not_inherit_launcher_descriptors() {
 #[test]
 #[ignore = "requires the genuine mode of scripts/qualify-proof-resource-inspection.sh"]
 fn root_genuine_application_campaign() {
-    run_genuine_application(None);
+    run_genuine_application(None, None);
 }
 
 #[test]
@@ -264,11 +264,30 @@ fn observe_two_gpu_selection() {
 #[ignore = "requires the genuine-two-gpu mode of scripts/qualify-proof-resource-inspection.sh"]
 fn root_genuine_two_gpu_application_campaign() {
     private_root();
-    run_genuine_application(Some(hardware::requested_ids().unwrap()));
+    run_genuine_application(Some(hardware::requested_ids().unwrap()), None);
 }
 
-fn run_genuine_application(devices: Option<[u64; 2]>) {
+#[test]
+#[ignore = "requires genuine-two-gpu with second-coverage-reject control"]
+fn root_genuine_two_gpu_second_coverage_control() {
+    run_genuine_application(
+        Some(hardware::requested_ids().unwrap()),
+        Some(hardware::Control::SecondCoverageReject),
+    );
+}
+
+#[test]
+#[ignore = "requires genuine-two-gpu with peer-deadline-before-submit control"]
+fn root_genuine_two_gpu_peer_deadline_control() {
+    run_genuine_application(
+        Some(hardware::requested_ids().unwrap()),
+        Some(hardware::Control::PeerDeadlineBeforeSubmit),
+    );
+}
+
+fn run_genuine_application(devices: Option<[u64; 2]>, control: Option<hardware::Control>) {
     private_root();
+    assert!(control.is_none() || devices.is_some());
     if let Some(ids) = devices {
         hardware::revalidate(ids).expect("final namespace GPU selection");
     }
@@ -406,16 +425,29 @@ fn run_genuine_application(devices: Option<[u64; 2]>) {
     ]);
     if let Some(ids) = devices {
         command.arg("--").args(ids.map(|id| format!("{id:#018x}")));
+        if let Some(control) = control {
+            command.arg(control.token());
+        }
     }
     let output = capture::run(&mut command, Instant::now() + Duration::from_secs(1500))
         .expect("bounded genuine application capture");
     io::stdout().write_all(&output.stdout).unwrap();
-    assert!(
-        output.status.success(),
-        "genuine compiler/application execution failed"
-    );
-    if let Some(ids) = devices {
-        hardware::verify_report(&output.stdout, ids).expect("two-GPU execution report");
+    if let Some(control) = control {
+        hardware::verify_control_report(
+            &output.stdout,
+            devices.unwrap(),
+            control,
+            output.status.code(),
+        )
+        .expect("two-GPU negative-control report and successful production route");
+    } else {
+        assert!(
+            output.status.success(),
+            "genuine compiler/application execution failed"
+        );
+        if let Some(ids) = devices {
+            hardware::verify_report(&output.stdout, ids).expect("two-GPU execution report");
+        }
     }
     assert!(
         manager.0.try_wait().unwrap().is_none(),

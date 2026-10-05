@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     use std::time::{Duration, Instant};
 
-    let devices = native_case::parse_devices(std::env::args_os().skip(1))?;
+    let case = native_case::parse_case(std::env::args_os().skip(1))?;
     assert!(std::env::var_os("FE2O3_PRODUCTION_HOST_BINDING_MODE_V1").is_none());
     for descriptor in [200, 201] {
         let error = std::fs::symlink_metadata(format!("/proc/self/fd/{descriptor}"))
@@ -27,8 +27,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(artifact.descriptor().kernel_id(), kernel);
     assert!(!artifact.grants_launch_authority());
     println!("genuine compiler audit and retained conditional proof admitted");
-    if let Some(devices) = devices {
-        gpu::run(std::sync::Arc::new(artifact), devices, deadline)?;
+    if let Some(case) = case {
+        gpu::run(std::sync::Arc::new(artifact), case, deadline)?;
+        let devices = case.devices;
+        if case.mode != native_case::Mode::Positive {
+            println!(
+                "{{\"schema\":\"fe2o3.genuine-two-gpu-control.v1\",\"devices\":[\"{:#018x}\",\"{:#018x}\"],\"mode\":\"{}\",\"shutdown\":\"released\"}}",
+                devices[0],
+                devices[1],
+                case.mode.token()
+            );
+            // A matched negative test succeeds without claiming positive GPU execution.
+            // Normal exit also retains Cargo's full post-application revalidation.
+            return Ok(());
+        }
         println!(
             "{{\"schema\":\"fe2o3.genuine-two-gpu.v1\",\"devices\":[\"{:#018x}\",\"{:#018x}\"],\"elements\":65,\"native_peer_completions\":2,\"shutdown\":\"released\"}}",
             devices[0], devices[1]

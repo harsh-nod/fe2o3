@@ -6,7 +6,40 @@ pub const GUARD_BYTES: usize = 32;
 pub const FRAME_BYTES: usize = PAYLOAD_BYTES + 2 * GUARD_BYTES;
 pub const SENTINELS: [u8; 2] = [0xa5, 0x5a];
 
-pub fn parse_devices(args: impl IntoIterator<Item = OsString>) -> Result<Option<[u64; 2]>, String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Positive,
+    SecondCoverageReject,
+    PeerDeadlineBeforeSubmit,
+}
+
+impl Mode {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Positive => "positive",
+            Self::SecondCoverageReject => "second-coverage-reject",
+            Self::PeerDeadlineBeforeSubmit => "peer-deadline-before-submit",
+        }
+    }
+
+    pub fn grid_x(self, invocation: usize) -> u32 {
+        if self == Self::SecondCoverageReject && invocation == 1 {
+            64
+        } else {
+            128
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HardwareCase {
+    pub devices: [u64; 2],
+    pub mode: Mode,
+}
+
+pub fn parse_case(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<Option<HardwareCase>, String> {
     let mut args = args.into_iter();
     let Some(first) = args.next() else {
         return Ok(None);
@@ -14,8 +47,19 @@ pub fn parse_devices(args: impl IntoIterator<Item = OsString>) -> Result<Option<
     let second = args
         .next()
         .ok_or("native execution requires exactly two GPU unique IDs")?;
+    let control = args.next();
+    let mode = match control
+        .as_deref()
+        .map(|value| value.to_str().ok_or("control mode is not UTF-8"))
+        .transpose()?
+    {
+        None => Mode::Positive,
+        Some("second-coverage-reject") => Mode::SecondCoverageReject,
+        Some("peer-deadline-before-submit") => Mode::PeerDeadlineBeforeSubmit,
+        Some(_) => return Err("unknown two-GPU control mode".into()),
+    };
     if args.next().is_some() {
-        return Err("native execution requires exactly two GPU unique IDs".into());
+        return Err("native execution accepts at most one control mode".into());
     }
     let parse = |value: OsString| {
         let text = value.to_str().ok_or("GPU unique ID is not UTF-8")?;
@@ -36,7 +80,7 @@ pub fn parse_devices(args: impl IntoIterator<Item = OsString>) -> Result<Option<
     if ids[0] == ids[1] {
         return Err("native execution requires two distinct GPU unique IDs".into());
     }
-    Ok(Some(ids))
+    Ok(Some(HardwareCase { devices: ids, mode }))
 }
 
 pub fn check_fill(values: &[u32]) -> Result<(), String> {
@@ -87,8 +131,8 @@ pub fn check_transport(
 mod tests {
     use super::*;
 
-    fn args(values: &[&str]) -> Result<Option<[u64; 2]>, String> {
-        parse_devices(values.iter().map(OsString::from))
+    fn args(values: &[&str]) -> Result<Option<HardwareCase>, String> {
+        parse_case(values.iter().map(OsString::from))
     }
 
     #[test]
@@ -96,9 +140,12 @@ mod tests {
         assert_eq!(args(&[]).unwrap(), None);
         assert_eq!(
             args(&["0x1", "0xffffffffffffffff"]).unwrap(),
-            Some([1, u64::MAX])
+            Some(HardwareCase {
+                devices: [1, u64::MAX],
+                mode: Mode::Positive
+            })
         );
-        assert_eq!(args(&["0xAB", "0x02"]).unwrap(), Some([171, 2]));
+        assert_eq!(args(&["0xAB", "0x02"]).unwrap().unwrap().devices, [171, 2]);
         for values in [
             vec!["0x1"],
             vec!["0x1", "0x2", "0x3"],
@@ -119,7 +166,50 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt as _;
-            assert!(parse_devices([OsString::from_vec(vec![255]), "0x2".into()]).is_err());
+            assert!(parse_case([OsString::from_vec(vec![255]), "0x2".into()]).is_err());
+        }
+    }
+
+    #[test]
+    fn control_modes_are_explicit_and_only_second_coverage_changes_geometry() {
+        for mode in [Mode::SecondCoverageReject, Mode::PeerDeadlineBeforeSubmit] {
+            assert_eq!(
+                args(&["0x1", "0x2", mode.token()]).unwrap().unwrap().mode,
+                mode
+            );
+            assert!(args(&["0x1", "0x2", mode.token(), "extra"]).is_err());
+        }
+        for token in [
+            "",
+            "positive",
+            "SECOND-COVERAGE-REJECT",
+            "second-coverage-reject\n",
+            "peer-deadline-before-submit ",
+            "peer-timeout",
+        ] {
+            assert!(args(&["0x1", "0x2", token]).is_err());
+        }
+        for mode in [
+            Mode::Positive,
+            Mode::SecondCoverageReject,
+            Mode::PeerDeadlineBeforeSubmit,
+        ] {
+            assert_eq!(mode.grid_x(0), 128);
+            assert_eq!(
+                mode.grid_x(1),
+                if mode == Mode::SecondCoverageReject {
+                    64
+                } else {
+                    128
+                }
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+            assert!(
+                parse_case(["0x1".into(), "0x2".into(), OsString::from_vec(vec![255])]).is_err()
+            );
         }
     }
 

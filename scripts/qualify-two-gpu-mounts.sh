@@ -1,5 +1,18 @@
 # Qualification-only observation data, never application or device authority.
+# shellcheck shell=bash
+# shellcheck disable=SC2154
 # Sourced by the resource campaign and its root-free parser tests.
+validate_two_gpu_case() {
+  [[ -n ${FE2O3_GENUINE_TWO_GPU_CASE+x} ]] || return 0
+  [[ $campaign == genuine-two-gpu ]] || {
+    printf 'two-GPU case requires genuine-two-gpu campaign\n' >&2; return 1;
+  }
+  case "$FE2O3_GENUINE_TWO_GPU_CASE" in
+    positive|second-coverage-reject|peer-deadline-before-submit) ;;
+    *) printf 'invalid two-GPU case\n' >&2; return 1 ;;
+  esac
+}
+
 read_two_gpu_selection() {
   "${FE2O3_GENUINE_JQ:?}" -Rse '
     split("\n") | map(select(startswith("FE2O3_GPU_SELECTION_V1="))

@@ -208,3 +208,52 @@ fn report_requires_one_complete_matching_execution_record() {
         assert!(verify_report(changed.to_string().as_bytes(), [1, 2]).is_err());
     }
 }
+
+#[test]
+fn negative_report_requires_exact_mode_clean_exit_and_no_positive_claim() {
+    for control in [
+        Control::SecondCoverageReject,
+        Control::PeerDeadlineBeforeSubmit,
+    ] {
+        let good = serde_json::json!({"schema":CONTROL_SCHEMA,
+            "devices":["0x0000000000000001","0x0000000000000002"],
+            "mode":control.token(),"shutdown":"released"})
+        .to_string();
+        let check =
+            |text: &str, code| verify_control_report(text.as_bytes(), [1, 2], control, code);
+        check(&format!("admission log\n{good}\n"), Some(0)).unwrap();
+        for code in [None, Some(1), Some(41), Some(42), Some(43), Some(137)] {
+            assert!(check(&good, code).is_err(), "{code:?}");
+        }
+        assert!(verify_report(good.as_bytes(), [1, 2]).is_err());
+        assert!(verify_control_report(good.as_bytes(), [2, 1], control, Some(0)).is_err());
+        let positive = report();
+        let escaped = positive.replace(REPORT_SCHEMA, "fe2o3.genuine-two-gpu.\\u00761");
+        for bad in [
+            String::new(),
+            "admission only".into(),
+            positive.clone(),
+            format!("{good}\n{good}"),
+            format!("{good}\n{positive}"),
+            format!("{good}\n{escaped}"),
+            format!("{good}\nmalformed {REPORT_SCHEMA}"),
+            format!("{good}\n{{\"unrelated\":true}}"),
+            format!("prefix {good}"),
+            good.replace("\"mode\":", "\"mode\":\"duplicate\",\"mode\":"),
+        ] {
+            assert!(check(&bad, Some(0)).is_err(), "{bad}");
+        }
+        for (key, value) in [
+            ("mode", serde_json::json!("unknown")),
+            ("shutdown", serde_json::json!("retained")),
+            ("schema", serde_json::json!(REPORT_SCHEMA)),
+            ("extra", serde_json::json!(true)),
+            ("devices", serde_json::json!(["0x1", "0x2"])),
+        ] {
+            let mut changed: serde_json::Value = serde_json::from_str(&good).unwrap();
+            changed[key] = value;
+            assert!(check(&changed.to_string(), Some(0)).is_err());
+        }
+        assert!(verify_control_report(&[255], [1, 2], control, Some(0)).is_err());
+    }
+}

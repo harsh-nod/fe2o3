@@ -8,6 +8,7 @@ readonly installed=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.0
 readonly campaign=${FE2O3_PROOF_INSTALL_CAMPAIGN:-resources}
 [[ $campaign == resources || $campaign == genuine || $campaign == genuine-two-gpu ]] || exit 2
 source "$repo/scripts/qualify-two-gpu-mounts.sh"
+validate_two_gpu_case
 source "$repo/scripts/qualify-application-inputs.sh"
 source "$repo/scripts/qualify-host-link.sh"
 FE2O3_GPU_MOUNTS=()
