@@ -4,6 +4,8 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-protected-static-executable requires Linux x86-64");
 
+#[cfg(test)]
+mod mode_owner_tests;
 mod native;
 mod native_io;
 #[cfg(test)]
@@ -487,6 +489,16 @@ fn create_sealed_image<const BOUNDED: bool>(
                 source,
             })?;
     }
+    // Set the final mode while the creator still owns the image. The protected
+    // coordinator may transfer ownership with CHOWN but deliberately lacks FOWNER.
+    rustix::fs::fchmod(
+        &writable,
+        Mode::RUSR | Mode::RGRP | Mode::ROTH | Mode::XUSR | Mode::XGRP | Mode::XOTH,
+    )
+    .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
+        operation: "set protected static executable mode",
+        source: source.into(),
+    })?;
     if owner != ProtectedStaticExecutableOwnerV1::current() {
         rustix::fs::fchown(
             &writable,
@@ -498,14 +510,6 @@ fn create_sealed_image<const BOUNDED: bool>(
             source: source.into(),
         })?;
     }
-    rustix::fs::fchmod(
-        &writable,
-        Mode::RUSR | Mode::RGRP | Mode::ROTH | Mode::XUSR | Mode::XGRP | Mode::XOTH,
-    )
-    .map_err(|source| ProtectedStaticExecutableErrorV1::Io {
-        operation: "set protected static executable mode",
-        source: source.into(),
-    })?;
     let content_and_exec = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::EXEC;
     rustix::fs::fcntl_add_seals(&writable, content_and_exec)
         .and_then(|()| rustix::fs::fcntl_add_seals(&writable, SealFlags::SEAL))
