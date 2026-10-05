@@ -86,6 +86,42 @@ pub struct Gfx950EngineeringPeerDependencyObservationV1 {
     pub completion_count: u32,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct Gfx950EngineeringPeerDependencyCompletionV3 {
+    /// Whole invocation, not device execution time.
+    pub elapsed_ns: u64,
+    pub witness_observed: bool,
+    pub completion_count: u32,
+    /// Acquired (write, read) pair per rank from the last completion sample.
+    /// Final currentness checks may read counters again. Completion does not turn
+    /// these sequential host observations into reusable ring capacity.
+    pub observed_queue_frontiers: [(u64, u64); 2],
+}
+
+impl Gfx950EngineeringPeerDependencyCompletionV3 {
+    fn diagnostic_v1(self) -> Gfx950EngineeringPeerDependencyObservationV1 {
+        Gfx950EngineeringPeerDependencyObservationV1 {
+            elapsed_ns: self.elapsed_ns,
+            witness_observed: self.witness_observed,
+            completion_count: self.completion_count,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionPolicy {
+    RetiredRing,
+    Signals,
+}
+
+fn require_completion_policy<const N: usize>(policy: CompletionPolicy) -> Result<()> {
+    require_packet_count::<N>()?;
+    if policy == CompletionPolicy::Signals && N != 8 {
+        return Err("signal completion requires the eight-packet terminal join".into());
+    }
+    Ok(())
+}
+
 fn deadline_check(deadline: Instant) -> Result<()> {
     if Instant::now() >= deadline {
         return Err("peer dependency aggregate deadline expired; process teardown required".into());
@@ -132,6 +168,37 @@ fn complete_at_frontiers<const N: usize>(
             .iter()
             .zip(expected_next)
             .all(|(&actual, next)| actual == (next, next)))
+}
+
+fn complete_at_observed_counters<const N: usize>(
+    values: Values<N>,
+    frontiers: [(u64, u64); 2],
+    expected_next: [u64; 2],
+    previous_reads: [u64; 2],
+    published: [bool; 2],
+) -> Result<bool> {
+    require_completion_policy::<N>(CompletionPolicy::Signals)?;
+    let complete = signals_complete(values)?;
+    if published != [true; 2] {
+        return Ok(false);
+    }
+    // Match ordinary/ordered dispatch completion. Actual read credit remains
+    // independent, including when every packet's release signal is complete.
+    let completion = if complete {
+        AqlCompletionObservationV1::Completed
+    } else {
+        AqlCompletionObservationV1::Pending
+    };
+    for rank in 0..2 {
+        dispatch_completed(
+            expected_next[rank],
+            previous_reads[rank],
+            frontiers[rank],
+            completion,
+            0,
+        )?;
+    }
+    Ok(complete)
 }
 
 trait DependencyBackend {
@@ -421,6 +488,7 @@ struct Native<'a, const N: usize> {
     diagnostic_error: Option<String>,
     started: Instant,
     deadline: Instant,
+    completion_policy: CompletionPolicy,
 }
 
 impl<const N: usize> Native<'_, N> {
@@ -635,20 +703,31 @@ impl<const N: usize> DependencyBackend for Native<'_, N> {
         witness_ready(values, self.published)
     }
     fn complete(&mut self) -> Result<bool> {
+        let previous_reads =
+            std::array::from_fn(|rank| self.group.contexts[rank].last_observed_read);
         let (values, frontiers) = self.observe()?;
-        complete_at_frontiers(
-            values,
-            frontiers,
-            std::array::from_fn(|rank| self.reservations[rank].next_write()),
-            self.published,
-        )
+        let expected_next = std::array::from_fn(|rank| self.reservations[rank].next_write());
+        match self.completion_policy {
+            CompletionPolicy::RetiredRing => {
+                complete_at_frontiers(values, frontiers, expected_next, self.published)
+            }
+            CompletionPolicy::Signals => complete_at_observed_counters(
+                values,
+                frontiers,
+                expected_next,
+                previous_reads,
+                self.published,
+            ),
+        }
     }
     fn retire(&mut self) -> Result<()> {
         if !self.complete()? {
-            return Err("dependency retirement without all signals and frontiers".into());
+            return Err("dependency retirement without the selected completion contract".into());
         }
         deadline_check(self.deadline)?;
         for rank in 0..2 {
+            // This is a logical completed-work frontier, never hardware read
+            // credit. Reservation continues to use last_observed_read.
             self.group.contexts[rank].completed_write = self.reservations[rank].next_write();
         }
         check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
@@ -686,7 +765,15 @@ impl Gfx950EngineeringPeerGroupV1 {
         witness: bool,
     ) -> Result<Gfx950EngineeringPeerDependencyObservationV1> {
         // SAFETY: the caller provides the same trusted commands and lifetime contract.
-        unsafe { self.dispatch_peer_dependency_graph::<7>(commands, timeout_ms, witness) }
+        unsafe {
+            self.dispatch_peer_dependency_graph::<7>(
+                commands,
+                timeout_ms,
+                witness,
+                CompletionPolicy::RetiredRing,
+            )
+        }
+        .map(Gfx950EngineeringPeerDependencyCompletionV3::diagnostic_v1)
     }
 
     /// Adds a terminal wait for both C1 completions to the V1 graph. This is an
@@ -703,7 +790,42 @@ impl Gfx950EngineeringPeerGroupV1 {
         witness: bool,
     ) -> Result<Gfx950EngineeringPeerDependencyObservationV1> {
         // SAFETY: only a distinct terminal barrier is added to the same checked commands.
-        unsafe { self.dispatch_peer_dependency_graph::<8>(commands, timeout_ms, witness) }
+        unsafe {
+            self.dispatch_peer_dependency_graph::<8>(
+                commands,
+                timeout_ms,
+                witness,
+                CompletionPolicy::RetiredRing,
+            )
+        }
+        .map(Gfx950EngineeringPeerDependencyCompletionV3::diagnostic_v1)
+    }
+
+    /// Completes the eight-packet graph using all sixteen acquired completion
+    /// signals and ordinary dispatch counter/fault checks. A lagging actual
+    /// read cursor is retained for capacity, not replaced by completion credit.
+    /// Arenas are never reset or exposed; Close destroys both queues before
+    /// releasing their peer mappings. V1/V2 retain their strict cursor gate.
+    ///
+    /// # Safety
+    /// The V1 trusted-code, truthful declared access, disposable-process and
+    /// terminal-error contract applies. This is not a repeated-decode API.
+    pub unsafe fn dispatch_peer_dependency_signal_completion_unchecked_v3(
+        &mut self,
+        commands: [[Gfx950EngineeringPeerDispatchV1<'_>; 4]; 2],
+        timeout_ms: u32,
+        witness: bool,
+    ) -> Result<Gfx950EngineeringPeerDependencyCompletionV3> {
+        // SAFETY: same prepared graph and retained lifetimes; only the explicitly
+        // selected completion contract differs from the cursor diagnostic.
+        unsafe {
+            self.dispatch_peer_dependency_graph::<8>(
+                commands,
+                timeout_ms,
+                witness,
+                CompletionPolicy::Signals,
+            )
+        }
     }
 
     unsafe fn dispatch_peer_dependency_graph<const N: usize>(
@@ -711,8 +833,9 @@ impl Gfx950EngineeringPeerGroupV1 {
         commands: [[Gfx950EngineeringPeerDispatchV1<'_>; 4]; 2],
         timeout_ms: u32,
         witness: bool,
-    ) -> Result<Gfx950EngineeringPeerDependencyObservationV1> {
-        require_packet_count::<N>()?;
+        completion_policy: CompletionPolicy,
+    ) -> Result<Gfx950EngineeringPeerDependencyCompletionV3> {
+        require_completion_policy::<N>(completion_policy)?;
         self.require_active()?;
         let started = Instant::now();
         let result = (|| {
@@ -813,6 +936,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                 diagnostic_error: None,
                 started,
                 deadline,
+                completion_policy,
             };
             run_dependencies(&mut native, witness, deadline).map_err(|error| {
                 let primary = format!(
@@ -828,10 +952,14 @@ impl Gfx950EngineeringPeerGroupV1 {
                     primary
                 }
             })?;
-            Ok(Gfx950EngineeringPeerDependencyObservationV1 {
+            Ok(Gfx950EngineeringPeerDependencyCompletionV3 {
                 elapsed_ns: u64::try_from(started.elapsed().as_nanos()).map_err(explain)?,
                 witness_observed: witness,
                 completion_count: (2 * N) as u32,
+                observed_queue_frontiers: native
+                    .last_observation
+                    .ok_or("missing completed dependency observation")?
+                    .1,
             })
         })();
         if result.is_err() {

@@ -25,7 +25,9 @@ mod round;
 
 #[path = "engineering_gfx950_peer_dependency.rs"]
 mod dependency;
-pub use dependency::Gfx950EngineeringPeerDependencyObservationV1;
+pub use dependency::{
+    Gfx950EngineeringPeerDependencyCompletionV3, Gfx950EngineeringPeerDependencyObservationV1,
+};
 
 #[path = "engineering_gfx950_peer_capacity_v1.rs"]
 mod capacity_v1;
@@ -331,6 +333,69 @@ impl PeerTransactionBackend for NativeTransaction<'_> {
     }
     fn release_owner(&mut self) -> Result<()> {
         self.contexts[self.owner].free(self.local_id)
+    }
+}
+
+trait PeerDependencyCloseBackend {
+    type Disabled;
+
+    fn participants(&self) -> usize;
+    fn check(&mut self) -> Result<()>;
+    fn destroy(&mut self, rank: usize) -> Result<Self::Disabled>;
+    fn release_all(&mut self) -> Result<()>;
+    fn finish_context(&mut self, rank: usize, disabled: Self::Disabled) -> Result<()>;
+}
+
+fn run_peer_dependency_close(backend: &mut impl PeerDependencyCloseBackend) -> Result<()> {
+    let participants = backend.participants();
+    if !(2..=8).contains(&participants) {
+        return Err("peer dependency close participant count".into());
+    }
+    backend.check()?;
+    let mut disabled = Vec::with_capacity(participants);
+    for rank in 0..participants {
+        disabled.push(backend.destroy(rank)?);
+    }
+    // All queue owners are revoked before any peer allocation is released.
+    // An error drops every pending token, poisoning the native process gate.
+    backend.release_all()?;
+    backend.check()?;
+    // No group fence is permitted after the first context releases CONTROL.
+    for (rank, disabled) in disabled.into_iter().enumerate() {
+        backend.finish_context(rank, disabled)?;
+    }
+    Ok(())
+}
+
+struct NativePeerDependencyClose<'a> {
+    group: &'a mut Gfx950EngineeringPeerGroupV1,
+    tokens: Vec<Gfx950EngineeringPeerBufferV1>,
+}
+
+impl PeerDependencyCloseBackend for NativePeerDependencyClose<'_> {
+    type Disabled = LinuxKfdRuntimeDisabledV1;
+
+    fn participants(&self) -> usize {
+        self.group.contexts.len()
+    }
+
+    fn check(&mut self) -> Result<()> {
+        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)
+    }
+
+    fn destroy(&mut self, rank: usize) -> Result<Self::Disabled> {
+        self.group.contexts[rank].destroy_queue()
+    }
+
+    fn release_all(&mut self) -> Result<()> {
+        for token in self.tokens.iter().copied() {
+            self.group.release(token)?;
+        }
+        Ok(())
+    }
+
+    fn finish_context(&mut self, rank: usize, disabled: Self::Disabled) -> Result<()> {
+        self.group.contexts[rank].finish_close_after_queue_destroyed(disabled)
     }
 }
 
@@ -834,7 +899,24 @@ impl Gfx950EngineeringPeerGroupV1 {
         self.finish(result)
     }
 
-    /// Unmaps peers before owner frees, then explicitly tears down every context.
+    fn has_peer_dependency_arena(&self) -> bool {
+        self.buffers
+            .values()
+            .any(|record| record.kind == BufferKind::PeerDependencyArena)
+    }
+
+    fn close_peer_dependency_contexts(
+        &mut self,
+        tokens: Vec<Gfx950EngineeringPeerBufferV1>,
+    ) -> Result<()> {
+        run_peer_dependency_close(&mut NativePeerDependencyClose {
+            group: self,
+            tokens,
+        })
+    }
+
+    /// Dependency arenas require all queues destroyed before peer unmapping.
+    /// Other groups retain the original peer-release then context-close order.
     pub fn close(&mut self) -> Result<()> {
         self.require_active()?;
         let result = (|| {
@@ -843,12 +925,16 @@ impl Gfx950EngineeringPeerGroupV1 {
                 .values()
                 .map(|record| record.token)
                 .collect::<Vec<_>>();
-            for token in tokens {
-                self.release(token)?;
-            }
-            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
-            for context in &mut self.contexts {
-                context.close_inner()?;
+            if self.has_peer_dependency_arena() {
+                self.close_peer_dependency_contexts(tokens)?;
+            } else {
+                for token in tokens {
+                    self.release(token)?;
+                }
+                check_contexts(&mut self.contexts, self.shared_full_currentness)?;
+                for context in &mut self.contexts {
+                    context.close_inner()?;
+                }
             }
             self.closed = true;
             Ok(())

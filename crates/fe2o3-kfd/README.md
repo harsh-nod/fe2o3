@@ -105,6 +105,23 @@ signal/frontier/header snapshots, the latest sample, a dropped-change count,
 and the first observed all-zero time. These are sequential host observations,
 not simultaneous GPU timestamps, and cannot authorize storage reuse.
 
+`dispatch_peer_dependency_signal_completion_unchecked_v3()` explicitly
+separates completed work from ring capacity, as ordinary/ordered dispatch do.
+It uses the eight-packet graph, requires all sixteen acquired completion
+signals, validates actual counters and exceptions, and repeats fresh fencing.
+Only the logical completed-work frontier advances. The actual read cursor is
+never fabricated, and remains the sole read credit for subsequent reservation.
+The V3 example reports those actual counters alongside data/guard checks;
+V1/V2 retain their strict read/write-equality diagnostic gate.
+
+Any group holding private peer-dependency arenas destroys every participant
+queue before unmapping or freeing any peer buffer. It holds the runtime-disable
+tokens and CONTROL mappings through the final group fence, then releases
+context storage. Failure stops teardown and poisons the group; dropping any
+unfinished disable token also poisons the process gate. There is no implicit
+retry. Signal completion alone does not reset arenas,
+authorize ring overwrite, or substitute for this queue-first teardown.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

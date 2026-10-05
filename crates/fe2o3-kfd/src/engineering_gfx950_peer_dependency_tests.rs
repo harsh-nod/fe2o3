@@ -1,6 +1,251 @@
 use super::*;
 use std::collections::VecDeque;
 
+#[test]
+fn signal_completion_policy_is_explicit_and_eight_packet_only() {
+    assert!(require_completion_policy::<7>(CompletionPolicy::RetiredRing).is_ok());
+    assert!(require_completion_policy::<8>(CompletionPolicy::RetiredRing).is_ok());
+    assert!(require_completion_policy::<7>(CompletionPolicy::Signals).is_err());
+    assert!(require_completion_policy::<8>(CompletionPolicy::Signals).is_ok());
+    for policy in [CompletionPolicy::RetiredRing, CompletionPolicy::Signals] {
+        assert!(require_completion_policy::<0>(policy).is_err());
+        assert!(require_completion_policy::<6>(policy).is_err());
+        assert!(require_completion_policy::<9>(policy).is_err());
+        assert!(require_completion_policy::<{ usize::MAX }>(policy).is_err());
+    }
+}
+
+#[test]
+fn signal_completion_helper_rejects_other_packet_counts() {
+    assert!(
+        complete_at_observed_counters::<0>([[]; 2], [(8, 8); 2], [8; 2], [0; 2], [true; 2],)
+            .is_err()
+    );
+    assert!(
+        complete_at_observed_counters::<7>([[0; 7]; 2], [(7, 7); 2], [7; 2], [0; 2], [true; 2],)
+            .is_err()
+    );
+    assert!(
+        complete_at_observed_counters::<9>([[0; 9]; 2], [(9, 9); 2], [9; 2], [0; 2], [true; 2],)
+            .is_err()
+    );
+}
+
+#[test]
+fn signal_completion_requires_every_signal_and_refuses_unexpected_values() {
+    assert!(
+        complete_at_observed_counters([[0; 8]; 2], [(8, 3); 2], [8; 2], [0; 2], [true; 2],)
+            .unwrap()
+    );
+    for rank in 0..2 {
+        for slot in 0..8 {
+            let mut values = [[0; 8]; 2];
+            values[rank][slot] = 1;
+            assert!(
+                !complete_at_observed_counters(values, [(8, 3); 2], [8; 2], [0; 2], [true; 2],)
+                    .unwrap()
+            );
+            for invalid in [-1, 2, i64::MIN, i64::MAX] {
+                values[rank][slot] = invalid;
+                assert!(
+                    complete_at_observed_counters(values, [(8, 3); 2], [8; 2], [0; 2], [true; 2],)
+                        .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn signal_completion_requires_both_publications() {
+    for published in [[false, false], [true, false], [false, true]] {
+        assert!(
+            !complete_at_observed_counters([[0; 8]; 2], [(8, 3); 2], [8; 2], [0; 2], published,)
+                .unwrap()
+        );
+        let mut invalid = [[0; 8]; 2];
+        invalid[1][7] = -1;
+        assert!(
+            complete_at_observed_counters(invalid, [(8, 3); 2], [8; 2], [0; 2], published,)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn signal_completion_accepts_lagging_and_distinct_nonzero_frontiers() {
+    for read0 in [0, 3, 7, 8] {
+        for read1 in [0, 3, 7, 8] {
+            let frontiers = [(8, read0), (8, read1)];
+            assert!(
+                complete_at_observed_counters(
+                    [[0; 8]; 2],
+                    frontiers,
+                    [8; 2],
+                    [read0, read1],
+                    [true; 2],
+                )
+                .unwrap()
+            );
+            assert_eq!(frontiers, [(8, read0), (8, read1)]);
+        }
+    }
+    assert!(
+        complete_at_observed_counters(
+            [[0; 8]; 2],
+            [(123, 120), (456, 450)],
+            [123, 456],
+            [119, 449],
+            [true; 2],
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn signal_completion_rejects_wrong_write_read_ahead_and_regression() {
+    for rank in 0..2 {
+        for invalid in [(7, 3), (9, 3), (8, 9)] {
+            let mut frontiers = [(8, 3); 2];
+            frontiers[rank] = invalid;
+            assert!(
+                complete_at_observed_counters([[0; 8]; 2], frontiers, [8; 2], [0; 2], [true; 2],)
+                    .is_err()
+            );
+        }
+        let mut previous_reads = [3; 2];
+        previous_reads[rank] = 4;
+        assert!(
+            complete_at_observed_counters(
+                [[0; 8]; 2],
+                [(8, 3); 2],
+                [8; 2],
+                previous_reads,
+                [true; 2],
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn signal_completion_still_checks_counters_while_signals_are_pending() {
+    for pending_rank in 0..2 {
+        let mut values = [[0; 8]; 2];
+        values[pending_rank][7] = 1;
+        for bad_rank in 0..2 {
+            for invalid in [(7, 3), (9, 3), (8, 9)] {
+                let mut frontiers = [(8, 3); 2];
+                frontiers[bad_rank] = invalid;
+                assert!(
+                    complete_at_observed_counters(values, frontiers, [8; 2], [0; 2], [true; 2],)
+                        .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn signal_completion_requires_nonzero_expected_write_on_each_rank() {
+    for rank in 0..2 {
+        let mut frontiers = [(8, 3); 2];
+        let mut expected_next = [8; 2];
+        frontiers[rank] = (0, 0);
+        expected_next[rank] = 0;
+        assert!(complete_at_observed_counters(
+            [[0; 8]; 2], frontiers, expected_next, [0; 2], [true; 2],
+        ).is_err());
+    }
+}
+
+#[test]
+fn signal_completion_preserves_outstanding_capacity_and_u64_counters() {
+    let full = MAX_UNRETIRED_RING_PACKETS_V1;
+    let write = full + 3;
+    assert!(
+        complete_at_observed_counters([[0; 8]; 2], [(write, 3); 2], [write; 2], [3; 2], [true; 2],)
+            .unwrap()
+    );
+    for rank in 0..2 {
+        let mut frontiers = [(write, 3); 2];
+        let mut expected_next = [write; 2];
+        frontiers[rank] = (write + 1, 3);
+        expected_next[rank] = write + 1;
+        assert!(complete_at_observed_counters(
+            [[0; 8]; 2], frontiers, expected_next, [3; 2], [true; 2],
+        ).is_err());
+    }
+    assert!(
+        complete_at_observed_counters(
+            [[0; 8]; 2],
+            [(u64::MAX, u64::MAX - 5); 2],
+            [u64::MAX; 2],
+            [u64::MAX - 6; 2],
+            [true; 2],
+        )
+        .unwrap()
+    );
+    assert!(require_sequence_capacity(u64::MAX, u64::MAX - 5, 1).is_err());
+}
+
+#[test]
+fn signal_completion_at_eight_three_does_not_promote_the_ring_read() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(RING_BYTES as u32).unwrap();
+    let mut ring = AqlSingleProducerRingModelV1::new(capacity, 8, 3).unwrap();
+    assert!(
+        complete_at_observed_counters(
+            [[0; 8]; 2],
+            [(ring.write(), ring.last_read()); 2],
+            [8; 2],
+            [3; 2],
+            [true; 2],
+        )
+        .unwrap()
+    );
+    assert_eq!((ring.write(), ring.last_read()), (8, 3));
+    assert_eq!(
+        MAX_UNRETIRED_RING_PACKETS_V1 - (ring.write() - ring.last_read()),
+        MAX_UNRETIRED_RING_PACKETS_V1 - 5
+    );
+    let next = ring.reserve_one(3).unwrap();
+    assert_eq!(next.packet_id(), 8);
+    assert_eq!((ring.write(), ring.last_read()), (9, 3));
+    assert!(ring.reserve_one(2).is_err());
+}
+
+#[test]
+fn signal_completion_cannot_grant_a_full_ring_any_reuse_credit() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(RING_BYTES as u32).unwrap();
+    let write = MAX_UNRETIRED_RING_PACKETS_V1 + 3;
+    let mut ring = AqlSingleProducerRingModelV1::new(capacity, write, 3).unwrap();
+    assert!(
+        complete_at_observed_counters([[0; 8]; 2], [(write, 3); 2], [write; 2], [3; 2], [true; 2],)
+            .unwrap()
+    );
+    require_completed_frontier(write, write).unwrap();
+    assert!(ring.reserve_one(3).is_err());
+    assert_eq!((ring.write(), ring.last_read()), (write, 3));
+    assert!(require_sequence_capacity(write, 3, 1).is_err());
+    let next = ring.reserve_one(4).unwrap();
+    assert_eq!(next.packet_id(), write);
+    assert_eq!((ring.write(), ring.last_read()), (write + 1, 4));
+    assert!(ring.reserve_one(4).is_err());
+    assert!(ring.reserve_one(3).is_err());
+}
+
+#[test]
+fn signal_completion_does_not_change_seven_or_eight_packet_strict_policy() {
+    assert!(!complete_at_frontiers([[0; 7]; 2], [(7, 3); 2], [7; 2], [true; 2],).unwrap());
+    assert!(!complete_at_frontiers([[0; 8]; 2], [(8, 3); 2], [8; 2], [true; 2],).unwrap());
+    assert!(complete_at_frontiers([[0; 7]; 2], [(7, 7); 2], [7; 2], [true; 2],).unwrap());
+    assert!(complete_at_frontiers([[0; 8]; 2], [(8, 8); 2], [8; 2], [true; 2],).unwrap());
+    assert!(
+        complete_at_observed_counters([[0; 8]; 2], [(8, 3); 2], [8; 2], [3; 2], [true; 2],)
+            .unwrap()
+    );
+}
+
 fn terminal_arenas<const N: usize>() -> [Arena<N>; 2] {
     std::array::from_fn(|rank| Arena {
         token: Gfx950EngineeringPeerBufferV1 {

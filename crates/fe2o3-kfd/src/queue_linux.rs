@@ -1768,6 +1768,74 @@ pub fn destroy_queue(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolated_disabled_token_case(name: &str, tokens: usize, complete: bool) {
+        const ENV: &str = "FE2O3_TEST_PEER_DEPENDENCY_DISABLED_TOKEN_CASE";
+        if std::env::var(ENV).ok().as_deref() == Some(name) {
+            let held = (0..tokens)
+                .map(|_| LinuxKfdRuntimeDisabledV1 {
+                    binding: KfdRuntimeBindingV1 {
+                        opener_pid: std::process::id(),
+                        raw_fd: -1,
+                    },
+                    completion_pending: true,
+                })
+                .collect::<Vec<_>>();
+            if complete {
+                for token in held {
+                    token.complete();
+                }
+            } else {
+                drop(held);
+            }
+            assert_eq!(
+                lock_runtime_gate_v1(&KFD_RUNTIME_GATE).permanently_poisoned,
+                !complete
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(format!("queue_linux::tests::{name}"))
+            .arg("--test-threads=1")
+            .env(ENV, name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child stdout={:?}; stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed; 0 ignored;"));
+    }
+
+    #[test]
+    fn dependency_close_second_destroy_failure_keeps_first_disabled_token_terminal() {
+        isolated_disabled_token_case(
+            "dependency_close_second_destroy_failure_keeps_first_disabled_token_terminal",
+            1,
+            false,
+        );
+    }
+
+    #[test]
+    fn dependency_close_peer_release_failure_keeps_both_disabled_tokens_terminal() {
+        isolated_disabled_token_case(
+            "dependency_close_peer_release_failure_keeps_both_disabled_tokens_terminal",
+            2,
+            false,
+        );
+    }
+
+    #[test]
+    fn dependency_close_success_can_complete_both_disabled_tokens() {
+        isolated_disabled_token_case(
+            "dependency_close_success_can_complete_both_disabled_tokens",
+            2,
+            true,
+        );
+    }
     use crate::queue::submit::{
         GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1, GFX942_CWSR_XCC_COUNT_V1,
     };

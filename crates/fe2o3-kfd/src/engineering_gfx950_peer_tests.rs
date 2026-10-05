@@ -1,5 +1,288 @@
 use super::*;
 
+#[test]
+fn only_dependency_arena_presence_selects_queue_first_close() {
+    let mut group = Gfx950EngineeringPeerGroupV1 {
+        incarnation: 7,
+        contexts: vec![],
+        buffers: BTreeMap::new(),
+        next_buffer: 1,
+        poisoned: false,
+        closed: false,
+        shared_full_currentness: false,
+        projection_mlp_scratch: None,
+    };
+    assert!(!group.has_peer_dependency_arena());
+    for kind in [
+        BufferKind::PublicVram,
+        BufferKind::WaveOutputStateV5,
+        BufferKind::WaveMlpStateV1,
+        BufferKind::WaveMlpTilesStateV2,
+        BufferKind::WaveQkvAttentionOutputTilesStateV6,
+        BufferKind::PeerDependencyArena,
+    ] {
+        group.buffers.insert(
+            1,
+            BufferRecord {
+                token: Gfx950EngineeringPeerBufferV1 {
+                    group: 7,
+                    id: 1,
+                    owner: 0,
+                    bytes: 4096,
+                },
+                local_id: 1,
+                mapping: PeerMapping::new(vec![]).unwrap(),
+                kind,
+            },
+        );
+        assert_eq!(
+            group.has_peer_dependency_arena(),
+            kind == BufferKind::PeerDependencyArena
+        );
+    }
+    group.buffers.clear();
+    group.closed = true;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DependencyCloseEvent {
+    Check,
+    Destroy(usize),
+    ReleaseAll,
+    Finish(usize),
+}
+
+#[derive(Default)]
+struct DependencyCloseState {
+    events: Vec<DependencyCloseEvent>,
+    live_at_event: Vec<Vec<usize>>,
+    live: BTreeSet<usize>,
+    completed: Vec<usize>,
+    dropped_pending: Vec<usize>,
+    poisoned: bool,
+}
+
+struct MockDependencyDisabled {
+    rank: usize,
+    completed: bool,
+    state: std::rc::Rc<std::cell::RefCell<DependencyCloseState>>,
+}
+
+impl Drop for MockDependencyDisabled {
+    fn drop(&mut self) {
+        let mut state = self.state.borrow_mut();
+        assert!(state.live.remove(&self.rank));
+        if !self.completed {
+            state.poisoned = true;
+            state.dropped_pending.push(self.rank);
+        }
+    }
+}
+
+struct MockDependencyClose {
+    participants: usize,
+    fail_at: Option<usize>,
+    state: std::rc::Rc<std::cell::RefCell<DependencyCloseState>>,
+}
+
+impl MockDependencyClose {
+    fn new(participants: usize, fail_at: Option<usize>) -> Self {
+        Self {
+            participants,
+            fail_at,
+            state: std::rc::Rc::default(),
+        }
+    }
+
+    fn step(&mut self, event: DependencyCloseEvent) -> Result<()> {
+        let mut state = self.state.borrow_mut();
+        let live = state.live.iter().copied().collect();
+        state.live_at_event.push(live);
+        state.events.push(event);
+        if self.fail_at == Some(state.events.len()) {
+            return Err("injected dependency close failure".into());
+        }
+        Ok(())
+    }
+}
+
+impl PeerDependencyCloseBackend for MockDependencyClose {
+    type Disabled = MockDependencyDisabled;
+
+    fn participants(&self) -> usize {
+        self.participants
+    }
+
+    fn check(&mut self) -> Result<()> {
+        self.step(DependencyCloseEvent::Check)
+    }
+
+    fn destroy(&mut self, rank: usize) -> Result<Self::Disabled> {
+        self.step(DependencyCloseEvent::Destroy(rank))?;
+        assert!(self.state.borrow_mut().live.insert(rank));
+        Ok(MockDependencyDisabled {
+            rank,
+            completed: false,
+            state: self.state.clone(),
+        })
+    }
+
+    fn release_all(&mut self) -> Result<()> {
+        self.step(DependencyCloseEvent::ReleaseAll)
+    }
+
+    fn finish_context(&mut self, rank: usize, mut disabled: Self::Disabled) -> Result<()> {
+        assert_eq!(rank, disabled.rank);
+        self.step(DependencyCloseEvent::Finish(rank))?;
+        disabled.completed = true;
+        self.state.borrow_mut().completed.push(rank);
+        Ok(())
+    }
+}
+
+fn dependency_close_events(participants: usize) -> Vec<DependencyCloseEvent> {
+    let mut events = vec![DependencyCloseEvent::Check];
+    events.extend((0..participants).map(DependencyCloseEvent::Destroy));
+    events.push(DependencyCloseEvent::ReleaseAll);
+    events.push(DependencyCloseEvent::Check);
+    events.extend((0..participants).map(DependencyCloseEvent::Finish));
+    events
+}
+
+#[test]
+fn dependency_close_destroys_every_queue_and_holds_every_token_before_release() {
+    for participants in [2, 8] {
+        let mut backend = MockDependencyClose::new(participants, None);
+        run_peer_dependency_close(&mut backend).unwrap();
+        let state = backend.state.borrow();
+        assert_eq!(state.events, dependency_close_events(participants));
+        let all = (0..participants).collect::<Vec<_>>();
+        assert_eq!(state.live_at_event[participants + 1], all);
+        assert_eq!(state.live_at_event[participants + 2], all);
+        for rank in 0..participants {
+            assert_eq!(
+                state.live_at_event[participants + 3 + rank],
+                (rank..participants).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(state.completed, all);
+        assert!(state.live.is_empty());
+        assert!(state.dropped_pending.is_empty());
+        assert!(!state.poisoned);
+    }
+}
+
+#[test]
+fn dependency_close_every_callback_failure_stops_and_drops_all_uncompleted_tokens() {
+    for participants in [2, 8] {
+        let events = dependency_close_events(participants);
+        for fail_at in 1..=events.len() {
+            let mut backend = MockDependencyClose::new(participants, Some(fail_at));
+            assert!(run_peer_dependency_close(&mut backend).is_err());
+            let successful = &events[..fail_at - 1];
+            let destroyed = successful
+                .iter()
+                .filter_map(|event| match event {
+                    DependencyCloseEvent::Destroy(rank) => Some(*rank),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let completed = successful
+                .iter()
+                .filter_map(|event| match event {
+                    DependencyCloseEvent::Finish(rank) => Some(*rank),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let pending = destroyed
+                .difference(&completed)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let state = backend.state.borrow();
+            assert_eq!(state.events, events[..fail_at]);
+            assert!(state.live.is_empty());
+            assert_eq!(
+                state.completed.iter().copied().collect::<BTreeSet<_>>(),
+                completed
+            );
+            assert_eq!(
+                state
+                    .dropped_pending
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>(),
+                pending
+            );
+            assert_eq!(state.poisoned, !pending.is_empty());
+        }
+    }
+}
+
+#[test]
+fn dependency_close_second_destroy_failure_never_unmaps_or_finishes() {
+    let mut backend = MockDependencyClose::new(2, Some(3));
+    assert!(run_peer_dependency_close(&mut backend).is_err());
+    let state = backend.state.borrow();
+    assert_eq!(
+        state.events,
+        [
+            DependencyCloseEvent::Check,
+            DependencyCloseEvent::Destroy(0),
+            DependencyCloseEvent::Destroy(1)
+        ]
+    );
+    assert_eq!(state.dropped_pending, [0]);
+    assert!(state.completed.is_empty());
+    assert!(state.poisoned);
+}
+
+#[test]
+fn dependency_close_final_fence_failure_never_releases_control_or_completes_tokens() {
+    let mut backend = MockDependencyClose::new(2, Some(5));
+    assert!(run_peer_dependency_close(&mut backend).is_err());
+    let state = backend.state.borrow();
+    assert_eq!(state.events, dependency_close_events(2)[..5]);
+    assert_eq!(
+        state
+            .dropped_pending
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([0, 1])
+    );
+    assert!(state.completed.is_empty());
+    assert!(state.poisoned);
+}
+
+#[test]
+fn dependency_close_rejects_invalid_participant_count_before_any_callback() {
+    for participants in [0, 1, 9, usize::MAX] {
+        let mut backend = MockDependencyClose::new(participants, None);
+        assert!(run_peer_dependency_close(&mut backend).is_err());
+        let state = backend.state.borrow();
+        assert!(state.events.is_empty());
+        assert!(state.live.is_empty());
+        assert!(!state.poisoned);
+    }
+}
+
+#[test]
+fn ordinary_close_keeps_old_order_and_dependency_failure_still_reaches_group_finish() {
+    let source = include_str!("engineering_gfx950_peer.rs");
+    let body = source.split("pub fn close(").nth(1).unwrap();
+    let branch = body.find("if self.has_peer_dependency_arena()").unwrap();
+    let special = body
+        .find("self.close_peer_dependency_contexts(tokens)?;")
+        .unwrap();
+    let ordinary = body.find("} else {").unwrap();
+    let release = body.find("self.release(token)?;").unwrap();
+    let close = body.find("context.close_inner()?;").unwrap();
+    let closed = body.find("self.closed = true;").unwrap();
+    let finish = body.find("self.finish(result)").unwrap();
+    assert!(branch < special && special < ordinary && ordinary < release);
+    assert!(release < close && close < closed && closed < finish);
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FenceEvent {
     Shared,

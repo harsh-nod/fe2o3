@@ -62,8 +62,8 @@ pub use finite_join::{
     Gfx950EngineeringFiniteJoinResultV1, execute_gfx950_engineering_finite_join_unchecked_v1,
 };
 pub use peer::{
-    Gfx950EngineeringPeerDependencyObservationV1,
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerClockObservationV1,
+    Gfx950EngineeringPeerDependencyCompletionV3, Gfx950EngineeringPeerDependencyObservationV1,
     Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
     Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringPeerKernelV1,
@@ -1229,6 +1229,20 @@ impl Context {
 
     fn close_inner(&mut self) -> Result<()> {
         let disabled = self.destroy_queue()?;
+        self.finish_close_after_queue_destroyed(disabled)
+    }
+
+    fn finish_close_after_queue_destroyed(
+        &mut self,
+        disabled: LinuxKfdRuntimeDisabledV1,
+    ) -> Result<()> {
+        if self.queue_id.is_some()
+            || self.runtime.is_some()
+            || self.event.is_some()
+            || self.doorbell.is_some()
+        {
+            return Err("queue teardown is incomplete".into());
+        }
         while let Some((_, kernel)) = self.kernels.pop_last() {
             self.release_resource(kernel.code)?;
         }
@@ -1666,6 +1680,51 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_context_close_delegates_to_one_destroyed_queue_release_tail() {
+        let source = include_str!("engineering_gfx950.rs");
+        let body = source
+            .split("fn close_inner(")
+            .nth(1)
+            .unwrap()
+            .split("fn finish_close_after_queue_destroyed(")
+            .next()
+            .unwrap();
+        assert!(
+            body.find("self.destroy_queue()?").unwrap()
+                < body
+                    .find("self.finish_close_after_queue_destroyed(disabled)")
+                    .unwrap()
+        );
+        assert!(!body.contains("pop_last"));
+        assert!(!body.contains("internal.pop"));
+    }
+
+    #[test]
+    fn destroyed_queue_release_tail_holds_disabled_token_through_all_resources_and_accounting() {
+        let source = include_str!("engineering_gfx950.rs");
+        let body = source
+            .split("fn finish_close_after_queue_destroyed(")
+            .nth(1)
+            .unwrap()
+            .split("struct Publication")
+            .next()
+            .unwrap();
+        let gate = body.find("self.queue_id.is_some()").unwrap();
+        for field in ["runtime", "event", "doorbell"] {
+            assert!(body.contains(&format!("self.{field}.is_some()")));
+        }
+        let code = body.find("self.kernels.pop_last()").unwrap();
+        let buffers = body.find("self.buffers.pop_last()").unwrap();
+        let internal = body.find("self.internal.pop()").unwrap();
+        let accounting = body.find("incomplete teardown accounting").unwrap();
+        let complete = body.find("disabled.complete();").unwrap();
+        assert!(gate < code && code < buffers && buffers < internal);
+        assert!(internal < accounting && accounting < complete);
+        assert!(!body.contains("destroy_queue()"));
+        assert!(!body.contains("check_idle("));
+    }
 
     #[test]
     fn pending_dispatch_rejects_foreign_device_epoch_frontier_and_repeated_completion() {
