@@ -135,6 +135,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(state.contains(&format!("hide(invocation_byte_boundary_{root}_v36);")));
                                     assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 1);
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
+                                    let valid = format!("assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}");
+                                    assert!(state.find(&valid).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let source_projection = state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
                                     assert!(source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
                                     assert!(!source_projection.contains("invocation_byte_boundary_"));
