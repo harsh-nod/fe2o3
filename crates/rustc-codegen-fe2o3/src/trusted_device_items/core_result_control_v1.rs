@@ -272,7 +272,8 @@ fn aggregate_v1<'tcx>(
     let Rvalue::Aggregate(kind, operands) = value else { return false; };
     let AggregateKind::Adt(def_id, variant, raw_arguments, None, None) = &**kind else { return false; };
     let TyKind::Adt(expected, expected_arguments) = *aggregate_type.kind() else { return false; };
-    let [operand] = operands.as_slice() else { return false; };
+    let mut operands = operands.iter();
+    let (Some(operand), None) = (operands.next(), operands.next()) else { return false; };
     let operand_matches = match (copied, operand) {
         (true, Operand::Copy(place)) | (false, Operand::Move(place)) => plain_local_v1(place, source),
         _ => false,
