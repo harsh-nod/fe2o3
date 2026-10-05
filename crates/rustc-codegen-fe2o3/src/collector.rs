@@ -3024,7 +3024,19 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_checked_integer_v1(
+                        self.tcx,
+                        instance,
+                    ) {
+                        continue;
+                    }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_u32_widening_v1(
+                        self.tcx,
+                        instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_attention_option_v1(
                         self.tcx,
                         instance,
                     ) {
