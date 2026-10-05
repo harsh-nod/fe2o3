@@ -471,6 +471,19 @@ pub(super) trait MemoryBackend {
             "mapped acquire observation backend",
         ))
     }
+    /// Separate closed-program route; ordinary AQL publication stays system-only.
+    fn publish_closed_program_aql_header(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+        _program_index: u32,
+        _program_count: u32,
+        _header: fe2o3_aql::AqlClosedProgramHeaderV1,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "closed-program AQL publication backend",
+        ))
+    }
     fn observe_aql_packet_header_acquire(
         _mapping: &mut Self::Mapping,
         _requested_bytes: usize,

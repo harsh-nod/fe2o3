@@ -37,6 +37,7 @@ pub use engineering_gfx950::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
     run_gfx950_engineering_worker_active_poll_10ms_unchecked_v1,
+    run_gfx950_engineering_worker_token_program_boundary_fences_unchecked_v1,
     run_gfx950_engineering_worker_token_program_native_unchecked_v1,
     run_gfx950_engineering_worker_token_program_unchecked_v1,
     run_gfx950_engineering_worker_unchecked_v1,
