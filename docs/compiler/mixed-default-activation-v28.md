@@ -123,7 +123,9 @@ downstream trust boundary.
    manifest entry from ordinary Rust, compare supported simulator/reference
    results, and execute target-matched hardware gates where available. Parser
    tests, checked-in KIR, source-name dispatch and compile-only results do not
-   replace these obligations.
+   replace these obligations. The [current tutorial runner](tutorial-current-qualification-v92.md)
+   covers the registered compilation/simulation/reference corpus; pending
+   displayed-source bindings and hardware execution remain separate gates.
 
 ## Evidence Classification
 
