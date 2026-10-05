@@ -112,7 +112,7 @@ pub(super) fn clone_placed(
         let (domain, _) = pending.0.as_mut().expect("prepared domain custody");
         domain.create()?;
         let fd = domain.clone_cgroup_fd()?;
-        let (pid, pidfd) = syscall::clone_child_with_cgroup(
+        let (pid, pidfd, parent_mask) = syscall::clone_child_with_cgroup(
             staged,
             credentials,
             ceiling,
@@ -128,6 +128,9 @@ pub(super) fn clone_placed(
                 let mut child = RootOwnedProtectedServiceChildV2::new_with_domain_and_namespace(
                     pid, pidfd, lease, domain, namespace, slot,
                 );
+                parent_mask
+                    .restore()
+                    .map_err(|e| io("restore placed parent signal mask", e))?;
                 child.check_pidfd()?;
                 child.configure_namespace()?;
                 child.revalidate_namespace()?;
@@ -138,6 +141,9 @@ pub(super) fn clone_placed(
                 let child = RootOwnedProtectedServiceChildV2::new_with_domain(
                     pid, pidfd, lease, domain, slot,
                 );
+                parent_mask
+                    .restore()
+                    .map_err(|e| io("restore placed parent signal mask", e))?;
                 child.check_pidfd()?;
                 Ok(child)
             }

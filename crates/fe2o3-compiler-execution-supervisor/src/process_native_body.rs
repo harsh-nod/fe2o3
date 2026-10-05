@@ -27,9 +27,10 @@ fn read_readiness(
 
 /// Fixed outer work for pipes, staging, parent descriptor closure, transfer and Drop.
 /// Native observations, child execution and finite waits charge additional work.
-const LAUNCH_WORK: usize = ENTRY + 128 * 1024;
+const LAUNCH_WORK: usize = ENTRY + 128 * 1024 + fe2o3_protected_service_spawn::clone_compat::WORK;
 /// Outer logical scratch above every retained input; not RSS or generated stack.
 const LAUNCH_SCRATCH: usize = 8 * size_of::<Session<'static, 'static>>()
+    + fe2o3_protected_service_spawn::clone_compat::SCRATCH
     + 4 * size_of::<StagedLaunchV1>()
     + 4 * size_of::<Profile>()
     + 4 * size_of::<Namespaces>()

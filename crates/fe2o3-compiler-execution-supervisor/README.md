@@ -236,8 +236,11 @@ capability, access-mode, object-snapshot, byte, parent-continuity, and role
 non-aliasing checks. The retained stdout, stderr, and readiness readers remain
 private, and no prepared value exposes a descriptor.
 
-Production launch consumes that prepared state through one `clone3` call with
-exactly `CLONE_PIDFD | CLONE_CLEAR_SIGHAND` and `SIGCHLD`. Every launcher input
+Production launch consumes that prepared state through the shared atomic-pidfd
+adapter: `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` with `SIGCHLD`, or only
+on `ENOSYS`, an unmapped legacy `clone(CLONE_PIDFD | SIGCHLD)` retry with all
+calling-thread signals blocked until the child resets dispositions. Parent
+signal restoration follows adoption of all child cleanup custody. Every launcher input
 is first duplicated above FD 215. The direct-syscall child resets signals,
 arms and verifies `PDEATHSIG=SIGKILL`, self-checks the inherited service
 profile, freshly observes all ten namespaces, and emits one fixed private report.

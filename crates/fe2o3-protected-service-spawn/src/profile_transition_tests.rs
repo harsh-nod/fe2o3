@@ -8,6 +8,43 @@ use std::{
 const MARKER: &str = "FE2O3_PRIVATE_PROFILE_TRANSITION_TEST";
 
 #[test]
+fn seccomp_enosys_never_falls_back_for_cgroup_or_user_namespace() {
+    crate::clone_compat::tests::run_named(
+        "syscall::profile_tests::strict_clone3_subprocess",
+        "strict-clone3",
+    );
+}
+
+#[test]
+fn strict_clone3_subprocess() {
+    if std::env::var(crate::clone_compat::tests::CASE).as_deref() != Ok("strict-clone3") {
+        return;
+    }
+    let dummy = File::open("/dev/null").unwrap();
+    let staged =
+        StagedProtectedServiceExecV1::new(&dummy, &[], dummy.as_fd(), dummy.as_fd(), dummy.as_fd())
+            .unwrap();
+    let credentials = ProtectedServiceCredentialProfileV1::new(1000, 1000).unwrap();
+    // Different errors distinguish strict clone3 refusal from any legacy retry.
+    crate::clone_compat::tests::install_filter(libc::ENOSYS, true, false);
+    for mapping in [None, Some((dummy.as_fd(), dummy.as_fd()))] {
+        let result = clone_child_with_cgroup(
+            &staged,
+            credentials,
+            40,
+            rustix::process::getpid(),
+            Some(dummy.as_fd()),
+            mapping,
+        );
+        assert!(matches!(result, Err(rustix::io::Errno::NOSYS)));
+    }
+    assert!(matches!(
+        rustix::process::waitpid(None, rustix::process::WaitOptions::NOHANG),
+        Err(rustix::io::Errno::CHILD)
+    ));
+}
+
+#[test]
 fn fresh_domain_clone_preserves_atomic_pidfd_and_signal_contract() {
     let domain = File::open("/dev/null").unwrap();
     let mut output = -1;
