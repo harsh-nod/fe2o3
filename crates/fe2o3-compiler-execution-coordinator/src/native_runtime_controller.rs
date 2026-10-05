@@ -15,7 +15,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
 use fe2o3_protected_service_spawn::native_spawn::{
-    MAX_RUNTIME_TASKS, RootRuntimeTraceV1 as Runtime, RuntimeTaskObservationV1 as View,
+    MAX_RUNTIME_TASKS, RootRuntimeTraceV1 as Runtime, RootTaskIdentityV2 as Identity,
+    RootTaskObservationV2 as RootView, RuntimeTaskObservationV1 as View,
     RuntimeTraceEventV1 as Event,
 };
 use std::mem::size_of;
@@ -32,6 +33,7 @@ const FRAME: usize = 4 * size_of::<NativeRuntimeController>() + 4096;
 
 pub(crate) struct NativeRuntimeController {
     root: i32,
+    identity: Identity,
     ledger: Ledger,
     address: usize,
     tasks: TaskImages<NativeKernelImage>,
@@ -59,9 +61,17 @@ pub(crate) enum Progress {
 }
 
 impl NativeRuntimeController {
-    pub(crate) const STORAGE: usize = size_of::<Self>();
-    pub(crate) const INITIAL_WORK: usize = LOCAL_WORK + Runtime::OPERATION_WORK;
-    pub(crate) const INITIAL_SCRATCH: usize = FRAME + Runtime::OPERATION_SCRATCH;
+    pub(crate) const STORAGE: usize = size_of::<Self>() + RootView::IDENTITY_STORAGE;
+    pub(crate) const INITIAL_WORK: usize = LOCAL_WORK
+        + Runtime::OPERATION_WORK
+        + Runtime::ROOT_OBSERVATION_WORK
+        + RootView::VIEW_WORK
+        + RootView::IDENTITY_WORK;
+    pub(crate) const INITIAL_SCRATCH: usize = FRAME
+        + Runtime::OPERATION_SCRATCH
+        + RootView::VIEW_SCRATCH
+        + RootView::IDENTITY_SCRATCH
+        + RootView::IDENTITY_STORAGE;
     pub(crate) const STEP_SCRATCH: usize = FRAME
         + Runtime::OPERATION_SCRATCH
         + View::FRAME
@@ -76,6 +86,7 @@ impl NativeRuntimeController {
     pub(crate) fn step_work() -> Result<usize> {
         let parts = [
             LOCAL_WORK,
+            Runtime::IDENTITY_COMPARISON_WORK,
             16 * Runtime::OPERATION_WORK,
             Runtime::bounded_census_work(PARK_OPERATIONS)?,
             View::CENSUS_WORK,
@@ -95,7 +106,7 @@ impl NativeRuntimeController {
     /// Bind only an actual held first root exec. Returned inline storage is FULL
     /// and unreserved. This does not resume, release the gate or admit a compiler.
     pub(crate) fn from_root_exec(runtime: &mut Runtime<'_>, b: &mut Budget<'_>) -> Result<Self> {
-        b.with_prepaid_scope(0, 8, LOCAL_WORK, FRAME, |b| {
+        b.with_prepaid_scope(0, 8, LOCAL_WORK, FRAME + RootView::IDENTITY_STORAGE, |b| {
             let event = runtime
                 .poll(b)?
                 .ok_or(Error::Invalid("native controller needs held root exec"))?;
@@ -105,8 +116,12 @@ impl NativeRuntimeController {
                 ));
             }
             let root = event.pid().as_raw_pid();
+            let (identity, charge) =
+                runtime.with_task_observation(b, |view, b| view.retain_identity(b))?;
+            b.reserve_storage(charge.additional_storage())?;
             Ok(Self {
                 root,
+                identity,
                 ledger: b.work_ledger_identity_v1(),
                 address: b as *const Budget<'_> as usize,
                 tasks: TaskImages::new(TaskKey {
@@ -119,8 +134,9 @@ impl NativeRuntimeController {
         })
     }
 
-    /// A single owned event transition. Any refusal marks cancellation; the
-    /// outer owner must drive funded retirement or retain its fail-stop contract.
+    /// A single owned event transition. After original identity matches, refusal
+    /// marks cancellation. Earlier funding/owner refusal never mutates an alien
+    /// runtime; the outer genuine owner still owes funded retirement/fail-stop.
     /// Source/output confinement is NOT established by a successful transition.
     pub(crate) fn step(
         &mut self,
@@ -129,16 +145,19 @@ impl NativeRuntimeController {
         inventory: &Inventory,
         b: &mut Budget<'_>,
     ) -> Result<Progress> {
+        let mut associated = false;
         let result = b.with_prepaid_scope(Self::STORAGE, 8, LOCAL_WORK, FRAME, |b| {
             if self.refused
                 || runtime.pid().as_raw_pid() != self.root
                 || b.work_ledger_identity_v1() != self.ledger
                 || b as *const Budget<'_> as usize != self.address
+                || !runtime.matches_original_identity(&self.identity, b)?
             {
                 return Err(Error::Invalid(
                     "native controller lost original owner/account association",
                 ));
             }
+            associated = true;
             if runtime.is_trace_retired() {
                 if self.tasks.count() != 0 || self.pending.is_some() {
                     return Err(Error::Invalid(
@@ -221,7 +240,9 @@ impl NativeRuntimeController {
         });
         if result.is_err() {
             self.refused = true;
-            runtime.mark_cancellation();
+            if associated {
+                runtime.mark_cancellation();
+            }
         }
         result
     }

@@ -13,6 +13,13 @@ controller records the original resource account and budget address. Its fixed
 32-task table holds only metadata obtained through the original trace; PID and
 generation scalars never acquire a process independently.
 
+It also retains the existing root trace's private, move-stable allocation
+identity and compares that exact original identity before every step, including
+retirement checks. PID reuse or another trace on the same resource account is
+not an identity match. Full identity retention, capture and comparison are
+included in the controller's quotes. This equality is inert and is not a runtime
+enforcement or publication capability.
+
 Event generations are the original owner's global observation epoch, not a
 per-task stop identity. Registry birth generations are recorded only at an
 actual acquired-and-held child transition. Other owned observations may advance
@@ -34,9 +41,12 @@ inherited records survive until the last task reference is gone. A consuming
 terminal acknowledgement removes exactly the original task generation before
 its slot can be reused. Root exit codes and terminating signals remain distinct.
 
-Any policy or resource refusal marks cancellation. The caller must still fund
-foreground retirement of the original complete trace. Trace retirement does
-not establish aggregate domain cleanup or artifact publication.
+After the original identity matches, a policy or resource refusal marks
+cancellation. Earlier funding/account/identity refusal does not mutate an alien
+runtime supplied by a mistaken caller. The controller becomes refused and the
+genuine outer owner still owes funded foreground retirement of its original
+complete trace. Trace retirement does not establish aggregate domain cleanup or
+artifact publication.
 
 ## Bounds
 
