@@ -35,23 +35,32 @@ filesystem read-only; it neither executes inspected inputs nor grants installed
 approval. Existing post-overlay source/installed audits and genuine admission
 still pass. This is one input-bundle prerequisite, not a complete deployment.
 
+The [private application input projection](evidence/dev-qualification-application-inputs-2026-10-04/README.md)
+now passes the complete genuine zero-argument campaign with the original homes
+hidden. Its independently manifested source, compiler and offline caches are
+copied from UID1002 transport into fresh root-owned private inodes before any
+bundled script executes. Application UID1000 can read the exact source projection;
+the existing Rust runtime pin and macro identity checks remain unchanged. This
+closes the application-input projection gate, not the host linker closure or
+two-GPU execution gate.
+
 Current work order:
 
-1. Prepare the complete pinned compiler/proof/offline-cache input bundle and make
-   the required real-root service launch available on MI300X. Read-only
-   checks reach the host, but the fixed services are absent, noninteractive sudo
-   requires a password and direct root SSH is unavailable. Compiler/tool paths and
-   four setup DSO hashes match the qualification host; that is not the complete
-   deployment closure. Add a private, separately manifested source/toolchain/cache
-   projection at the CLI's exact compiled-in source root. Give application UID1000
-   searchable private ancestors without changing the UID1002 host checkout or
-   exposing its home. Preserve the pinned Rust runtime's mode bits and exact
-   registry/git bytes; qualify the host static-link tool closure separately.
-   Do not bypass admission or weaken device permissions.
+1. Qualify the remaining host setup/static-link inputs, transport the reviewed
+   application and proof/service inputs, and establish the required real-root
+   private service launch on MI300X. The source/toolchain/offline-cache projection
+   is now implemented and qualified locally. GCC, binutils, CRTs, static archives,
+   linker scripts and their execution dependencies remain an installed-host
+   premise, not part of that bundle. Fresh Windows OpenSSH read-only checks reach
+   `sharkmi300x-1` using the existing trusted host keys, but the fixed services
+   remain absent, noninteractive sudo requires a password and direct root SSH
+   is denied. Do not bypass admission or weaken device permissions.
 2. Select two freshly observed free physical GPUs, resolve their hardware IDs and
    expose only their render nodes plus KFD in the private application namespace.
    The harness preserves application UID1000 and derives necessary numeric GPU
    groups. KFD remains process-global; this is not kernel-enforced GPU isolation.
+   The latest read-only check found live users on all eight devices; sampled 0%
+   utilization did not establish a free pair. No remote workload was started.
 3. Execute 65-element fills with G128/WG64 on both devices, then stage their actual
    completed bytes into PUBLIC native peer copies in both directions. Require two
    native peer completions, complete payload/source checks, separate sentinel
@@ -60,12 +69,22 @@ Current work order:
 4. Exercise second-invocation and transfer-deadline failure controls. Require no
    hardware success record and inspect owned shutdown/quarantine.
 
+Latest application-input qualification: **35 Python controls passed as real
+root**, **436 frontend tests passed, 8 ignored**, all three copied-runtime/macro
+checks passed as UID1000 with original homes hidden, and existing package/mount/
+four-layer device-node controls passed. The genuine campaign passes **1/1 in
+451.21 seconds** in the test, **510.33 seconds** including private deployment and
+cleanup, or **557.95 seconds** including transport construction and projection
+probes. The private storage mount and owned cgroup were removed. This is not a
+performance benchmark. No GPU workload or HIP/HSA comparison was run.
+
 Latest proof-input qualification: **22 shell controls passed**. Real pinned input
 audit passes without root or writable filesystems; a bad package fails before
 cgroup creation. A fresh genuine zero-argument campaign passes 1/1 in 493.57
 seconds including deployment and cleanup (481.00 seconds in the test). No Rust
 unit suite, hardware execution or performance comparison was rerun for this
-shell-only change. The complete input projection and hardware gates remain open.
+shell-only change. The application projection is qualified above; the remaining
+deployment and hardware gates are still open.
 
 Latest harness qualification: **38 unit tests passed, 12 ignored**, strict Clippy,
 shell parser controls and four-layer synthetic character-node carriage passed.

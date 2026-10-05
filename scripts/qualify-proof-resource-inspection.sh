@@ -8,6 +8,7 @@ readonly installed=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.0
 readonly campaign=${FE2O3_PROOF_INSTALL_CAMPAIGN:-resources}
 [[ $campaign == resources || $campaign == genuine || $campaign == genuine-two-gpu ]] || exit 2
 source "$repo/scripts/qualify-two-gpu-mounts.sh"
+source "$repo/scripts/qualify-application-inputs.sh"
 FE2O3_GPU_MOUNTS=()
 if [[ $campaign == genuine-two-gpu && -n ${1:-} ]]; then
   configure_two_gpu_mounts
@@ -29,6 +30,7 @@ require_private() {
 case "${1:-}" in
   '')
     campaign_mounts=()
+    prepare_application_input_bundle
     for name in FE2O3_PROOF_INSTALL_TEST FE2O3_STATIC_PROOF_CUSTODIAN_DIR \
       FE2O3_PROOF_INSTALL_COORDINATOR FE2O3_PROOF_INSTALL_WORKER \
       FE2O3_PROOF_RUNTIME_INPUTS FE2O3_PROOF_VERUS_DIST FE2O3_PROOF_RUST_TOOLCHAIN; do
@@ -46,10 +48,12 @@ case "${1:-}" in
         }
       done
       [[ -d /usr/libexec/gcc ]]
-      campaign_mounts=(--ro-bind /usr/libexec/gcc /usr/libexec/gcc \
-        --ro-bind "$FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1" \
-        /run/authority-binding-trampoline --setenv FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1 \
-        /run/authority-binding-trampoline)
+      campaign_mounts=(--ro-bind /usr/libexec/gcc /usr/libexec/gcc)
+      if [[ -z ${FE2O3_GENUINE_INPUT_BUNDLE:-} ]]; then
+        campaign_mounts+=(--ro-bind "$FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1" \
+          /run/authority-binding-trampoline --setenv FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1 \
+          /run/authority-binding-trampoline)
+      fi
     fi
     if [[ $campaign == genuine-two-gpu ]]; then
       # Resolve UIDs through the canonical read-only topology parser before any
@@ -97,6 +101,13 @@ case "${1:-}" in
     trap cleanup EXIT
     trap 'exit 143' TERM
     trap 'exit 130' INT
+    configure_application_input_mounts
+    setup_script=$0
+    setup_phase=prepare
+    if [[ -n ${FE2O3_GENUINE_INPUT_BUNDLE:-} ]]; then
+      setup_script="$FE2O3_APPLICATION_DRIVER_MOUNT/scripts/qualify-proof-resource-inspection.sh"
+      setup_phase=stage
+    fi
     (
     printf '%s\n' "$BASHPID" > "$scope/cgroup.procs"
     exec timeout --kill-after=10s 1800s bwrap --die-with-parent \
@@ -106,13 +117,23 @@ case "${1:-}" in
       --tmpfs /usr/libexec --tmpfs /opt \
       --tmpfs /run --tmpfs /var/lib --tmpfs /tmp --chmod 1777 /tmp --proc /proc --dev /dev \
       "${FE2O3_GPU_MOUNTS[@]}" \
+      "${FE2O3_APPLICATION_INPUT_MOUNTS[@]}" \
       "${campaign_mounts[@]}" \
       --bind /sys/fs/cgroup /sys/fs/cgroup \
       --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
       --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP --cap-add CAP_SYS_PTRACE \
-      /bin/bash "$0" prepare
+      /bin/bash "$setup_script" "$setup_phase"
     ) &
     wait "$!"
+    ;;
+  stage)
+    require_private
+    [[ $campaign != resources && $FE2O3_GENUINE_INPUT_BUNDLE == "$FE2O3_APPLICATION_INPUT_MOUNT" ]]
+    confirmed=$(/usr/bin/python3 -E -s -B "$repo/scripts/qualification_input_bundle.py" \
+      stage-application "$FE2O3_APPLICATION_TRANSPORT_MOUNT" \
+      "$FE2O3_GENUINE_INPUT_SHA256" /run/qualification-input-v1)
+    [[ $confirmed == "$FE2O3_GENUINE_INPUT_SOURCE_ROOT" ]]
+    exec /bin/bash "$FE2O3_APPLICATION_INPUT_MOUNT/data/source/scripts/qualify-proof-resource-inspection.sh" prepare
     ;;
   prepare)
     require_private
@@ -146,8 +167,14 @@ case "${1:-}" in
       ln -sf libzstd.so.1.5.5 "$dir/libzstd.so.1"
       ln -sf libcap-ng.so.0.0.0 "$dir/libcap-ng.so.0"
     done
+    input_readonly=()
+    if [[ -n ${FE2O3_GENUINE_INPUT_BUNDLE:-} ]]; then
+      input_readonly=(--ro-bind "$FE2O3_GENUINE_INPUT_BUNDLE" "$FE2O3_GENUINE_INPUT_BUNDLE"
+        --tmpfs "$FE2O3_APPLICATION_TRANSPORT_MOUNT" --tmpfs "$FE2O3_APPLICATION_DRIVER_MOUNT")
+    fi
     exec bwrap --die-with-parent --bind / / --dev /dev \
       "${FE2O3_GPU_MOUNTS[@]}" \
+      "${input_readonly[@]}" \
       --ro-bind /usr/lib/x86_64-linux-gnu /run/host-lib \
       --ro-bind /run/setup/overlay /usr/lib/x86_64-linux-gnu \
       --tmpfs /usr/lib64 --symlink ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2 \
@@ -174,15 +201,21 @@ case "${1:-}" in
         install -m 0555 "$FE2O3_COMPILER_INSTALL_DIR/$name" "/usr/libexec/fe2o3/$name"
       done
       install -m 0555 "$FE2O3_COMPILER_INSTALL_LAUNCHER" /usr/libexec/fe2o3/fe2o3-static-preexec-launcher
-      # Cargo needs its explicit toolchain/source closure; unlike the resource-only campaign,
-      # this namespace retains the read-only host home and setup DSO aliases.
+      configure_application_projection
+      application_script=$0
+      if [[ -n ${FE2O3_GENUINE_INPUT_BUNDLE:-} ]]; then
+        application_script="$FE2O3_GENUINE_INPUT_SOURCE_ROOT/scripts/qualify-proof-resource-inspection.sh"
+      fi
+      # Bundle mode hides host homes. Legacy mode retains them; both still use
+      # the separately qualified host setup/linker premise.
       exec bwrap --die-with-parent --bind / / --dev /dev --tmpfs /etc \
         "${FE2O3_GPU_MOUNTS[@]}" \
+        "${FE2O3_APPLICATION_PROJECTION[@]}" \
         --ro-bind /etc/alternatives /etc/alternatives \
         --size 8589934592 --tmpfs /run/application-target \
         --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
         --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP --cap-add CAP_SYS_PTRACE \
-        /bin/bash "$0" genuine
+        /bin/bash "$application_script" genuine
     fi
     install -d -m 0755 /run/proof-inputs
     for name in envelope.bin payload.hsaco kernel.bin; do

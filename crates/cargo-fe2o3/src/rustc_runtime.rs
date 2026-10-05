@@ -359,6 +359,31 @@ mod tests {
 
     static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    #[ignore = "requires an explicit copied rustc path and independent runtime pin"]
+    fn qualification_copied_toolchain_preserves_runtime_pin() {
+        let rustc = PathBuf::from(
+            std::env::var_os("FE2O3_QUALIFICATION_RUSTC")
+                .expect("FE2O3_QUALIFICATION_RUSTC is required"),
+        );
+        assert!(rustc.is_absolute());
+        assert_eq!(rustc.file_name().unwrap(), "rustc");
+        assert_eq!(rustc.parent().unwrap().file_name().unwrap(), "bin");
+        assert_eq!(fs::canonicalize(&rustc).unwrap(), rustc);
+        let expected = std::env::var("FE2O3_QUALIFICATION_RUNTIME_SHA256")
+            .expect("FE2O3_QUALIFICATION_RUNTIME_SHA256 is required");
+        assert_eq!(expected.len(), 64);
+        assert!(
+            expected
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        );
+        let directory = crate::rustc_lib_tree_directory(&rustc).unwrap();
+        let pinned = PinnedRustcLibTree::pin(directory).unwrap();
+        assert_eq!(crate::hex_encode(pinned.sha256()), expected);
+        pinned.revalidate().unwrap();
+    }
+
     struct TestTree(PathBuf);
 
     impl TestTree {
