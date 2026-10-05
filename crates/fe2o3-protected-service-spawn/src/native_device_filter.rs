@@ -95,7 +95,7 @@ pub(crate) fn install(directory: BorrowedFd<'_>) -> Result<()> {
     if raw < 0 {
         return Err(io(
             "load fixed compiler device denial",
-            Errno::last_os_error(),
+            last_error(),
         ));
     }
     let raw = i32::try_from(raw).map_err(|_| Error::State("invalid BPF program descriptor"))?;
@@ -121,10 +121,16 @@ pub(crate) fn install(directory: BorrowedFd<'_>) -> Result<()> {
     if result != 0 {
         return Err(io(
             "attach fixed compiler device denial",
-            Errno::last_os_error(),
+            last_error(),
         ));
     }
     Ok(())
+}
+
+fn last_error() -> Errno {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .map_or(Errno::IO, Errno::from_raw_os_error)
 }
 
 #[cfg(test)]
