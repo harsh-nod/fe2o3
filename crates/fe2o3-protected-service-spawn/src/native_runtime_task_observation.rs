@@ -133,14 +133,8 @@ impl RuntimeTaskObservationV1<'_, '_> {
         if self.owner.generation != self.generation
             || self.owner.census_generation != Some(self.generation)
             || (self.selected && self.owner.selected != Some(self.index))
-            || !self.owner.tasks[self.index].is_some_and(|t| {
-                t.pid == self.pid
-                    && t.stop == self.stop
-                    && matches!(
-                        t.stop,
-                        Stop::Exec | Stop::Seccomp | Stop::Syscall | Stop::Interrupt
-                    )
-            })
+            || !self.owner.tasks[self.index]
+                .is_some_and(|t| t.pid == self.pid && t.stop == self.stop && t.stop.inspectable())
         {
             return Err(Error::State(
                 "runtime task observation lost its stopped generation",
