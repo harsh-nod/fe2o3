@@ -98,7 +98,10 @@ fn checkpoint_dispatch_is_closed_and_open_confinement_cannot_be_bypassed() {
     for number in [16, 47, 299] {
         assert_eq!(entry_kind(number, [0; 6], 1), Ok(EntryKind::Descriptor));
     }
-    for number in [2, 257, 58, 435, 317, 437, 438, 999, u64::MAX] {
+    for number in [2, 257] {
+        assert_eq!(entry_kind(number, [0; 6], 1), Ok(EntryKind::Open));
+    }
+    for number in [58, 435, 317, 437, 438, 999, u64::MAX] {
         assert!(entry_kind(number, [0; 6], 1).is_err());
     }
     assert_eq!(entry_kind(60, [0; 6], 32), Ok(EntryKind::Exit));

@@ -1,7 +1,51 @@
-//! Original attempt transitions. No gate release or runtime-admission token.
+//! Original attempt transitions and its private installed-confinement receipt.
 use super::*;
+use crate::native_runtime_guard::Error as GuardError;
 use crate::native_v3::NativeAttempt as Issued;
-use fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1 as Runtime;
+use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as Ledger;
+use fe2o3_protected_service_spawn::native_spawn::{
+    RootRuntimeTraceV1 as Runtime, RootTaskIdentityV2 as Identity,
+    RootTaskObservationV2 as RootView,
+};
+
+/// Only the original Attempt's successful gate transition can create this
+/// receipt. The trusted pre-READY path installed inherited, irreversible
+/// Landlock confinement; the original Domain proves actual pre-clone device
+/// denial. A stage flag, syscall result, PID or caller assertion is insufficient.
+pub(crate) struct CompilerConfinement {
+    identity: Identity,
+    ledger: Ledger,
+    address: usize,
+}
+
+impl CompilerConfinement {
+    pub(crate) const STORAGE: usize = size_of::<Self>() + RootView::IDENTITY_STORAGE;
+    pub(crate) const VALIDATE_WORK: usize = 8
+        + Runtime::IDENTITY_COMPARISON_WORK
+        + Runtime::ROOT_OBSERVATION_WORK
+        + RootView::VIEW_WORK
+        + RootView::DEVICE_CONFINEMENT_WORK;
+    pub(crate) const VALIDATE_SCRATCH: usize =
+        Self::STORAGE + RootView::VIEW_SCRATCH + RootView::DEVICE_CONFINEMENT_SCRATCH;
+
+    pub(crate) fn validate(
+        &self,
+        runtime: &Runtime<'_>,
+        b: &mut Budget<'_>,
+    ) -> std::result::Result<(), GuardError> {
+        b.with_prepaid_scope(Self::STORAGE, 8, 8, Self::STORAGE, |b| {
+            if self.ledger != b.work_ledger_identity_v1()
+                || self.address != b as *const Budget<'_> as usize
+                || !runtime.matches_original_identity(&self.identity, b)?
+            {
+                return Err(GuardError::Invalid(
+                    "compiler confinement lost original trace/account identity",
+                ));
+            }
+            runtime.with_task_observation(b, |view, b| Ok(view.require_device_open_confinement(b)?))
+        })
+    }
+}
 
 // These states route the private owner only. Actual trace stops, original Rc
 // identity, backing and kernel enforcement remain independently checked.
@@ -11,6 +55,8 @@ pub(super) enum Phase {
     Interrupting,
     Interrupted,
     Armed,
+    AwaitingExec,
+    FirstExec,
     HeldExec,
     ConfirmedExec,
     Issued,
@@ -66,7 +112,7 @@ impl<'work> Attempt<'work> {
 
     /// Interrupt only the same original compiler while its exec gate remains
     /// closed. Neither this state nor a successful interrupt admits execution.
-    pub(super) fn interrupt_runtime(
+    pub(in super::super) fn interrupt_runtime(
         &mut self,
         received: &Receiver,
         b: &mut Budget<'_>,
@@ -81,7 +127,10 @@ impl<'work> Attempt<'work> {
     }
 
     /// One consuming original wait; pending does not renew the intake deadline.
-    pub(super) fn poll_runtime_interrupt(&mut self, b: &mut Budget<'_>) -> AttemptResult<bool> {
+    pub(in super::super) fn poll_runtime_interrupt(
+        &mut self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<bool> {
         if self.phase != Phase::Interrupting {
             return Err(Failure::Invalid(
                 "compiler runtime interrupt was not requested",
@@ -101,7 +150,8 @@ impl<'work> Attempt<'work> {
         Ok(true)
     }
 
-    pub(super) fn arm_runtime_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+    pub(in super::super) fn arm_runtime_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let inner = Trace::runtime_takeover_quota()?;
         Ok(native::CompilerExecutionLaunchQuotaV2 {
             work: native::sum(&[LOCAL_WORK, inner.work()])?,
@@ -118,7 +168,10 @@ impl<'work> Attempt<'work> {
     /// gate stays closed; an unresolved failure after takeover must fail-stop,
     /// never transfer an armed tree to root-only background cleanup.
     #[allow(unsafe_code)]
-    pub(super) unsafe fn arm_runtime(&mut self, b: &mut Budget<'_>) -> AttemptResult<usize> {
+    pub(in super::super) unsafe fn arm_runtime(
+        &mut self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<usize> {
         if self.phase != Phase::Interrupted || self.controller.is_some() {
             return Err(Failure::Invalid(
                 "compiler runtime takeover lacks its held interrupt",
@@ -147,10 +200,120 @@ impl<'work> Attempt<'work> {
         result
     }
 
+    /// Revalidate the original received/staged objects, establish actual device
+    /// confinement and release only its held bootstrap interrupt. The trusted
+    /// bootstrap installs the additional TRACE filter before original exec;
+    /// no application instruction is resumed by this transition.
+    pub(in super::super) fn release_runtime(
+        &mut self,
+        received: &Receiver,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<usize> {
+        let result = (|| {
+            if self.phase != Phase::Armed || self.controller.is_some() || self.confinement.is_some()
+            {
+                return Err(Failure::Invalid(
+                    "compiler runtime gate is not freshly armed",
+                ));
+            }
+            self.revalidate(received, b)?;
+            let retained = native::sum(&[self.retained, CompilerConfinement::STORAGE])?;
+            b.with_prepaid_scope(
+                self.retained,
+                8,
+                LOCAL_WORK,
+                FRAME + CompilerConfinement::STORAGE,
+                |b| {
+                    require_deadline(self.deadline)?;
+                    let gate = self
+                        .gate_writer
+                        .as_ref()
+                        .ok_or(Failure::Invalid("compiler runtime gate writer is absent"))?;
+                    let Some(Owner::Gated(trace)) = &mut self.owner else {
+                        return Err(Failure::Invalid("compiler gate lost original owner"));
+                    };
+                    let confinement = trace.with_runtime_backing(b, |runtime, _, b| {
+                        let event = runtime.poll(b)?.ok_or(Failure::Invalid(
+                            "compiler gate lacks its held bootstrap interrupt",
+                        ))?;
+                        if !event.is_interrupt() || event.pid() != runtime.pid() {
+                            return Err(Failure::Invalid(
+                                "compiler gate is not at its original bootstrap interrupt",
+                            ));
+                        }
+                        let (identity, storage) = runtime.with_task_observation(b, |view, b| {
+                            view.require_device_open_confinement(b)?;
+                            view.retain_identity(b)
+                        })?;
+                        b.reserve_storage(storage.additional_storage())?;
+                        launch_io::release_child(
+                            gate.as_fd(),
+                            &mut GateObserver { runtime, budget: b },
+                            self.deadline,
+                        )?;
+                        runtime.resume_selected(b)?;
+                        Ok::<_, Failure>(CompilerConfinement {
+                            identity,
+                            ledger: b.work_ledger_identity_v1(),
+                            address: b as *const Budget<'_> as usize,
+                        })
+                    })?;
+                    self.confinement = Some(confinement);
+                    b.reserve_storage(CompilerConfinement::STORAGE)?;
+                    self.retained = retained;
+                    drop(self.gate_writer.take());
+                    self.phase = Phase::AwaitingExec;
+                    Ok(CompilerConfinement::STORAGE)
+                },
+            )
+        })();
+        if result.is_err() {
+            self.cancel();
+        }
+        result
+    }
+
+    /// Only Pending or the exact original root Exec may follow gate release.
+    /// Keep that Exec held through image validation and issuer readiness.
+    pub(in super::super) fn poll_first_exec(&mut self, b: &mut Budget<'_>) -> AttemptResult<bool> {
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::AwaitingExec || self.confinement.is_none() {
+                return Err(Failure::Invalid(
+                    "compiler first-exec poll has no released gate",
+                ));
+            }
+            require_deadline(self.deadline)?;
+            let found = self
+                .gated_trace_mut()?
+                .with_runtime_backing(b, |runtime, _, b| {
+                    let Some(event) = runtime.poll(b)? else {
+                        return Ok::<_, Failure>(false);
+                    };
+                    if !event.is_exec() || event.pid() != runtime.pid() {
+                        return Err(Failure::Invalid(
+                            "compiler bootstrap did not reach its original first exec",
+                        ));
+                    }
+                    Ok(true)
+                })?;
+            if found {
+                self.phase = Phase::FirstExec;
+            }
+            Ok(found)
+        });
+        if result.is_err() {
+            self.cancel();
+        }
+        result
+    }
+
     /// First-exec policy capture only. The gate/exec protocol remains a separate
     /// transition; this refuses unless the actual original runtime holds Exec.
-    pub(super) fn capture_first_exec(&mut self, b: &mut Budget<'_>) -> AttemptResult<usize> {
-        if self.phase != Phase::Armed || self.controller.is_some() {
+    pub(in super::super) fn capture_first_exec(
+        &mut self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<usize> {
+        if self.phase != Phase::FirstExec || self.controller.is_some() {
             return Err(Failure::Invalid("compiler first-exec capture is not fresh"));
         }
         let retained = native::sum(&[self.retained, Controller::STORAGE])?;
@@ -159,11 +322,18 @@ impl<'work> Attempt<'work> {
                 return Err(Failure::Invalid("compiler first-exec lost original owner"));
             };
             let inventory = &self.executables;
+            let confinement = self.confinement.take().ok_or(Failure::Invalid(
+                "compiler first-exec lacks its original confinement receipt",
+            ))?;
             let controller = trace.with_runtime_backing(b, |runtime, helper, b| {
                 helper.with_compiler(b, |backing, b| -> AttemptResult<_> {
                     inventory.revalidate(backing, b)?;
-                    Ok(Controller::from_checked_root_exec(
-                        runtime, backing, inventory, b,
+                    Ok(Controller::from_confined_root_exec(
+                        runtime,
+                        backing,
+                        inventory,
+                        confinement,
+                        b,
                     )?)
                 })
             })?;
@@ -188,7 +358,10 @@ impl<'work> Attempt<'work> {
     /// remain held; this actual stop has already passed complete image/census
     /// validation and has not resumed since it was captured.
     #[allow(unsafe_code)]
-    pub(super) unsafe fn confirm_first_exec(&mut self, b: &mut Budget<'_>) -> AttemptResult<()> {
+    pub(in super::super) unsafe fn confirm_first_exec(
+        &mut self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<()> {
         if self.phase != Phase::HeldExec || self.controller.is_none() {
             return Err(Failure::Invalid(
                 "compiler exec confirmation lacks held image validation",
@@ -231,7 +404,7 @@ impl<'work> Attempt<'work> {
     /// payload Drop contracts. The existing independently funded original pool
     /// must outlive both compiler and issuer, including unresolved fail-stop.
     #[allow(unsafe_code)]
-    pub(super) unsafe fn launch_issuer(
+    pub(in super::super) unsafe fn launch_issuer(
         &mut self,
         prepared: crate::native_v3::PreparedCompilerExecutionSupervisorV3,
         cleanup: &mut Cleanup,
@@ -282,7 +455,7 @@ impl<'work> Attempt<'work> {
     /// Only an actual issuer-owning variant may run checkpoints. Readiness is
     /// checked while the first exec stays held; subsequent steps keep the same
     /// original helper/inventory/controller and do not hash code per syscall.
-    pub(super) fn step_runtime(
+    pub(in super::super) fn step_runtime(
         &mut self,
         b: &mut Budget<'_>,
     ) -> AttemptResult<crate::native_runtime_controller::Progress> {
@@ -315,7 +488,8 @@ impl<'work> Attempt<'work> {
         result
     }
 
-    pub(super) fn runtime_step_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+    pub(in super::super) fn runtime_step_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let trace = Issued::<Helper>::runtime_backing_quota()?;
         let helper = Helper::checkpoint_access_quota()?;
         Ok(native::CompilerExecutionLaunchQuotaV2 {
@@ -334,11 +508,12 @@ impl<'work> Attempt<'work> {
         })
     }
 
-    pub(super) fn runtime_poll_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+    pub(in super::super) fn runtime_poll_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         Trace::gated_operation_quota().map_err(Into::into)
     }
 
-    pub(super) fn runtime_confirmation_quota()
+    pub(in super::super) fn runtime_confirmation_quota()
     -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let inner = Trace::runtime_confirmation_quota()?;
         Ok(native::CompilerExecutionLaunchQuotaV2 {
@@ -348,7 +523,7 @@ impl<'work> Attempt<'work> {
         })
     }
 
-    pub(super) fn runtime_issuer_quota(
+    pub(in super::super) fn runtime_issuer_quota(
         &self,
         prepared: &crate::native_v3::PreparedCompilerExecutionSupervisorV3,
     ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
@@ -357,6 +532,107 @@ impl<'work> Attempt<'work> {
         Ok(native::CompilerExecutionLaunchQuotaV2 {
             work: native::sum(&[LOCAL_WORK, launch.work(), ready.work()])?,
             scratch: native::sum(&[FRAME, launch.scratch(), ready.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn runtime_gate_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let trace = Trace::runtime_backing_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            // Full received/stage validation is quoted separately by request.
+            work: native::sum(&[
+                LOCAL_WORK,
+                trace.work(),
+                2 * Runtime::OPERATION_WORK,
+                Runtime::ROOT_OBSERVATION_WORK,
+                RootView::VIEW_WORK,
+                RootView::DEVICE_CONFINEMENT_WORK,
+                RootView::IDENTITY_WORK,
+                launch_io::MAX_GATE_ATTEMPTS * launch_io::Boundary::GateRelease.work(),
+            ])?,
+            scratch: native::sum(&[
+                FRAME,
+                CompilerConfinement::STORAGE,
+                trace.scratch(),
+                Runtime::OPERATION_SCRATCH,
+                RootView::VIEW_SCRATCH,
+                RootView::DEVICE_CONFINEMENT_SCRATCH,
+                RootView::IDENTITY_SCRATCH,
+                RootView::IDENTITY_STORAGE,
+            ])?,
+        })
+    }
+
+    pub(in super::super) fn first_exec_poll_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let trace = Trace::runtime_backing_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, trace.work(), Runtime::OPERATION_WORK])?,
+            scratch: native::sum(&[FRAME, trace.scratch(), Runtime::OPERATION_SCRATCH])?,
+        })
+    }
+
+    pub(in super::super) fn continuity_quota(
+        &self,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        if !matches!(self.owner, Some(Owner::Issued(_))) {
+            return Err(Failure::Invalid(
+                "compiler has no original issued continuity",
+            ));
+        }
+        let inner = Issued::<Helper>::original_validation_quota();
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: native::sum(&[FRAME, inner.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn continuity(&self, b: &mut Budget<'_>) -> AttemptResult<()> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            let Some(Owner::Issued(attempt)) = &self.owner else {
+                return Err(Failure::Invalid(
+                    "compiler has no original issued continuity",
+                ));
+            };
+            Ok(attempt.validate_original(b)?)
+        })
+    }
+
+    pub(in super::super) fn original_policy_identity_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let inner = Issued::<Helper>::original_policy_identity_quota();
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: native::sum(&[FRAME, inner.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn original_policy_identity(
+        &self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<[u8; 32]> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            let Some(Owner::Issued(attempt)) = &self.owner else {
+                return Err(Failure::Invalid("compiler has no original issued policy"));
+            };
+            Ok(attempt.original_policy_identity(b)?)
+        })
+    }
+}
+
+struct GateObserver<'a, 'work, 'budget> {
+    runtime: &'a Runtime<'work>,
+    budget: &'a mut Budget<'budget>,
+}
+impl launch_io::Observer for GateObserver<'_, '_, '_> {
+    type Error = Failure;
+    fn before_attempt(&mut self, boundary: launch_io::Boundary) -> AttemptResult<()> {
+        Ok(self.budget.charge_work(boundary.work())?)
+    }
+    fn is_live(&mut self) -> AttemptResult<bool> {
+        self.runtime.with_task_observation(self.budget, |view, b| {
+            view.validate_continuity(b)?;
+            Ok(true)
         })
     }
 }

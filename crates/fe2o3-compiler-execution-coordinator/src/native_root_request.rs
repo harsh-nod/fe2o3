@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 #[path = "native_compiler_attempt.rs"]
 mod compiler_attempt;
+pub(crate) use compiler_attempt::CompilerConfinement;
 
 #[path = "native_root_request_quota.rs"]
 mod quota;

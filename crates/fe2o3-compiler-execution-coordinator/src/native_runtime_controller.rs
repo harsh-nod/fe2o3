@@ -1,13 +1,14 @@
 //! Original stopped-task policy orchestration, not production admission.
 //!
 //! No gate release, publisher token or provider-supplied enforcement guard is
-//! constructed here. Open pre-effects remain a concrete missing confinement
-//! obligation and refuse. The caller must keep the original trace, immutable
-//! backing and outside-custodian contract through foreground retirement.
+//! constructed here. Opens require the original Attempt's private installed
+//! confinement receipt; the unconfined constructors cannot grant it. The caller
+//! retains original immutable backing and outside custody through retirement.
 use crate::{
     compiler_invocation_backing::CompilerInvocationBacking as Backing,
     native_runtime_guard::{self as guard, Error, NativeKernelImage, descriptor},
     native_runtime_inventory::NativeCompilerExecutableInventory as Inventory,
+    native_v3::root_intake::CompilerConfinement,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -38,6 +39,7 @@ pub(crate) struct NativeRuntimeController {
     address: usize,
     tasks: TaskImages<NativeKernelImage>,
     pending: Option<Pending>,
+    confinement: Option<CompilerConfinement>,
     refused: bool,
 }
 
@@ -61,7 +63,7 @@ pub(crate) enum Progress {
 }
 
 impl NativeRuntimeController {
-    pub(crate) const STORAGE: usize = size_of::<Self>() + RootView::IDENTITY_STORAGE;
+    pub(crate) const STORAGE: usize = size_of::<Self>() + 2 * RootView::IDENTITY_STORAGE;
     pub(crate) const INITIAL_WORK: usize = LOCAL_WORK
         + Runtime::OPERATION_WORK
         + Runtime::ROOT_OBSERVATION_WORK
@@ -84,6 +86,10 @@ impl NativeRuntimeController {
         + NativeKernelImage::CAPTURE_SCRATCH
         + NativeKernelImage::STORAGE
         + guard::IMAGE_SCRATCH;
+    pub(crate) const CONFINED_IMAGE_WORK: usize =
+        Self::INITIAL_IMAGE_WORK + CompilerConfinement::VALIDATE_WORK;
+    pub(crate) const CONFINED_IMAGE_SCRATCH: usize =
+        Self::INITIAL_IMAGE_SCRATCH + CompilerConfinement::VALIDATE_SCRATCH;
     pub(crate) const STEP_SCRATCH: usize = FRAME
         + Runtime::OPERATION_SCRATCH
         + View::FRAME
@@ -91,7 +97,8 @@ impl NativeRuntimeController {
         + NativeKernelImage::CAPTURE_SCRATCH
         + guard::IMAGE_SCRATCH
         + guard::MEMORY_SCRATCH
-        + descriptor::SCRATCH;
+        + descriptor::SCRATCH
+        + CompilerConfinement::VALIDATE_SCRATCH;
 
     /// Complete fixed step quote, including bounded parking and every callback.
     /// Existing absolute deadlines and independently funded cleanup are separate.
@@ -108,6 +115,7 @@ impl NativeRuntimeController {
             guard::MEMORY_WORK,
             descriptor::ENTRY_WORK,
             descriptor::EXIT_WORK,
+            CompilerConfinement::VALIDATE_WORK,
         ];
         parts.into_iter().try_fold(0_usize, |sum, part| {
             sum.checked_add(part)
@@ -141,6 +149,7 @@ impl NativeRuntimeController {
                     birth: event.generation(),
                 }),
                 pending: None,
+                confinement: None,
                 refused: false,
             })
         })
@@ -175,10 +184,27 @@ impl NativeRuntimeController {
         })
     }
 
+    /// Only the original Attempt can supply this nonconstructible receipt. Its
+    /// live original Domain and private allocation/account identity are checked
+    /// again at the held first Exec, before taking ownership of the receipt.
+    pub(crate) fn from_confined_root_exec(
+        runtime: &mut Runtime<'_>,
+        backing: &Backing,
+        inventory: &Inventory,
+        confinement: CompilerConfinement,
+        b: &mut Budget<'_>,
+    ) -> Result<Self> {
+        confinement.validate(runtime, b)?;
+        let mut controller = Self::from_checked_root_exec(runtime, backing, inventory, b)?;
+        controller.confinement = Some(confinement);
+        Ok(controller)
+    }
+
     /// A single owned event transition. After original identity matches, refusal
     /// marks cancellation. Earlier funding/owner refusal never mutates an alien
     /// runtime; the outer genuine owner still owes funded retirement/fail-stop.
-    /// Source/output confinement is NOT established by a successful transition.
+    /// Ordinary constructors remain unconfined; successful unrelated transitions
+    /// cannot substitute for the original Attempt's installed-confinement receipt.
     pub(crate) fn step(
         &mut self,
         runtime: &mut Runtime<'_>,
@@ -308,6 +334,17 @@ impl NativeRuntimeController {
             .map_err(Error::Invalid)?;
         self.validate_all(runtime, backing, inventory, b)?;
         let descriptor = match kind {
+            EntryKind::Open => {
+                self.confinement
+                    .as_ref()
+                    .ok_or(Error::Invalid(
+                        "native open lacks original installed confinement",
+                    ))?
+                    .validate(runtime, b)?;
+                Some(runtime.with_selected_task_observation(b, |view, b| {
+                    descriptor::prepare_descriptor_entry(entry, view, b)
+                })?)
+            }
             EntryKind::Memory => {
                 runtime.with_selected_task_observation(b, |view, b| {
                     guard::validate_memory_entry(entry, view, backing, inventory, b)

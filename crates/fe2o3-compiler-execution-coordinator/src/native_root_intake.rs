@@ -33,7 +33,7 @@ const EXCHANGE_WORK: usize = 2 * io::packet_receive_work(N);
 
 #[path = "native_root_request.rs"]
 mod request;
-pub(crate) use request::RootCompilerRequest;
+pub(crate) use request::{CompilerConfinement, RootCompilerRequest};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {

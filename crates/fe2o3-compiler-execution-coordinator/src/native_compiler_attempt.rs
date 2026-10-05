@@ -25,6 +25,7 @@ type AttemptResult<T> = std::result::Result<T, Failure>;
 type Trace<'work> = CompilerTrace<'work, Helper>;
 #[path = "native_compiler_attempt_runtime.rs"]
 mod runtime;
+pub(crate) use runtime::CompilerConfinement;
 use runtime::{Owner, Phase};
 const INVOCATION_FD: i32 = fe2o3_compiler_closure_capability::RUSTC_INVOCATION_CHILD_FD_V1;
 const BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
@@ -45,6 +46,7 @@ pub(super) struct Attempt<'work> {
     owner: Option<Owner<'work>>,
     executables: Executables,
     controller: Option<Controller>,
+    confinement: Option<CompilerConfinement>,
     phase: Phase,
     stage: Option<Stage>,
     gate_reader: Option<OwnedFd>,
@@ -209,6 +211,7 @@ pub(super) unsafe fn launch<'work>(
             owner: Some(Owner::Gated(trace)),
             executables,
             controller: None,
+            confinement: None,
             phase: Phase::Gated,
             stage: Some(stage),
             gate_reader: Some(gate_reader),

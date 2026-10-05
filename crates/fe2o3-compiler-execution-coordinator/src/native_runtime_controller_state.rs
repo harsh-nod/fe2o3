@@ -133,6 +133,7 @@ impl<I> TaskImages<I> {
 pub(super) enum EntryKind {
     Memory,
     Descriptor,
+    Open,
     Birth,
     Exit,
     ThreadName,
@@ -142,7 +143,9 @@ pub(super) fn entry_kind(number: u64, arguments: [u64; 6], tasks: usize) -> Resu
     match number {
         9 | 10 | 25 | 216 | 329 => Ok(EntryKind::Memory),
         16 | 47 | 299 => Ok(EntryKind::Descriptor),
-        2 | 257 => Err("native open requires concrete pre-effect source/output confinement"),
+        // Classification only. The controller still requires the non-forgeable
+        // original Attempt receipt and live kernel confinement before stepping.
+        2 | 257 => Ok(EntryKind::Open),
         56 => {
             // No namespace escape, untraced child, external parent, PIDFD import
             // or vfork dependency. Standard legacy pthread/fork flags remain.
