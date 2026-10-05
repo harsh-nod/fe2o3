@@ -14,7 +14,11 @@ struct InvocationSourceScalarOperandsResultV48 {
 }
 
 spec fn invocation_source_scalar_operands_shape_v48(event: InvocationSourceScalarOperandsV48) -> bool {
-    if event.operation >= 10 {
+    if 22 <= event.operation <= 24 {
+        (event.input_bits == 8 || event.input_bits == 16
+            || event.input_bits == 32 || event.input_bits == 64)
+            && event.output_bits == event.input_bits && event.right.is_some()
+    } else if 10 <= event.operation < 22 {
         byte_float_shape_v52(event.operation, event.input_bits, event.output_bits)
             && !event.input_signed && (event.operation == 10) == event.right.is_none()
     } else { 0 <= event.operation < 10
@@ -29,7 +33,7 @@ spec fn invocation_source_scalar_operands_value_v48(
     frames: MemoryFrameRuntimeV30, event: InvocationSourceScalarOperandsV48,
     left: MemoryValueV30, right: MemoryValueV30,
 ) -> MemoryValueV30 {
-    if event.operation >= 10 && invocation_source_scalar_operands_shape_v48(event) {
+    if 10 <= event.operation < 22 && invocation_source_scalar_operands_shape_v48(event) {
         byte_float_value_v52(frames, event.operation, event.input_bits, event.output_bits, left, right)
     } else if !invocation_source_scalar_operands_shape_v48(event)
         || !invocation_source_byte_value_typed_v36(left, event.input_bits)
@@ -49,6 +53,11 @@ spec fn invocation_source_scalar_operands_value_v48(
                     let value = if event.operation == 1 { ((left as u64) & (right as u64)) as int }
                         else if event.operation == 2 { ((left as u64) | (right as u64)) as int }
                         else if event.operation == 3 { ((left as u64) ^ (right as u64)) as int }
+                        // Ordinary integer MIR arithmetic is modulo its bit
+                        // width. Checked and unchecked rvalues are not dispatched here.
+                        else if event.operation == 22 { (left + right) % modulus }
+                        else if event.operation == 23 { (left + modulus - right) % modulus }
+                        else if event.operation == 24 { (left * right) % modulus }
                         else { if (event.operation == 4 && a == b)
                             || (event.operation == 5 && a != b)
                             || (event.operation == 6 && a < b)
