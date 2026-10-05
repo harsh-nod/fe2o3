@@ -136,6 +136,9 @@ fn tile_convergence_authenticates_kernel_abi_and_launch() {
     assert!(matches!(check(&input), Err(Error::LaunchMismatch(_))));
     input.kernels.clear();
     input.functions[0].role = fe2o3_kernel_ir::FunctionRole::InternalHelper;
+    input.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .clear();
     assert_eq!(check(&input), Err(Error::KernelEntry));
 }
 
