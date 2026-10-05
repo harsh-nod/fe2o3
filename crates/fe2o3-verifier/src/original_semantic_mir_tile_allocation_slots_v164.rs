@@ -183,6 +183,38 @@ mod tests {
     use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, ExecutionTileLayoutV1 as Layout};
 
     #[test]
+    fn original_mir_tile_allocations_have_exact_and_one_short_full_resources() {
+        for layout in [Layout::Blocked, Layout::Striped] {
+            let run = |work, storage| {
+                super::super::tests::run_tile_slots_with_limits(
+                    layout,
+                    work,
+                    storage,
+                    |slots, out| {
+                        let tile = slots.tile.unwrap();
+                        let (inventory, receipt) =
+                            Inventory::derive_v18(tile.output(out.budget)?, out.budget)?;
+                        out.budget.reserve_storage(receipt.retained_storage())?;
+                        let allocations = TileAllocationSlotsV164::derive(slots, &inventory, out)?;
+                        allocations.check_owner(inventory.owner(), out)?;
+                        for row in inventory.operations() {
+                            if matches!(row.operation.kind, OperationKind::Alloca { .. }) {
+                                allocations.site(row.coordinate, out)?;
+                            }
+                        }
+                        Ok(())
+                    },
+                )
+            };
+            let measured = run(100_000_000, 100_000_000);
+            measured.0.unwrap();
+            run(measured.1, measured.3).0.unwrap();
+            assert!(run(measured.1 - 1, measured.3).0.is_err());
+            assert!(run(measured.1, measured.3 - 1).0.is_err());
+        }
+    }
+
+    #[test]
     fn original_mir_tile_allocations_join_the_complete_original_and_expanded_census() {
         for layout in [Layout::Blocked, Layout::Striped] {
             super::super::tests::run_tile_slots(layout, |slots, out| {

@@ -874,9 +874,18 @@ mod tests {
         layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
         examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
     ) -> (Result<()>, usize, usize, usize) {
+        run_tile_slots_with_limits(layout, LIMIT, LIMIT, examine)
+    }
+
+    pub(super) fn run_tile_slots_with_limits(
+        layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
+        work: usize,
+        storage: usize,
+        examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+    ) -> (Result<()>, usize, usize, usize) {
         super::super::super::invocations::tests::run_allocation_variant(
-            LIMIT,
-            LIMIT,
+            work,
+            storage,
             |plan, out| {
                 let source = plan.source(out)?;
                 let result = source.with_checked_mixed_fixedpoint_optimization_v18(
@@ -952,6 +961,24 @@ mod tests {
         })
         .0
         .unwrap_err();
+    }
+
+    #[test]
+    fn original_mir_tile_slots_have_exact_and_one_short_full_resources() {
+        use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+        for layout in [Layout::Blocked, Layout::Striped] {
+            let run = |work, storage| {
+                run_tile_slots_with_limits(layout, work, storage, |slots, out| {
+                    slots.tile_policy_v162(0, out)?;
+                    slots.emit(out)
+                })
+            };
+            let measured = run(LIMIT, LIMIT);
+            measured.0.unwrap();
+            run(measured.1, measured.3).0.unwrap();
+            assert!(run(measured.1 - 1, measured.3).0.is_err());
+            assert!(run(measured.1, measured.3 - 1).0.is_err());
+        }
     }
 
     #[test]
