@@ -1,4 +1,7 @@
 use super::*;
+use fe2o3_rustc_invocation::{
+    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, derive_cargo_metadata_build_observation_v2,
+};
 use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::Compiler;
@@ -10,6 +13,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+const FIXTURE_METADATA: &str = "fe2o3_core_attention_option_fixture_v1";
 
 const FIXTURE: &str = r#"
 #![no_std]
@@ -79,13 +84,29 @@ fn reject<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, body: &Body<'tcx>,
 
 impl Callbacks for FixtureCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        // The owning test process supplies this observation before spawning
+        // libtest threads; provider source authentication remains unchanged.
+        assert_eq!(tcx.sess.opts.cg.metadata.as_slice(), &[FIXTURE_METADATA.to_owned()]);
+        let observation = derive_cargo_metadata_build_observation_v2(&tcx.sess.opts.cg.metadata);
+        assert_eq!(
+            std::env::var(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
+                .expect("Option fixture requires its scoped metadata observation"),
+            observation.to_hex(),
+        );
         let mut result = Results::default();
         for (name, method) in [("ok_usize", "ok_or"), ("ok_u32", "ok_or"), ("ok_tile", "ok_or"),
             ("then_add", "and_then"), ("then_mul", "and_then")] {
             let (instance, _) = fixture_call(tcx, name, method);
-            assert!(signature(tcx, instance).is_some(), "real signature: {instance:?}");
+            let types = signature(tcx, instance)
+                .unwrap_or_else(|| panic!("real signature: {instance:?}"));
             assert!(body_matches(tcx, instance, tcx.instance_mir(instance.def)), "real body: {instance:?}");
-            assert!(authenticate_reviewed_safe_core_attention_option_v1(tcx, instance), "real family: {name}");
+            assert!(authenticate_reviewed_safe_core_attention_option_v1(tcx, instance),
+                "real family: {name}; provider refusal: {:?}",
+                match types.other.kind() {
+                    TyKind::Adt(adt, _) => crate::trusted_device_items::rejected_provider(tcx, adt.did())
+                        .map(|rejected| rejected.reason),
+                    _ => None,
+                });
             result.positives += 1;
         }
         for (name, method) in [("wrong_payload", "ok_or"), ("wrong_error", "ok_or"),
@@ -406,6 +427,7 @@ fn compiler_results() -> Results {
         let (core, builtins, provider, dependencies, host_dependencies) = target_core_metadata(&fixture, std::path::Path::new(&sysroot));
         let args = vec![
             "rustc".to_owned(), "--crate-name".to_owned(), "fe2o3_core_attention_option_fixture".to_owned(),
+            format!("-Cmetadata={FIXTURE_METADATA}"),
             "--crate-type=lib".to_owned(), "--edition=2024".to_owned(), "--emit=metadata".to_owned(),
             "-Zmir-opt-level=0".to_owned(), "-Zinline-mir=no".to_owned(), "-Cpanic=abort".to_owned(),
             "--target=amdgcn-amd-amdhsa".to_owned(), "-Ctarget-cpu=gfx942".to_owned(),
