@@ -995,7 +995,7 @@ pub(in super::super) fn run_captured_callable_transform(
     )
 }
 
-fn run_prepared(
+pub(in super::super) fn run_prepared(
     work: usize,
     storage: usize,
     prepare: impl FnOnce(&mut Budget<'_>) -> Result<ProductionPreparedSourceV18>,
