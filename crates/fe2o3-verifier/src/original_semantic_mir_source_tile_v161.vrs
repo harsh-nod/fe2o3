@@ -54,7 +54,7 @@ spec fn invocation_source_tile_offset_v161(
 // nominal role assertion. The authenticated constructor separately checks roles.
 spec fn invocation_source_tile_shape_v161(ty: int, elements: int, parts: bool) -> bool {
     1 <= elements <= 125
-        && invocation_source_aggregate_leaf_count_v42(ty) == 2 * elements + if parts { 0 } else { 2 }
+        && invocation_source_aggregate_leaf_count_v42(ty) == 2 * elements + if parts { 0int } else { 2int }
         && (forall|i: int| 0 <= i < elements ==>
             invocation_source_aggregate_leaf_path_v42(ty, i) == seq![0int, i]
                 && invocation_source_aggregate_leaf_bits_v42(ty, i) == 32
@@ -117,7 +117,7 @@ spec fn invocation_source_context_issue_v161(
         match source.machine.frames.execution {
             Some(execution) if byte_execution_well_formed_v37(execution) => {
                 let leaves = Map::new(
-                    |path: Seq<int>| path.len() == 1 && 0 <= path[0] < 5,
+                    Set::new(|path: Seq<int>| path.len() == 1 && 0 <= path[0] < 5),
                     |path: Seq<int>| MemoryValueV30::Unit);
                 let after = invocation_source_aggregate_install_v42(source, issue.destination,
                     InvocationSourceAggregateV42 { source_type: issue.source_type, leaves });
@@ -222,9 +222,9 @@ spec fn invocation_source_tile_load_v161(
                             components.source, base_reads + components.observations)
                     } else {
                         let leaves = Map::new(
-                            |path: Seq<int>| path == seq![2int] || path == seq![3int]
+                            Set::new(|path: Seq<int>| path == seq![2int] || path == seq![3int]
                                 || path.len() == 2 && (path[0] == 0 || path[0] == 1)
-                                    && 0 <= path[1] < load.elements,
+                                    && 0 <= path[1] < load.elements),
                             |path: Seq<int>| if path == seq![2int] || path == seq![3int] {
                                 MemoryValueV30::Unit
                             } else if path[0] == 0 { components.values[path[1]] }
