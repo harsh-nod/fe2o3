@@ -479,8 +479,13 @@ fn wrong_launcher_and_issuer_measurements_reject() {
 #[test]
 fn dynamic_and_invalid_source_descriptors_reject() {
     let fixture = Fixture::new("hostile-source");
-    let current = std::env::current_exe().unwrap();
-    let current_bytes = fs::read(&current).unwrap();
+    let current = fixture.root.join("dynamic-entry");
+    let mut current_bytes = fixture.bytes.clone();
+    const PT_INTERP: u32 = 3;
+    let stack_header = 64 + 3 * 56;
+    current_bytes[stack_header..stack_header + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
+    fs::write(&current, &current_bytes).unwrap();
+    fs::set_permissions(&current, fs::Permissions::from_mode(0o555)).unwrap();
     let current_measurement = ProvisionedStaticExecutableMeasurementV1::new(
         Sha256::digest(&current_bytes).into(),
         u64::try_from(current_bytes.len()).unwrap(),
@@ -495,7 +500,7 @@ fn dynamic_and_invalid_source_descriptors_reject() {
         ),
         Err(IssuerProgramAdmissionErrorV1::InvalidStaticImage {
             role: "static launcher",
-            ..
+            source: fe2o3_runtime_protocol::SealedStaticApplicationErrorV1::InterpreterPresent,
         })
     ));
 
