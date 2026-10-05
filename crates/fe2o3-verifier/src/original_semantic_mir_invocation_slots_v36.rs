@@ -1503,6 +1503,7 @@ mod tests {
     fn original_mir_allocation_index_headers_have_independent_field_envelope() {
         type Fields<'a, 's> = (
             &'a Correspondence<'s>,
+            Option<&'a TileExpansion<'a, 's>>,
             Vec<Operation>,
             Vec<Option<Frame>>,
             Vec<(SourceKey, usize)>,

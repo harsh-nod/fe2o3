@@ -82,7 +82,13 @@ fn generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped(
     assert_eq!(prior.matches(descriptor).count(), 1);
     let expected = prior.replacen(
         descriptor,
-        "    Descriptor(InvocationSourceDescriptorEventV51),\n    ThreadWrite(InvocationSourceThreadWriteV88),\n",
+        concat!(
+            "    Descriptor(InvocationSourceDescriptorEventV51),\n",
+            "    ThreadWrite(InvocationSourceThreadWriteV88),\n",
+            "    ContextIssue(InvocationSourceContextIssueV161),\n",
+            "    TileLoad(InvocationSourceTileLoadV161),\n",
+            "    TileTransport(InvocationSourceTileTransportV161),\n",
+        ),
         1,
     );
     assert_eq!(warning_definition_v65(source, marker), expected);
