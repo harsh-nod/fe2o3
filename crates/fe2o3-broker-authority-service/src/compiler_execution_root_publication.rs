@@ -27,6 +27,9 @@ use payload::{Acquire, Owners, Validate};
 mod quota;
 pub use quota::RootPublicationQuotaV3;
 
+#[path = "compiler_execution_root_publication_trace.rs"]
+mod trace_owner;
+
 const ENTRY: usize = 8;
 const LOCAL_WORK: usize = ENTRY + 64 * 1088;
 // Expected::derive and join_subject visit/copy the complete admitted descriptor.
@@ -86,6 +89,27 @@ impl RootPublicationCustodyV3 {
     /// and observation_cleanup_quota to fund the original accounts beforehand.
     pub fn observe_with_limit<T: Send + 'static>(
         trace: &mut Trace<'_, T>,
+        cleanup: &mut Cleanup,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, usize)> {
+        Self::observe_owned(trace, cleanup, maximum_handoff_bytes, b)
+    }
+
+    /// Same publication protocol through the original runtime trace. The caller
+    /// retains complete stopped-task/runtime enforcement and cancellation duties;
+    /// this observation grants neither compiler resume nor retirement permission.
+    pub fn observe_runtime_with_limit(
+        trace: &mut fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1<'_>,
+        cleanup: &mut Cleanup,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, usize)> {
+        Self::observe_owned(trace, cleanup, maximum_handoff_bytes, b)
+    }
+
+    fn observe_owned<'work>(
+        trace: &mut impl trace_owner::PublicationTrace<'work>,
         cleanup: &mut Cleanup,
         maximum_handoff_bytes: usize,
         b: &mut Budget<'_>,
@@ -187,6 +211,24 @@ impl RootPublicationCustodyV3 {
     pub fn revalidate<T: Send + 'static>(
         &self,
         trace: &Trace<'_, T>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.revalidate_owned(trace, b)
+    }
+
+    /// Revalidate through the same advanced trace, never a replacement process
+    /// or a caller-supplied observation. A retired task cannot be observed here.
+    pub fn revalidate_runtime(
+        &self,
+        trace: &fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.revalidate_owned(trace, b)
+    }
+
+    fn revalidate_owned<'work>(
+        &self,
+        trace: &impl trace_owner::PublicationTrace<'work>,
         b: &mut Budget<'_>,
     ) -> Result<()> {
         let floor = self

@@ -10,6 +10,7 @@ use fe2o3_artifact_transaction::{
     compiler_module_handoff_custody_quota_for_limit_v5,
 };
 use fe2o3_protected_service_spawn::LateRetainedQuotaV2;
+use fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1;
 
 /// Cumulative request work and peak additional storage above retained inputs.
 /// An inert bound only; it grants no authority and creates or resets no account.
@@ -89,6 +90,7 @@ impl RootPublicationCustodyV3 {
                 OBSERVE_WORK,
                 observe_work,
                 2 * RootObservation::VIEW_WORK,
+                2 * RootRuntimeTraceV1::ROOT_OBSERVATION_WORK,
                 recover.work(),
                 late.request_work(),
                 2 * Holder::<Owners>::ATTACH_WORK,
@@ -130,6 +132,7 @@ pub(super) fn revalidation(
         work: sum(&[
             LOCAL_WORK,
             RootObservation::VIEW_WORK,
+            RootRuntimeTraceV1::ROOT_OBSERVATION_WORK,
             Holder::<Owners>::ATTACH_WORK,
             LOCAL_WORK,
             work,

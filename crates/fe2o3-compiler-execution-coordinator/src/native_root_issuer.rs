@@ -2,7 +2,7 @@
 // is manufactured here. The attempt owns its original trace/session independently
 // of the issuer; runtime admission and publication remain separate integrations.
 use super::PreparedCompilerExecutionSupervisorV3 as Prepared;
-use crate::compiler_child_channel::CompilerTrace;
+use crate::compiler_child_channel::{CompilerTrace, CompilerTraceEvent as TraceEvent};
 use crate::native_launch::{
     self as launch, CompilerExecutionLaunchErrorV2 as Error,
     CompilerExecutionLaunchQuotaV2 as Quota, CompilerExecutionLaunchStorageV2 as Storage,
@@ -41,8 +41,7 @@ use fe2o3_protected_service_spawn::{
     launch_io,
     native_spawn::{
         RootOwnedProtectedServiceChildV2 as PlainChild,
-        RootOwnedRetainedServiceChildV2 as RetainedChild, RootTaskTraceEventV2 as TraceEvent,
-        StagedProtectedServiceExecV2 as Stage,
+        RootOwnedRetainedServiceChildV2 as RetainedChild, StagedProtectedServiceExecV2 as Stage,
     },
 };
 use fe2o3_protected_static_executable::{
@@ -261,6 +260,13 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
 
     pub(crate) fn cancel_compiler(&mut self) -> CleanupPoll {
         self.trace.cancel()
+    }
+
+    /// Advance the same compiler's foreground runtime cancellation. A Pending
+    /// result retains the whole attempt; it is not a background cleanup transfer.
+    pub(crate) fn cancel_compiler_step(&mut self, b: &mut Budget<'_>) -> Result<CleanupPoll> {
+        self.account
+            .with(self.retained, b, |b| self.trace.cancel_step(b))
     }
 
     /// Uses the issuer's original cleanup slot without touching compiler/session.

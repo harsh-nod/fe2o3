@@ -152,6 +152,8 @@ impl<'work> RootRuntimeTraceV1<'work> {
     pub const STORAGE_GROWTH: usize = std::mem::size_of::<Self>();
     pub const OPERATION_WORK: usize = ENTRY + CAPACITY * 16 * (1024 + 64);
     pub const OPERATION_SCRATCH: usize = 4 * std::mem::size_of::<Self>() + 4096;
+    /// Additional fixed entry work above an original root observation.
+    pub const ROOT_OBSERVATION_WORK: usize = ENTRY;
 
     /// The trace must hold its own pre-exec interrupt stop. Prepay STORAGE_GROWTH.
     ///
@@ -252,7 +254,7 @@ impl<'work> RootRuntimeTraceV1<'work> {
     where
         E: From<Resource> + From<Error>,
     {
-        b.with_prepaid_scope(self.retained, ENTRY, ENTRY, 0, |b| {
+        b.with_prepaid_scope(self.retained, ENTRY, Self::ROOT_OBSERVATION_WORK, 0, |b| {
             self.check(b, true)?;
             self.root().with_task_observation(b, operation)
         })
