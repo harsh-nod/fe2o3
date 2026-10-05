@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use fe2o3_protected_service_spawn::trace_runtime as runtime_policy;
 use rustix::fs::OFlags;
 
 use super::{
@@ -98,9 +99,6 @@ const OPENAT_SYSCALL: u32 = 257;
 const PROT_WRITE: u64 = 2;
 const PROT_EXEC: u64 = 4;
 const MAP_ANONYMOUS: u64 = 0x20;
-const READ_IMPLIES_EXEC: u32 = 0x0040_0000;
-// x86-64 O_ACCMODE, O_CREAT, O_TRUNC and __O_TMPFILE; O_DIRECTORY stays allowed.
-const WRITABLE_OPEN_FLAGS: u64 = 3 | 0x40 | 0x200 | 0x0040_0000;
 const CLONE3_SYSCALL: u32 = 435;
 const CLONE3_ARGUMENT_BYTES: u64 = 88;
 const RUST_THREAD_CLONE3_FLAGS: u64 = 0x003d_0f00;
@@ -1499,10 +1497,7 @@ fn validate_sensitive_registers_with_policy(
 fn validate_read_only_open(flags: u64) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     // Scalar flags avoid a pathname race and cover /proc/self/mem, thread-self,
     // numeric PIDs and procfd aliases alike. Existing inherited output pipes remain usable.
-    if flags & WRITABLE_OPEN_FLAGS != 0 {
-        return Err(process_failure("write-capable file open is not admitted"));
-    }
-    Ok(())
+    runtime_policy::validate_read_only_open(flags).map_err(|error| process_failure(error.message()))
 }
 
 fn validate_clone3_request(
@@ -1615,7 +1610,7 @@ fn validate_nonexecutable_mapping_range(
             "zero-length mapping remap request is not admitted",
         ));
     }
-    let end = start
+    let _end = start
         .checked_add(length)
         .ok_or_else(|| process_failure("mapping remap range overflow"))?;
     let maps = std::fs::read_to_string(format!("/proc/{process}/maps"))
@@ -1625,62 +1620,15 @@ fn validate_nonexecutable_mapping_range(
             "remapped process map inventory is oversized",
         ));
     }
-    let mut cursor = start;
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let range = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed remapped process map"))?;
-        let permissions = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed remapped process map"))?;
-        let (mapping_start, mapping_end) = parse_mapping_range(range)?;
-        if mapping_end <= cursor {
-            continue;
-        }
-        if mapping_start > cursor {
-            break;
-        }
-        if permissions
-            .as_bytes()
-            .get(2)
-            .is_some_and(|value| *value == b'x')
-        {
-            return Err(process_failure(
-                "mapping remap covers an executable source range",
-            ));
-        }
-        cursor = mapping_end.min(end);
-        if cursor == end {
-            return Ok(());
-        }
-    }
-    Err(process_failure(
-        "mapping remap source range is not fully mapped",
-    ))
+    runtime_policy::validate_nonexecutable_mapping_rows(&maps, start, length)
+        .map_err(|error| process_failure(error.message()))
 }
 
+#[cfg(test)]
 fn parse_mapping_range(
     range: &str,
 ) -> Result<(u64, u64), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let (start, end) = range
-        .split_once('-')
-        .ok_or_else(|| process_failure("malformed process mapping range"))?;
-    let start = u64::from_str_radix(start, 16)
-        .map_err(|_| process_failure("noncanonical process mapping start"))?;
-    let end = u64::from_str_radix(end, 16)
-        .map_err(|_| process_failure("noncanonical process mapping end"))?;
-    if start >= end {
-        return Err(process_failure("empty or inverted process mapping range"));
-    }
-    Ok((start, end))
-}
-
-fn parse_mapping_file_offset(
-    offset: &str,
-) -> Result<u64, RetainedFunctionalRefinementRuntimeErrorV1> {
-    u64::from_str_radix(offset, 16)
-        .map_err(|_| process_failure("noncanonical process mapping file offset"))
+    runtime_policy::parse_mapping_range(range).map_err(|error| process_failure(error.message()))
 }
 
 fn executable_object_range_is_allowed(
@@ -1689,56 +1637,17 @@ fn executable_object_range_is_allowed(
     length: u64,
     allowed: &[AllowedRuntimeExecutableV1],
 ) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| process_failure("executable mapping file range overflow"))?;
-    if length == 0 {
-        return Ok(false);
+    // Preserve overflow refusal even when no retained object matches.
+    runtime_policy::contains_file_range(offset, length, &[])
+        .map_err(|error| process_failure(error.message()))?;
+    for executable in allowed.iter().filter(|entry| entry.identity == identity) {
+        if runtime_policy::contains_file_range(offset, length, &executable.executable_file_ranges)
+            .map_err(|error| process_failure(error.message()))?
+        {
+            return Ok(true);
+        }
     }
-    Ok(allowed.iter().any(|executable| {
-        executable.identity == identity
-            && executable
-                .executable_file_ranges
-                .iter()
-                .any(|(start, admitted_end)| *start <= offset && end <= *admitted_end)
-    }))
-}
-
-fn mapping_file_range_is_allowed(
-    device: &str,
-    inode: &str,
-    offset: u64,
-    length: u64,
-    allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
-    let (major, minor) = device
-        .split_once(':')
-        .ok_or_else(|| process_failure("malformed process mapping device"))?;
-    let major = u32::from_str_radix(major, 16)
-        .map_err(|_| process_failure("noncanonical process mapping device major"))?;
-    let minor = u32::from_str_radix(minor, 16)
-        .map_err(|_| process_failure("noncanonical process mapping device minor"))?;
-    let inode = inode
-        .parse::<u64>()
-        .map_err(|_| process_failure("noncanonical process mapping inode"))?;
-    if inode == 0 {
-        return Ok(false);
-    }
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| process_failure("executable mapping file range overflow"))?;
-    if length == 0 {
-        return Ok(false);
-    }
-    Ok(allowed.iter().any(|executable| {
-        executable.identity.inode == inode
-            && rustix::fs::major(executable.identity.device) == major
-            && rustix::fs::minor(executable.identity.device) == minor
-            && executable
-                .executable_file_ranges
-                .iter()
-                .any(|(start, admitted_end)| *start <= offset && end <= *admitted_end)
-    }))
+    Ok(false)
 }
 
 fn validate_executable_mappings(
@@ -1761,111 +1670,25 @@ fn validate_executable_mappings(
 fn validate_personality(
     personality: &str,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let value = u32::from_str_radix(personality.trim(), 16)
-        .map_err(|_| process_failure("malformed traced process personality"))?;
-    if value & READ_IMPLIES_EXEC != 0 {
-        return Err(process_failure("READ_IMPLIES_EXEC is not admitted"));
-    }
-    Ok(())
+    runtime_policy::validate_personality(personality)
+        .map_err(|error| process_failure(error.message()))
 }
 
 fn validate_executable_mapping_rows(
     maps: &str,
     allowed: &[AllowedRuntimeExecutableV1],
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let mut executable_count = 0_usize;
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let range = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let (mapping_start, mapping_end) = parse_mapping_range(range)?;
-        let permissions = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        if permissions
-            .as_bytes()
-            .get(2)
-            .is_none_or(|value| *value != b'x')
-        {
-            continue;
-        }
-        if permissions.as_bytes().get(1) == Some(&b'w') {
-            return Err(process_failure(
-                "writable executable mapping is not admitted",
-            ));
-        }
-        executable_count += 1;
-        if executable_count > 256 {
-            return Err(process_failure("too many executable mappings"));
-        }
-        let file_offset = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let file_offset = parse_mapping_file_offset(file_offset)?;
-        let device = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let inode = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let path = fields.next().unwrap_or("");
-        if matches!(path, "[vdso]" | "[vsyscall]") {
-            continue;
-        }
-        if path.is_empty() || path.starts_with('[') {
-            return Err(process_failure(
-                "anonymous executable mapping is not admitted",
-            ));
-        }
-        if !mapping_file_range_is_allowed(
-            device,
-            inode,
-            file_offset,
-            mapping_end - mapping_start,
-            allowed,
-        )? {
-            #[cfg(test)]
-            {
-                // Diagnostic only: the original closed identity/range predicate
-                // above and its refusal below remain unchanged.
-                let parsed_inode = inode.parse::<u64>().ok();
-                let parsed_device = device.split_once(':').and_then(|(major, minor)| {
-                    Some((
-                        u32::from_str_radix(major, 16).ok()?,
-                        u32::from_str_radix(minor, 16).ok()?,
-                    ))
-                });
-                let same_inode = allowed
-                    .iter()
-                    .filter(|entry| Some(entry.identity.inode) == parsed_inode)
-                    .count();
-                let same_device = allowed
-                    .iter()
-                    .filter(|entry| {
-                        Some((
-                            rustix::fs::major(entry.identity.device),
-                            rustix::fs::minor(entry.identity.device),
-                        )) == parsed_device
-                    })
-                    .count();
-                let inventory = format!("{allowed:?}");
-                let inventory = inventory.as_bytes();
-                eprintln!(
-                    "runtime maps test diagnostic: line={:?}, same_inode={same_inode}, same_device={same_device}, retained_prefix={:?}",
-                    String::from_utf8_lossy(&line.as_bytes()[..line.len().min(512)]),
-                    String::from_utf8_lossy(&inventory[..inventory.len().min(2048)]),
-                );
-            }
-            return Err(process_failure(
-                "executable mapping object or file range is outside retained runtime closure",
-            ));
-        }
-    }
-    if executable_count == 0 {
-        return Err(process_failure("traced process has no executable mappings"));
-    }
-    Ok(())
+    runtime_policy::validate_executable_mapping_rows(
+        maps,
+        allowed.iter().map(|entry| {
+            runtime_policy::ExecutableObjectRanges::new(
+                entry.identity.device,
+                entry.identity.inode,
+                &entry.executable_file_ranges,
+            )
+        }),
+    )
+    .map_err(|error| process_failure(error.message()))
 }
 
 fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {

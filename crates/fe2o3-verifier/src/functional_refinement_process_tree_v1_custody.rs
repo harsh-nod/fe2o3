@@ -436,7 +436,7 @@ impl Tracees {
     pub(super) fn values(&self) -> impl Iterator<Item = &Tracee> {
         self.entries.iter().map(|(_, task)| task)
     }
-    pub(super) fn pids(&self) -> impl Iterator<Item = i32> + use<> {
+    pub(super) fn pids(&self) -> std::iter::Take<std::array::IntoIter<i32, CUSTODY_CAPACITY>> {
         let mut pids = [0; CUSTODY_CAPACITY];
         for (out, (pid, _)) in pids.iter_mut().zip(&self.entries) {
             *out = *pid;
