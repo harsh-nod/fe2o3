@@ -11,6 +11,15 @@ mod conservation;
 #[path = "original_semantic_mir_invocation_step_generate_v85.rs"]
 mod step;
 
+#[cfg(test)]
+pub(super) fn target_follow_fuel_for_test(
+    model: &PairedInvocations<'_, '_, '_>,
+    root: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<usize> {
+    step::target_follow_fuel(model, model.roots.get(root).ok_or_else(mismatch)?, out)
+}
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }

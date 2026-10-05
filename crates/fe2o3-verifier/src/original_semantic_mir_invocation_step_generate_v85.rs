@@ -53,6 +53,7 @@ pub(super) fn emit(
     if hints.fuels.len() != row.instances.len() || hints.entries.len() != row.instances.len() {
         return Err(mismatch());
     }
+    let follow_fuel = target_follow_fuel(model, row, out)?;
     if !hints.conserves_heap {
         emit!(
             out,
@@ -127,9 +128,13 @@ pub(super) fn emit(
                                 " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n hide(invocation_source_enter_{root}_{child}_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));\n"
                             );
                         }
+                        if constructor.is_some() && matches!(goal, Goal::Observations) {
+                            let child = constructor.ok_or_else(mismatch)?.0.child;
+                            observations_context(root, child, add(row.blocks.start, block)?, out)?;
+                        }
                         unfold(
                             root,
-                            row,
+                            follow_fuel,
                             hints,
                             hint,
                             matches!(goal, Goal::Observations),
@@ -153,6 +158,8 @@ pub(super) fn emit(
                                 enter(root, hint, call, entry, out)?;
                             } else if matches!(goal, Goal::Control) {
                                 control_values(model, root, cut, call, out)?;
+                            } else if matches!(goal, Goal::Observations) {
+                                empty_observations(root, call.child, out)?;
                             }
                         }
                     }
@@ -175,11 +182,71 @@ pub(super) fn emit(
             }
         } else {
             // A hint-shape miss retains all four obligations, not a new premise.
-            unfold(root, row, hints, hint, true, out)?;
+            unfold(root, follow_fuel, hints, hint, true, out)?;
         }
         emit!(out, "}}\n");
     }
     Ok(())
+}
+
+pub(super) fn target_follow_fuel(
+    model: &PairedInvocations<'_, '_, '_>,
+    row: &Root,
+    out: &mut Writer<'_, '_>,
+) -> Result<usize> {
+    model.check(out)?;
+    out.budget
+        .reserve_storage(24 * size_of::<usize>() + 12 * size_of::<&()>())?;
+    out.budget.charge_work(4)?;
+    let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
+    let blocks = inventory
+        .blocks()
+        .get(row.blocks.clone())
+        .ok_or_else(mismatch)?;
+    let original = add(blocks.len(), 1)?;
+    if row.cuts.len() != blocks.len() {
+        return Err(mismatch());
+    }
+    let mut noncuts = 0usize;
+    let mut chained = false;
+    for (index, block) in blocks.iter().enumerate() {
+        out.budget.charge_work(3)?;
+        if row.cuts[index].is_some() {
+            continue;
+        }
+        noncuts = add(noncuts, 1)?;
+        if block.coordinate.block as usize != index {
+            return Ok(original);
+        }
+        for edge in inventory
+            .edges()
+            .get(block.edges.clone())
+            .ok_or_else(mismatch)?
+        {
+            out.budget.charge_work(3)?;
+            if edge.target.function != block.coordinate.function {
+                return Ok(original);
+            }
+            let next = edge.target.block as usize;
+            let Some(cut) = row.cuts.get(next) else {
+                return Ok(original);
+            };
+            if cut.is_none() {
+                if next <= index {
+                    return Ok(original);
+                }
+                chained = true;
+            }
+        }
+    }
+    // Follow stops at every cut; monotone non-cut edges cannot revisit a block.
+    Ok(if noncuts == 0 {
+        1
+    } else if !chained {
+        2
+    } else {
+        add(noncuts, 1)?
+    })
 }
 
 fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
@@ -187,6 +254,38 @@ fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
         " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_byte_states_related_v36);\n"
+    );
+    Ok(())
+}
+
+fn observations_context(
+    root: usize,
+    child: usize,
+    block: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.charge_work(13)?;
+    emit!(out, " hide(invocation_source_enter_{root}_{child}_v36);\n");
+    emit!(
+        out,
+        " hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n"
+    );
+    emit!(
+        out,
+        " hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_paired_observations_related_{root}_v39);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_state_memory_well_formed_v30);\n hide(invocation_source_byte_map_{root}_v36);\n assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n assert(target.pc == {block}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}\n"
+    );
+    Ok(())
+}
+
+fn empty_observations(root: usize, child: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(4)?;
+    emit!(
+        out,
+        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_enter_{root}_{child}_v36);\n }}\n"
+    );
+    emit!(
+        out,
+        " assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n reveal(invocation_actual_observations_v39);\n }}\n assert(invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)) by {{\n reveal(invocation_paired_observations_related_{root}_v39);\n }}\n"
     );
     Ok(())
 }
@@ -344,7 +443,7 @@ fn header(root: usize, pc: Option<usize>, goal: Goal, out: &mut Writer<'_, '_>) 
 
 fn unfold(
     root: usize,
-    row: &Root,
+    follow_fuel: usize,
     hints: &SourceStepHintsV85,
     cut: &SourceCutHintsV85,
     observations: bool,
@@ -364,7 +463,7 @@ fn unfold(
     emit!(
         out,
         " reveal_with_fuel(invocation_byte_follow_{root}_v36, {});\n",
-        add(row.blocks.len(), 1)?
+        follow_fuel
     );
     if observations {
         emit!(

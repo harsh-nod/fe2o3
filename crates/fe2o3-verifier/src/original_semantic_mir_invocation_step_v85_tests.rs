@@ -46,6 +46,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     assert!(!out.text.contains("proof fn invocation_source_cut_summary_"));
                     assert_eq!(out.text.matches("proof fn invocation_related_target_inputs_v96").count(), 1);
                     for (root, row) in paired.roots.iter().enumerate() {
+                        let follow_fuel = generate::target_follow_fuel_for_test(&paired, root, out)?;
                         let hints = row.step_hints.as_ref().unwrap();
                         assert!(hints.conserves_heap);
                         assert!(!out.text.contains("proof fn invocation_scalar_store_"));
@@ -54,7 +55,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                         check_four(&out.text, &format!("invocation_paired_step_{root}_v36"), root);
                         check_four(&out.text, &format!("invocation_paired_cut_{root}_terminal_all_v85"), root);
                         let dispatcher = theorem(&out.text, &format!("invocation_paired_step_{root}_v36"));
-                        for cut in row.cuts.iter().flatten() {
+                        for (block, cut) in row.cuts.iter().enumerate() {
+                            let Some(cut) = cut else { continue };
                             let pc = cut.source;
                             check_four(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_all_v85"), root);
                             assert!(dispatcher.contains(&format!("else if source.machine.pc == {pc}")));
@@ -65,6 +67,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
                                 assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                assert!(map.contains(&format!("reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});")));
                                 let control = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_control_v85"));
                                 for predicate in ["invocation_paired_source_step", "invocation_paired_source_defined", "invocation_source_byte_storage_related", "invocation_source_byte_map", "invocation_paired_control_values"] {
                                     assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
@@ -84,6 +87,22 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 assert!(control.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
                                 assert!(control.contains(&format!("invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));")));
                                 assert!(control.contains(&format!("assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}")));
+                                let observations = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_observations_v85"));
+                                assert!(observations.contains(&format!("hide(invocation_source_enter_{root}_{index}_v36);")));
+                                assert_eq!(observations.matches("hide(invocation_source_enter_").count(), 1);
+                                if index != child {
+                                    assert!(!observations.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
+                                }
+                                assert!(observations.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_enter_{root}_{index}_v36);\n }}")));
+                                assert!(observations.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
+                                assert!(observations.contains(&format!("assert(target.pc == {}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}", row.blocks.start + block)));
+                                for side in ["source", "actual"] {
+                                    let argument = if side == "source" { "source" } else { "target" };
+                                    assert!(observations.contains(&format!("hide(invocation_{side}_observations_v39);")));
+                                    assert!(observations.contains(&format!("assert(invocation_paired_{side}_step_{root}_v36({argument}).events == Seq::empty()) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n reveal(invocation_{side}_observations_v39);\n }}")));
+                                }
+                                let premises = observations.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
+                                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));
@@ -103,6 +122,136 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                 })
             },
         ).0.unwrap();
+    }
+}
+
+fn run_target_follow_topology(
+    work: usize,
+    storage: usize,
+    probe_boundaries: bool,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::super::invocations::tests::run_root_variant(
+        work,
+        storage,
+        false,
+        true,
+        3,
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let program = SourceByteProgram::derive(plan, slots, out)?;
+                let mut paired =
+                    PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                for root in 0..paired.roots.len() {
+                    let count = paired.roots[root].cuts.len();
+                    let fuel = generate::target_follow_fuel_for_test(&paired, root, out)?;
+                    assert!((1..=count + 1).contains(&fuel));
+                    if !probe_boundaries {
+                        continue;
+                    }
+                    let inventory = paired.slots.correspondence(out)?.inventory(out.budget)?;
+                    let successors: Vec<Vec<usize>> = inventory.blocks()
+                        [paired.roots[root].blocks.clone()]
+                    .iter()
+                    .map(|block| {
+                        inventory.edges()[block.edges.clone()]
+                            .iter()
+                            .map(|edge| {
+                                assert_eq!(edge.target.function, block.coordinate.function);
+                                edge.target.block as usize
+                            })
+                            .collect()
+                    })
+                    .collect();
+                    // Exercise only the unfolding heuristic on altered boundary bitmaps.
+                    // These synthetic locators are never emitted or admitted as a model.
+                    for mask in 0..1usize << count.min(4) {
+                        let row = &mut paired.roots[root];
+                        for (block, cut) in row.cuts.iter_mut().enumerate() {
+                            *cut = if block < 4 && mask & (1 << block) != 0 {
+                                None
+                            } else {
+                                Some(Cut {
+                                    source: 0,
+                                    instance: row.instances.start,
+                                    live: vec![],
+                                    end: End::Ordinary,
+                                })
+                            };
+                        }
+                        let fuel = generate::target_follow_fuel_for_test(&paired, root, out)?;
+                        if mask == 0 {
+                            assert_eq!(fuel, 1);
+                        }
+                        let row = &paired.roots[root];
+                        let mut active = vec![false; count];
+                        for block in 0..count {
+                            match independent_follow_depth(
+                                block,
+                                &row.cuts,
+                                &successors,
+                                &mut active,
+                            ) {
+                                Some(depth) => assert!(fuel > depth),
+                                None => assert_eq!(fuel, count + 1),
+                            }
+                        }
+                        if mask.count_ones() == 1 {
+                            let block = mask.trailing_zeros() as usize;
+                            if !successors[block].contains(&block) {
+                                assert_eq!(fuel, 2);
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })
+        },
+    )
+}
+
+fn independent_follow_depth(
+    block: usize,
+    cuts: &[Option<Cut>],
+    successors: &[Vec<usize>],
+    active: &mut [bool],
+) -> Option<usize> {
+    if cuts[block].is_some() {
+        return Some(0);
+    }
+    if active[block] {
+        return None;
+    }
+    active[block] = true;
+    let mut depth = 0;
+    for next in &successors[block] {
+        let Some(tail) = independent_follow_depth(*next, cuts, successors, active) else {
+            active[block] = false;
+            return None;
+        };
+        depth = depth.max(tail);
+    }
+    active[block] = false;
+    Some(depth + 1)
+}
+
+#[test]
+fn original_mir_step_follow_fuel_covers_authentic_graph_boundary_subsets() {
+    run_target_follow_topology(LIMIT, LIMIT, true).0.unwrap();
+}
+
+#[test]
+fn original_mir_step_follow_fuel_keeps_exact_and_one_short_accounts() {
+    use super::super::super::invocations::tests::FLOOR;
+    let measured = run_target_follow_topology(LIMIT, LIMIT, false);
+    measured.0.unwrap();
+    assert_eq!(measured.2, FLOOR);
+    let exact = run_target_follow_topology(measured.1, measured.3, false);
+    exact.0.unwrap();
+    assert_eq!(exact.2, FLOOR);
+    for (work, storage) in [(measured.1 - 1, measured.3), (measured.1, measured.3 - 1)] {
+        let short = run_target_follow_topology(work, storage, false);
+        assert!(short.0.is_err());
+        assert_eq!(short.2, FLOOR);
     }
 }
 
