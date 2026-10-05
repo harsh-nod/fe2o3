@@ -25,7 +25,7 @@ fn explicit_source_tile_graph_builds_and_replays_whole_actual_owner_with_both_la
             let candidate = view.prepare_tile_scalar_candidate_v157(
                 0,
                 layout,
-                fe2o3_kernel_ir::StorageLayoutLimitsV1::default(),
+                ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
                 budget,
             )?;
             assert_eq!(budget.storage(), floor);

@@ -5,6 +5,16 @@ use fe2o3_kernel_ir::{
     Signature, Terminator, WorkgroupSize,
 };
 
+#[path = "tile_scalar_sim_v158_tests.rs"]
+mod simulation;
+
+const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
+    rows: 16,
+    edges: 32,
+    containment_depth: 8,
+    object_bytes: 4096,
+};
+
 fn execution(id: u32, role: Role, operation: Execution) -> Operation {
     Operation::effect_free(
         ValueDef::new(ValueId(id), Type::Execution(role)),
@@ -162,12 +172,8 @@ fn selection(layout: ExecutionTileLayoutV1) -> [TileScalarFunctionSelectionV18; 
 }
 
 fn owner(module: &Module, budget: &mut Budget<'_>) -> Owner {
-    let (owner, storage) = Owner::from_module_ref_with_verification_budget_v18(
-        module,
-        StorageLayoutLimitsV1::default(),
-        budget,
-    )
-    .unwrap();
+    let (owner, storage) =
+        Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, budget).unwrap();
     budget.reserve_storage(storage.retained_storage()).unwrap();
     owner
 }
@@ -184,13 +190,9 @@ fn tile_scalar_whole_graph_retains_discarded_reads_cross_block_transport_and_par
         let original = fixture();
         let input = owner(&original, &mut budget);
         let floor = budget.storage();
-        let result = prepare_owned_tile_scalar_v18(
-            &input,
-            &selection(layout),
-            StorageLayoutLimitsV1::default(),
-            &mut budget,
-        )
-        .unwrap();
+        let result =
+            prepare_owned_tile_scalar_v18(&input, &selection(layout), LAYOUTS, &mut budget)
+                .unwrap();
         assert_eq!(budget.storage(), floor);
         budget.reserve_storage(result.retained_storage()).unwrap();
         result.replay_against(&input, &mut budget).unwrap();
@@ -239,11 +241,9 @@ fn compare_mutation(mut candidate: Module, mutate: impl FnOnce(&mut Module)) -> 
     let mut budget = Budget::new(&mut work, usize::MAX);
     let input = owner(&fixture(), &mut budget);
     mutate(&mut candidate);
-    let Ok((output, storage)) = Owner::from_module_ref_with_verification_budget_v18(
-        &candidate,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    ) else {
+    let Ok((output, storage)) =
+        Owner::from_module_ref_with_verification_budget_v18(&candidate, LAYOUTS, &mut budget)
+    else {
         return false;
     };
     budget.reserve_storage(storage.retained_storage()).unwrap();
@@ -269,7 +269,7 @@ fn tile_scalar_whole_graph_independent_checker_rejects_scalar_cfg_and_untouched_
     let lowered = prepare_owned_tile_scalar_v18(
         &input,
         &selection(ExecutionTileLayoutV1::Blocked),
-        StorageLayoutLimitsV1::default(),
+        LAYOUTS,
         &mut budget,
     )
     .unwrap();
@@ -314,28 +314,12 @@ fn tile_scalar_whole_graph_refuses_missing_geometry_invalid_policy_and_role_para
     let mut budget = Budget::new(&mut work, usize::MAX);
     let input = owner(&fixture(), &mut budget);
     let repeated = [selection(ExecutionTileLayoutV1::Blocked)[0]; 2];
-    assert!(
-        prepare_owned_tile_scalar_v18(
-            &input,
-            &repeated,
-            StorageLayoutLimitsV1::default(),
-            &mut budget
-        )
-        .is_err()
-    );
+    assert!(prepare_owned_tile_scalar_v18(&input, &repeated, LAYOUTS, &mut budget).is_err());
     let invalid = [TileScalarFunctionSelectionV18 {
         function: CanonicalKirFunctionCoordinateV1(99),
         layout: ExecutionTileLayoutV1::Blocked,
     }];
-    assert!(
-        prepare_owned_tile_scalar_v18(
-            &input,
-            &invalid,
-            StorageLayoutLimitsV1::default(),
-            &mut budget
-        )
-        .is_err()
-    );
+    assert!(prepare_owned_tile_scalar_v18(&input, &invalid, LAYOUTS, &mut budget).is_err());
     let mut module = fixture();
     module.kernels[0].workgroup_size = None;
     let input = owner(&module, &mut budget);
@@ -343,7 +327,7 @@ fn tile_scalar_whole_graph_refuses_missing_geometry_invalid_policy_and_role_para
         prepare_owned_tile_scalar_v18(
             &input,
             &selection(ExecutionTileLayoutV1::Blocked),
-            StorageLayoutLimitsV1::default(),
+            LAYOUTS,
             &mut budget
         )
         .is_err()
@@ -355,12 +339,7 @@ fn tile_scalar_whole_graph_refuses_missing_geometry_invalid_policy_and_role_para
             elements: 3,
         });
     assert!(
-        Owner::from_module_ref_with_verification_budget_v18(
-            &module,
-            StorageLayoutLimitsV1::default(),
-            &mut budget
-        )
-        .is_err()
+        Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget).is_err()
     );
 }
 
@@ -369,9 +348,7 @@ fn tile_scalar_whole_graph_empty_selection_preserves_complete_module() {
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
     let input = owner(&fixture(), &mut budget);
-    let output =
-        prepare_owned_tile_scalar_v18(&input, &[], StorageLayoutLimitsV1::default(), &mut budget)
-            .unwrap();
+    let output = prepare_owned_tile_scalar_v18(&input, &[], LAYOUTS, &mut budget).unwrap();
     assert_eq!(output.output().module(), input.module());
 }
 
@@ -391,7 +368,7 @@ fn tile_scalar_whole_graph_keeps_unselected_function_and_rejects_foreign_replay(
     let output = prepare_owned_tile_scalar_v18(
         &input,
         &selection(ExecutionTileLayoutV1::Blocked),
-        StorageLayoutLimitsV1::default(),
+        LAYOUTS,
         &mut budget,
     )
     .unwrap();
@@ -449,7 +426,7 @@ fn tile_scalar_whole_graph_preserves_repeated_workgroup_epochs_and_scope_owners(
     let output = prepare_owned_tile_scalar_v18(
         &input,
         &selection(ExecutionTileLayoutV1::Striped),
-        StorageLayoutLimitsV1::default(),
+        LAYOUTS,
         &mut budget,
     )
     .unwrap();
@@ -490,17 +467,14 @@ fn bounded(work_limit: usize, storage_limit: usize) -> (Result<()>, usize, usize
     let mut budget = Budget::new(&mut work, storage_limit);
     let result = (|| {
         budget.reserve_storage(37)?;
-        let (input, storage) = Owner::from_module_ref_with_verification_budget_v18(
-            &fixture(),
-            StorageLayoutLimitsV1::default(),
-            &mut budget,
-        )?;
+        let (input, storage) =
+            Owner::from_module_ref_with_verification_budget_v18(&fixture(), LAYOUTS, &mut budget)?;
         budget.reserve_storage(storage.retained_storage())?;
         let floor = budget.storage();
         let output = prepare_owned_tile_scalar_v18(
             &input,
             &selection(ExecutionTileLayoutV1::Striped),
-            StorageLayoutLimitsV1::default(),
+            LAYOUTS,
             &mut budget,
         )?;
         assert_eq!(budget.storage(), floor);
