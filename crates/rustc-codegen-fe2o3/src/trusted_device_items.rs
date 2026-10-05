@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xd3, 0x76, 0xc8, 0x30, 0x67, 0x6b, 0x1a, 0xa6, 0x17, 0x38, 0x0b, 0x85, 0x88, 0x8a, 0xf0, 0x67,
-    0x1d, 0x61, 0xa6, 0xac, 0x33, 0x9a, 0x0b, 0x67, 0x80, 0xef, 0x4e, 0x46, 0x3f, 0x70, 0xe4, 0x00,
+    0x03, 0x7e, 0x47, 0x2e, 0xa2, 0x4d, 0x73, 0x37, 0xf8, 0x80, 0x28, 0xed, 0x65, 0xcb, 0x3d, 0x6e,
+    0xa6, 0xe0, 0xc0, 0x68, 0x15, 0x38, 0xe6, 0x12, 0x1a, 0xb7, 0x82, 0x40, 0xc4, 0x4e, 0xf6, 0x75,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -3330,6 +3330,35 @@ mod tests {
     }
 
     #[test]
+    fn exact_device_provider_rejects_previous_source_generation() {
+        let previous =
+            digest("d376c830676b1aa617380b85888af0671d61a6ac339a0b6780ef4e463f70e400");
+        assert_ne!(previous, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
+        for item in [
+            TrustedDeviceItem::ThreadIndexCheckedBlock,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
+        ] {
+            // Trap authenticates the provider closure without an exact-path table entry.
+            let structural = match item {
+                TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap) => {
+                    "fe2o3_device::diagnostics::trap"
+                }
+                _ => exact_provider_compiler_definition_path_v1(item).unwrap(),
+            };
+            let local = structural.strip_prefix("fe2o3_device::").unwrap();
+            let current = semantic_definition(
+                local,
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &current)
+                .expect("current reviewed provider generation");
+            let stale = semantic_definition(local, previous, [6; 32]);
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &stale).is_err());
+        }
+    }
+
+    #[test]
     fn neutral_workgroup_terminals_reject_legacy_and_stale_provider_identities() {
         let neutral = [
             TrustedDeviceItem::WorkgroupGroup,
@@ -3523,7 +3552,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("d376c830676b1aa617380b85888af0671d61a6ac339a0b6780ef4e463f70e400")
+            digest("037e472ea24d7337f88028ed65cb3d6ea6e0c0681538e6121ab78240c44ef675")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }

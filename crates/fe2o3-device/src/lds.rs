@@ -508,6 +508,8 @@ pub struct WorkgroupPipeline<
     const ELEMENTS: usize,
     const PREFETCH: usize,
 > {
+    // Retain the issuer's value in optimized MIR; this byte is not an allocation ID.
+    _representation: u8,
     _storage: PhantomData<&'workgroup mut [T]>,
     _not_send_sync: PhantomData<*mut ()>,
 }

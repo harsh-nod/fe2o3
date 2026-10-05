@@ -24,6 +24,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod execution;
 pub mod ffi;
+pub mod finite_join;
 pub mod fp8;
 pub mod gfx950;
 pub mod group;
