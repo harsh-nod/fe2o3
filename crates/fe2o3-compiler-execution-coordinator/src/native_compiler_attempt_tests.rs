@@ -41,3 +41,11 @@ fn equal_contents_cannot_replace_an_original_staged_object() {
         other.metadata().unwrap().len()
     );
 }
+
+#[test]
+fn final_validation_requires_both_typed_child_modes() {
+    for (checkpoints, confinement) in [(false, false), (false, true), (true, false)] {
+        assert!(require_stage_modes(checkpoints, confinement).is_err());
+    }
+    require_stage_modes(true, true).unwrap();
+}

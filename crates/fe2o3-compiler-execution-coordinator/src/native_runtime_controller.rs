@@ -72,6 +72,18 @@ impl NativeRuntimeController {
         + RootView::VIEW_SCRATCH
         + RootView::IDENTITY_SCRATCH
         + RootView::IDENTITY_STORAGE;
+    pub(crate) const INITIAL_IMAGE_WORK: usize = 8
+        + Self::INITIAL_WORK
+        + View::VIEW_WORK
+        + View::CENSUS_WORK
+        + NativeKernelImage::CAPTURE_WORK
+        + MAX_RUNTIME_TASKS * guard::IMAGE_WORK;
+    pub(crate) const INITIAL_IMAGE_SCRATCH: usize = 2 * Self::STORAGE
+        + Self::INITIAL_SCRATCH
+        + View::FRAME
+        + NativeKernelImage::CAPTURE_SCRATCH
+        + NativeKernelImage::STORAGE
+        + guard::IMAGE_SCRATCH;
     pub(crate) const STEP_SCRATCH: usize = FRAME
         + Runtime::OPERATION_SCRATCH
         + View::FRAME
@@ -131,6 +143,35 @@ impl NativeRuntimeController {
                 pending: None,
                 refused: false,
             })
+        })
+    }
+
+    /// Capture and validate the original first-exec image without resuming it.
+    /// Issuer launch can now keep that exact stop held through its own readiness
+    /// and publication joins. Returned FULL storage remains unreserved.
+    pub(crate) fn from_checked_root_exec(
+        runtime: &mut Runtime<'_>,
+        backing: &Backing,
+        inventory: &Inventory,
+        b: &mut Budget<'_>,
+    ) -> Result<Self> {
+        b.with_prepaid_scope(0, 8, 8, Self::STORAGE, |b| {
+            let mut controller = Self::from_root_exec(runtime, b)?;
+            b.reserve_storage(Self::STORAGE)?;
+            let image = runtime
+                .with_selected_task_observation(b, |view, b| NativeKernelImage::capture(view, b))?;
+            b.reserve_storage(NativeKernelImage::STORAGE)?;
+            let key = controller
+                .tasks
+                .key(controller.root)
+                .map_err(Error::Invalid)?;
+            controller
+                .tasks
+                .replace_exec(key, image)
+                .map_err(Error::Invalid)?;
+            b.release_storage(NativeKernelImage::STORAGE)?;
+            controller.validate_all(runtime, backing, inventory, b)?;
+            Ok(controller)
         })
     }
 
