@@ -834,6 +834,46 @@ fn writing_cut_support_has_exact_full_model_work_and_storage_limits() {
 }
 
 #[test]
+fn thread_write_validity_normalization_reveals_only_scoped_branch_equations() {
+    let laws = include_str!("original_semantic_mir_thread_write_normal_laws_v94.vrs");
+    let theorem = laws
+        .split_once("proof fn invocation_thread_write_local_normal_valid_v93(")
+        .unwrap()
+        .1
+        .split("proof fn ")
+        .next()
+        .unwrap();
+    let (header, body) = theorem.split_once("\n{\n").unwrap();
+    assert!(body.starts_with("    hide(invocation_source_thread_write_v88);\n"));
+    assert_eq!(body.matches("assert(result == ").count(), 8);
+    assert_eq!(
+        body.matches("            reveal(invocation_source_thread_write_v88);")
+            .count(),
+        8
+    );
+    for required in [
+        "after.machine.valid ==> source.machine.valid",
+        "0 <= index < memory_value_modulus_v30(write.recipe.metadata_bits / 8)",
+        "0 <= value < memory_value_modulus_v30(write.recipe.width)",
+        "byte_range_aligned_v30(source.machine.memory, pointer,",
+        "after.machine.memory == byte_store_v30(source.machine.memory,",
+        "else { after.machine.memory == source.machine.memory }",
+    ] {
+        assert!(header.contains(required), "{required}");
+    }
+    for forbidden in ["assume(", "admit(", "external_body"] {
+        assert!(!laws.contains(forbidden), "{forbidden}");
+    }
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(text.matches(laws).count(), 1);
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
 fn descriptor_wf_composition_uses_authentic_events_and_retains_map_obligations() {
     let laws = include_str!("original_semantic_mir_source_wf_laws_v95.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 5);

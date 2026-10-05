@@ -136,6 +136,7 @@ proof fn invocation_thread_write_local_normal_frame_v93(
 }
 
 // Closed scalar-local operand normalization; callers prove the structural premises.
+#[verifier::spinoff_prover]
 proof fn invocation_thread_write_local_normal_valid_v93(
     source: InvocationSourceByteStateV36, write: InvocationSourceThreadWriteV88,
     local: int, bits: int, root: int, instance: int, little_endian: bool,
@@ -171,6 +172,7 @@ proof fn invocation_thread_write_local_normal_valid_v93(
                 })
     }),
 {
+    hide(invocation_source_thread_write_v88);
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_logical_write_v38);
     hide(invocation_source_descriptor_reference_current_v51);
@@ -178,14 +180,22 @@ proof fn invocation_thread_write_local_normal_valid_v93(
     hide(invocation_source_store_v36);
     hide(byte_store_v30);
     hide(byte_memory_well_formed_v30);
+    let result = invocation_source_thread_write_v88(source, write, root, instance,
+        little_endian).source;
     if !write.recipe.mutable || !write.moved_receiver
         || !invocation_source_descriptor_reference_current_v51(source, write.input, write.recipe) {
+        assert(result == invocation_source_byte_refused_v36(source)) by {
+            reveal(invocation_source_thread_write_v88);
+        }
         return;
     }
     invocation_source_put_local_preserves_heap_v78(source, write.input, MemoryValueV30::Undefined);
     invocation_thread_write_put_local_pc_v94(source, write.input, MemoryValueV30::Undefined);
     let receiver = invocation_source_byte_put_local_v36(source, write.input, MemoryValueV30::Undefined);
     if !invocation_source_witness_current_v38(receiver, write.index, write.witness_type) {
+        assert(result == invocation_source_byte_refused_v36(receiver)) by {
+            reveal(invocation_source_thread_write_v88);
+        }
         return;
     }
     invocation_source_put_local_preserves_heap_v78(receiver, write.index, MemoryValueV30::Undefined);
@@ -199,11 +209,17 @@ proof fn invocation_thread_write_local_normal_valid_v93(
         root, instance, little_endian);
     if !evaluated.source.machine.valid
         || !invocation_source_byte_value_typed_v36(evaluated.value, bits) {
+        assert(result == invocation_source_byte_refused_v36(evaluated.source)) by {
+            reveal(invocation_source_thread_write_v88);
+        }
         return;
     }
     match (source.machine.values[write.input], receiver.machine.values[write.index]) {
         (MemoryValueV30::Slice(slice), MemoryValueV30::Scalar(index)) => {
             if index < 0 || index >= memory_value_modulus_v30(write.recipe.metadata_bits / 8) {
+                assert(result == invocation_source_byte_refused_v36(evaluated.source)) by {
+                    reveal(invocation_source_thread_write_v88);
+                }
                 return;
             }
             if index >= slice.length {
@@ -211,6 +227,10 @@ proof fn invocation_thread_write_local_normal_valid_v93(
                     MemoryValueV30::Scalar(0));
                 invocation_thread_write_put_local_pc_v94(evaluated.source, write.destination,
                     MemoryValueV30::Scalar(0));
+                assert(result == invocation_source_byte_put_local_v36(evaluated.source,
+                    write.destination, MemoryValueV30::Scalar(0))) by {
+                    reveal(invocation_source_thread_write_v88);
+                }
                 return;
             }
             let pointer = MemoryPointerV30 {
@@ -223,15 +243,26 @@ proof fn invocation_thread_write_local_normal_valid_v93(
                     write.recipe.width, write.recipe.width, evaluated.value, little_endian),
                 ..evaluated.source };
             if !stored.machine.valid {
+                assert(result == invocation_source_byte_refused_v36(stored)) by {
+                    reveal(invocation_source_thread_write_v88);
+                }
                 return;
             }
             invocation_source_put_local_preserves_heap_v78(stored, write.destination,
                 MemoryValueV30::Scalar(1));
             invocation_thread_write_put_local_pc_v94(stored, write.destination,
                 MemoryValueV30::Scalar(1));
+            assert(result == invocation_source_byte_put_local_v36(stored,
+                write.destination, MemoryValueV30::Scalar(1))) by {
+                reveal(invocation_source_thread_write_v88);
+            }
             reveal(invocation_source_store_v36);
         },
-        _ => {},
+        _ => {
+            assert(result == invocation_source_byte_refused_v36(evaluated.source)) by {
+                reveal(invocation_source_thread_write_v88);
+            }
+        },
     }
 }
 
