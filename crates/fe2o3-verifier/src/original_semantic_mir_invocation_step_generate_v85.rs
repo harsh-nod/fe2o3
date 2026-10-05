@@ -53,6 +53,7 @@ pub(super) fn emit(
     if hints.fuels.len() != row.instances.len() || hints.entries.len() != row.instances.len() {
         return Err(mismatch());
     }
+    let follow_fuel = target_follow_fuel(model, row, out)?;
     if !hints.conserves_heap {
         emit!(
             out,
@@ -133,7 +134,7 @@ pub(super) fn emit(
                         }
                         unfold(
                             root,
-                            row,
+                            follow_fuel,
                             hints,
                             hint,
                             matches!(goal, Goal::Observations),
@@ -181,11 +182,71 @@ pub(super) fn emit(
             }
         } else {
             // A hint-shape miss retains all four obligations, not a new premise.
-            unfold(root, row, hints, hint, true, out)?;
+            unfold(root, follow_fuel, hints, hint, true, out)?;
         }
         emit!(out, "}}\n");
     }
     Ok(())
+}
+
+pub(super) fn target_follow_fuel(
+    model: &PairedInvocations<'_, '_, '_>,
+    row: &Root,
+    out: &mut Writer<'_, '_>,
+) -> Result<usize> {
+    model.check(out)?;
+    out.budget
+        .reserve_storage(24 * size_of::<usize>() + 12 * size_of::<&()>())?;
+    out.budget.charge_work(4)?;
+    let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
+    let blocks = inventory
+        .blocks()
+        .get(row.blocks.clone())
+        .ok_or_else(mismatch)?;
+    let original = add(blocks.len(), 1)?;
+    if row.cuts.len() != blocks.len() {
+        return Err(mismatch());
+    }
+    let mut noncuts = 0usize;
+    let mut chained = false;
+    for (index, block) in blocks.iter().enumerate() {
+        out.budget.charge_work(3)?;
+        if row.cuts[index].is_some() {
+            continue;
+        }
+        noncuts = add(noncuts, 1)?;
+        if block.coordinate.block as usize != index {
+            return Ok(original);
+        }
+        for edge in inventory
+            .edges()
+            .get(block.edges.clone())
+            .ok_or_else(mismatch)?
+        {
+            out.budget.charge_work(3)?;
+            if edge.target.function != block.coordinate.function {
+                return Ok(original);
+            }
+            let next = edge.target.block as usize;
+            let Some(cut) = row.cuts.get(next) else {
+                return Ok(original);
+            };
+            if cut.is_none() {
+                if next <= index {
+                    return Ok(original);
+                }
+                chained = true;
+            }
+        }
+    }
+    // Follow stops at every cut; monotone non-cut edges cannot revisit a block.
+    Ok(if noncuts == 0 {
+        1
+    } else if !chained {
+        2
+    } else {
+        add(noncuts, 1)?
+    })
 }
 
 fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
@@ -382,7 +443,7 @@ fn header(root: usize, pc: Option<usize>, goal: Goal, out: &mut Writer<'_, '_>) 
 
 fn unfold(
     root: usize,
-    row: &Root,
+    follow_fuel: usize,
     hints: &SourceStepHintsV85,
     cut: &SourceCutHintsV85,
     observations: bool,
@@ -402,7 +463,7 @@ fn unfold(
     emit!(
         out,
         " reveal_with_fuel(invocation_byte_follow_{root}_v36, {});\n",
-        add(row.blocks.len(), 1)?
+        follow_fuel
     );
     if observations {
         emit!(
