@@ -1,6 +1,8 @@
 //! Typed foreground view over dependencies also owned by the child's fixed slot.
 
-use super::child::{RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2};
+use super::child::{
+    RootRuntimeTraceV1, RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2,
+};
 use super::{
     ProtectedServiceSpawnStorageV2 as Storage, Result, RootOwnedProtectedServiceChildV2 as Child,
 };
@@ -131,6 +133,29 @@ pub struct RootRetainedTaskTraceV2<'work, T: Send + 'static> {
 }
 
 impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
+    /// Ask the original controller to interrupt its root; poll must consume the
+    /// actual stop before runtime takeover can be attempted.
+    pub fn interrupt(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.trace.interrupt(b)
+    }
+
+    /// Consume this exact trace AND the same retained backing. No new slot,
+    /// identity, pidfd or tracer is created. Prepay runtime STORAGE_GROWTH.
+    ///
+    /// # Safety
+    /// Preserve RootRuntimeTraceV1's closed-gate, exclusive custody, original
+    /// deadline and dedicated-process/outside-custodian takeover contract.
+    pub unsafe fn into_runtime_trace(
+        self,
+        deadline: std::time::Instant,
+        b: &mut Budget<'_>,
+    ) -> Result<RootRetainedRuntimeTraceV1<'work, T>> {
+        let Self { trace, resources } = self;
+        // SAFETY: caller supplies the unchanged original-trace takeover contract.
+        let trace = unsafe { trace.into_runtime_trace(deadline, b) }?;
+        Ok(RootRetainedRuntimeTraceV1 { trace, resources })
+    }
+
     /// Monotonically extend only the installed late payload; return no owner/view.
     ///
     /// # Safety
@@ -292,6 +317,68 @@ impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
     /// One original prepaid cancellation step, then transfer to the same slot.
     pub fn cancel(&mut self) -> CleanupPollV1 {
         self.trace.cancel()
+    }
+}
+
+/// Same complete backing and original runtime trace. The runtime field drops
+/// first; unresolved TRACEEXIT/tree custody cannot enter root-only cleanup.
+pub struct RootRetainedRuntimeTraceV1<'work, T: Send + 'static> {
+    trace: RootRuntimeTraceV1<'work>,
+    resources: Resources<T>,
+}
+
+impl<'work, T: Send + 'static> RootRetainedRuntimeTraceV1<'work, T> {
+    pub fn retained_storage(&self) -> usize {
+        self.trace.retained_storage()
+    }
+    /// Mechanical controller only, not the consumed root-only trace or a guard.
+    pub fn runtime(&mut self) -> &mut RootRuntimeTraceV1<'work> {
+        &mut self.trace
+    }
+    /// Read-only controller access for original observations and late custody.
+    pub fn observation(&self) -> &RootRuntimeTraceV1<'work> {
+        &self.trace
+    }
+
+    pub fn dependency_quota(&self) -> Result<RetainedDependencyQuotaV2> {
+        let mut quota = self.resources.dependency_quota()?;
+        quota.work = quota
+            .work
+            .checked_add(super::ENTRY)
+            .ok_or(Resource::Arithmetic)?;
+        Ok(quota)
+    }
+
+    /// Retains the same original backing only. The returned full charge remains
+    /// unreserved and must stay funded independently on the original account.
+    pub fn retain_dependencies(&self, b: &mut Budget<'_>) -> Result<RetainedDependencyV2<T>> {
+        b.with_prepaid_scope(
+            self.retained_storage(),
+            super::ENTRY,
+            super::ENTRY,
+            0,
+            |b| {
+                self.trace.check_budget(b)?;
+                Ok(self.resources.retain_dependency(b)?)
+            },
+        )
+    }
+
+    /// Read-only backing view with unchanged mutex, ledger and complete floor.
+    pub fn with_resources<'budget, R, E>(
+        &self,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(&T, &mut Budget<'budget>) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource>
+            + From<crate::RetainedResourceAccessErrorV2>
+            + From<super::ProtectedServiceSpawnErrorV2>,
+    {
+        b.with_prepaid_scope(self.retained_storage(), 0, 0, 0, |b| {
+            self.trace.check_budget(b)?;
+            self.resources.with(b, operation)
+        })
     }
 }
 
