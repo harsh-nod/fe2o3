@@ -311,6 +311,48 @@ run_all_rustc_codegen_shards() { :; }
         self.signal_case(signal.SIGTERM, during_spawn=True)
 
 
+class ProcessLifecycleTests(unittest.TestCase):
+    def test_real_terminal_leader_is_waitable_until_group_cleanup(self):
+        original_stop = harness.stop_group
+        observations = []
+
+        def checked_stop(process):
+            self.assertIsNone(process.returncode)
+            terminal = os.waitid(os.P_PID, process.pid,
+                                 os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            self.assertIsNotNone(terminal)
+            observations.append((terminal.si_pid, terminal.si_status))
+            original_stop(process)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(process.pid, os.WNOHANG)
+
+        for code in (0, 7):
+            with self.subTest(exit_code=code), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(harness, "stop_group", side_effect=checked_stop):
+                result = harness.run_command([sys.executable, "-c", f"raise SystemExit({code})"],
+                                             ROOT, dict(os.environ), Path(temporary) / "log", 3, 32)
+                self.assertEqual(result["exitCode"], code)
+                self.assertTrue(result["directChildReaped"])
+        self.assertEqual([code for _, code in observations], [0, 7])
+
+    def test_already_reaped_process_never_authorizes_group_signal(self):
+        with subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True) as process:
+            process.wait(timeout=3)
+            with patch.object(harness.os, "killpg") as signal_group:
+                harness.stop_group(process)
+            signal_group.assert_not_called()
+
+    def test_closed_output_does_not_remove_process_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = harness.run_command(
+                [sys.executable, "-c", "import os,time; os.close(1); os.close(2); time.sleep(30)"],
+                ROOT, dict(os.environ), Path(temporary) / "log", 0.05, 32)
+            self.assertEqual(result["status"], "timeout")
+            self.assertEqual(result["exitCode"], -signal.SIGKILL)
+            self.assertTrue(result["directChildReaped"])
+            self.assertFalse(result["logComplete"])
+
+
 def signal_fixture(directory, during_spawn):
     """A real sleeping subprocess under the CLI, never a compiler qualification."""
     directory = Path(directory)

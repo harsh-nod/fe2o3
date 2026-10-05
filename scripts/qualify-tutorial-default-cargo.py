@@ -137,11 +137,12 @@ def prerequisites(cargo_fe2o3, environment):
 
 
 def stop_group(process):
-    # The launcher owns a new session. Terminate its descendants as well as Cargo.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    # Retain the unreaped session leader until group cleanup: its PID owns the PGID.
+    if process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     process.wait()
 
 
@@ -188,10 +189,13 @@ def run_command(arguments, cwd, environment, log_path, timeout, max_log_bytes):
                     if reason is not None:
                         break
                 if reason is None:
-                    try:
-                        process.wait(timeout=max(0.001, timeout - (time.monotonic() - started)))
-                    except subprocess.TimeoutExpired:
-                        reason = "timeout"
+                    while os.waitid(os.P_PID, process.pid,
+                                    os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                        remaining = timeout - (time.monotonic() - started)
+                        if remaining <= 0:
+                            reason = "timeout"
+                            break
+                        time.sleep(min(remaining, 0.01))
         finally:
             # Also kills any descendant retaining the pipe after the leader exits.
             if process is not None:
