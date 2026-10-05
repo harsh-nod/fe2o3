@@ -230,7 +230,7 @@ fn source_state(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.reserve_storage(12 * size_of::<usize>())?;
-    out.budget.charge_work(20)?;
+    out.budget.charge_work(21)?;
     let fuel = add(hint.statements, 1)?;
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
         return Err(mismatch());
@@ -249,7 +249,7 @@ fn source_state(
     }
     emit!(
         out,
-        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
         call.child,
         hint.instance,
         add(hint.operands, 1)?
@@ -303,10 +303,10 @@ fn source_state(
         out,
         " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
     );
-    out.budget.charge_work(3)?;
+    out.budget.charge_work(4)?;
     emit!(
         out,
-        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
+        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_source_entry_initialize_v166);\n }}\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
     );
     Ok(())
 }

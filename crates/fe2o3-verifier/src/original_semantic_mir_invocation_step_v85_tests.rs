@@ -156,6 +156,9 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!source_state.contains("invocation_paired_related_"));
                                     assert!(!source_state.contains("invocation_paired_source_preserved_"));
                                     assert!(source_state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(source_state.contains("hide(invocation_source_entry_initialize_v166);"));
+                                    assert_eq!(source_state.matches("reveal(invocation_source_entry_initialize_v166);").count(), 1);
+                                    assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_source_entry_initialize_v166);\n }}")));
                                     assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}")));
                                     assert!(source_state.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                     assert!(!state.contains("reveal_with_fuel(invocation_source_micro_run_"));
