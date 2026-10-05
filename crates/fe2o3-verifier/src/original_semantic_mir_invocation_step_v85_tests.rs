@@ -70,6 +70,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
                                 }
                                 assert!(!control.contains("hide(invocation_paired_actual_step_"));
+                                assert!(control.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
                                 for predicate in ["invocation_byte_states_related_v36", "invocation_source_byte_state_well_formed_v36", "byte_memory_well_formed_v30", "byte_frame_runtime_well_formed_v30", "byte_private_frames_live_v30", "private_generation_counters_valid_v30"] {
                                     assert!(control.contains(&format!(" hide({predicate});")));
                                 }
@@ -152,6 +153,7 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert!(fallback.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(!fallback.contains("constructor_clear_well_formed"));
                                 assert!(!fallback.contains("hide(invocation_paired_control_values_"));
+                                assert!(!fallback.contains("hide(invocation_source_enter_"));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                             }
