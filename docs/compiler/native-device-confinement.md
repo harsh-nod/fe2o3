@@ -26,8 +26,11 @@ and output-write confinement remain separate.
 Loading this program requires `CAP_BPF` plus `CAP_NET_ADMIN` (or the broader
 legacy `CAP_SYS_ADMIN`) in the deployment's actual privileged context. Missing
 capabilities, unsupported kernels, or incompatible ancestor attachment modes
-refuse before cloning. This patch does not expand the service capability set
-or claim actual privileged/native production qualification.
+refuse before cloning. The canonical service unit grants only the two narrower
+capabilities to its trusted creator; it does not grant `CAP_SYS_ADMIN`. Existing
+child setup drops effective, permitted, inheritable, ambient and bounding
+capabilities before READY, including these two. Updating the repository unit
+does not install it or qualify actual privileged/native production execution.
 
 Kernel contracts: [cgroup v2 device controller](https://docs.kernel.org/admin-guide/cgroup-v2.html#device-controller),
 [Linux 6.8 BPF syscall permission checks](https://github.com/torvalds/linux/blob/v6.8/kernel/bpf/syscall.c),

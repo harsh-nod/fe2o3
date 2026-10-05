@@ -30,7 +30,9 @@ OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3:anchor-key-see
 # Lifecycle '..' traversal through service-owned 0700 roots needs read/search.
 # Exact namespace observation of the distinct-UID, nondumpable anchor needs ptrace.
 # The creator writes the fresh helper's identity uid_map, including parent UID 0.
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
+# Fixed cgroup-device BPF installation requires BPF and NET_ADMIN in the trusted
+# creator. Compiler/helper children drop the entire capability set before READY.
+CapabilityBoundingSet=CAP_BPF CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_NET_ADMIN CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
 AmbientCapabilities=
 NoNewPrivileges=no
 PrivateDevices=yes
