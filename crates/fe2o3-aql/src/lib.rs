@@ -1038,6 +1038,51 @@ impl AqlPreparedKernelDispatchBatchV2<1> {
     }
 }
 
+/// Heap-owned, runtime-cardinality counterpart to the fixed V2 batch.
+/// This is inert packet data, not native queue or publication authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedKernelDispatchProgramV1 {
+    packets: Box<[AqlPreparedKernelDispatchV1]>,
+}
+
+impl AqlPreparedKernelDispatchProgramV1 {
+    pub fn try_from_packets(
+        packets: Box<[AqlPreparedKernelDispatchV1]>,
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        if packets.is_empty() {
+            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
+        }
+        if packets.len() > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
+            return Err(
+                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                    requested: packets.len(),
+                    maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2,
+                },
+            );
+        }
+        Ok(Self { packets })
+    }
+
+    pub fn packet_count(&self) -> u32 {
+        self.packets.len() as u32
+    }
+
+    /// Every INVALID body is written before any release header, including on
+    /// error: a body failure cannot expose an executable prefix.
+    pub fn publish_with<T: AqlPacketBatchPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        for (index, packet) in self.packets.iter().enumerate() {
+            target.write_unpublished(index as u32, &packet.packet)?;
+        }
+        for (index, packet) in self.packets.iter().enumerate() {
+            target.publish_release_header(index as u32, packet.ordering.header())?;
+        }
+        Ok(())
+    }
+}
+
 /// Backend boundary used to keep one packet body and final header paired.
 ///
 /// Implementing this trait grants no ring or doorbell authority. A production

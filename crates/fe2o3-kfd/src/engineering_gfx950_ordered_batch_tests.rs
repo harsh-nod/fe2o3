@@ -16,6 +16,7 @@ enum PreparationFault {
 
 #[derive(Default)]
 struct Fake {
+    native_program: bool,
     deadlines: Vec<Instant>,
     events: Vec<String>,
     fail_at: Option<usize>,
@@ -153,6 +154,17 @@ impl OrderedBackend for Fake {
         self.deadlines.push(deadline);
         self.publication_start = self.events.len();
         self.event("ring_capacity_reservation".into())?;
+        if self.native_program {
+            let program = fe2o3_aql::AqlPreparedKernelDispatchProgramV1::try_from_packets(
+                (0..count)
+                    .map(Self::packet)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+            .unwrap();
+            native_program::expose_program(program, self)?;
+            return Ok(count);
+        }
         match count {
             1 => self.expose::<1>()?,
             16 => self.expose::<16>()?,
@@ -616,3 +628,104 @@ fn optional_arena_and_signals_are_reinitialized_after_confirmed_queue_rollover()
 
 #[path = "engineering_gfx950_ordered64_tests.rs"]
 mod ordered64;
+
+#[test]
+fn native_program_publishes_once_and_observes_every_signal_at_cardinality_boundaries() {
+    for count in [1, 63, 64, 65, 652, 1024] {
+        let mut fake = Fake {
+            native_program: true,
+            ..Default::default()
+        };
+        run_ordered_batch_deadline_bounded(&mut fake, count, 600_000, 1024, None).unwrap();
+        assert!(fake.completed && !fake.poisoned);
+        assert_eq!(fake.retained, count);
+        for event in [
+            "write_reservation",
+            "doorbell",
+            "poll_final_identity_counters_exception",
+            "complete_frontier",
+        ] {
+            assert_eq!(
+                fake.events.iter().filter(|value| *value == event).count(),
+                1
+            );
+        }
+        assert_eq!(
+            fake.events
+                .iter()
+                .filter(|event| event.starts_with("validate_signal:"))
+                .count(),
+            count
+        );
+        let last_body = fake
+            .events
+            .iter()
+            .rposition(|event| event.starts_with("body:"))
+            .unwrap();
+        let first_header = fake
+            .events
+            .iter()
+            .position(|event| event.starts_with("header:"))
+            .unwrap();
+        assert!(last_body < first_header);
+    }
+    for count in [0, 1025] {
+        let mut fake = Fake {
+            native_program: true,
+            ..Default::default()
+        };
+        assert!(run_ordered_batch_deadline_bounded(&mut fake, count, 1, 1024, None).is_err());
+        assert!(fake.poisoned && fake.events.is_empty());
+    }
+}
+
+#[test]
+fn native_program_every_publication_poll_and_retirement_fault_retains_and_poisons() {
+    let count = 65;
+    let mut success = Fake {
+        native_program: true,
+        ..Default::default()
+    };
+    run_ordered_batch_deadline_bounded(&mut success, count, 600_000, 1024, None).unwrap();
+    for fail_at in 0..success.events.len() {
+        let mut fake = Fake {
+            native_program: true,
+            fail_at: Some(fail_at),
+            ..Default::default()
+        };
+        assert!(run_ordered_batch_deadline_bounded(&mut fake, count, 600_000, 1024, None).is_err());
+        assert!(fake.poisoned);
+        assert_eq!(fake.events, success.events[..=fail_at]);
+        if fake.events.iter().any(|event| event == "write_reservation") {
+            assert_eq!(fake.retained, count);
+        }
+        if !fake.events.iter().any(|event| event == "complete_frontier") {
+            assert!(!fake.completed);
+        }
+        assert!(run_ordered_batch_deadline_bounded(&mut fake, count, 600_000, 1024, None).is_err());
+        assert_eq!(fake.events.len(), fail_at + 1);
+    }
+}
+
+#[test]
+fn native_program_invalid_last_preparation_and_expired_deadline_publish_nothing() {
+    let mut fake = Fake {
+        native_program: true,
+        fault_after_prepare: Some((651, PreparationFault::Frontier)),
+        ..Default::default()
+    };
+    assert!(run_ordered_batch_deadline_bounded(&mut fake, 652, 600_000, 1024, None).is_err());
+    assert!(fake.poisoned && !fake.completed);
+    assert_eq!(fake.retained, 0);
+    assert!(!fake.events.iter().any(|event| event == "write_reservation"));
+    let mut expired = Fake {
+        native_program: true,
+        ..Default::default()
+    };
+    assert!(
+        run_ordered_batch_deadline_bounded(&mut expired, 652, 600_000, 1024, Some(Instant::now()))
+            .is_err()
+    );
+    assert!(expired.poisoned && !expired.completed);
+    assert_eq!(expired.retained, 0);
+}

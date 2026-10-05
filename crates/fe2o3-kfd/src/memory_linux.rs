@@ -333,6 +333,44 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
         Ok(())
     }
 
+    /// Separate retained program arena; legacy ordered signal pages keep their
+    /// original fixed extent and limits. The entire mapping is checked before
+    /// initializing the first slot.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_program_signals(
+        mapping: &mut LinuxCpuMapping,
+        requested_bytes: usize,
+        count: usize,
+    ) -> Result<(), MemorySessionError> {
+        let exact_bytes = count
+            .checked_mul(AMD_SIGNAL_BYTES_V1)
+            .and_then(|bytes| bytes.checked_add(4095))
+            .map(|bytes| bytes & !4095);
+        if !(1..=crate::engineering_wire::MAX_TOKEN_PROGRAM_DISPATCHES_V1).contains(&count)
+            || exact_bytes != Some(requested_bytes)
+        {
+            return Err(malformed_aql_mapping("engineering program signal extent"));
+        }
+        checked_mapping_pointer(mapping, requested_bytes, 0, requested_bytes, 64)?;
+        for index in 0..count {
+            let pointer = checked_mapping_pointer(
+                mapping,
+                requested_bytes,
+                index * AMD_SIGNAL_BYTES_V1,
+                AMD_SIGNAL_BYTES_V1,
+                64,
+            )?;
+            // SAFETY: the caller owns an idle, exclusively retained arena; the
+            // checked extent contains distinct aligned slots for the program.
+            unsafe {
+                pointer
+                    .cast::<fe2o3_aql::AmdBusyCompletionSignalV1>()
+                    .write(fe2o3_aql::AmdBusyCompletionSignalV1::new_pending())
+            };
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "engineering-gfx950")]
     pub(super) fn initialize_engineering_error_payload(
         mapping: &mut LinuxCpuMapping,
@@ -1760,5 +1798,89 @@ mod tests {
                 .is_err()
         );
         assert_eq!(page.0, before);
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn program_signal_arena_checks_exact_extent_before_initialization() {
+        #[repr(C, align(4096))]
+        struct Arena([u8; 65536]);
+        let mut arena = Box::new(Arena([0xa5; 65536]));
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut *arena).cast(),
+            bytes: 65536,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        for (count, extent) in [
+            (0, 4096),
+            (65, 4096),
+            (64, 8192),
+            (1025, 65536),
+            (usize::MAX, 65536),
+        ] {
+            assert!(
+                LinuxGfx950MemoryBackend::initialize_engineering_program_signals(
+                    &mut mapping,
+                    extent,
+                    count
+                )
+                .is_err()
+            );
+            assert!(arena.0.iter().all(|byte| *byte == 0xa5));
+        }
+        for count in [1usize, 63, 64, 65, 1024] {
+            let extent = (count * 64 + 4095) & !4095;
+            LinuxGfx950MemoryBackend::initialize_engineering_program_signals(
+                &mut mapping,
+                extent,
+                count,
+            )
+            .unwrap();
+            for slot in 0..count as u32 {
+                assert_eq!(
+                    LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                        &mut mapping,
+                        extent,
+                        slot
+                    )
+                    .unwrap(),
+                    AqlCompletionObservationV1::Pending
+                );
+                checked_completion_value(&mut mapping, extent, slot)
+                    .unwrap()
+                    .store(0, Ordering::Release);
+                LinuxGfx950MemoryBackend::reset_completion_signal_release(
+                    &mut mapping,
+                    extent,
+                    slot,
+                )
+                .unwrap();
+                assert_eq!(
+                    LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                        &mut mapping,
+                        extent,
+                        slot
+                    )
+                    .unwrap(),
+                    AqlCompletionObservationV1::Pending
+                );
+            }
+        }
+        mapping.bytes = 4096;
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_program_signals(
+                &mut mapping,
+                8192,
+                65
+            )
+            .is_err()
+        );
+        mapping.accessible = false;
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_program_signals(&mut mapping, 4096, 1)
+                .is_err()
+        );
     }
 }

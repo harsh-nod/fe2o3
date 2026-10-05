@@ -1,9 +1,10 @@
 #![cfg(target_os = "linux")]
 
 use std::fs::File;
+use std::io::Read as _;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -69,6 +70,33 @@ fn child_creates_exact_pid_bound_service_channel() {
 
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[test]
+fn child_may_queue_request_before_parent_admits_its_service_channel() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut command = Command::new("/bin/bash");
+    command
+        .arg("-c")
+        .arg(format!(
+            "printf request >&{} && printf q && exec /bin/sleep 30",
+            COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+        ))
+        .stdout(Stdio::piped());
+    let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
+    let mut child = command.spawn().unwrap();
+    let mut marker = [0u8; 1];
+    let queued = child.stdout.as_mut().unwrap().read_exact(&mut marker);
+    let launch = pending.finish(child.id(), Duration::from_secs(2));
+    let killed = child.kill();
+    let reaped = child.wait();
+    queued.unwrap();
+    assert_eq!(marker, *b"q");
+    killed.unwrap();
+    reaped.unwrap();
+    assert_eq!(launch.unwrap().client().pid(), child.id());
 }
 
 #[test]
