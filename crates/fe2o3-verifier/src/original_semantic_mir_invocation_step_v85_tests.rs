@@ -86,7 +86,12 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 assert!(control.contains(&format!("invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));")));
                                 assert!(control.contains(&format!("assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}")));
                                 let observations = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_observations_v85"));
-                                assert!(!observations.contains("hide(invocation_source_enter_"));
+                                assert!(observations.contains(&format!("hide(invocation_source_enter_{root}_{index}_v36);")));
+                                assert_eq!(observations.matches("hide(invocation_source_enter_").count(), 1);
+                                if index != child {
+                                    assert!(!observations.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
+                                }
+                                assert!(observations.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_enter_{root}_{index}_v36);\n }}")));
                                 assert!(observations.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
                                 assert!(observations.contains(&format!("assert(target.pc == {}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}", row.blocks.start + block)));
                                 for side in ["source", "actual"] {
