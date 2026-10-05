@@ -3,6 +3,7 @@
 use super::*;
 use crate::compiler_invocation_staging::StagedRustcInvocationV1 as Staging;
 use crate::native_launch::{self as native, CompilerExecutionLaunchErrorV2 as NativeError};
+use crate::native_runtime_inventory::NativeCompilerExecutableInventory as Executables;
 use fe2o3_build_authority::{
     COMPILER_APPROVAL_POLICY_BYTES_V2 as POLICY_BYTES,
     COMPILER_APPROVAL_POLICY_WORK_V2 as POLICY_WORK,
@@ -144,7 +145,8 @@ pub(super) fn refusal() -> Result<Quota> {
             RootCompilerRequest::LOCAL_WORK,
             8,
             EXCHANGE_WORK,
-            repeated(3, backing_check_work()?)?,
+            repeated(4, backing_check_work()?)?,
+            Executables::WORK,
             proof_helper_launch::LOCAL_WORK,
             ProofHelperBacking::LOCAL_WORK,
             compiler_attempt::LOCAL_WORK,
@@ -172,6 +174,7 @@ pub(super) fn refusal() -> Result<Quota> {
             proof_helper_launch::FRAME,
             ProofHelperBacking::FRAME_STORAGE,
             compiler_attempt::FRAME,
+            Executables::FRAME,
             crate::compiler_child_channel::CompilerTrace::<ManagedProofHelper>::OBSERVATION_SCRATCH,
             Resources::<ManagedProofHelper>::ACCESS_SCRATCH,
             Resources::<proof_helper_launch::Payload>::ACCESS_SCRATCH,
@@ -242,6 +245,16 @@ pub(super) fn launch() -> Result<Quota> {
             // compiler staging/channel/final validation 11. Each helper check
             // includes TWO compiler checks, not one detached runtime check.
             repeated(34, backing_check_work()?)?,
+            // ELF inventory capture: helper access checks compiler twice and
+            // capture checks it twice; final attempt revalidation adds one.
+            repeated(5, backing_check_work()?)?,
+            repeated(2, Executables::WORK)?,
+            proof_helper_launch::LOCAL_WORK,
+            ProofHelperBacking::LOCAL_WORK,
+            image_check.work(),
+            Resources::<proof_helper_launch::Payload>::ACCESS_WORK,
+            PlainChild::OPERATION_WORK,
+            fe2o3_protected_service_profile::observations::PROCESS_VALIDATE_WORK,
             // Helper source clone + validation, then three validations of
             // the compiler's two actual staged image transfers.
             8 * SINGLE_TRANSFER_WORK,
@@ -282,6 +295,8 @@ pub(super) fn launch() -> Result<Quota> {
         ])?,
         scratch: sum(&[
             guard.scratch(),
+            Executables::MAX_STORAGE,
+            Executables::FRAME,
             helper,
             compiler,
             2 * staging,

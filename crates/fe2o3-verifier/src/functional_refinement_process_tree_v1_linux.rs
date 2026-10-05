@@ -106,6 +106,8 @@ const RUST_PROCESS_CLONE3_FLAGS: u64 = 0x0000_0001_0000_4100;
 const SIGCHLD: u64 = 17;
 const MAX_CLONE_STACK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_TRACEES: usize = 32;
+#[cfg(test)]
+const SYSTEM_PAGE_BYTES: u64 = 4096;
 const PRCTL_SYSCALL: u32 = 157;
 const PR_SET_NAME: u64 = 15;
 const SENSITIVE_SYSCALLS: [u32; 14] = [
