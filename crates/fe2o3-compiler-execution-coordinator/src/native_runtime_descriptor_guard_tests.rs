@@ -70,7 +70,7 @@ fn native_ioctl_socket_query_refuses_unreviewed_protocol_drivers() {
     query_ioctl(&unix, 0x541b).unwrap();
     assert!(query_ioctl(&unix, 0x5401).is_err());
     let inet = File::from(
-        net::socket(
+        net::socket_with(
             net::AddressFamily::INET,
             net::SocketType::DGRAM,
             net::SocketFlags::CLOEXEC,

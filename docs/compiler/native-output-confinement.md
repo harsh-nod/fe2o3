@@ -14,6 +14,10 @@ incremental or temporary paths do not acquire permission from argv.
 This is one prerequisite, not activation. Existing descriptors retain their
 rights; device-open effects, imported descriptors, ioctl, executable mappings,
 external writers and source identity require their independent checks. Arbitrary
+hardlinks already present in the output hierarchy can alias external files;
+path confinement does not prove that every alias of an inode is inside it.
+Only the separate immutable-file contract protects approved executable bytes.
+Arbitrary
 user-source snapshots are not introduced: the compiler claim begins at captured
 MIR, and approved executable files retain their existing immutable-file contract.
 The controller must not admit opens from this staging flag alone.
