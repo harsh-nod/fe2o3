@@ -1,13 +1,16 @@
 //! Exercises shipped entrypoints; no receipt, signing seed, or application handoff is fabricated.
 
 use super::*;
-use std::io::IoSliceMut;
+use std::io::{IoSliceMut, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
+
+mod capture;
+mod hardware;
 
 const COORDINATOR: &str = "/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator";
 const NOTIFY: &str = "/run/coordinator-ready.sock";
@@ -242,7 +245,33 @@ fn authority_child_does_not_inherit_launcher_descriptors() {
 #[test]
 #[ignore = "requires the genuine mode of scripts/qualify-proof-resource-inspection.sh"]
 fn root_genuine_application_campaign() {
+    run_genuine_application(None);
+}
+
+#[test]
+#[ignore = "read-only hardware preflight for the genuine-two-gpu campaign"]
+fn observe_two_gpu_selection() {
+    let selection = hardware::discover(hardware::requested_ids().unwrap()).unwrap();
+    selection.required_groups().unwrap();
+    println!(
+        "\n{}{}",
+        hardware::SELECTION_TAG,
+        serde_json::to_string(&selection).unwrap()
+    );
+}
+
+#[test]
+#[ignore = "requires the genuine-two-gpu mode of scripts/qualify-proof-resource-inspection.sh"]
+fn root_genuine_two_gpu_application_campaign() {
     private_root();
+    run_genuine_application(Some(hardware::requested_ids().unwrap()));
+}
+
+fn run_genuine_application(devices: Option<[u64; 2]>) {
+    private_root();
+    if let Some(ids) = devices {
+        hardware::revalidate(ids).expect("final namespace GPU selection");
+    }
     let output = Command::new("/usr/libexec/fe2o3/fe2o3-compiler-execution-provision")
         .env_clear()
         .arg("1")
@@ -337,11 +366,27 @@ fn root_genuine_application_campaign() {
     command.args([
         "--reuid=1000",
         "--regid=1000",
-        "--clear-groups",
         "--inh-caps=-all",
         "--ambient-caps=-all",
         "--bounding-set=-all",
     ]);
+    let groups = devices
+        .map(hardware::revalidate)
+        .transpose()
+        .unwrap()
+        .unwrap_or_default();
+    if groups.is_empty() {
+        command.arg("--clear-groups");
+    } else {
+        command.arg(format!(
+            "--groups={}",
+            groups
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
     command.arg(std::env::var_os("FE2O3_GENUINE_CARGO_FE2O3").unwrap());
     command.args([
         "authority",
@@ -359,10 +404,19 @@ fn root_genuine_application_campaign() {
         "--bin",
         "fe2o3-conditional-custodian-application",
     ]);
+    if let Some(ids) = devices {
+        command.arg("--").args(ids.map(|id| format!("{id:#018x}")));
+    }
+    let output = capture::run(&mut command, Instant::now() + Duration::from_secs(1500))
+        .expect("bounded genuine application capture");
+    io::stdout().write_all(&output.stdout).unwrap();
     assert!(
-        command.status().unwrap().success(),
-        "genuine compiler/application admission failed"
+        output.status.success(),
+        "genuine compiler/application execution failed"
     );
+    if let Some(ids) = devices {
+        hardware::verify_report(&output.stdout, ids).expect("two-GPU execution report");
+    }
     assert!(
         manager.0.try_wait().unwrap().is_none(),
         "proof manager lost custody"

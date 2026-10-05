@@ -6,7 +6,12 @@ readonly repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly installed=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
 [[ ${EUID} -eq 0 ]] || { printf 'qualification requires real root\n' >&2; exit 1; }
 readonly campaign=${FE2O3_PROOF_INSTALL_CAMPAIGN:-resources}
-[[ $campaign == resources || $campaign == genuine ]] || exit 2
+[[ $campaign == resources || $campaign == genuine || $campaign == genuine-two-gpu ]] || exit 2
+source "$repo/scripts/qualify-two-gpu-mounts.sh"
+FE2O3_GPU_MOUNTS=()
+if [[ $campaign == genuine-two-gpu && -n ${1:-} ]]; then
+  configure_two_gpu_mounts
+fi
 
 require_private() {
   [[ ${FE2O3_PROOF_INSTALL_PRIVATE:-} == 1 \
@@ -31,7 +36,7 @@ case "${1:-}" in
         printf 'missing absolute qualification input: %s\n' "${name}" >&2; exit 1;
       }
     done
-    if [[ $campaign == genuine ]]; then
+    if [[ $campaign != resources ]]; then
       for name in FE2O3_COMPILER_INSTALL_DIR FE2O3_COMPILER_INSTALL_LAUNCHER \
         FE2O3_GENUINE_APPLICATION FE2O3_GENUINE_CARGO_FE2O3 FE2O3_GENUINE_CARGO_REGISTRY \
         FE2O3_GENUINE_CARGO_GIT \
@@ -45,6 +50,15 @@ case "${1:-}" in
         --ro-bind "$FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1" \
         /run/authority-binding-trampoline --setenv FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1 \
         /run/authority-binding-trampoline)
+    fi
+    if [[ $campaign == genuine-two-gpu ]]; then
+      # Resolve UIDs through the canonical read-only topology parser before any
+      # namespace hides /dev. Only bounded numeric minors become mount paths.
+      FE2O3_GENUINE_GPU_SELECTION=$(timeout --kill-after=2s 30s "$FE2O3_PROOF_INSTALL_TEST" \
+        --exact provisioning::tests::genuine_application::observe_two_gpu_selection \
+        --ignored --nocapture --test-threads=1 | read_two_gpu_selection)
+      export FE2O3_GENUINE_GPU_SELECTION
+      configure_two_gpu_mounts
     fi
     export FE2O3_PROOF_INSTALL_PRIVATE=1
     FE2O3_PROOF_INSTALL_HOST_PID_NAMESPACE="$(readlink /proc/self/ns/pid)"
@@ -69,7 +83,7 @@ case "${1:-}" in
         [[ -d "$child" ]] || continue
         printf 'draining empty owned scope: %s\n' "$child"
         rmdir -- "$child"
-        [[ $campaign == genuine ]] || status=98
+        [[ $campaign != resources ]] || status=98
       done
       rmdir -- "$scope"
       printf 'outer cgroup removed: %s\n' "$scope"
@@ -86,6 +100,7 @@ case "${1:-}" in
       --ro-bind /etc/passwd /etc/passwd --ro-bind /etc/group /etc/group \
       --tmpfs /usr/libexec --tmpfs /opt \
       --tmpfs /run --tmpfs /var/lib --tmpfs /tmp --chmod 1777 /tmp --proc /proc --dev /dev \
+      "${FE2O3_GPU_MOUNTS[@]}" \
       "${campaign_mounts[@]}" \
       --bind /sys/fs/cgroup /sys/fs/cgroup \
       --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
@@ -127,6 +142,7 @@ case "${1:-}" in
       ln -sf libcap-ng.so.0.0.0 "$dir/libcap-ng.so.0"
     done
     exec bwrap --die-with-parent --bind / / --dev /dev \
+      "${FE2O3_GPU_MOUNTS[@]}" \
       --ro-bind /usr/lib/x86_64-linux-gnu /run/host-lib \
       --ro-bind /run/setup/overlay /usr/lib/x86_64-linux-gnu \
       --tmpfs /usr/lib64 --symlink ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2 \
@@ -146,7 +162,7 @@ case "${1:-}" in
     install -m 0555 "$FE2O3_PROOF_INSTALL_COORDINATOR" /usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator
     install -m 0555 "$FE2O3_PROOF_INSTALL_WORKER" /usr/libexec/fe2o3/fe2o3-llvm-link-worker
     install -m 0555 "$FE2O3_PROOF_INSTALL_TEST" /usr/libexec/fe2o3/resource-qualification
-    if [[ $campaign == genuine ]]; then
+    if [[ $campaign != resources ]]; then
       for name in fe2o3-compiler-execution-provision fe2o3-compiler-execution-supervisor \
         fe2o3-compiler-execution-issuer fe2o3-external-anchor-provisioning-helper \
         fe2o3-external-anchor-service; do
@@ -156,6 +172,7 @@ case "${1:-}" in
       # Cargo needs its explicit toolchain/source closure; unlike the resource-only campaign,
       # this namespace retains the read-only host home and setup DSO aliases.
       exec bwrap --die-with-parent --bind / / --dev /dev --tmpfs /etc \
+        "${FE2O3_GPU_MOUNTS[@]}" \
         --ro-bind /etc/alternatives /etc/alternatives \
         --size 8589934592 --tmpfs /run/application-target \
         --cap-add CAP_CHOWN --cap-add CAP_DAC_OVERRIDE --cap-add CAP_KILL \
@@ -186,7 +203,7 @@ case "${1:-}" in
     ;;
   genuine)
     require_private
-    [[ $campaign == genuine ]]
+    [[ $campaign != resources ]]
     [[ "$(stat -f -c %T /var/lib)" == tmpfs ]]
     printf '%s\n' \
       'root:x:0:0:root:/root:/bin/false' \
@@ -219,8 +236,13 @@ case "${1:-}" in
       > "$FE2O3_PRODUCTION_BUILD_CONFIG_V1"
     chmod 0444 "$FE2O3_PRODUCTION_BUILD_CONFIG_V1"
     umask 077
+    campaign_test=provisioning::tests::genuine_application::root_genuine_application_campaign
+    if [[ $campaign == genuine-two-gpu ]]; then
+      campaign_test=provisioning::tests::genuine_application::root_genuine_two_gpu_application_campaign
+    fi
     # Keep Cargo's cache lock private, with existing offline registry content mounted read-only.
     exec bwrap --die-with-parent --bind / / --dev /dev \
+      "${FE2O3_GPU_MOUNTS[@]}" \
       --ro-bind "$FE2O3_GENUINE_CARGO_REGISTRY" /run/application-home/.cargo/registry \
       --ro-bind "$FE2O3_GENUINE_CARGO_GIT" /run/application-home/.cargo/git \
       --cap-drop ALL \
@@ -229,7 +251,7 @@ case "${1:-}" in
       /usr/bin/setpriv --bounding-set=-all,+chown,+dac_override,+kill,+setgid,+setpcap,+setuid,+sys_ptrace \
       --inh-caps=-all --ambient-caps=-all \
       /usr/libexec/fe2o3/resource-qualification \
-      --exact provisioning::tests::genuine_application::root_genuine_application_campaign \
+      --exact "$campaign_test" \
       --ignored --nocapture --test-threads=1
     ;;
   *) exit 2 ;;

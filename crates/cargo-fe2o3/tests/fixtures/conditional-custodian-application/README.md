@@ -27,6 +27,31 @@ HIP ordinals or render-node indices. Missing hardware never silently selects the
 admission-only mode. Hardware qualification requires the installed services and
 KFD plus the selected render nodes in the application's private namespace.
 
+The separate `genuine-two-gpu` campaign now provides that namespace transport and
+validates the hardware success record. From the repository root, in the real-root
+qualification environment with the same pinned inputs as `genuine`, select two
+freshly observed free devices and run:
+
+```bash
+FE2O3_PROOF_INSTALL_CAMPAIGN=genuine-two-gpu \
+FE2O3_GENUINE_GPU_UID0="${GPU_UID0:?}" \
+FE2O3_GENUINE_GPU_UID1="${GPU_UID1:?}" \
+bash scripts/qualify-proof-resource-inspection.sh
+```
+
+The selector observes topology and both directed routes before creating the
+private scope. It rechecks selected identities, exact character nodes and Unix
+mode permissions after namespace transport and immediately before Cargo.
+Application UID1000 is unchanged; only necessary numeric GPU groups are added.
+ACL and device-cgroup access are still enforced by actual native opens. Selected
+render mounts do not make process-global KFD a two-GPU security boundary.
+
+The harness bounds captured stdout to 1 MiB and does not wait for descendant pipe
+EOF after its direct child exits. Successful child status and exactly one matching
+typed JSON record are required; missing, duplicate or mismatched records reject.
+The ordinary `genuine` campaign remains admission-only. Tests and live MI300X
+read-only selection pass, but the full hardware campaign has not yet run.
+
 The hardware path retains one remote artifact across two conditional invocations
 of the unchanged device kernel (65 elements, grid 128, workgroup 64). Exact
 completion receipts gate charged result extraction. It stages the actual completed

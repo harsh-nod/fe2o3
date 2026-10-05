@@ -21,26 +21,39 @@ two native peer retirements plus full payload/source/guard checks, and inspects
 drain, native shutdown and credit refund before emitting its hardware success
 record. The device kernel is unchanged. **This branch has not executed on GPUs.**
 
+The [separate hardware qualification harness](evidence/dev-two-gpu-qualification-harness-2026-10-04/README.md)
+is implemented. `genuine-two-gpu` requires explicit hardware UIDs, checked topology
+and both directed routes, carries only the selected render nodes plus KFD through
+all four private namespace layers, and validates one matching execution record
+after successful child exit. Its read-only selector passes on MI300X for render
+nodes 128 and 136; this does not establish device idleness or execute GPU work.
+
 Current work order:
 
-1. Add the separate `genuine-two-gpu` harness campaign without changing the
-   zero-argument control. Use existing checked topology discovery, preserve exact
-   selected device nodes through every private namespace layer, and require a
-   matching hardware success record from bounded application stdout.
-2. Make the required installed service deployment available on MI300X. Read-only
+1. Prepare the complete pinned compiler/proof/offline-cache input bundle and make
+   the required real-root service launch available on MI300X. Read-only
    checks reach the host, but the fixed services are absent, noninteractive sudo
-   requires a password and direct root SSH is unavailable. This is a deployment
-   prerequisite, not approval to bypass admission or weaken device permissions.
-3. Select two freshly observed free physical GPUs, resolve their hardware IDs and
+   requires a password and direct root SSH is unavailable. Compiler/tool paths and
+   four setup DSO hashes match the qualification host; that is not the complete
+   deployment closure. Do not bypass admission or weaken device permissions.
+2. Select two freshly observed free physical GPUs, resolve their hardware IDs and
    expose only their render nodes plus KFD in the private application namespace.
-   Preserve the application UID and add only the actual render supplementary group.
-4. Execute 65-element fills with G128/WG64 on both devices, then stage their actual
+   The harness preserves application UID1000 and derives necessary numeric GPU
+   groups. KFD remains process-global; this is not kernel-enforced GPU isolation.
+3. Execute 65-element fills with G128/WG64 on both devices, then stage their actual
    completed bytes into PUBLIC native peer copies in both directions. Require two
    native peer completions, complete payload/source checks, separate sentinel
    destinations and intact guards. Require explicit successful drain/release;
    timeouts, process exit and quarantined work are not native settlement.
-5. Exercise second-invocation and transfer-deadline failure controls. Require no
+4. Exercise second-invocation and transfer-deadline failure controls. Require no
    hardware success record and inspect owned shutdown/quarantine.
+
+Latest harness qualification: **38 unit tests passed, 12 ignored**, strict Clippy,
+shell parser controls and four-layer synthetic character-node carriage passed.
+Hardware mode rejects absent KFD topology before creating a cgroup, without
+falling back. The live MI300X read-only selector passes 1/1, and a fresh genuine
+zero-argument campaign passes 1/1 in 458.15 seconds including isolated deployment
+and cleanup. The GPU execution branch, A3/A7 and performance remain unqualified.
 
 Latest fixture qualification: **4 pure tests passed**, full host typecheck and
 strict binding-only Clippy passed. A fresh genuine zero-argument campaign passes

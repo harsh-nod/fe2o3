@@ -1612,6 +1612,7 @@ dependencies = [
  "fe2o3-host",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kfd",
  "fe2o3-process-identity",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
@@ -1620,6 +1621,8 @@ dependencies = [
  "fe2o3-verifier",
  "libc",
  "rustix",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "tempfile",
 ]
