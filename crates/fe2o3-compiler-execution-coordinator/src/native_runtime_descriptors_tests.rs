@@ -65,6 +65,36 @@ fn native_descriptor_policy_accepts_actual_terminal_data_interface() {
 }
 
 #[test]
+fn native_descriptor_policy_identifies_terminal_devices_before_querying_them() {
+    for (major, minor) in [
+        (4, 0),
+        (4, 64),
+        (5, 0),
+        (5, 1),
+        (5, 2),
+        (136, 0),
+        (143, 255),
+    ] {
+        assert!(known_terminal_device(major, minor));
+    }
+    for (major, minor) in [
+        (1, 3),
+        (1, 5),
+        (5, 3),
+        (10, 200),
+        (135, 0),
+        (144, 0),
+        (u32::MAX, 0),
+    ] {
+        assert!(!known_terminal_device(major, minor));
+    }
+    let zero = OpenOptions::new().read(true).open("/dev/zero").unwrap();
+    assert!(!is_terminal(zero.as_fd(), &fs::fstat(&zero).unwrap()));
+    let (reader, _) = rustix::pipe::pipe().unwrap();
+    assert!(!is_terminal(reader.as_fd(), &fs::fstat(&reader).unwrap()));
+}
+
+#[test]
 fn native_descriptor_policy_refuses_unknown_and_control_filesystems() {
     for magic in [
         0,

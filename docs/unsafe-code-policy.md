@@ -767,6 +767,16 @@ remains mandatory at ownership transitions. Continuous immutable-backing and
 write-exclusion obligations remain with the owning controller. These private
 policy results are not enforcement tokens or permission to release the gate.
 
+Native descriptor checkpoint preparation likewise returns only bounded data.
+Open results are inspected through the original task view; pre-open pathname,
+creation, truncation and device effects remain a separate controller obligation.
+Credential-only receives validate all payload/header/control non-overlap and
+reject rights, unknown controls and truncation before any task resumes. A late
+ancillary-copy error is not treated as proof that no descriptor was installed.
+The selected IPC role audit and remaining qualification are documented in
+`docs/compiler/native-descriptor-boundary-v161.md`. These additions introduce no
+new unsafe blocks or independent task/descriptor acquisition authority.
+
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
 inspect initialized scalar buffers and install outer test-only denial filters.
