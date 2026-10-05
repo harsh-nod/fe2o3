@@ -116,15 +116,35 @@ spec fn invocation_source_context_issue_v161(
     } else {
         match source.machine.frames.execution {
             Some(execution) if byte_execution_well_formed_v37(execution) => {
-                let leaves = Map::new(
-                    Set::new(|path: Seq<int>| path.len() == 1 && 0 <= path[0] < 5),
-                    |path: Seq<int>| MemoryValueV30::Unit);
+                let leaves = Map::empty()
+                    .insert(seq![0int], MemoryValueV30::Unit)
+                    .insert(seq![1int], MemoryValueV30::Unit)
+                    .insert(seq![2int], MemoryValueV30::Unit)
+                    .insert(seq![3int], MemoryValueV30::Unit)
+                    .insert(seq![4int], MemoryValueV30::Unit);
                 let after = invocation_source_aggregate_install_v42(source, issue.destination,
                     InvocationSourceAggregateV42 { source_type: issue.source_type, leaves });
                 invocation_source_tile_installed_v161(source, after, seq![])
             },
             _ => invocation_source_tile_refused_v161(source),
         }
+    }
+}
+
+// Construct only finitely many original field paths; no set finiteness axiom
+// or unchecked finite-domain conversion participates in the value semantics.
+spec fn invocation_source_tile_leaves_v166(
+    values: Seq<MemoryValueV30>, masks: Seq<MemoryValueV30>, next: int,
+) -> Map<Seq<int>, MemoryValueV30>
+    decreases values.len() - next,
+{
+    if next < 0 || values.len() <= next || values.len() != masks.len() {
+        Map::empty().insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+    } else {
+        invocation_source_tile_leaves_v166(values, masks, next + 1)
+            .insert(seq![0int, next], values[next])
+            .insert(seq![1int, next], masks[next])
     }
 }
 
@@ -221,14 +241,8 @@ spec fn invocation_source_tile_load_v161(
                         invocation_source_tile_refused_after_v161(
                             components.source, base_reads + components.observations)
                     } else {
-                        let leaves = Map::new(
-                            Set::new(|path: Seq<int>| path == seq![2int] || path == seq![3int]
-                                || path.len() == 2 && (path[0] == 0 || path[0] == 1)
-                                    && 0 <= path[1] < load.elements),
-                            |path: Seq<int>| if path == seq![2int] || path == seq![3int] {
-                                MemoryValueV30::Unit
-                            } else if path[0] == 0 { components.values[path[1]] }
-                            else { components.masks[path[1]] });
+                        let leaves = invocation_source_tile_leaves_v166(
+                            components.values, components.masks, 0);
                         let after = invocation_source_aggregate_install_v42(
                             components.source, load.destination,
                             InvocationSourceAggregateV42 { source_type: load.source_type, leaves });
