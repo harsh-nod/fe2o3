@@ -197,14 +197,14 @@ pub(super) fn emit(
         );
     }
     emit!(out, "{{\n");
-    residual_context(root, out)?;
     out.budget.charge_work(6)?;
     emit!(
         out,
-        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n assert(target.pc == {});\n",
-        call.child,
-        summary.start
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n",
+        call.child
     );
+    residual_context(root, out)?;
+    emit!(out, " assert(target.pc == {});\n", summary.start);
     unfold(root, follow_fuel, hints, hint, true, out)?;
     emit!(
         out,
@@ -223,11 +223,20 @@ pub(super) fn emit(
     Ok(())
 }
 
-pub(super) fn consume(root: usize, pc: usize, out: &mut Writer<'_, '_>) -> Result<()> {
-    out.budget.charge_work(6)?;
+pub(super) fn opacity(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(5)?;
     emit!(
         out,
-        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n invocation_constructor_states_{root}_{pc}_v162(source, target);\n"
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n"
+    );
+    Ok(())
+}
+
+pub(super) fn consume(root: usize, pc: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(1)?;
+    emit!(
+        out,
+        " invocation_constructor_states_{root}_{pc}_v162(source, target);\n"
     );
     Ok(())
 }

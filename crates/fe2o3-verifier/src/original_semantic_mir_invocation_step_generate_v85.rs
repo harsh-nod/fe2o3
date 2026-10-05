@@ -130,7 +130,7 @@ pub(super) fn emit(
                     }
                     _ => {
                         if constructor_state.is_some() {
-                            constructor_states::consume(root, cut.source, out)?;
+                            constructor_states::opacity(root, out)?;
                         }
                         out.budget.charge_work(1)?;
                         if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
@@ -158,6 +158,9 @@ pub(super) fn emit(
                         }
                         if constructor.is_some() && matches!(goal, Goal::Residual) {
                             residual_context(root, out)?;
+                        }
+                        if constructor_state.is_some() {
+                            constructor_states::consume(root, cut.source, out)?;
                         }
                         unfold(
                             root,

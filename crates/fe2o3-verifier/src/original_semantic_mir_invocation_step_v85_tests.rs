@@ -12,6 +12,27 @@ fn theorem<'a>(text: &'a str, name: &str) -> &'a str {
         .unwrap()
 }
 
+fn assert_leading_opacity_headers(theorem: &str) {
+    let body = theorem
+        .split_once("\n{\n")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let mut statements = false;
+    for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.starts_with("hide(") {
+            assert!(
+                !statements,
+                "opacity header after a proof statement: {line}"
+            );
+        } else {
+            statements = true;
+        }
+    }
+}
+
 pub(super) fn check_four(text: &str, name: &str, root: usize) {
     let header = theorem(text, name).split_once("\n{\n").unwrap().0;
     for conclusion in [
@@ -109,6 +130,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!target_state.contains(".update(values["));
                                     assert!(target_state.contains(&format!("MemoryStateV30 {{ pc: {current}, values, valid: true, ..target }}")));
                                     let state = theorem(&out.text, &state_name);
+                                    assert_leading_opacity_headers(state);
                                     let (premises, conclusions) = state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
                                     assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
                                     let contract = conclusions.split_once("\n{\n").unwrap().0;
@@ -119,6 +141,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     }
                                     for part in ["map", "heap", "residual", "observations", "halted", "control"] {
                                         let body = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_{part}_v85"));
+                                        assert_leading_opacity_headers(body);
                                         assert_eq!(body.matches(&format!("{state_name}(source, target);")).count(), 1);
                                         for name in ["invocation_paired_source_step", "invocation_paired_actual_step", "invocation_source_block_runtime", "invocation_byte_boundary"] {
                                             assert!(body.contains(&format!("hide({name}_{root}_v36);")));
