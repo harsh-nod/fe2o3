@@ -1200,6 +1200,10 @@
   "crates/fe2o3-protected-service-spawn/src/native_compiler_restrictions_exec_tests.rs": {
     "block": 12
   },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_trace_filter.rs": {
+    "block": 1,
+    "function": 1
+  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn.rs": {
     "function": 2
   },
