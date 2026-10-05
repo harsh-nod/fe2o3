@@ -155,6 +155,28 @@ impl<'work, T: Send + 'static> NativeAttempt<'work, T> {
         self.continuity
     }
 
+    /// Read the policy association from the original retained preparation after
+    /// its transfer. This does not replace live continuity or grant authority.
+    pub(crate) fn original_policy_identity(&self, b: &mut Budget<'_>) -> Result<[u8; 32]> {
+        self.account.with(self.retained, b, |b| {
+            self.issuer
+                .as_ref()
+                .ok_or(Error::Invalid(
+                    "root attempt has no original issuer payload",
+                ))?
+                .child
+                .with_resources(b, |payload, _| {
+                    Ok(*payload
+                        .prepared
+                        .trust
+                        .policy()
+                        .policy()
+                        .identity()
+                        .as_bytes())
+                })
+        })
+    }
+
     /// Owning attempt must check readiness/continuity before resuming its compiler.
     /// This does not perform Prepare/Issue or inspect a not-yet-created publication.
     pub(crate) fn validate_ready(&self, b: &mut Budget<'_>) -> Result<()> {
