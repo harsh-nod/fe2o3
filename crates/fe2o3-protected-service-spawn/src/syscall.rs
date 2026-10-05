@@ -304,28 +304,22 @@ pub(crate) fn spawn(
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> io::Result<RootOwnedProtectedServiceChildV1> {
-    let (pid, pidfd) =
+    let (pid, pidfd, parent_mask) =
         clone_child(staged, credentials, cap_last_cap, expected_parent).map_err(io::Error::from)?;
+    let child = RootOwnedProtectedServiceChildV1 { pid, pidfd };
+    let pidfd = child.pidfd.as_ref();
     let Some(pidfd) = pidfd else {
         let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
         reap_pid(pid);
+        parent_mask.restore().map_err(io::Error::from)?;
         return Err(io::Error::from_raw_os_error(libc::EBADFD));
     };
-    let flags = match rustix::io::fcntl_getfd(&pidfd) {
-        Ok(flags) => flags,
-        Err(source) => {
-            terminate_and_reap(pid, &pidfd);
-            return Err(source.into());
-        }
-    };
+    parent_mask.restore().map_err(io::Error::from)?;
+    let flags = rustix::io::fcntl_getfd(pidfd).map_err(io::Error::from)?;
     if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        terminate_and_reap(pid, &pidfd);
         return Err(io::Error::from_raw_os_error(libc::EPERM));
     }
-    Ok(RootOwnedProtectedServiceChildV1 {
-        pid,
-        pidfd: Some(pidfd),
-    })
+    Ok(child)
 }
 
 // No fallible parent operations follow successful clone: the caller must adopt
@@ -335,7 +329,11 @@ pub(crate) fn clone_child(
     credentials: ProtectedServiceCredentialProfileV1,
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
-) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
+) -> rustix::io::Result<(
+    rustix::process::Pid,
+    Option<OwnedFd>,
+    crate::clone_compat::ParentSignalMask,
+)> {
     clone_child_with_cgroup(
         staged,
         credentials,
@@ -356,7 +354,11 @@ pub(crate) fn clone_child_with_cgroup(
     expected_parent: rustix::process::Pid,
     cgroup: Option<BorrowedFd<'_>>,
     mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
-) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
+) -> rustix::io::Result<(
+    rustix::process::Pid,
+    Option<OwnedFd>,
+    crate::clone_compat::ParentSignalMask,
+)> {
     if mapping_gate.is_some() && cgroup.is_none() {
         return Err(rustix::io::Errno::INVAL);
     }
@@ -372,15 +374,22 @@ pub(crate) fn clone_child_with_cgroup(
         return Err(rustix::io::Errno::INVAL);
     }
     let mut pidfd_raw = -1_i32;
-    let arguments = clone_arguments(&mut pidfd_raw, cgroup, mapping_gate.is_some());
-    // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
-    // child executes direct syscalls only and cannot return into Rust.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_clone3,
-            &raw const arguments,
-            std::mem::size_of::<CloneArgsV1>(),
-        )
+    let (result, parent_mask) = if cgroup.is_none() && mapping_gate.is_none() {
+        // SAFETY: child_exec resets dispositions before unmasking and never returns.
+        // The parent returns all custody, including its pending mask, to the adopter.
+        unsafe { crate::clone_compat::clone_unmapped(&mut pidfd_raw) }?
+    } else {
+        let arguments = clone_arguments(&mut pidfd_raw, cgroup, mapping_gate.is_some());
+        // SAFETY: placed/mapped launches retain the exact clone3-only ABI. There is
+        // no legacy fallback that could lose atomic cgroup placement or mappings.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_clone3,
+                &raw const arguments,
+                std::mem::size_of::<CloneArgsV1>(),
+            )
+        };
+        (result, crate::clone_compat::ParentSignalMask::unchanged())
     };
     if result < 0 {
         // SAFETY: failed direct syscall set this thread's errno.
@@ -406,7 +415,7 @@ pub(crate) fn clone_child_with_cgroup(
         // SAFETY: successful CLONE_PIDFD installed one newly owned descriptor.
         Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
     };
-    Ok((pid, pidfd))
+    Ok((pid, pidfd, parent_mask))
 }
 
 fn clone_arguments(
@@ -546,28 +555,6 @@ impl Drop for RootOwnedProtectedServiceChildV1 {
 pub(crate) enum ReapErrorV1 {
     OwnershipLost,
     Io(io::Error),
-}
-
-fn terminate_and_reap(pid: rustix::process::Pid, pidfd: &OwnedFd) {
-    let signaled = match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => true,
-        Err(_) => matches!(
-            rustix::process::kill_process(pid, rustix::process::Signal::KILL),
-            Ok(()) | Err(rustix::io::Errno::SRCH)
-        ),
-    };
-    if signaled {
-        loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
-                Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => break,
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(_) => break,
-            }
-        }
-    }
 }
 
 fn reap_pid(pid: rustix::process::Pid) {

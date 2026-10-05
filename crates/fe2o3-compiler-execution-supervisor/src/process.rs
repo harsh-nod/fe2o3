@@ -45,12 +45,8 @@ use crate::{
     ProtectedIssuerSupervisorV1,
 };
 
-const CLONE_PIDFD: u64 = 0x0000_1000;
-const CLONE_CLEAR_SIGHAND: u64 = 0x0000_0001_0000_0000;
-const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
 const SIGSTOP: c_int = 19;
-const SYS_CLONE3: c_long = 435;
 const SYS_CLOSE_RANGE: c_long = 436;
 const SYS_EXECVEAT: c_long = 322;
 const SYS_RT_SIGACTION: c_long = 13;
@@ -98,21 +94,6 @@ unsafe extern "C" {
     fn syscall(number: c_long, ...) -> c_long;
     fn write(descriptor: c_int, bytes: *const c_void, length: usize) -> isize;
     fn _exit(status: c_int) -> !;
-}
-
-#[repr(C)]
-struct CloneArgsV1 {
-    flags: u64,
-    pidfd: u64,
-    child_tid: u64,
-    parent_tid: u64,
-    exit_signal: u64,
-    stack: u64,
-    stack_size: u64,
-    tls: u64,
-    set_tid: u64,
-    set_tid_size: u64,
-    cgroup: u64,
 }
 
 #[repr(C)]
@@ -823,38 +804,15 @@ fn spawn_child(
     spawn_lease: fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1,
 ) -> Result<IssuerChild, ChildProcessError> {
     let mut pidfd_raw = -1_i32;
-    let clone_arguments = CloneArgsV1 {
-        flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
-        pidfd: (&raw mut pidfd_raw).addr() as u64,
-        child_tid: 0,
-        parent_tid: 0,
-        exit_signal: SIGCHLD,
-        stack: 0,
-        stack_size: 0,
-        tls: 0,
-        set_tid: 0,
-        set_tid_size: 0,
-        cgroup: 0,
-    };
-    // SAFETY: clone3 receives the exact 88-byte Linux ABI record and no VM/thread-sharing
-    // flags. The child executes only direct syscalls over preallocated state and never
-    // returns into Rust cleanup. CLONE_PIDFD installs one descriptor before parent return.
-    let clone_result = unsafe {
-        syscall(
-            SYS_CLONE3,
-            &raw const clone_arguments,
-            std::mem::size_of::<CloneArgsV1>(),
-        )
-    };
-    if clone_result < 0 {
-        // SAFETY: syscall set the calling thread's libc errno on failure.
-        let errno = unsafe { rustix::io::Errno::from_raw_os_error(*libc::__errno_location()) };
-        // No child exists: ordinary Drop releases the unused lease and reservation.
-        return Err(ChildProcessError::Io {
-            operation: "clone3 protected issuer with atomic pidfd",
-            errno,
-        });
-    }
+    // SAFETY: this closed unmapped launch retains atomic pidfd creation. The child
+    // resets signal dispositions before unmasking and never runs Rust cleanup.
+    // Parent signal restoration happens only after adopting every cleanup owner.
+    let (clone_result, parent_mask) =
+        unsafe { fe2o3_protected_service_spawn::clone_compat::clone_unmapped(&mut pidfd_raw) }
+            .map_err(|errno| ChildProcessError::Io {
+                operation: "clone protected issuer with atomic pidfd",
+                errno,
+            })?;
     if clone_result == 0 {
         // SAFETY: child_exec uses only direct syscalls and preallocated state, then
         // execveat or _exit. No Rust destructor runs in the post-clone child.
@@ -885,9 +843,15 @@ fn spawn_child(
     // with the pre-clone slot and spawn lease before any fallible parent operation.
     let cleanup = unsafe { ChildCleanupV1::adopt(pidfd, pid, Some(spawn_lease)) };
     let process = IssuerChild::new(cleanup, reap_slot);
+    parent_mask
+        .restore()
+        .map_err(|errno| ChildProcessError::Io {
+            operation: "restore protected issuer parent signal mask",
+            errno,
+        })?;
     if pidfd_raw < 0 {
         return Err(ChildProcessError::State(
-            "clone3 did not return the requested pidfd",
+            "clone did not return the requested pidfd",
         ));
     }
     Ok(process)

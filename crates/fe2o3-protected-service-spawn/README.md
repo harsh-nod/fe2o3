@@ -4,9 +4,21 @@ This package owns the one root-to-protected-service process transition used by
 fe2o3 deployment coordinators. It stages one caller-admitted executable and a
 bounded, destination-unique descriptor table above every admitted target,
 requires the root parent to own `SIGCHLD`, creates the direct child with
-`clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)`, and performs only direct syscalls
+the atomic-pidfd clone adapter, and performs only direct syscalls
 in the post-clone child. Executable measurement, ownership, sealing, and static
 ELF admission remain mandatory policy checks in the calling coordinator.
+
+The adapter first uses `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)`. Only for
+an unmapped launch without cgroup placement, `ENOSYS` permits a retry through
+legacy `clone(CLONE_PIDFD | SIGCHLD)`. This accommodates a namespace-denying
+seccomp policy without relaxing it. Since legacy clone cannot clear handlers,
+the adapter blocks all catchable signals on the calling thread before cloning;
+the child resets every disposition before unmasking. The parent restores its
+exact previous mask only after adopting the child and all cleanup leases. A
+restoration failure refuses launch while that cleanup owner retains custody.
+Other errors, cgroup placement and user-namespace mapping never fall back.
+The ignored root regression requires the exact five coordinator capabilities;
+ordinary tests independently exercise the seccomp, handler and mask boundaries.
 
 Before reporting profile readiness, the child resets signals, binds
 `PDEATHSIG=SIGKILL` to the exact parent, installs the dedicated UID/GID with no
@@ -149,10 +161,10 @@ custody; it never continues with a weaker child profile. The filter denies
 `ENOSYS` for `clone3` so qualified libc thread/fork fallback remains possible.
 
 There is no public role selector or exemption. An unmapped generic service stage
-keeps legacy creator behavior, including direct `clone3`; it is not a helper
+keeps its existing creator policy, including allowance for direct `clone3`; it is not a helper
 confinement path. In particular, the V2 coordinator stages its supervisor with
 `Stage::stage` and `spawn_retaining`, and that supervisor's native issuer path
-requires direct `clone3` with an atomic pidfd. The typed proof-helper launch stays
+uses the shared unmapped atomic-pidfd adapter. The typed proof-helper launch stays
 on `spawn_retaining_in_fresh_user_namespace`, so it must install the filter.
 Compiler-specific constructors require it even without mapping. These structural
 facts do not authenticate images, roles, runtime approvals, administrator
@@ -163,6 +175,8 @@ All spawn queries conservatively retain the worst-case namespace allowance:
 `4544` work and `400` scratch bytes, even for unmapped services that skip
 installation. No original request or cleanup ledger is replaced or refunded
 because of branch selection. Fresh mapping work/scratch remain additional.
+The shared adapter's worst-case parent work and signal-mask scratch are also
+charged before launch, even when clone3 succeeds without retrying.
 
 The constructor matrix covers generic service, compiler and child-channel compiler
 staging with and without a real mapping-gate owner. It is inert selection evidence,

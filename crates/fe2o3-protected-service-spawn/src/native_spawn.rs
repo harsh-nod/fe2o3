@@ -181,7 +181,10 @@ impl StagedProtectedServiceExecV2 {
     pub const STAGING_SCRATCH: usize =
         4 * size_of::<Self>() + syscall::StagedProtectedServiceExecV1::TABLE_STORAGE + 4096;
     /// Parent checks/clone/cleanup work; child work and cleanup reservation are additional.
-    pub const SPAWN_WORK: usize = ENTRY + 32 * (1024 + 64) + observations::CAPABILITY_CEILING_WORK;
+    pub const SPAWN_WORK: usize = ENTRY
+        + 32 * (1024 + 64)
+        + observations::CAPABILITY_CEILING_WORK
+        + crate::clone_compat::WORK;
     /// Worst-case parent/child ABI staging, including compiler and namespace
     /// filters even for unmapped service stages; not generated stack or process RSS.
     pub const SPAWN_SCRATCH: usize = 4 * size_of::<Self>()
@@ -190,7 +193,8 @@ impl StagedProtectedServiceExecV2 {
         + syscall::COMPILER_CHANNEL_SCRATCH
         + syscall::COMPILER_RESTRICTION_SCRATCH
         + syscall::NAMESPACE_RESTRICTION_SCRATCH
-        + 8192;
+        + 8192
+        + crate::clone_compat::SCRATCH;
 
     /// Checked conservative full result charge including every duplicated image.
     /// `source_storage` includes all borrowed Files, image bytes and binding inputs.
@@ -516,11 +520,14 @@ fn clone_guarded(
     lease: fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1,
     slot: crate::process_reaper::ReapSlotV1<'static>,
 ) -> Result<RootOwnedProtectedServiceChildV2> {
-    let (pid, pidfd) =
+    let (pid, pidfd, parent_mask) =
         syscall::clone_child(staged, credentials, ceiling, rustix::process::getpid())
             .map_err(|e| io("clone native protected-service child", e))?;
     // All three obligations enter the guard before any parent check can fail.
     let child = RootOwnedProtectedServiceChildV2::new(pid, pidfd, lease, slot);
+    parent_mask
+        .restore()
+        .map_err(|e| io("restore native parent signal mask", e))?;
     child.check_pidfd()?;
     Ok(child)
 }
