@@ -57,6 +57,13 @@ fn boundary(block: usize, declaration: &SemanticBasicBlockV1) -> ProductionConte
 }
 
 fn prepared(budget: &mut Budget<'_>) -> Result<ProductionPreparedSourceV18> {
+    prepared_with_owner(budget, owner)
+}
+
+fn prepared_with_owner(
+    budget: &mut Budget<'_>,
+    owner: impl Fn() -> ProductionSemanticSsaOwnerV1,
+) -> Result<ProductionPreparedSourceV18> {
     let projection = owner();
     let semantic = projection.source_semantic();
     assert_eq!(semantic.roots(), &[SemanticFunctionIdV1::from_index(0)]);
@@ -254,6 +261,65 @@ fn prepared(budget: &mut Budget<'_>) -> Result<ProductionPreparedSourceV18> {
     )
 }
 
+fn owner_with_live_context_reborrow_v170() -> ProductionSemanticSsaOwnerV1 {
+    let original = owner();
+    let semantic = original.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[1];
+    let mut blocks = helper.blocks().to_vec();
+    let initial_borrow = blocks[0].statements()[0].clone();
+    assert!(
+        matches!(initial_borrow.kind(), SemanticStatementKindV1::Assign(assignment)
+        if matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Mutable, ..
+        }))
+    );
+    let successor = &blocks[1];
+    let mut statements = vec![initial_borrow];
+    statements.extend_from_slice(successor.statements());
+    blocks[1] = SemanticBasicBlockV1::new(
+        successor.identity(),
+        successor.source(),
+        statements,
+        successor.terminator().clone(),
+    )
+    .unwrap();
+    functions[1] = SemanticFunctionDeclV1::new(
+        helper.identity(),
+        helper.role(),
+        helper.item_definition_identity(),
+        helper.monomorphization_identity(),
+        helper.generic_type_arguments_identity(),
+        helper.const_generic_arguments_identity(),
+        helper.source(),
+        helper.abi().clone(),
+        helper.locals().to_vec(),
+        helper.entry(),
+        blocks,
+    )
+    .unwrap();
+    let request = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        semantic.allocations().to_vec(),
+        semantic.statics().to_vec(),
+        semantic.vtables().to_vec(),
+        functions,
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap();
+    let semantic = request
+        .admit_exact_v29(SemanticMirLimitsV1::default())
+        .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
 fn run_fixture(
     layout: Layout,
     work: usize,
@@ -280,7 +346,22 @@ fn run_fixture_with_plan(
         &mut Writer<'_, '_>,
     ) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
-    super::super::super::invocations::tests::run_prepared(work, storage, prepared, |plan, out| {
+    run_fixture_with_preparation(layout, work, storage, prepared, examine)
+}
+
+fn run_fixture_with_preparation(
+    layout: Layout,
+    work: usize,
+    storage: usize,
+    prepare: impl FnOnce(&mut Budget<'_>) -> Result<ProductionPreparedSourceV18>,
+    examine: impl FnOnce(
+        &InvocationPlan<'_, '_>,
+        &SourceSlots<'_, '_>,
+        &TileExpansion<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::super::invocations::tests::run_prepared(work, storage, prepare, |plan, out| {
         let source = plan.source(out)?;
         let result = source.with_checked_mixed_fixedpoint_optimization_v18(
             out.budget,
@@ -324,6 +405,21 @@ fn run_fixture_with_plan(
             Err(error) => panic!("original tile fixture preparation: {error:?}"),
         }
     })
+}
+
+#[test]
+#[ignore = "diagnostic original-source lifetime boundary; not an admission or proof result"]
+fn diagnostic_original_context_reborrow_while_workgroup_live_v170() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let result = run_fixture_with_preparation(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |budget| prepared_with_owner(budget, owner_with_live_context_reborrow_v170),
+            generate_actual_tile_source_v168,
+        );
+        println!("original-context-reborrow-v170 {layout:?}: {:?}", result.0);
+    }
 }
 
 fn check_actual_tile_slots(
