@@ -49,3 +49,30 @@ fn final_validation_requires_both_typed_child_modes() {
     }
     require_stage_modes(true, true).unwrap();
 }
+
+#[test]
+fn runtime_step_quote_composes_original_owner_helper_and_controller() {
+    let quote = Attempt::runtime_step_quota().unwrap();
+    let trace = crate::native_v3::NativeAttempt::<Helper>::runtime_backing_quota().unwrap();
+    let helper = Helper::checkpoint_access_quota().unwrap();
+    assert_eq!(
+        quote.work(),
+        LOCAL_WORK + trace.work() + helper.work() + Controller::step_work().unwrap()
+    );
+    assert_eq!(
+        quote.scratch(),
+        FRAME + trace.scratch() + helper.scratch() + Controller::STEP_SCRATCH
+    );
+}
+
+#[test]
+fn runtime_arm_and_cancellation_quotes_include_the_outer_attempt() {
+    let arm = Attempt::arm_runtime_quota().unwrap();
+    let inner = Trace::runtime_takeover_quota().unwrap();
+    assert_eq!(arm.work(), LOCAL_WORK + inner.work());
+    assert_eq!(arm.scratch(), FRAME + inner.scratch());
+    let cancel = Attempt::cancellation_quota().unwrap();
+    let issued = crate::native_v3::NativeAttempt::<Helper>::runtime_cancellation_quota().unwrap();
+    assert_eq!(cancel.work(), LOCAL_WORK + issued.work());
+    assert_eq!(cancel.scratch(), FRAME + issued.scratch());
+}

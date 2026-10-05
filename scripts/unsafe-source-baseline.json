@@ -291,6 +291,10 @@
     "block": 2,
     "function": 1
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt_runtime.rs": {
+    "block": 3,
+    "function": 3
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt_tests.rs": {
     "function": 1
   },

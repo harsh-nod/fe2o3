@@ -306,6 +306,14 @@ impl<'work, T: Send + 'static> NativeAttempt<'work, T> {
         })
     }
 
+    pub(crate) fn runtime_cancellation_quota() -> Result<Quota> {
+        let inner = CompilerTrace::<T>::cancellation_quota()?;
+        Ok(Quota {
+            work: sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: sum(&[FRAME, inner.scratch()])?,
+        })
+    }
+
     /// Uses the issuer's original cleanup slot without touching compiler/session.
     /// This is not a restart path: the compiler input transfer remains one-use.
     pub(crate) fn cancel_issuer(&mut self) -> Option<CleanupPoll> {
