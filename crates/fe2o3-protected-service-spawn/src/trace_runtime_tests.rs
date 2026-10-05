@@ -191,6 +191,56 @@ fn strict_kernel_mapping_policy_requires_exact_derived_coordinates_not_names() {
 }
 
 #[test]
+fn native_x86_gate_requires_exact_kernel_abi_shape_and_is_not_a_name_exception() {
+    let row = "ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0 [vsyscall]\n";
+    for permissions in ["--xp", "r-xp"] {
+        for name in ["[vsyscall]", "not-authority", ""] {
+            let actual = row.replace("--xp", permissions).replace("[vsyscall]", name);
+            assert!(
+                validate_native_x86_executable_mapping_rows(&actual, std::iter::empty(), &[])
+                    .is_ok()
+            );
+        }
+    }
+    for (old, new) in [
+        ("ffffffffff600000", "ffffffffff5ff000"),
+        ("ffffffffff601000", "ffffffffff602000"),
+        ("--xp", "rwxp"),
+        ("--xp", "--xs"),
+        ("--xp", "r-xs"),
+        ("00000000", "00001000"),
+        ("00:00", "08:01"),
+        ("0 [vsyscall]", "1 [vsyscall]"),
+    ] {
+        assert!(
+            validate_native_x86_executable_mapping_rows(
+                &row.replace(old, new),
+                std::iter::empty(),
+                &[]
+            )
+            .is_err(),
+            "{old} -> {new}"
+        );
+    }
+    assert!(
+        validate_native_x86_executable_mapping_rows(
+            &format!("{row}{row}"),
+            std::iter::empty(),
+            &[]
+        )
+        .is_err()
+    );
+    assert!(
+        validate_native_x86_executable_mapping_rows(
+            "8000-9000 r-xp 00000000 00:00 0 [vsyscall]\n",
+            std::iter::empty(),
+            &[]
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn direct_object_ranges_keep_identity_and_whole_interval_requirements() {
     let device = rustix::fs::makedev(8, 7);
     let ranges = [(0x1000, 0x3000)];

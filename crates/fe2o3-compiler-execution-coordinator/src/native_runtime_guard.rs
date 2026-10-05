@@ -137,7 +137,7 @@ pub(crate) fn validate_stopped_image(
                 validate_personality(view, b)?;
                 with_maps(view, b, |maps, b| {
                     let interval = kernel.validate(view, maps, b)?;
-                    policy::validate_executable_mapping_rows_with_kernel_ranges(
+                    policy::validate_native_x86_executable_mapping_rows(
                         maps,
                         inventory.ranges(),
                         &[interval],
