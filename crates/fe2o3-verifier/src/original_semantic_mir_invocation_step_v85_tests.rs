@@ -133,7 +133,7 @@ fn run_target_follow_topology(
     super::super::super::invocations::tests::run_root_variant(
         work,
         storage,
-        true,
+        false,
         true,
         3,
         |plan, out| {
