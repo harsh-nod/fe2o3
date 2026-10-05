@@ -1194,6 +1194,9 @@
   "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
     "block": 5
   },
+  "crates/fe2o3-protected-service-spawn/src/native_device_filter.rs": {
+    "block": 3
+  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_channel_syscall.rs": {
     "block": 1,
     "function": 1

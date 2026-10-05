@@ -313,6 +313,7 @@ fn inert_owner(phase: Phase) -> NativeCgroupDomainV1 {
         directory: None,
         kill: None,
         events: None,
+        device_filter_installed: false,
     }
 }
 
@@ -320,6 +321,38 @@ impl NativeCgroupDomainV1 {
     pub(crate) fn quarantined_fixture_for_cleanup() -> Self {
         inert_owner(Phase::Quarantined)
     }
+}
+
+#[test]
+fn device_confinement_requires_original_successful_installation() {
+    for phase in [
+        Phase::Prepared,
+        Phase::Created,
+        Phase::NoCreation,
+        Phase::Uncertain,
+        Phase::Quarantined,
+        Phase::Cleaning,
+        Phase::Removed,
+    ] {
+        let owner = inert_owner(phase);
+        assert!(owner.require_device_open_confinement().is_err());
+    }
+    let mut repeated = inert_owner(Phase::Created);
+    repeated.device_filter_installed = true;
+    assert!(matches!(
+        repeated.install_device_open_confinement(),
+        Err(Error::State(
+            "invalid or repeated compiler device confinement"
+        ))
+    ));
+    assert!(
+        NativeCgroupDomainV1::DEVICE_FILTER_WORK
+            >= NativeCgroupDomainV1::CLONE_FD_WORK + crate::native_device_filter::WORK
+    );
+    assert!(
+        NativeCgroupDomainV1::DEVICE_FILTER_SCRATCH
+            >= NativeCgroupDomainV1::CLONE_FD_SCRATCH + crate::native_device_filter::SCRATCH
+    );
 }
 
 #[test]

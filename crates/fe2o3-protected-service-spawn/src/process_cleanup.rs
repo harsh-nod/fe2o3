@@ -126,6 +126,17 @@ impl ChildCleanupV1 {
         self.observe_namespace_result(result)
     }
 
+    pub(crate) fn require_device_open_confinement(&self) -> SpawnResult<()> {
+        self.require_namespace_setup_custody()?;
+        self.custody
+            .domain
+            .as_ref()
+            .ok_or(SpawnError::State(
+                "compiler has no original device-confined domain",
+            ))?
+            .require_device_open_confinement()
+    }
+
     fn observe_namespace_result(&self, result: SpawnResult<()>) -> SpawnResult<()> {
         if matches!(
             &result,

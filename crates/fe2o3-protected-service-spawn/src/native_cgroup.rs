@@ -91,6 +91,7 @@ pub(crate) struct NativeCgroupDomainV1 {
     directory: Option<OwnedFd>,
     kill: Option<OwnedFd>,
     events: Option<OwnedFd>,
+    device_filter_installed: bool,
 }
 
 impl NativeCgroupDomainV1 {
@@ -112,6 +113,11 @@ impl NativeCgroupDomainV1 {
     pub(crate) const CLONE_FD_WORK: usize = 32 * OPERATION_WORK + 4 * NAME_BYTES;
     /// Revalidation frames; borrowing does not allocate or duplicate a descriptor.
     pub(crate) const CLONE_FD_SCRATCH: usize = 8 * size_of::<Stat>() + 4 * size_of::<Self>() + 1024;
+    /// Original-directory revalidation and fixed load/attach/close operations.
+    pub(crate) const DEVICE_FILTER_WORK: usize =
+        Self::CLONE_FD_WORK + crate::native_device_filter::WORK;
+    pub(crate) const DEVICE_FILTER_SCRATCH: usize =
+        Self::CLONE_FD_SCRATCH + crate::native_device_filter::SCRATCH;
     /// One finite kill/read/identity/remove turn, with no syscall retry loops.
     pub(crate) const STEP_WORK: usize = 64 * OPERATION_WORK + 16 * READ_LIMIT;
     /// Fixed cleanup frames and a single at-most-4096-byte event read buffer.
@@ -153,6 +159,7 @@ impl NativeCgroupDomainV1 {
             directory: None,
             kill: None,
             events: None,
+            device_filter_installed: false,
         })
     }
 
@@ -187,6 +194,33 @@ impl NativeCgroupDomainV1 {
             return Err(error);
         }
         Ok(self.directory()?.as_fd())
+    }
+
+    /// Install only on this original empty domain, before its first clone.
+    /// Unsupported kernels/capabilities/ancestor attachment modes refuse.
+    pub(crate) fn install_device_open_confinement(&mut self) -> Result<()> {
+        if self.phase != Phase::Created || self.device_filter_installed {
+            return Err(Error::State(
+                "invalid or repeated compiler device confinement",
+            ));
+        }
+        self.require_origin()?;
+        self.check_identity()?;
+        crate::native_device_filter::install(self.directory()?.as_fd())?;
+        self.device_filter_installed = true;
+        Ok(())
+    }
+
+    /// Revalidate the original installed domain, not a caller's claimed policy.
+    /// Privileged external policy/control writers remain excluded by custody.
+    pub(crate) fn require_device_open_confinement(&self) -> Result<()> {
+        if self.phase != Phase::Created || !self.device_filter_installed {
+            return Err(Error::State(
+                "compiler device confinement is absent or retiring",
+            ));
+        }
+        self.require_origin()?;
+        self.check_identity()
     }
 
     /// One prepaid turn; no loop, sleep, recursion, reaper or path-based adoption.

@@ -152,6 +152,9 @@ impl RootOwnedProtectedServiceChildV2 {
     pub(super) fn revalidate_namespace(&self) -> Result<()> {
         self.record()?.revalidate_namespace()
     }
+    pub(super) fn require_device_open_confinement(&self) -> Result<()> {
+        self.record()?.require_device_open_confinement()
+    }
     fn record(&self) -> Result<&Child> {
         self.custody
             .0
