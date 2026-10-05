@@ -1,6 +1,40 @@
 //! Independent complete-graph comparison; never calls the materializer/emitter.
 use super::*;
 
+pub(super) fn compare_roles(
+    input: &Inventory<'_>,
+    plan: &Plan,
+    projections: &[TileScalarRoleProjectionV162],
+    meter: &mut Meter<'_, '_>,
+) -> Result<()> {
+    if input.definitions().len() != plan.roles.len() {
+        return Err(Error::Inconsistent("tile role definition census"));
+    }
+    let mut actual = projections.iter();
+    let mut previous = None;
+    for (definition, recipe) in input.definitions().iter().zip(&plan.roles) {
+        meter.work(4)?;
+        let Some(recipe) = recipe else { continue };
+        let row = actual
+            .next()
+            .ok_or(Error::Inconsistent("tile role projection missing"))?;
+        if !matches!(
+            definition.coordinate,
+            CanonicalKirDefinitionCoordinateV1::Result { .. }
+        ) || previous.is_some_and(|coordinate| coordinate >= row.input)
+            || row.input != definition.coordinate
+            || row.recipe != *recipe
+        {
+            return Err(Error::Inconsistent("tile role projection differs"));
+        }
+        previous = Some(row.input);
+    }
+    if actual.next().is_some() {
+        return Err(Error::Inconsistent("tile role projection extra"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(super) fn compare(
     input: &Inventory<'_>,

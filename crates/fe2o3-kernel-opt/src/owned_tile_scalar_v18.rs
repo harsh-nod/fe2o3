@@ -5,11 +5,12 @@ use fe2o3_kernel_analysis::{CanonicalKirInventoryErrorV1, CanonicalKirInventoryV
 use fe2o3_kernel_ir::{
     CanonicalKernelIrReplayAdmissionErrorV18, CanonicalKernelIrReplayStorageV18,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
-    CanonicalKernelIrVerificationResourceErrorV1 as Resource, CanonicalKirFunctionCoordinateV1,
-    CanonicalKirOperationCoordinateV1, ExecutionOperationV15 as Execution, ExecutionTileLayoutV1,
-    ExecutionTileScalarLoweringV1, ExecutionTileScheduleV1, Module, Operation,
-    OperationKind as Kind, StorageLayoutLimitsV1, Type, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrIdentityV18 as Identity, VerifiedCanonicalKernelIrModuleV18 as Owner,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource, CanonicalKirDefinitionCoordinateV1,
+    CanonicalKirFunctionCoordinateV1, CanonicalKirOperationCoordinateV1,
+    ExecutionOperationV15 as Execution, ExecutionTileLayoutV1, ExecutionTileScalarLoweringV1,
+    ExecutionTileScheduleV1, Module, Operation, OperationKind as Kind, StorageLayoutLimitsV1, Type,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrIdentityV18 as Identity,
+    VerifiedCanonicalKernelIrModuleV18 as Owner,
 };
 use std::{fmt, mem::size_of};
 
@@ -104,6 +105,21 @@ pub struct TileScalarOperationProjectionV159 {
     pub end: u32,
 }
 
+/// An eliminated input role and its checked scalar components. Coordinates and
+/// copied rows are descriptive; consumers must retain the actual owning tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TileScalarRoleProjectionV162 {
+    pub input: CanonicalKirDefinitionCoordinateV1,
+    recipe: ExecutionTileScalarLoweringV1,
+}
+
+impl TileScalarRoleProjectionV162 {
+    /// Actual value and mask SSA IDs in the unchanged containing function.
+    pub fn component(self, element: u16) -> Option<(ValueId, ValueId)> {
+        self.recipe.component(element)
+    }
+}
+
 /// A freshly admitted candidate with independently checked scalar contents and
 /// complete unchanged CFG/metadata. It grants no source, formal, native, or
 /// launch authority. The selected layout is observable and remains explicit.
@@ -113,6 +129,7 @@ pub struct OwnedTileScalarContinuationV18 {
     input_identity: Identity,
     selections: Vec<TileScalarFunctionSelectionV18>,
     projections: Vec<TileScalarOperationProjectionV159>,
+    roles: Vec<TileScalarRoleProjectionV162>,
     retained: usize,
 }
 impl OwnedTileScalarContinuationV18 {
@@ -129,6 +146,11 @@ impl OwnedTileScalarContinuationV18 {
     /// operations, erased transports, and adjusted scope exits.
     pub fn projections_v159(&self) -> &[TileScalarOperationProjectionV159] {
         &self.projections
+    }
+    /// Complete coordinate-ordered tile/fragment definitions, including loads
+    /// whose components are discarded. Every row is checked during replay.
+    pub fn role_projections_v162(&self) -> &[TileScalarRoleProjectionV162] {
+        &self.roles
     }
     pub const fn retained_storage(&self) -> usize {
         self.retained
@@ -153,6 +175,7 @@ impl OwnedTileScalarContinuationV18 {
                     self.output_storage,
                     self.selections.capacity(),
                     self.projections.capacity(),
+                    self.roles.capacity(),
                 )?
             {
                 return Err(Resource::Accounting.into());
@@ -161,6 +184,7 @@ impl OwnedTileScalarContinuationV18 {
                 meter.derive(|budget| Ok(Inventory::derive_v18(input, budget)?))?;
             meter.reserve(receipt.retained_storage())?;
             let plan = derive(&inventory, &self.selections, meter)?;
+            check::compare_roles(&inventory, &plan, &self.roles, meter)?;
             check::compare_projected(
                 &inventory,
                 &self.output,
@@ -182,6 +206,7 @@ fn retained(
     output: CanonicalKernelIrReplayStorageV18,
     selections: usize,
     projections: usize,
+    roles: usize,
 ) -> Result<usize> {
     add(
         add(
@@ -189,8 +214,11 @@ fn retained(
             output.retained_storage(),
         )?,
         add(
-            product(selections, size_of::<TileScalarFunctionSelectionV18>())?,
-            product(projections, size_of::<TileScalarOperationProjectionV159>())?,
+            add(
+                product(selections, size_of::<TileScalarFunctionSelectionV18>())?,
+                product(projections, size_of::<TileScalarOperationProjectionV159>())?,
+            )?,
+            product(roles, size_of::<TileScalarRoleProjectionV162>())?,
         )?,
     )
 }
@@ -226,6 +254,25 @@ pub fn prepare_owned_tile_scalar_v18(
             meter.derive(|budget| Ok(Inventory::derive_v18(input, budget)?))?;
         meter.reserve(receipt.retained_storage())?;
         let plan = derive(&inventory, &selected, meter)?;
+        let mut role_count = 0usize;
+        for role in &plan.roles {
+            meter.work(1)?;
+            role_count = add(role_count, usize::from(role.is_some()))?;
+        }
+        let (mut roles, _) = meter.table(role_count)?;
+        for (definition, recipe) in inventory.definitions().iter().zip(&plan.roles) {
+            meter.work(1)?;
+            if let Some(recipe) = recipe {
+                meter.push(
+                    &mut roles,
+                    TileScalarRoleProjectionV162 {
+                        input: definition.coordinate,
+                        recipe: *recipe,
+                    },
+                )?;
+            }
+        }
+        check::compare_roles(&inventory, &plan, &roles, meter)?;
         let (mut projections, _) = meter.table(inventory.operations().len())?;
         let mut previous_block = None;
         let mut next = 0_u32;
@@ -265,7 +312,12 @@ pub fn prepare_owned_tile_scalar_v18(
         })?;
         meter.reserve(storage.retained_storage())?;
         check::compare_projected(&inventory, &output, &plan, Some(&projections), meter)?;
-        let retained = retained(storage, selected.capacity(), projections.capacity())?;
+        let retained = retained(
+            storage,
+            selected.capacity(),
+            projections.capacity(),
+            roles.capacity(),
+        )?;
         drop(candidate);
         drop(plan);
         drop(inventory);
@@ -276,6 +328,7 @@ pub fn prepare_owned_tile_scalar_v18(
             input_identity: *input.identity(),
             selections: selected,
             projections,
+            roles,
             retained,
         })
     })

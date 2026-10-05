@@ -1,5 +1,6 @@
 //! Live original-source transport through the checked one-to-many tile graph.
 use super::*;
+use fe2o3_kernel_ir::{CanonicalKirFunctionCoordinateV1, ExecutionRoleV15, ScalarType};
 use fe2o3_kernel_opt::{OwnedTileScalarContinuationV18 as Tail, OwnedTileScalarErrorV18 as Error};
 
 #[cfg(test)]
@@ -16,6 +17,18 @@ pub struct ProductionSourceTileOperationSpanV159 {
     pub original: OpCoordinate,
     /// Complete one-to-many correspondence after the neutral prefix.
     pub expansion: fe2o3_kernel_opt::TileScalarOperationProjectionV159,
+}
+
+/// Original aggregate leaf resolved against the actual retained scalar graph.
+/// A copied result is descriptive, not a source or native proof certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionSourceTileLeafV162 {
+    Scalar {
+        function: CanonicalKirFunctionCoordinateV1,
+        value: ValueId,
+        scalar: ScalarType,
+    },
+    Unit,
 }
 
 /// Retains the live original-source relation and a complete checked successor,
@@ -36,6 +49,8 @@ pub struct ProductionSourceTileExpansionV159<'view, 'source> {
     required: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    root: usize,
+    lanes: u16,
 }
 
 fn tile_error(error: Error) -> ProductionSourceOwnedViewErrorV18 {
@@ -78,6 +93,41 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
                 budget.reserve_storage(tail.retained_storage())?;
                 tail.replay_against(self.checked.output().owner(), budget)
                     .map_err(tile_error)?;
+                budget.charge_work(3)?;
+                let [selection] = tail.selections() else {
+                    return resources::binding("source tile policy census differs");
+                };
+                if selection.layout != layout {
+                    return resources::binding("source tile policy layout differs");
+                }
+                let module = tail.output().module();
+                let function = module.functions.get(selection.function.0 as usize).ok_or(
+                    ProductionSourceOwnedViewErrorV18::Binding(
+                        "source tile policy function absent",
+                    ),
+                )?;
+                let mut lanes = None;
+                for kernel in &module.kernels {
+                    budget.charge_work(1)?;
+                    if kernel.entry != function.id {
+                        continue;
+                    }
+                    let Some(size) = kernel.workgroup_size else {
+                        return resources::binding("source tile policy launch absent");
+                    };
+                    if size.x == 0
+                        || size.x > 256
+                        || size.y != 1
+                        || size.z != 1
+                        || lanes.is_some_and(|old| old != size.x as u16)
+                    {
+                        return resources::binding("source tile policy launch differs");
+                    }
+                    lanes = Some(size.x as u16);
+                }
+                let lanes = lanes.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "source tile policy kernel absent",
+                ))?;
                 #[cfg(test)]
                 if PANIC_AFTER_TILE_REPLAY_V159.replace(false) {
                     panic!("test panic after retaining and replaying the complete tile owner");
@@ -90,9 +140,9 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
                     self.original.source.cleanup.deny_refund();
                     return Err(ArgumentResourceV1::Accounting.into());
                 }
-                Ok((tail, retained))
+                Ok((tail, retained, lanes))
             });
-        let (tail, retained) = self.retain(result)?;
+        let (tail, retained, lanes) = self.retain(result)?;
         Ok(ProductionSourceTileExpansionV159 {
             source: self,
             tail,
@@ -100,11 +150,13 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
             required: budget.storage(),
             slot: std::ptr::from_ref(budget) as usize,
             ledger: budget.work_ledger_identity_v1(),
+            root,
+            lanes,
         })
     }
 }
 
-impl ProductionSourceTileExpansionV159<'_, '_> {
+impl<'view, 'source> ProductionSourceTileExpansionV159<'view, 'source> {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
@@ -140,6 +192,116 @@ impl ProductionSourceTileExpansionV159<'_, '_> {
     ) -> SourceOwnedResultV18<&[fe2o3_kernel_opt::TileScalarFunctionSelectionV18]> {
         self.check(budget)?;
         Ok(self.tail.selections())
+    }
+
+    /// The live neutral-prefix relation, not rebound to the expanded output.
+    pub fn neutral_source_v162(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<&'view ProductionOptimizedSourceCorrespondenceV18<'source>> {
+        self.check(budget)?;
+        Ok(self.source)
+    }
+
+    /// The genuine original correspondence needed for original MIR interpretation.
+    pub fn original_source_v162(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<&'source ProductionSourceCorrespondenceV18<'source>> {
+        self.check(budget)?;
+        Ok(self.source.original)
+    }
+
+    /// Explicit selected output function, layout and one-dimensional lane count
+    /// for an actual original root. Unselected roots have no tile policy.
+    pub fn root_policy_v162(
+        &self,
+        root: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<(CanonicalKirFunctionCoordinateV1, ExecutionTileLayoutV1, u16)>>
+    {
+        self.check(budget)?;
+        self.source.original.source.root(root, budget)?;
+        self.source.retain((|| {
+            budget.charge_work(2)?;
+            if root != self.root {
+                return Ok(None);
+            }
+            let [selection] = self.tail.selections() else {
+                return resources::binding("source tile policy census differs");
+            };
+            Ok(Some((selection.function, selection.layout, self.lanes)))
+        })())
+    }
+
+    /// Resolves original `[values, element]` / `[masks, element]` leaves through
+    /// the checked prefix and exact scalar recipe. Marker fields 2 and 3 are
+    /// unit leaves. Rewritten, ambiguous and non-tile definitions refuse.
+    pub fn aggregate_leaf_v162(
+        &self,
+        original: Definition,
+        path: &[u32],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionSourceTileLeafV162> {
+        self.check(budget)?;
+        self.source.retain((|| {
+            let input = self.source.checked.input();
+            let index = resources::definition_index(input, original, budget)?;
+            let definition = &input.definitions()[index];
+            let elements = match definition.ty {
+                Type::Execution(
+                    ExecutionRoleV15::MaskedTileU32 { elements, .. }
+                    | ExecutionRoleV15::LaneFragmentU32 { elements, .. },
+                ) => *elements,
+                _ => return resources::binding("source tile leaf is not a tile or fragment"),
+            };
+            let Definition::Result { operation, result } = original else {
+                return resources::binding("source tile leaf has no operation definition");
+            };
+            let span = self.operation_span(operation, budget)?.ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("source tile leaf is unreachable"),
+            )?;
+            let descendants = self.source.definition_descendants(original, budget)?;
+            budget.charge_work(3)?;
+            let [descendant] = descendants else {
+                return resources::binding("source tile leaf has ambiguous prefix descendants");
+            };
+            let expected = Definition::Result {
+                operation: span.expansion.input,
+                result,
+            };
+            if descendant.kind != fe2o3_kernel_ir::CanonicalKirDefinitionDescendantKindV1::Retained
+                || descendant.output != expected
+            {
+                return resources::binding("source tile leaf prefix definition differs");
+            }
+            let rows = self.tail.role_projections_v162();
+            budget.charge_work((usize::BITS - rows.len().leading_zeros()) as usize + 1)?;
+            let index = rows
+                .binary_search_by_key(&expected, |row| row.input)
+                .map_err(|_| {
+                    ProductionSourceOwnedViewErrorV18::Binding(
+                        "source tile leaf role binding absent",
+                    )
+                })?;
+            let (field, element) = match path {
+                [2] | [3] => return Ok(ProductionSourceTileLeafV162::Unit),
+                [field @ (0 | 1), element] if *element < u32::from(elements) => (*field, *element),
+                _ => return resources::binding("source tile leaf field path differs"),
+            };
+            let (value, mask) = rows[index].component(element as u16).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("source tile leaf geometry differs"),
+            )?;
+            Ok(ProductionSourceTileLeafV162::Scalar {
+                function: span.expansion.input.block.function,
+                value: if field == 0 { value } else { mask },
+                scalar: if field == 0 {
+                    ScalarType::U32
+                } else {
+                    ScalarType::Bool
+                },
+            })
+        })())
     }
 
     /// Composes an actual original operation through the neutral prefix and the

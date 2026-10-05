@@ -1,4 +1,207 @@
 #[test]
+fn explicit_source_tile_expansion_binds_original_leaves_to_actual_scalar_definitions() {
+    use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Definition, ScalarType};
+    for layout in [
+        ExecutionTileLayoutV1::Blocked,
+        ExecutionTileLayoutV1::Striped,
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = prepared_tile_schedule_v155(&mut budget);
+        with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+            let floor = budget.storage();
+            let expanded = view.prepare_tile_expansion_v159(0, layout, budget)?;
+            assert!(std::ptr::eq(expanded.neutral_source_v162(budget)?, view));
+            assert!(std::ptr::eq(
+                expanded.original_source_v162(budget)?.source(budget)?,
+                view.original_source(budget)?
+            ));
+            let (function, selected, lanes) = expanded.root_policy_v162(0, budget)?.unwrap();
+            assert_eq!(selected, layout);
+            assert_eq!(lanes, 64);
+            let mut roles = 0;
+            for row in view.input_inventory(budget)?.operations() {
+                let elements = match row.operation.kind {
+                    OperationKind::Execution(
+                        ExecutionOperationV15::MaskedTileLoadU32 { elements, .. }
+                        | ExecutionOperationV15::TileIntoFragmentU32 { elements, .. },
+                    ) => elements,
+                    _ => continue,
+                };
+                let original = Definition::Result {
+                    operation: row.coordinate,
+                    result: 0,
+                };
+                for marker in [2, 3] {
+                    assert_eq!(
+                        expanded.aggregate_leaf_v162(original, &[marker], budget)?,
+                        ProductionSourceTileLeafV162::Unit
+                    );
+                }
+                for field in 0..2 {
+                    for element in 0..u32::from(elements) {
+                        let ProductionSourceTileLeafV162::Scalar {
+                            function: actual_function,
+                            value,
+                            scalar,
+                        } = expanded.aggregate_leaf_v162(original, &[field, element], budget)?
+                        else {
+                            panic!("scalar tile leaf returned unit");
+                        };
+                        assert_eq!(actual_function, function);
+                        let expected = if field == 0 {
+                            ScalarType::U32
+                        } else {
+                            ScalarType::Bool
+                        };
+                        assert_eq!(scalar, expected);
+                        let body = expanded.output(budget)?.module().functions[function.0 as usize]
+                            .body
+                            .as_ref()
+                            .unwrap();
+                        let definition = body
+                            .blocks
+                            .iter()
+                            .flat_map(|block| &block.operations)
+                            .flat_map(|operation| &operation.results)
+                            .find(|result| result.id == value)
+                            .unwrap();
+                        assert_eq!(definition.ty, Type::Scalar(expected));
+                    }
+                }
+                roles += 1;
+            }
+            assert!(roles >= 3);
+            expanded.replay(budget)?;
+            expanded.discard(budget)?;
+            assert_eq!(budget.storage(), floor);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn explicit_source_tile_expansion_refuses_invalid_aggregate_leaf_paths() {
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
+    for path in [
+        vec![],
+        vec![0],
+        vec![0, u32::MAX],
+        vec![1, u32::MAX],
+        vec![2, 0],
+        vec![4],
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = prepared_tile_schedule_v155(&mut budget);
+        let result = with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+            let original = view
+                .input_inventory(budget)?
+                .operations()
+                .iter()
+                .find(|row| {
+                    matches!(
+                        row.operation.kind,
+                        OperationKind::Execution(ExecutionOperationV15::MaskedTileLoadU32 { .. })
+                    )
+                })
+                .unwrap()
+                .coordinate;
+            let floor = budget.storage();
+            let expanded =
+                view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Blocked, budget)?;
+            let error = expanded
+                .aggregate_leaf_v162(
+                    Definition::Result {
+                        operation: original,
+                        result: 0,
+                    },
+                    &path,
+                    budget,
+                )
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                ProductionSourceOwnedViewErrorV18::Binding("source tile leaf field path differs")
+            ));
+            assert!(expanded.discard(budget).is_err());
+            assert_eq!(budget.storage(), floor);
+            Err::<(), _>(error)
+        });
+        assert!(result.is_err());
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn explicit_source_tile_expansion_consumer_queries_keep_original_account_custody() {
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
+    for query in 0..4 {
+        for foreign in [false, true] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+            let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+            budget.reserve_storage(MODULE_FLOOR).unwrap();
+            let prepared = prepared_tile_schedule_v155(&mut budget);
+            let result = with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+                let original = view
+                    .input_inventory(budget)?
+                    .operations()
+                    .iter()
+                    .find(|row| {
+                        matches!(
+                            row.operation.kind,
+                            OperationKind::Execution(
+                                ExecutionOperationV15::MaskedTileLoadU32 { .. }
+                            )
+                        )
+                    })
+                    .unwrap()
+                    .coordinate;
+                let expanded =
+                    view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Blocked, budget)?;
+                let check = |account: &mut ArgumentBudgetV1<'_>| match query {
+                    0 => expanded.neutral_source_v162(account).map(|_| ()),
+                    1 => expanded.original_source_v162(account).map(|_| ()),
+                    2 => expanded.root_policy_v162(0, account).map(|_| ()),
+                    _ => expanded
+                        .aggregate_leaf_v162(
+                            Definition::Result {
+                                operation: original,
+                                result: 0,
+                            },
+                            &[0, 0],
+                            account,
+                        )
+                        .map(|_| ()),
+                };
+                let error = if foreign {
+                    let mut other_work =
+                        CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+                    let mut other = ArgumentBudgetV1::new(&mut other_work, MODULE_LIMIT);
+                    other.reserve_storage(budget.storage())?;
+                    check(&mut other).unwrap_err()
+                } else {
+                    budget.release_storage(1)?;
+                    check(budget).unwrap_err()
+                };
+                assert!(matches!(
+                    error,
+                    ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)
+                ));
+                assert!(expanded.output(budget).is_err());
+                assert!(expanded.discard(budget).is_err());
+                Err::<(), _>(error)
+            });
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
 fn explicit_source_tile_expansion_retains_source_layout_and_complete_operation_spans() {
     for layout in [
         ExecutionTileLayoutV1::Blocked,
@@ -201,6 +404,24 @@ fn tile_expansion_resource_run_v159(
                         ExecutionTileLayoutV1::Striped,
                         budget,
                     )?;
+                    expanded.root_policy_v162(0, budget)?;
+                    for row in view.input_inventory(budget)?.operations() {
+                        if matches!(
+                            row.operation.kind,
+                            OperationKind::Execution(
+                                ExecutionOperationV15::MaskedTileLoadU32 { .. }
+                            )
+                        ) {
+                            expanded.aggregate_leaf_v162(
+                                fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
+                                    operation: row.coordinate,
+                                    result: 0,
+                                },
+                                &[0, 0],
+                                budget,
+                            )?;
+                        }
+                    }
                     let replay = expanded.replay(budget);
                     let settled = expanded.discard(budget);
                     replay?;
