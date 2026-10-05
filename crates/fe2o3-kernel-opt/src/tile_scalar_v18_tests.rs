@@ -16,6 +16,81 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 };
 
 #[test]
+fn tile_scalar_role_components_cover_discarded_tiles_and_cross_block_fragments() {
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    let input = owner(&fixture(), &mut budget);
+    for layout in [
+        ExecutionTileLayoutV1::Blocked,
+        ExecutionTileLayoutV1::Striped,
+    ] {
+        let output =
+            prepare_owned_tile_scalar_v18(&input, &selection(layout), LAYOUTS, &mut budget)
+                .unwrap();
+        let retained = output.retained_storage();
+        budget.reserve_storage(retained).unwrap();
+        let roles = output.role_projections_v162();
+        assert_eq!(roles.len(), 3);
+        assert!(roles.windows(2).all(|pair| pair[0].input < pair[1].input));
+        for element in 0..3 {
+            assert_eq!(roles[0].component(element), roles[2].component(element));
+            assert_ne!(roles[0].component(element), roles[1].component(element));
+            for role in roles {
+                let (value, mask) = role.component(element).unwrap();
+                let body = output.output().module().functions[0].body.as_ref().unwrap();
+                let definition = |value| {
+                    body.blocks
+                        .iter()
+                        .flat_map(|block| &block.operations)
+                        .flat_map(|operation| &operation.results)
+                        .find(|result| result.id == value)
+                        .unwrap()
+                };
+                assert_eq!(definition(value).ty, Type::Scalar(ScalarType::U32));
+                assert_eq!(definition(mask).ty, Type::BOOL);
+            }
+        }
+        assert!(roles.iter().all(|row| row.component(3).is_none()));
+        output.replay_against(&input, &mut budget).unwrap();
+        drop(output);
+        budget.release_storage(retained).unwrap();
+    }
+}
+
+#[test]
+fn tile_scalar_role_replay_refuses_missing_extra_reordered_or_substituted_bindings() {
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    let input = owner(&fixture(), &mut budget);
+    for mutation in 0..5 {
+        let mut output = prepare_owned_tile_scalar_v18(
+            &input,
+            &selection(ExecutionTileLayoutV1::Striped),
+            LAYOUTS,
+            &mut budget,
+        )
+        .unwrap();
+        let retained = output.retained_storage();
+        budget.reserve_storage(retained).unwrap();
+        match mutation {
+            0 => {
+                output.roles.pop();
+            }
+            1 => output.roles.swap(0, 1),
+            2 => output.roles[0].recipe = output.roles[1].recipe,
+            3 => output.roles[0].input = output.roles[1].input,
+            _ => {
+                let duplicate = output.roles[0];
+                output.roles.push(duplicate);
+            }
+        }
+        assert!(output.replay_against(&input, &mut budget).is_err());
+        drop(output);
+        budget.release_storage(retained).unwrap();
+    }
+}
+
+#[test]
 fn tile_scalar_whole_graph_checks_complete_operation_spans_independently() {
     let mut work = Work::new(usize::MAX);
     let mut budget = Budget::new(&mut work, usize::MAX);
