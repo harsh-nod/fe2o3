@@ -68,6 +68,20 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
         self.retain(budget.reserve_storage(header).map_err(Into::into))?;
         let result = (|| {
             let function = self.tile_scalar_function_v156(root, budget)?;
+            let cfg = self.output_root_cfg_v18(root, budget)?;
+            fe2o3_kernel_analysis::check_canonical_tile_convergence_v160(
+                cfg.inventory(),
+                function.function,
+                budget,
+            )
+            .map_err(|error| match error {
+                fe2o3_kernel_analysis::CanonicalTileConvergenceErrorV160::Resource(error) => {
+                    ProductionSourceOwnedViewErrorV18::from(error)
+                }
+                _ => ProductionSourceOwnedViewErrorV18::Binding(
+                    "source tile input uniformity or workgroup arrival refused",
+                ),
+            })?;
             let selection = [fe2o3_kernel_opt::TileScalarFunctionSelectionV18 {
                 function: function.function,
                 layout,
