@@ -74,7 +74,7 @@ impl RootRuntimeTraceV1<'_> {
         b.with_prepaid_scope(
             self.retained,
             ENTRY,
-            ENTRY + CAPACITY * RuntimeTaskObservationV1::VIEW_WORK,
+            RuntimeTaskObservationV1::CENSUS_WORK,
             RuntimeTaskObservationV1::FRAME,
             |b| {
                 self.check(b, true)?;
@@ -102,6 +102,8 @@ impl RootRuntimeTraceV1<'_> {
 
 impl RuntimeTaskObservationV1<'_, '_> {
     pub const VIEW_WORK: usize = ENTRY + 8 * 1088;
+    /// Complete fixed traversal charge, excluding each caller policy callback.
+    pub const CENSUS_WORK: usize = ENTRY + CAPACITY * Self::VIEW_WORK;
     pub const DESCRIPTOR_WORK: usize = ENTRY + 12 * 1088;
     pub const FRAME: usize = 4096 + 4 * size_of::<File>() + 2 * size_of::<fs::StatFs>();
     pub const MAPS_WORK: usize =
@@ -301,7 +303,7 @@ impl RuntimeTaskObservationV1<'_, '_> {
                     ));
                 }
                 let file = self.open_proc("mem")?;
-                if rio::pread(&file, out, address)
+                if rio::pread(&file, &mut *out, address)
                     .map_err(|e| io("read retained task memory", e))?
                     != out.len()
                 {
