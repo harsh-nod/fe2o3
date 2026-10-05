@@ -44,7 +44,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     program.emit(out)?;
                     paired.emit(out)?;
                     assert!(!out.text.contains("proof fn invocation_source_cut_summary_"));
-                    assert!(!out.text.contains("proof fn invocation_related_target_inputs_v96"));
+                    assert_eq!(out.text.matches("proof fn invocation_related_target_inputs_v96").count(), 1);
                     for (root, row) in paired.roots.iter().enumerate() {
                         let hints = row.step_hints.as_ref().unwrap();
                         assert!(hints.conserves_heap);
@@ -62,6 +62,28 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let index = child - row.instances.start;
                                 let entry = hints.entries[index].as_ref().unwrap();
                                 let map = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_map_v85"));
+                                let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
+                                assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
+                                assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                let control = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_control_v85"));
+                                for predicate in ["invocation_paired_source_step", "invocation_paired_source_defined", "invocation_source_byte_storage_related", "invocation_source_byte_map", "invocation_paired_control_values"] {
+                                    assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
+                                }
+                                assert!(!control.contains("hide(invocation_paired_actual_step_"));
+                                assert!(control.contains(&format!("hide(invocation_source_enter_{root}_{index}_v36);")));
+                                assert!(out.text.contains(&format!("spec fn invocation_source_enter_{root}_{index}_v36(")));
+                                assert_eq!(control.matches("hide(invocation_source_enter_").count(), 1);
+                                if index != child {
+                                    assert!(!control.contains(&format!("hide(invocation_source_enter_{root}_{child}_v36);")));
+                                }
+                                for predicate in ["invocation_byte_states_related_v36", "invocation_source_byte_state_well_formed_v36", "byte_memory_well_formed_v30", "byte_frame_runtime_well_formed_v30", "byte_private_frames_live_v30", "private_generation_counters_valid_v30"] {
+                                    assert!(control.contains(&format!(" hide({predicate});")));
+                                }
+                                assert!(!control.contains("hide(byte_state_memory_well_formed_v30)"));
+                                assert!(control.contains(&format!("assert(original.source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}")));
+                                assert!(control.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
+                                assert!(control.contains(&format!("invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));")));
+                                assert!(control.contains(&format!("assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}")));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));
@@ -132,7 +154,11 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert!(!out.text.contains(&format!("proof fn invocation_paired_cut_{root}_pc{pc}_map_v85(")));
                                 let fallback = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_all_v85"));
                                 assert!(fallback.contains("reveal_with_fuel(invocation_source_micro_run_"));
+                                assert_eq!(fallback.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
+                                assert!(fallback.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(!fallback.contains("constructor_clear_well_formed"));
+                                assert!(!fallback.contains("hide(invocation_paired_control_values_"));
+                                assert!(!fallback.contains("hide(invocation_source_enter_"));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                             }

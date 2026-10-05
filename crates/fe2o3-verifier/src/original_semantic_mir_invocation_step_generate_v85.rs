@@ -79,11 +79,11 @@ pub(super) fn emit(
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
         let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
+        if (summary.is_some() || constructor.is_some()) && !*summary_shared {
+            emit!(out, "{}", summaries::SHARED);
+            *summary_shared = true;
+        }
         if let Some(summary) = &summary {
-            if !*summary_shared {
-                emit!(out, "{}", summaries::SHARED);
-                *summary_shared = true;
-            }
             summaries::emit(model, root, row, cut, hint, summary, out)?;
         }
         let partition = summary.is_none() && (constructor.is_some() || !hints.conserves_heap);
@@ -101,6 +101,7 @@ pub(super) fn emit(
                 header(root, Some(cut.source), goal, out)?;
                 match goal {
                     Goal::Relation => {
+                        compose_opaquely(root, out)?;
                         for part in [Goal::Map, Goal::Heap, Goal::Residual] {
                             invoke(root, cut.source, part, out)?;
                         }
@@ -116,6 +117,14 @@ pub(super) fn emit(
                             emit!(
                                 out,
                                 " hide(invocation_source_byte_state_well_formed_v36);\n"
+                            );
+                        }
+                        if constructor.is_some() && matches!(goal, Goal::Control) {
+                            let child = constructor.ok_or_else(mismatch)?.0.child;
+                            out.budget.charge_work(14)?;
+                            emit!(
+                                out,
+                                " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n hide(invocation_source_enter_{root}_{child}_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));\n"
                             );
                         }
                         unfold(
@@ -155,6 +164,7 @@ pub(super) fn emit(
         if summary.is_some() {
             summaries::compose(root, cut.source, out)?;
         } else if partition {
+            compose_opaquely(root, out)?;
             for goal in [
                 Goal::Relation,
                 Goal::Observations,
@@ -169,6 +179,15 @@ pub(super) fn emit(
         }
         emit!(out, "}}\n");
     }
+    Ok(())
+}
+
+fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(7)?;
+    emit!(
+        out,
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_byte_states_related_v36);\n"
+    );
     Ok(())
 }
 
@@ -331,15 +350,17 @@ fn unfold(
     observations: bool,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    for (instance, fuel) in hints.fuels.iter().enumerate() {
-        out.budget.charge_work(1)?;
-        if *fuel != 0 {
-            emit!(
-                out,
-                " reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});\n"
-            );
-        }
+    out.budget.charge_work(2)?;
+    let instance = cut.instance;
+    let fuel = add(cut.statements, 1)?;
+    if fuel > *hints.fuels.get(instance).ok_or_else(mismatch)? {
+        return Err(mismatch());
     }
+    // One source cut stops at its terminator, including entry to another frame.
+    emit!(
+        out,
+        " reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});\n"
+    );
     emit!(
         out,
         " reveal_with_fuel(invocation_byte_follow_{root}_v36, {});\n",
@@ -361,8 +382,12 @@ fn unfold(
     } else {
         emit!(
             out,
-            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n invocation_scalar_store_facts_v92();\n"
+            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n"
         );
+        out.budget.charge_work(1)?;
+        if cut.needs_scalar_store_facts {
+            emit!(out, " invocation_scalar_store_facts_v92();\n");
+        }
     }
     Ok(())
 }
@@ -429,9 +454,10 @@ fn control_values(
         .get(child)
         .and_then(Option::as_ref)
         .ok_or_else(mismatch)?;
+    out.budget.charge_work(1)?;
     emit!(
         out,
-        " let original = invocation_source_block_runtime_{root}_v36(source);\n let actual = invocation_byte_boundary_{root}_v36(target);\n assert(original.returned.is_none());\n assert(actual.returned.len() == 0);\n assert(original.operands.len() == {});\n assert(actual.state.values.len() == target.values.len());\n",
+        " let original = invocation_source_block_runtime_{root}_v36(source);\n let actual = invocation_byte_boundary_{root}_v36(target);\n assert(original.source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(original.returned.is_none());\n assert(actual.returned.len() == 0);\n assert(original.operands.len() == {});\n assert(actual.state.values.len() == target.values.len());\n",
         call.arguments.len()
     );
     for (i, (local, _, _)) in call.arguments.iter().enumerate() {
@@ -461,6 +487,11 @@ fn control_values(
             }
         }
     }
+    out.budget.charge_work(1)?;
+    emit!(
+        out,
+        " assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}\n"
+    );
     Ok(())
 }
 

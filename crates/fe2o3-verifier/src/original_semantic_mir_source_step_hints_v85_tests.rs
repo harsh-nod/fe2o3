@@ -24,6 +24,7 @@ fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
                                 })
                                 .unwrap();
                             assert_eq!(hint.statements, row.statements);
+                            assert!(!hint.needs_scalar_store_facts);
                             if let End::Call { child, arguments } = &row.end {
                                 let call = hint.call.as_ref().unwrap();
                                 assert_eq!(call.child, *child);
@@ -150,4 +151,80 @@ fn source_step_hints_decline_unsupported_shape_without_removing_generic_obligati
     })
     .0
     .unwrap();
+}
+
+fn run_cut_effects(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
+    super::super::super::super::invocations::tests::run_variant(work, storage, true, |plan, out| {
+        with_slots(plan, out, |slots, out| {
+            let mut program = SourceByteProgram::derive(plan, slots, out)?;
+            let range = program.roots[0].0.clone();
+            let index = range.start;
+            let function = program.functions[index].as_ref().unwrap();
+            let block = function
+                .control
+                .iter()
+                .position(|row| matches!(row.end, End::Call { .. }))
+                .unwrap();
+            assert!(!cut_may_store(
+                function,
+                &program.functions[range.clone()],
+                block,
+                out
+            )?);
+            let End::Call { child, .. } =
+                &mut program.functions[index].as_mut().unwrap().control[block].end
+            else {
+                unreachable!()
+            };
+            let saved = *child;
+            *child = usize::MAX;
+            assert!(cut_may_store(
+                program.functions[index].as_ref().unwrap(),
+                &program.functions[range.clone()],
+                block,
+                out
+            )?);
+            let End::Call { child, .. } =
+                &mut program.functions[index].as_mut().unwrap().control[block].end
+            else {
+                unreachable!()
+            };
+            *child = saved;
+            let old = std::mem::replace(
+                &mut program.functions[index].as_mut().unwrap().control[block].end,
+                End::Abort,
+            );
+            assert!(cut_may_store(
+                program.functions[index].as_ref().unwrap(),
+                &program.functions[range.clone()],
+                block,
+                out
+            )?);
+            program.functions[index].as_mut().unwrap().control[block].end = old;
+            assert!(!cut_may_store(
+                program.functions[index].as_ref().unwrap(),
+                &program.functions[range],
+                block,
+                out
+            )?);
+            assert!(out.text.is_empty());
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn cut_effect_facts_keep_unknown_callees_and_effects_with_exact_one_short_accounts() {
+    use super::super::super::super::invocations::tests::FLOOR;
+    let measured = run_cut_effects(LIMIT, LIMIT);
+    measured.0.unwrap();
+    assert_eq!(measured.2, FLOOR);
+    let exact = run_cut_effects(measured.1, measured.3);
+    exact.0.unwrap();
+    assert_eq!(exact.2, FLOOR);
+    for (work, storage) in [(measured.1 - 1, measured.3), (measured.1, measured.3 - 1)] {
+        let short = run_cut_effects(work, storage);
+        assert!(short.0.is_err());
+        assert_eq!(short.2, FLOOR);
+    }
 }

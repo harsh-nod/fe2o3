@@ -4,7 +4,7 @@
 use super::super::source_bytes::{Destination, Value};
 use super::*;
 
-fn event_supported(event: Event) -> bool {
+pub(super) fn event_supported(event: Event) -> bool {
     matches!(
         event,
         Event::Transfer {
