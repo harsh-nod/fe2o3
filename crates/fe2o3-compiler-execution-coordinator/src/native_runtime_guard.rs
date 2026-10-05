@@ -21,6 +21,8 @@ use std::{fmt, fs::File, mem::size_of, os::fd::AsFd};
 #[path = "native_runtime_kernel_image.rs"]
 mod kernel;
 pub(crate) use kernel::NativeKernelImage;
+#[path = "native_runtime_descriptor_guard.rs"]
+pub(crate) mod descriptor;
 
 #[derive(Debug)]
 pub(crate) enum Error {

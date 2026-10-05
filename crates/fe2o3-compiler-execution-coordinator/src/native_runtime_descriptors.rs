@@ -71,7 +71,7 @@ pub(crate) fn inspect(file: BorrowedFd<'_>, b: &mut Budget<'_>) -> Result<()> {
             fs::FileType::Fifo | fs::FileType::Socket => return Ok(()),
             fs::FileType::CharacterDevice => {
                 if (fs::major(stat.st_rdev), fs::minor(stat.st_rdev)) == (1, 3)
-                    || rustix::termios::isatty(file)
+                    || is_terminal(file, &stat)
                 {
                     return Ok(());
                 }
@@ -80,6 +80,18 @@ pub(crate) fn inspect(file: BorrowedFd<'_>, b: &mut Budget<'_>) -> Result<()> {
         }
         Err(Error::UnsupportedWriter)
     })
+}
+
+// isatty itself issues TCGETS: establish a known Linux terminal device first,
+// rather than asking an arbitrary character-device driver to interpret it.
+pub(crate) fn is_terminal(file: BorrowedFd<'_>, stat: &fs::Stat) -> bool {
+    fs::FileType::from_raw_mode(stat.st_mode) == fs::FileType::CharacterDevice
+        && known_terminal_device(fs::major(stat.st_rdev), fs::minor(stat.st_rdev))
+        && rustix::termios::isatty(file)
+}
+
+fn known_terminal_device(major: u32, minor: u32) -> bool {
+    matches!(major, 4 | 136..=143) || (major == 5 && minor <= 2)
 }
 
 // Linux UAPI filesystem kinds with ordinary data-file write semantics. Unknown
