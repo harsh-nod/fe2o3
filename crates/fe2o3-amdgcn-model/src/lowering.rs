@@ -51,6 +51,7 @@ mod ordered_program_composition_v1;
 pub use ordered_program_composition_v1::*;
 
 include!("lowering_native_v12.rs");
+include!("lowering_native_bf16_v12.rs");
 
 use crate::{
     AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
@@ -1117,6 +1118,40 @@ fn lower_compiler_module_with_ordered_context(
     require_kernel: bool,
     ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_and_bf16_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        None,
+    )
+}
+
+fn lower_compiler_module_with_ordered_and_bf16_context(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
+) -> Result<String, LoweringErrors> {
+    if let Some(context) = bf16_context {
+        if !std::ptr::eq(context.owner.module(), module)
+            || !matches!(target, LoweringTarget::Gfx942XnackMinusV1)
+            || ordered_owner.is_some()
+            || !matches!(semantic_anchor_identity, Some(SemanticAnchorInputV1::Native(owner))
+                if std::ptr::eq(owner, context.owner))
+        {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::SemanticAnchorIdentityMismatch,
+                "private BF16 lowering requires its actual native V12 owner context",
+            ));
+        }
+    }
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1397,6 +1432,11 @@ fn lower_compiler_module_with_ordered_context(
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
         };
+        // Carry only this owner's already-proved exact root Call context.
+        // Every root convergent operation still gets its original scope check.
+        if let Some(context) = bf16_context.filter(|context| std::ptr::eq(context.root, entry)) {
+            lowerer.native_bf16_helper = Some(context);
+        }
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1415,6 +1455,11 @@ fn lower_compiler_module_with_ordered_context(
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
         };
+        if let Some(context) = bf16_context.filter(|context| std::ptr::eq(context.helper, function))
+        {
+            lowerer.native_bf16_helper = Some(context);
+            lowerer.workgroup_size = Some(context.workgroup);
+        }
         preflight_function(&mut lowerer)?;
         helper_lowerers.push(lowerer);
     }
@@ -2033,7 +2078,9 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         matches!(
             diagnostic,
             fe2o3_kernel_analysis::Diagnostic::Unsupported { .. }
-        )
+        ) && !lowerer.native_bf16_helper.is_some_and(|context| {
+            context.admits_root_call_diagnostic(lowerer.module, lowerer.function, diagnostic)
+        })
     }) {
         return Err(LoweringErrors::one(
             lowerer.function_location(),
@@ -3760,6 +3807,7 @@ struct FunctionLowerer<'a> {
     ordered_region_v16: bool,
     ordered_program_v17: bool,
     ordered_composition_v1: Option<&'a fe2o3_kernel_ir::VerifiedOrderedProgramCompositionV1>,
+    native_bf16_helper: Option<&'a NativeBf16HelperContextV1<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -4111,6 +4159,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_composition_v1: None,
+            native_bf16_helper: None,
         })
     }
 
@@ -4144,6 +4193,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_composition_v1: None,
+            native_bf16_helper: None,
         })
     }
 
@@ -4172,6 +4222,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_composition_v1: None,
+            native_bf16_helper: None,
         })
     }
 
@@ -5122,7 +5173,12 @@ impl<'a> FunctionLowerer<'a> {
         matrix: &MatrixOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if self.kernel.is_none() {
+        if self.kernel.is_none()
+            && !self.native_bf16_helper.is_some_and(|context| {
+                matches!(self.target, LoweringTarget::Gfx942XnackMinusV1)
+                    && context.admits(self.module, self.function, matrix)
+            })
+        {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedMatrixOperation,

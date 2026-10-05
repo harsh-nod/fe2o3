@@ -11,6 +11,72 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 owning LLVM continuation — 2026-10-05
+
+The private continuation now retains full dialect LLVM and LLVM 22 worker-layout
+text together with the actual checked optimized V12 output, its formal/source
+owners and the original projection account. Replay compares the complete text
+and source/output correspondence; digests alone cannot authorize compilation.
+The matrix-helper convergence exception is restricted to the verified root
+pointer, call block, ordinal and callee. The generic lowering route remains
+closed; helper results remain varying, and divergent wave operations still fail.
+
+Four fresh frontend processes (Identity and swapped inputs, debug and release)
+completed this owning LLVM path. Each retained a 7,120-byte optimized module,
+one MFMA call and one anchor-absence record. Identity retained 23,348 bytes of
+dialect LLVM and 23,344 bytes of worker-layout text; swapped inputs retained
+23,337 and 23,333 bytes. Full text replay and wrong-Return rejection passed.
+These are emitted and replayed strings: no external LLVM worker, descriptor,
+artifact publication, ordinary compilation or GPU launch was performed.
+
+Eight additional frontend processes repeated the separate guarded-output and
+raw-output diagnostics in both build modes. Within each of the three paths,
+debug/release observations and diagnostics agree, including byte-identical raw
+stderr. The raw analysis remains Incomplete, with three allocations, nine
+accesses, one 256-byte bound, two aliases, no reported conflicts and eight
+guarded-access reasons. Structural guard discharge does not authenticate
+runtime bounds, aliases or launch inputs.
+
+The LLVM text reservations are 46,748 bytes (Identity) and 46,726 bytes (swapped),
+with a 176-byte observation header. Projection live storage is 910,754,417 and
+910,754,395 bytes respectively; peak storage is 962,461,661 bytes. After owner
+drop, the distinct materialization account returns to 816,298,804 bytes.
+Selected logical accounting is not whole-engine allocation or process-RSS
+accounting; existing engine, formatting and diagnostic exclusions remain.
+
+This checkpoint was joined with upstream commit
+`60dc6edb2ffa07a56ddc53e2bf9a3d202bdbfd8f`, including the device LDS-write
+correction and its reviewed provider pins. Three initial post-join frontend
+checks correctly rejected stale prepared device metadata; those failed records
+remain preserved. A fresh 13-child preparation campaign rebuilt the current
+device dependencies before the twelve successful frontend processes above.
+No identity check was relaxed.
+
+Validation on the joined source passed, in both debug and release:
+239 model tests (three ignored), 3,962 compiler library tests (235 ignored),
+73 extractor tests, two API tests and 2,088 lowerer tests. Release product builds,
+12 focused convergence tests on the pre-join implementation, the three
+14-control frontend parents and the 53-control preparation parent also passed.
+Existing warnings remain recorded. Joined qualified source census:
+`4eb88f00fa6a7b0bf968e7a7f89511a0d2effdb8f88ae9154942c4d2c97032ca`.
+The root comparison record is
+`bf16-current-pair-comparison-root-r68-r1/COMPARISON.json`
+(SHA256 `4a55a1a09bcd4c3c6b9fe7f18105683d5fb55777f48d44cbc1098aece89dd48f`).
+
+Separately, the scalar debugger's subsequent finite native attempt reached
+register/memory capture: S12 and a 272-byte memory observation matched all
+64 lane XOR values and canaries. It then failed at the resume-scope/commit
+boundary. Its failure, consumed lease and cleanup history remain preserved;
+this is not a successful public capture qualification. A paired CPU/wave resume
+source correction passed strict C++ and 13 source/mutation controls. Its
+selective native rebuild, measured type sizes, fresh startup and fresh native
+attempt remain pending; proposed source and CPU controls do not replace them.
+
+Next are descriptor construction with retained source/output/text ownership,
+runtime integration, and the debugger's paired-resume native qualification.
+No milestone or tutorial is completed here. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 optimized-output structural guards — 2026-10-04
 
 The private owning pipeline now proves guarded accesses on the actual retained

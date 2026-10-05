@@ -366,3 +366,33 @@ impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
         })
     }
 }
+
+impl RetainedMaterializationPhaseV1<PrivateBf16OptimizedCompilationV1> {
+    /// Fresh actual-O proof/emission stays enclosed by the original
+    /// materialization account and its ordinary try_map postflights.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn lower_private_bf16_llvm_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<RetainedMaterializationPhaseV1<PrivateBf16LlvmCompilationV1>> {
+        self.try_map(|owner, _original_materialization_account| {
+            owner
+                .lower_private_bf16_llvm_v1(requested_return)
+                .map_err(Box::new)
+        })
+    }
+}
+impl RetainedMaterializationPhaseV1<PrivateBf16LlvmCompilationV1> {
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn revalidate_private_bf16_llvm_retained_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<Self> {
+        self.try_map(|mut owner, _original_materialization_account| {
+            owner
+                .revalidate_private_bf16_llvm_v1(requested_return)
+                .map_err(Box::new)?;
+            Ok(owner)
+        })
+    }
+}

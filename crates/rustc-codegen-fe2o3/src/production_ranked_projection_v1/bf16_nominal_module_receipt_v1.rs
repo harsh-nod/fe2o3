@@ -4620,3 +4620,820 @@ mod private_checked_output_guard_observer {
         }
     }
 }
+
+type PrivateBf16LlvmErrorV1 = crate::production_pipeline::ProductionPipelineError;
+type PrivateBf16LlvmResultV1 = Result<PrivateBf16LlvmPayloadV1, PrivateBf16LlvmErrorV1>;
+
+struct PrivateBf16LlvmPayloadV1 {
+    worker: String,
+    dialect: String,
+    retained: usize,
+}
+
+/// Both LLVM strings drop before their actual checked O/B/nominal/formal/target
+/// owner and original projection phase. Caller retains materialization separately.
+/// This private stage is inert text, not descriptor/Worker/artifact/launch authority.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16LlvmV1 {
+    llvm: PrivateBf16LlvmPayloadV1,
+    optimized: PrivateBf16OptimizedV1,
+}
+
+fn private_bf16_llvm_context_v1(reason: &'static str) -> PrivateBf16LlvmErrorV1 {
+    PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm(
+        dialect_amdgcn::PrivateBf16NativeLlvmErrorV1::Context(reason),
+    )
+}
+
+fn private_bf16_llvm_caps_v1() -> Result<usize, E> {
+    sum(
+        dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES,
+        dialect_amdgcn::MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
+    )
+}
+
+fn reserve_private_bf16_llvm_output_v1(budget: &mut Budget<'_>) -> Result<(usize, usize), E> {
+    budget.check_prior_denials_v1().map_err(resource)?;
+    budget.charge_work(1).map_err(resource)?;
+    let retained = std::mem::size_of::<PrivateBf16LlvmV1>();
+    let scratch = std::mem::size_of::<Option<PrivateBf16LlvmResultV1>>();
+    budget
+        .reserve_storage(sum(retained, scratch)?)
+        .map_err(resource)?;
+    Ok((retained, scratch))
+}
+
+/// Construction-only scope with no callbacks. The existing two text ceilings
+/// are reserved before either emitter or binder can allocate a returned String.
+/// Their inherited trees/formatters/internal allocations remain excluded; this
+/// is logical retained text/header accounting, not an entire-engine/RSS bound.
+fn derive_private_bf16_llvm_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    requested_return: [u8; 4],
+    budget: &mut Budget<'_>,
+) -> PrivateBf16LlvmResultV1 {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let floor = budget.storage();
+    let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget
+            .charge_work(3)
+            .map_err(private_bf16_target_resource_v1)?;
+        let header = std::mem::size_of::<PrivateBf16LlvmPayloadV1>();
+        let caps =
+            private_bf16_llvm_caps_v1().map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        budget
+            .reserve_storage(
+                header
+                    .checked_add(caps)
+                    .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+            )
+            .map_err(private_bf16_target_resource_v1)?;
+        let dialect = dialect_amdgcn::lower_private_bf16_canonical_v12_to_gfx942_llvm_ir_v1(
+            output,
+            requested_return,
+            budget,
+        )
+        .map_err(PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm)?;
+        if dialect.len() > dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES {
+            return Err(private_bf16_llvm_context_v1(
+                "dialect text exceeded its existing ceiling",
+            ));
+        }
+        // Pay selected complete text scans and copying before the existing
+        // exact canonical-header/unique-header LLVM22 layout binder runs.
+        budget
+            .charge_work(
+                dialect
+                    .len()
+                    .checked_mul(8)
+                    .and_then(|n| {
+                        n.checked_add(
+                            fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1
+                                .len()
+                                .checked_mul(2)?,
+                        )
+                    })
+                    .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+            )
+            .map_err(private_bf16_target_resource_v1)?;
+        let worker = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&dialect)
+            .map_err(PrivateBf16LlvmErrorV1::UpstreamLlvmLayoutBinding)?;
+        if worker.len() > dialect_amdgcn::MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1 {
+            return Err(private_bf16_llvm_context_v1(
+                "worker text exceeded its existing ceiling",
+            ));
+        }
+        let text = dialect
+            .len()
+            .checked_add(worker.len())
+            .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+        let retained = header
+            .checked_add(text)
+            .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?;
+        budget
+            .release_storage(
+                caps.checked_sub(text)
+                    .ok_or_else(|| private_bf16_target_resource_v1(Resource::Accounting))?,
+            )
+            .map_err(private_bf16_target_resource_v1)?;
+        if budget.storage().checked_sub(floor) != Some(retained) {
+            return Err(private_bf16_target_resource_v1(Resource::Accounting));
+        }
+        Ok(PrivateBf16LlvmPayloadV1 {
+            worker,
+            dialect,
+            retained,
+        })
+    }));
+    let result = match attempted {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm(
+                dialect_amdgcn::PrivateBf16NativeLlvmErrorV1::Panicked,
+            ))
+        }
+    };
+    let prior = budget.check_prior_denials_v1();
+    if result.is_ok() && prior.is_ok() {
+        return result;
+    }
+    let error = match result {
+        Ok(payload) => {
+            drop(payload);
+            private_bf16_target_resource_v1(prior.expect_err("prior denial checked"))
+        }
+        Err(error) => error,
+    };
+    // Failure has dropped all newly created strings/context before refund.
+    // No callback or preexisting owner's reservation can be above this floor.
+    let restored = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(Resource::Accounting)
+        .and_then(|bytes| budget.release_storage(bytes));
+    if let Err(error) = prior {
+        return Err(private_bf16_target_resource_v1(error));
+    }
+    restored.map_err(private_bf16_target_resource_v1)?;
+    Err(error)
+}
+
+fn recheck_private_bf16_llvm_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    retained: &PrivateBf16LlvmPayloadV1,
+    requested_return: [u8; 4],
+    budget: &mut Budget<'_>,
+) -> Result<(), PrivateBf16LlvmErrorV1> {
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    let floor = budget.storage();
+    let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fresh = derive_private_bf16_llvm_v1(output, requested_return, budget)?;
+        let joined = (|| {
+            budget
+                .charge_work(
+                    retained
+                        .dialect
+                        .len()
+                        .checked_add(retained.worker.len())
+                        .and_then(|n| n.checked_add(fresh.dialect.len()))
+                        .and_then(|n| n.checked_add(fresh.worker.len()))
+                        .and_then(|n| n.checked_add(3))
+                        .ok_or_else(|| private_bf16_target_resource_v1(Resource::Arithmetic))?,
+                )
+                .map_err(private_bf16_target_resource_v1)?;
+            if retained.retained != fresh.retained
+                || retained.dialect != fresh.dialect
+                || retained.worker != fresh.worker
+            {
+                return Err(private_bf16_llvm_context_v1(
+                    "retained LLVM bytes differ from actual O replay",
+                ));
+            }
+            Ok(())
+        })();
+        drop(fresh);
+        joined
+    }));
+    let result = match attempted {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm(
+                dialect_amdgcn::PrivateBf16NativeLlvmErrorV1::Panicked,
+            ))
+        }
+    };
+    // This no-callback scratch scope retains no new payload on any path.
+    let restored = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(Resource::Accounting)
+        .and_then(|bytes| budget.release_storage(bytes));
+    budget
+        .check_prior_denials_v1()
+        .map_err(private_bf16_target_resource_v1)?;
+    restored.map_err(private_bf16_target_resource_v1)?;
+    result
+}
+
+impl PrivateBf16OptimizedV1 {
+    #[allow(dead_code)]
+    pub(crate) fn lower_private_bf16_llvm_v1(
+        mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<PrivateBf16LlvmV1, PrivateBf16LlvmErrorV1> {
+        // Replays actual source/Return/target/B→O and freshly discharges actual
+        // O guards. Neither a prior unit result nor source guard coordinates
+        // authorize this consuming step. Runtime bounds/aliases remain duties.
+        self.verify_private_bf16_output_guarded_safety_v1(requested_return, typed_roots, profile)?;
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        let output = self.optimization.checked.owner();
+        let result = self.target.formal.verification.phase.with_budget(|budget| {
+            let (retained, scratch) = reserve_private_bf16_llvm_output_v1(budget)?;
+            match derive_private_bf16_llvm_v1(output, requested_return, budget) {
+                Ok(llvm) => {
+                    budget.release_storage(scratch).map_err(resource)?;
+                    Ok(Ok(llvm))
+                }
+                Err(error) => {
+                    budget
+                        .release_storage(sum(retained, scratch)?)
+                        .map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    Ok(Err(error))
+                }
+            }
+        });
+        self.target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        let llvm = result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)??;
+        Ok(PrivateBf16LlvmV1 {
+            llvm,
+            optimized: self,
+        })
+    }
+}
+
+impl PrivateBf16LlvmV1 {
+    #[allow(dead_code)]
+    pub(crate) fn revalidate_private_bf16_llvm_v1(
+        &mut self,
+        requested_return: [u8; 4],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    ) -> Result<(), PrivateBf16LlvmErrorV1> {
+        self.optimized
+            .verify_private_bf16_output_guarded_safety_v1(requested_return, typed_roots, profile)?;
+        self.optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        let output = self.optimized.optimization.checked.owner();
+        let retained = &self.llvm;
+        let result = self
+            .optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .with_budget(|budget| {
+                budget.check_prior_denials_v1().map_err(resource)?;
+                Ok(recheck_private_bf16_llvm_v1(
+                    output,
+                    retained,
+                    requested_return,
+                    budget,
+                ))
+            });
+        self.optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .require_clean_v1()
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+        result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)?
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod private_bf16_llvm_owner_controls {
+    use super::*;
+    use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
+    use fe2o3_kernel_ir::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12 as Owner,
+    };
+    fn source(permutation: [u8; 4], trapped: bool) -> Module {
+        let parameters = (0..12)
+            .map(|i| {
+                if i < 8 {
+                    Type::Scalar(ScalarType::Bf16)
+                } else {
+                    Type::F32
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut call = BasicBlock::new(BlockId(0));
+        call.operations.push(Operation::new(
+            (12..16)
+                .map(|i| ValueDef::new(ValueId(i), Type::F32))
+                .collect(),
+            OperationKind::Call {
+                callee: FunctionId::new("mfma"),
+                arguments: (0..12).map(ValueId).collect(),
+            },
+        ));
+        if trapped {
+            call.operations
+                .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+        }
+        call.terminator = Some(if trapped {
+            Terminator::Unreachable
+        } else {
+            Terminator::Return { values: vec![] }
+        });
+        let mut blocks = vec![call];
+        if trapped {
+            // A distinct reachable branch supplies the root's sole normal Return.
+            let mut start = BasicBlock::new(BlockId(2));
+            start.operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(16), Type::BOOL),
+                OperationKind::Constant(Constant::Bool(true)),
+            ));
+            start.terminator = Some(Terminator::ConditionalBranch {
+                condition: ValueId(16),
+                then_target: BlockId(0),
+                then_arguments: vec![],
+                else_target: BlockId(1),
+                else_arguments: vec![],
+            });
+            let mut done = BasicBlock::new(BlockId(1));
+            done.terminator = Some(Terminator::Return { values: vec![] });
+            blocks = vec![start, blocks.pop().unwrap(), done];
+        }
+        let mut root = Function::kernel_entry(
+            "entry",
+            Signature::new(parameters.clone(), vec![]),
+            (0..12).map(ValueId).collect(),
+            blocks,
+        );
+        root.required_capabilities = root.derived_capabilities();
+        // Calls do not derive the capability of their narrow-float arguments.
+        root.required_capabilities
+            .insert(TargetCapability::BFloat16);
+        let mut body = BasicBlock::new(BlockId(0));
+        body.operations.push(Operation::new(
+            (12..16)
+                .map(|i| ValueDef::new(ValueId(i), Type::F32))
+                .collect(),
+            OperationKind::Matrix(
+                MatrixOperation::multiply_accumulate(
+                    [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+                    [ValueId(4), ValueId(5), ValueId(6), ValueId(7)],
+                    [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
+                )
+                .with_declared_tensor_layout(
+                    TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+                        .with_zero_filled_predicate_inputs(),
+                ),
+            ),
+        ));
+        body.terminator = Some(Terminator::Return {
+            values: permutation
+                .into_iter()
+                .map(|i| ValueId(12 + u32::from(i)))
+                .collect(),
+        });
+        let mut helper = Function::internal_helper(
+            "mfma",
+            Signature::new(parameters, vec![Type::F32; 4]),
+            (0..12).map(ValueId).collect(),
+            vec![body],
+        );
+        helper.required_capabilities = helper.derived_capabilities();
+        let mut module = Module::new("private_bf16_native_control");
+        module.functions = vec![root, helper];
+        if trapped {
+            module
+                .functions
+                .push(AmdGpuDiagnosticOperation::Trap.declaration());
+        }
+        let mut kernel = Kernel::new(
+            "entry",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn with_owner(source: &Module, inspect: impl FnOnce(&Owner, &mut Budget<'_>)) {
+        let bound = dialect_amdgcn::bind_production_target_v1(source, Profile::Gfx942).unwrap();
+        let mut work = Work::new(1_000_000_000_000);
+        let mut budget = Budget::new(&mut work, 128 * 1024 * 1024);
+        budget.reserve_storage(7).unwrap();
+        let (owner, storage) =
+            Owner::from_module_ref_with_verification_budget_v12(bound.module(), &mut budget)
+                .unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        inspect(&owner, &mut budget);
+        drop(owner);
+        budget.release_storage(storage.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), 7);
+    }
+    #[test]
+    fn llvm_owner_header_exact_short_and_original_prior_denial() {
+        let bytes = std::mem::size_of::<PrivateBf16LlvmV1>()
+            + std::mem::size_of::<Option<PrivateBf16LlvmResultV1>>();
+        for cap in [7 + bytes, 6 + bytes] {
+            let mut work = Work::new(1);
+            let mut budget = Budget::new(&mut work, cap);
+            budget.reserve_storage(7).unwrap();
+            let result = reserve_private_bf16_llvm_output_v1(&mut budget);
+            assert_eq!(result.is_ok(), cap == 7 + bytes);
+            if let Ok((retained, scratch)) = result {
+                assert_eq!(retained + scratch, bytes);
+                budget.release_storage(bytes).unwrap();
+            } else {
+                let prior = budget.check_prior_denials_v1().unwrap_err();
+                let before = (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                );
+                for _ in 0..2 {
+                    assert!(matches!(reserve_private_bf16_llvm_output_v1(&mut budget),
+                        Err(E::ConditionalResource(error)) if error==prior));
+                    assert_eq!(
+                        (
+                            budget.work(),
+                            budget.storage(),
+                            budget.failed_work(),
+                            budget.failed_storage()
+                        ),
+                        before
+                    );
+                }
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+    #[test]
+    fn actual_model_and_worker_texts_are_retained_compared_and_dropped_before_refund() {
+        for permutation in [[0, 1, 2, 3], [1, 0, 2, 3]] {
+            with_owner(&source(permutation, false), |owner, budget| {
+                let floor = budget.storage();
+                let ledger = budget.work_ledger_identity_v1();
+                let mut payload = derive_private_bf16_llvm_v1(owner, permutation, budget).unwrap();
+                let live = payload.retained;
+                assert_eq!(budget.storage(), floor + live);
+                assert_eq!(
+                    live,
+                    std::mem::size_of::<PrivateBf16LlvmPayloadV1>()
+                        + payload.dialect.len()
+                        + payload.worker.len()
+                );
+                assert!(
+                    payload
+                        .worker
+                        .contains(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
+                );
+                recheck_private_bf16_llvm_v1(owner, &payload, permutation, budget).unwrap();
+                assert_eq!(budget.storage(), floor + live);
+                payload.worker.replace_range(0..1, "X");
+                assert!(matches!(
+                    recheck_private_bf16_llvm_v1(owner, &payload, permutation, budget),
+                    Err(PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm(
+                        dialect_amdgcn::PrivateBf16NativeLlvmErrorV1::Context(
+                            "retained LLVM bytes differ from actual O replay"
+                        )
+                    ))
+                ));
+                payload.worker.replace_range(0..1, "t");
+                assert!(
+                    recheck_private_bf16_llvm_v1(owner, &payload, [0, 0, 2, 3], budget).is_err()
+                );
+                assert_eq!(budget.storage(), floor + live);
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                drop(payload);
+                budget.release_storage(live).unwrap();
+                assert_eq!(budget.storage(), floor);
+            });
+        }
+    }
+    #[test]
+    fn malformed_actual_owner_does_not_publish_partial_llvm_or_retained_credit() {
+        let mut module = source([0, 1, 2, 3], false);
+        module.functions[1].body.as_mut().unwrap().blocks[0]
+            .operations
+            .insert(
+                0,
+                Operation::effect_free(
+                    ValueDef::new(ValueId(16), Type::F32),
+                    OperationKind::Constant(Constant::F32Bits(0)),
+                ),
+            );
+        with_owner(&module, |owner, budget| {
+            let floor = budget.storage();
+            assert!(matches!(
+                derive_private_bf16_llvm_v1(owner, [0, 1, 2, 3], budget),
+                Err(PrivateBf16LlvmErrorV1::PrivateBf16NativeLlvm(
+                    dialect_amdgcn::PrivateBf16NativeLlvmErrorV1::Context("extra helper operation")
+                ))
+            ));
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+    #[test]
+    fn both_text_ceilings_are_prepaid_before_emission_on_original_account() {
+        with_owner(&source([0, 1, 2, 3], false), |owner, budget| {
+            let needed = std::mem::size_of::<PrivateBf16LlvmPayloadV1>()
+                + private_bf16_llvm_caps_v1().unwrap();
+            let padding = 128 * 1024 * 1024 - budget.storage() - (needed - 1);
+            budget.reserve_storage(padding).unwrap();
+            let floor = budget.storage();
+            assert!(derive_private_bf16_llvm_v1(owner, [0, 1, 2, 3], budget).is_err());
+            assert_eq!(budget.storage(), floor);
+            let prior = budget.check_prior_denials_v1().unwrap_err();
+            assert!(matches!(prior, Resource::Storage(_)));
+            let before = (
+                budget.work(),
+                budget.storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..2 {
+                assert!(
+                    matches!(derive_private_bf16_llvm_v1(owner,[0,1,2,3],budget),
+                    Err(PrivateBf16LlvmErrorV1::RankedVerification(E::ConditionalResource(error))) if error==prior)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+            budget.release_storage(padding).unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
+mod private_owning_llvm_observer_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as Ledger;
+    use sha2::{Digest, Sha256};
+
+    // Non-Copy paid row: all hashes/counters are consumed before exact refund.
+    struct Observation {
+        ledger: Ledger,
+        protected: usize,
+        initial_work: usize,
+        output_sha: [u8; 32],
+        output_bytes: u64,
+        dialect_sha: [u8; 32],
+        worker_sha: [u8; 32],
+        dialect_bytes: usize,
+        worker_bytes: usize,
+        retained: usize,
+        work: usize,
+        storage: usize,
+        peak: usize,
+    }
+    struct Hex<'a>(&'a [u8; 32]);
+    impl std::fmt::Display for Hex<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for byte in self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+            Ok(())
+        }
+    }
+    impl Observation {
+        fn emit(self, requested: [u8; 4], scratch: usize) {
+            eprintln!(
+                "fe2o3-bf16-private-owning-llvm-collected-v1 requested={},{},{},{} output_sha256={} output_bytes={} dialect_sha256={} dialect_bytes={} worker_sha256={} worker_bytes={} retained_llvm_storage={} observer_storage={} work={} storage={} peak={} same_ledger=true actual_output_owner=true full_text_replayed=true worker_layout_bound=true mfma_calls=1 anchor_absence_records=1 cleanup_pending=true llvm_emitted=true worker_invoked=false descriptor_constructed=false normal_admission=false launch_authenticated=false artifact_authority=false",
+                requested[0],
+                requested[1],
+                requested[2],
+                requested[3],
+                Hex(&self.output_sha),
+                self.output_bytes,
+                Hex(&self.dialect_sha),
+                self.dialect_bytes,
+                Hex(&self.worker_sha),
+                self.worker_bytes,
+                self.retained,
+                scratch,
+                self.work,
+                self.storage,
+                self.peak,
+            );
+        }
+    }
+    fn inspect_text_v1(llvm: &PrivateBf16LlvmPayloadV1, budget: &mut Budget<'_>) -> Result<(), E> {
+        const CALL: &str = " = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(";
+        const ABSENCE: &str = "!fe2o3.semantic_anchor.absence.v1 =";
+        budget.check_prior_denials_v1().map_err(resource)?;
+        let bytes = llvm
+            .dialect
+            .len()
+            .checked_add(llvm.worker.len())
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        // Selected full-text passes, including later two hashes. These do not
+        // claim that all inherited formatter/control stack storage is metered.
+        budget
+            .charge_work(
+                bytes
+                    .checked_mul(8)
+                    .and_then(|n| n.checked_add(128))
+                    .ok_or_else(|| resource(Resource::Arithmetic))?,
+            )
+            .map_err(resource)?;
+        if llvm.dialect.is_empty()
+            || llvm.worker.is_empty()
+            || llvm.dialect.len() > dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES
+            || llvm.worker.len() > dialect_amdgcn::MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1
+            || llvm.retained != sum(std::mem::size_of::<PrivateBf16LlvmPayloadV1>(), bytes)?
+            || llvm.dialect.matches(CALL).count() != 1
+            || llvm.worker.matches(CALL).count() != 1
+            || llvm.dialect.matches(ABSENCE).count() != 1
+            || llvm.worker.matches(ABSENCE).count() != 1
+            || llvm.dialect.contains("call void @llvm.pseudoprobe")
+            || llvm.worker.contains("call void @llvm.pseudoprobe")
+            || llvm
+                .worker
+                .matches(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
+                .count()
+                != 1
+        {
+            return Err(E::RosterMetadata("actual retained LLVM shape differs"));
+        }
+        Ok(())
+    }
+
+    impl PrivateBf16LlvmV1 {
+        /// Called only after the actual returned owner has completed full
+        /// revalidation. This paid row has no source/descriptor/launch authority.
+        pub(crate) fn observe_private_bf16_llvm_for_test_v1(
+            &mut self,
+            requested: [u8; 4],
+        ) -> Result<(), PrivateBf16LlvmErrorV1> {
+            self.optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+            let output = self.optimized.optimization.checked.owner();
+            let llvm = &self.llvm;
+            let result = self
+                .optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .with_budget(|budget| {
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    budget.charge_work(4).map_err(resource)?;
+                    if !matches!(requested, [0, 1, 2, 3] | [1, 0, 2, 3]) {
+                        return Err(E::RosterMetadata("unsupported actual LLVM Return request"));
+                    }
+                    let scratch = std::mem::size_of::<Observation>();
+                    let floor = budget.storage();
+                    budget.reserve_storage(scratch).map_err(resource)?;
+                    let mut row = Observation {
+                        ledger: budget.work_ledger_identity_v1(),
+                        protected: sum(floor, scratch)?,
+                        initial_work: budget.work(),
+                        output_sha: *output.canonical().identity().digest(),
+                        output_bytes: output.canonical().identity().canonical_length(),
+                        dialect_sha: [0; 32],
+                        worker_sha: [0; 32],
+                        dialect_bytes: llvm.dialect.len(),
+                        worker_bytes: llvm.worker.len(),
+                        retained: llvm.retained,
+                        work: 0,
+                        storage: 0,
+                        peak: 0,
+                    };
+                    let inspected = (|| {
+                        inspect_text_v1(llvm, budget)?;
+                        row.dialect_sha = Sha256::digest(llvm.dialect.as_bytes()).into();
+                        row.worker_sha = Sha256::digest(llvm.worker.as_bytes()).into();
+                        budget.check_prior_denials_v1().map_err(resource)?;
+                        if budget.work_ledger_identity_v1() != row.ledger
+                            || budget.storage() != row.protected
+                            || budget.work() <= row.initial_work
+                            || budget.peak_storage() < budget.storage()
+                        {
+                            return Err(resource(Resource::Accounting));
+                        }
+                        row.work = budget.work();
+                        row.storage = budget.storage();
+                        row.peak = budget.peak_storage();
+                        row.emit(requested, scratch);
+                        Ok(())
+                    })();
+                    // FnOnce capture is consumed on success or dropped on refusal;
+                    // neither the paid row nor a Copy counter escapes the loan.
+                    budget.release_storage(scratch).map_err(resource)?;
+                    budget.check_prior_denials_v1().map_err(resource)?;
+                    inspected
+                });
+            self.optimized
+                .target
+                .formal
+                .verification
+                .phase
+                .require_clean_v1()
+                .map_err(PrivateBf16LlvmErrorV1::RankedVerification)?;
+            result.map_err(PrivateBf16LlvmErrorV1::RankedVerification)
+        }
+    }
+
+    #[test]
+    fn llvm_observer_prepaid_shape_refusal_preserves_same_account_floor_and_sticky_error() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        let retained = std::mem::size_of::<PrivateBf16LlvmPayloadV1>() + 16;
+        let exact = 8 * 16 + 128;
+        for cap in [exact, exact - 1] {
+            let mut work = Work::new(cap);
+            let mut budget = Budget::new(&mut work, retained + 7);
+            budget.reserve_storage(retained + 7).unwrap();
+            let payload = PrivateBf16LlvmPayloadV1 {
+                worker: "not LLVM".into(),
+                dialect: "not LLVM".into(),
+                retained,
+            };
+            let id = budget.work_ledger_identity_v1();
+            let result = inspect_text_v1(&payload, &mut budget);
+            if cap == exact {
+                assert!(matches!(
+                    result,
+                    Err(E::RosterMetadata("actual retained LLVM shape differs"))
+                ));
+            } else {
+                let prior = budget.check_prior_denials_v1().unwrap_err();
+                assert!(matches!(result,Err(E::ConditionalResource(error)) if error==prior));
+                let before = (
+                    budget.work(),
+                    budget.storage(),
+                    budget.failed_work(),
+                    budget.failed_storage(),
+                );
+                assert!(
+                    matches!(inspect_text_v1(&payload,&mut budget),Err(E::ConditionalResource(error)) if error==prior)
+                );
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    before
+                );
+            }
+            assert!(budget.work_ledger_identity_v1() == id);
+            assert_eq!(budget.storage(), retained + 7);
+            drop(payload);
+            budget.release_storage(retained).unwrap();
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+}
