@@ -873,7 +873,10 @@ mod tests {
             ))
         ));
 
-        let current = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let mut current = static_elf();
+        const PT_INTERP: u32 = 3;
+        let stack_header = 64 + 3 * 56;
+        current[stack_header..stack_header + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
         let dynamic_path = fixture._root.path().join("dynamic-entry");
         fs::write(&dynamic_path, &current).unwrap();
         fs::set_permissions(&dynamic_path, fs::Permissions::from_mode(0o555)).unwrap();
@@ -890,7 +893,10 @@ mod tests {
                 ProtectedStaticExecutableOwnerV1::current(),
                 "dynamic executable",
             ),
-            Err(ProtectedStaticExecutableErrorV1::InvalidStaticImage { .. })
+            Err(ProtectedStaticExecutableErrorV1::InvalidStaticImage {
+                source: SealedStaticApplicationErrorV1::InterpreterPresent,
+                ..
+            })
         ));
     }
 
