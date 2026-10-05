@@ -158,6 +158,31 @@ custody. Its installed root-only qualification remains unfinished.
 
 ## Transport And Ownership
 
+### Root Namespace Observation
+
+The V1 systemd coordinator requires `CAP_SYS_PTRACE` in its root-only bounding
+set to inspect the exact owned child's `/proc/PID/ns` descriptors after that
+child has changed UID and become non-dumpable. Linux applies ptrace credential
+and dumpability checks to this observation even though no tracing or namespace
+entry is performed; root UID alone does not bypass them. See the
+[Linux ptrace access checks](https://man7.org/linux/man-pages/man2/ptrace.2.html).
+
+Ambient capabilities remain empty. The existing protected launcher still drops
+every effective, permitted, inheritable, bounding, and ambient child capability
+set. Parent and child independently validate the original non-root credentials,
+non-dumpability, `no_new_privs`, and exact namespace identities before release.
+This unit correction does not change child profiles, namespace restrictions,
+proof policy, or the existing launch and qualification deadlines.
+
+An admitted supervisor socket is not a readiness notification. The coordinator
+publishes `READY=1` only after both protected child bootstrap checks complete;
+the qualification client is ordered after that notification. A failed bootstrap
+can leave the fixed socket in the retained qualification runtime directory.
+Automatic restart must refuse that existing pathname, not delete or adopt it
+without custody. The qualification owner must finish its existing scoped
+teardown before a fresh run. Unit and profile tests do not establish live
+service readiness; the exact rebuilt bundle still needs the root-only VM gate.
+
 The service consumes one admitted issuer and its retained unnamed Unix
 `SOCK_SEQPACKET` peer. It polls that peer together with the admitted client's
 pidfd. The peer, pidfd, signing key, issuer journal, Worker journal, occurrence,

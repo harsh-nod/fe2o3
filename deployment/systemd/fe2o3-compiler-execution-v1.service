@@ -27,7 +27,9 @@ OpenFile=/etc/fe2o3/compiler-execution/anchor-provisioning-v1:anchor-provisionin
 OpenFile=/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1:issuer-key-seed:read-only
 OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1:anchor-key-seed:read-only
 
-CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID
+# Exact namespace observation of the distinct-UID, nondumpable child needs ptrace.
+# The protected child launcher still clears every child capability set.
+CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
 AmbientCapabilities=
 NoNewPrivileges=no
 PrivateDevices=yes
