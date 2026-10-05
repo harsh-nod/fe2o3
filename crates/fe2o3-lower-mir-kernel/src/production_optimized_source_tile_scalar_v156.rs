@@ -45,6 +45,58 @@ pub struct ProductionTileScalarLoadV156<'function, 'view, 'source> {
 }
 
 impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
+    /// Builds a complete, freshly admitted scalar candidate for one actual
+    /// source root under an explicit layout. The output is not a source proof or
+    /// a native policy: source refinement and production activation remain gated.
+    /// The candidate receipt is returned unreserved after restoring entry
+    /// storage; callers reserve it before retaining it through further work.
+    pub fn prepare_tile_scalar_candidate_v157(
+        &self,
+        root: usize,
+        layout: ExecutionTileLayoutV1,
+        layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<fe2o3_kernel_opt::OwnedTileScalarContinuationV18> {
+        self.query(budget)?;
+        let floor = budget.storage();
+        let header = std::mem::size_of::<ProductionTileScalarFunctionV156<'_, '_>>()
+            + std::mem::size_of::<ProductionOptimizedSourceCfgRootV18<'_, '_>>()
+            + std::mem::size_of::<fe2o3_kernel_opt::TileScalarFunctionSelectionV18>()
+            + std::mem::size_of::<
+                SourceOwnedResultV18<fe2o3_kernel_opt::OwnedTileScalarContinuationV18>,
+            >();
+        self.retain(budget.reserve_storage(header).map_err(Into::into))?;
+        let result = (|| {
+            let function = self.tile_scalar_function_v156(root, budget)?;
+            let selection = [fe2o3_kernel_opt::TileScalarFunctionSelectionV18 {
+                function: function.function,
+                layout,
+            }];
+            fe2o3_kernel_opt::prepare_owned_tile_scalar_v18(
+                self.checked.output().owner(),
+                &selection,
+                layouts,
+                budget,
+            )
+            .map_err(|error| match error {
+                fe2o3_kernel_opt::OwnedTileScalarErrorV18::Resource(error) => error.into(),
+                fe2o3_kernel_opt::OwnedTileScalarErrorV18::Inventory(
+                    fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1::Resource(error),
+                ) => error.into(),
+                _ => ProductionSourceOwnedViewErrorV18::Binding(
+                    "source tile scalar candidate refused",
+                ),
+            })
+        })();
+        self.check(budget)?;
+        if budget.storage() != floor + header {
+            self.original.source.cleanup.deny_refund();
+            return self.retain(Err(ArgumentResourceV1::Accounting.into()));
+        }
+        budget.release_storage(header)?;
+        self.retain(result)
+    }
+
     /// The caller prepays the returned fixed header, as for the borrowed CFG
     /// root API. No graph copy, kernel-name selection or implicit layout occurs.
     pub fn tile_scalar_function_v156<'view>(

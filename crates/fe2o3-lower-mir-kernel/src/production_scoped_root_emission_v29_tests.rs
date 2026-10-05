@@ -49,6 +49,7 @@ mod module_tests {
         include!("production_optimized_source_execution_v18_tests.rs");
         include!("production_optimized_source_tile_schedule_v155_tests.rs");
         include!("production_optimized_source_tile_scalar_v156_tests.rs");
+        include!("production_optimized_source_tile_graph_v157_tests.rs");
         include!("production_optimized_source_native_lifecycle_v18_tests.rs");
         include!("production_optimized_source_hostile_v18_tests.rs");
         include!("production_optimized_source_resources_v18_tests.rs");
