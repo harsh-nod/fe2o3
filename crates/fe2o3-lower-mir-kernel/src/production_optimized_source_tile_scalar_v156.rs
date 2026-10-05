@@ -117,6 +117,7 @@ impl<'view, 'source> ProductionTileScalarFunctionV156<'view, 'source> {
         self.source.query(budget)
     }
 
+    /// First value ID strictly above every actual definition in this root.
     pub fn first_unused(&self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<ValueId> {
         self.check(budget)?;
         Ok(self.first_unused)
@@ -176,6 +177,7 @@ impl ProductionTileScalarLoadV156<'_, '_, '_> {
         Ok(())
     }
 
+    /// Original and retained output coordinates where replacement reads belong.
     pub fn effect_sites(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -184,11 +186,13 @@ impl ProductionTileScalarLoadV156<'_, '_, '_> {
         Ok((self.original, self.output))
     }
 
+    /// Exclusive end of this replacement's contiguous fresh SSA range.
     pub fn next_value(&self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<ValueId> {
         self.check(budget)?;
         Ok(self.recipe.next_value())
     }
 
+    /// Exact bounded number of ordinary operations emitted by this replacement.
     pub fn operation_count(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -197,6 +201,7 @@ impl ProductionTileScalarLoadV156<'_, '_, '_> {
         Ok(self.recipe.operation_count())
     }
 
+    /// Scalar value and active-mask SSA definitions for one component.
     pub fn component(
         &self,
         element: u16,
