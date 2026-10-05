@@ -119,7 +119,7 @@ def make_loader(fixture_tests, identities, previous=None):
                     self.assertEqual((budget.used, budget.source_item_visits), (2, limit))
 
         def test_cached_spans_still_apply_macros_only_context(self):
-            for source in ("fn helper() {}\n", "#![no_std]\n"):
+            for source in ("const VALUE: u32 = 0;\n", "#![no_std]\n"):
                 with self.subTest(source=source):
                     cache, functions, budget = {}, {}, identities._Budget(20)
                     self.declarations(source, budget, cache, functions)
