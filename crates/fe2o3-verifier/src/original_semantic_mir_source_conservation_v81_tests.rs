@@ -179,8 +179,22 @@ fn source_conservation_header_allowance_and_shared_law_domains_are_explicit() {
             + 8 * size_of::<&()>()
     );
     let laws = include_str!("original_semantic_mir_source_constructor_laws_v81.vrs");
-    assert_eq!(laws.matches("proof fn ").count(), 12);
-    assert_eq!(laws.matches("#[verifier::spinoff_prover]").count(), 11);
+    assert_eq!(laws.matches("proof fn ").count(), 13);
+    assert_eq!(laws.matches("#[verifier::spinoff_prover]").count(), 12);
+    let copy_law = laws
+        .split_once("proof fn invocation_source_scalar_copy_valid_identity_v164(")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    assert!(!copy_law.contains("requires"));
+    assert_eq!(copy_law.matches(".source.machine.valid ==>").count(), 2);
+    assert!(copy_law.contains(".source == source,"));
+    assert!(
+        copy_law
+            .contains(".value == InvocationSourceValueV42::Carrier(source.machine.values[local]),")
+    );
     assert!(laws.contains("requires invocation_byte_heaps_related_v36(source, target, map),\n        map.private == Map::<MemoryAllocationV30, InvocationByteBindingV36>::empty(),"));
     assert!(laws.contains("requires\n        forall|allocation: MemoryAllocationV30| #[trigger] source.machine.memory.live.contains_key(allocation)\n            ==> !invocation_private_allocation_v36(allocation),"));
     assert!(laws.contains("destination.component.is_none()\n                && destination.memory.is_none() && destination.descriptor.is_none()"));
