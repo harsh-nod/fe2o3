@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v9-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+  "before": {
+    "bytes": 35357,
+    "sha256": "649703a97e5292620229c1c13ee69b1d96f93dd702bbca71991fce748db52bc8"
+  },
+  "after": {
+    "bytes": 36280,
+    "sha256": "d29ce0ab8f1171487ced25ec363d564298b62cc03db3de86711db5dbdce7c1d0"
+  },
+  "changes": [
+    {
+      "beforeOffset": 2541,
+      "afterOffset": 2541,
+      "before": "enum class resume_kind : std::uint8_t { publication, completion };",
+      "after": "enum class resume_kind : std::uint8_t { publication, completion };\n/* Bounded bookkeeping for the selected all-stop-on-non-stop completion.\n   This carries no native owner/authority and has no reset or recovery path. */\nenum class completion_edge : std::uint8_t {\n  cpu_begin, cpu_return, cpu_body, cpu_generic,\n  wave_begin, wave_return, wave_body, wave_generic,\n  commit_begin, commit_amd, commit_generic, count\n};\nclass completion_sequence final {\npublic:\n  bool expects (completion_edge edge) const noexcept {\n    return !m_failed && m_next == static_cast<unsigned> (edge);\n  }\n  bool advance (completion_edge edge) noexcept {\n    if (edge == completion_edge::count || !expects (edge)) {\n      m_failed = true; return false;\n    }\n    ++m_next; return true;\n  }\n  bool completed () const noexcept { return expects (completion_edge::count); }\nprivate:\n  std::uint8_t m_next = 0;\n  bool m_failed = false;\n};\nstatic_assert (sizeof (completion_sequence) == 2, \"fixed completion sequence\");"
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schema": "fe2o3-disabled-physical-v9-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
+  "before": {
+    "bytes": 51573,
+    "sha256": "c0a8f89d8f5fffe8676a5d7ff21bd9bdc3a221e4f43cc930bb90cd108b49c35b"
+  },
+  "after": {
+    "bytes": 59122,
+    "sha256": "ce1f0e8d69aa28b391b02513891d011a4ba5539b7a279a62bb89a21f2352440d"
+  },
+  "changes": [
+    {
+      "beforeOffset": 22770,
+      "afterOffset": 22770,
+      "before": "             && (m_infrun_scope==minus_one_ptid || m_infrun_scope==ptid_t (m_inferior->pid)),",
+      "after": "             && m_completion.completed () && m_infrun_scope==m_gpu_thread->ptid,"
+    },
+    {
+      "beforeOffset": 30945,
+      "afterOffset": 30932,
+      "before": "void native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,",
+      "after": "// The selected completion profile admits exactly the actual host-first,\n// one-host/one-wave roster used by proceed's all-stop-on-non-stop loop.\n// Reverse order, extra/exited threads, stack drift, and pending statuses fail\n// before the next effect. This is a narrow profile, not a global ordering claim.\nvoid native_adapter::completion_current (bool cpu_running, bool wave_running,\n                                         bool commit_required) {\n  debit (counter::work,160);\n  resume_require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior\n                  && current_inferior ()==m_inferior && m_host!=nullptr\n                  && m_host_ref.get ()==m_host && m_gpu_thread!=nullptr\n                  && m_gpu_thread_ref.get ()==m_gpu_thread\n                  && !non_stop && target_is_non_stop_p ()\n                  && m_loaded_process_ref.get ()!=nullptr\n                  && m_loaded_base_ref.get ()!=nullptr\n                  && m_loaded_top_ref.get ()==&the_amd_dbgapi_target,\n                  resume_site::completion_environment);\n  auto *const proc=m_inferior->process_target ();\n  auto *const base=m_loaded_base_ref.get ();\n  resume_require (proc==m_loaded_process_ref.get () && proc==get_native_target ()\n                  && m_inferior->top_target ()==m_loaded_top_ref.get ()\n                  && m_inferior->target_is_pushed (proc)\n                  && m_inferior->target_is_pushed (base)\n                  && m_inferior->find_target_beneath (&the_amd_dbgapi_target)==base\n                  && (base==proc || (base->stratum ()==thread_stratum\n                                    && m_inferior->find_target_beneath (base)==proc))\n                  && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS\n                  && m_owner.check_owner (current_identity ())\n                  && !m_owner.m_callback && !m_owner.m_allocation_active\n                  && m_callback_progress==callback_progress::none\n                  && m_inferior->ptid_thread_map.size ()==2\n                  && info ().wave_info_map.size ()==1,\n                  resume_site::completion_environment);\n  std::size_t total=0;\n  for (auto *inf : all_inferiors ()) {\n    debit (counter::work,8);\n    resume_require (++total==1 && inf==m_inferior,resume_site::completion_roster);\n  }\n  resume_require (total==1,resume_site::completion_roster);\n  total=0;\n  for (auto *thread : m_inferior->threads ()) {\n    debit (counter::work,32);\n    resume_require (++total<=2 && thread==(total==1 ? m_host : m_gpu_thread)\n                    && thread->inf==m_inferior && thread->state==THREAD_RUNNING\n                    && thread->ptid.pid ()==m_inferior->pid\n                    && !thread->has_pending_waitstatus (),\n                    resume_site::completion_roster);\n  }\n  resume_require (total==2 && !ptid_is_gpu (m_host->ptid)\n                  && ptid_is_gpu (m_gpu_thread->ptid)\n                  && proc->find_thread (m_gpu_thread->ptid)==m_gpu_thread\n                  && static_cast<std::uint64_t> (m_gpu_thread->global_num)==m_owner.m_stop.thread\n                  && get_amd_dbgapi_wave_id (m_gpu_thread->ptid).handle==m_owner.m_stop.wave\n                  && m_host->executing ()==cpu_running && m_host->resumed ()==cpu_running\n                  && m_gpu_thread->executing ()==wave_running\n                  && m_gpu_thread->resumed ()==wave_running\n                  && !m_host->control.trap_expected && !m_gpu_thread->control.trap_expected\n                  && !m_host->control.stepping_command && !m_gpu_thread->control.stepping_command\n                  && proc->commit_resumed_state==commit_required\n                  && !proc->has_resumed_with_pending_wait_status (),\n                  resume_site::completion_thread_state);\n  const auto cached=info ().wave_info_map.begin ();\n  resume_require (cached->first==m_owner.m_stop.wave\n                  && cached->second.coords.wave_id.handle==m_owner.m_stop.wave\n                  && cached->second.coords.queue_id.handle==m_owner.m_stop.queue\n                  && cached->second.coords.dispatch_id.handle==m_owner.m_stop.dispatch\n                  && cached->second.coords.agent_id.handle==m_owner.m_stop.agent,\n                  resume_site::completion_environment);\n}\nvoid native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,"
+    },
+    {
+      "beforeOffset": 31163,
+      "afterOffset": 35386,
+      "before": "  require (!m_infrun_origin && m_path==path::none && thread!=nullptr\n           && thread==inferior_thread () && (thread==m_host || thread==m_gpu_thread)\n           && m_owner.check_owner (current_identity ()),failure::resume_scope);",
+      "after": "  resume_require (!m_infrun_origin\n                  && (m_path==path::none\n                      || (m_path==path::completion\n                          && m_completion.expects (completion_edge::wave_begin)))\n                  && thread!=nullptr && thread==inferior_thread ()\n                  && (thread==m_host || thread==m_gpu_thread)\n                  && m_owner.check_owner (current_identity ()),resume_site::infrun_origin);"
+    },
+    {
+      "beforeOffset": 31951,
+      "afterOffset": 36370,
+      "before": "  require (m_infrun_origin && m_path==path::none && !m_generic_returned\n           && !m_generic_commit && m_infrun_scope==scope && m_infrun_step==(step!=0)\n           && m_infrun_signal==signal && signal==GDB_SIGNAL_0\n           && !m_infrun_software && !m_infrun_user_step\n           && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()\n           && m_owner.check_owner (current_identity ()),failure::resume_scope);",
+      "after": "  resume_require (m_infrun_origin\n                  && (m_path==path::none\n                      || (m_path==path::completion\n                          && m_completion.expects (completion_edge::wave_begin)))\n                  && !m_generic_returned && !m_generic_commit && !m_amd_body_returned\n                  && !m_amd_commit_returned\n                  && m_infrun_scope==scope && m_infrun_step==(step!=0)\n                  && m_infrun_signal==signal && signal==GDB_SIGNAL_0\n                  && !m_infrun_software && !m_infrun_user_step\n                  && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()\n                  && m_owner.check_owner (current_identity ()),resume_site::generic_origin);"
+    },
+    {
+      "beforeOffset": 32592,
+      "afterOffset": 37297,
+      "before": "  if (m_callback_progress==callback_progress::step_ready) {",
+      "after": "  if (m_path==path::completion) {\n    resume_require (m_owner.state ()==phase::completion_consumed\n                    && !m_command_continue && !m_stop_retired\n                    && inferior_thread ()==m_gpu_thread && scope==m_gpu_thread->ptid\n                    && host==1 && gpu==1 && step==0\n                    && !m_infrun_trap && !m_infrun_inline\n                    && same (m_candidate_stop,m_owner.m_stop),\n                    resume_site::completion_wave_scope);\n    completion_current (true,false,false);\n    resume_require (m_completion.advance (completion_edge::wave_begin),\n                    resume_site::completion_wave_scope);\n  } else if (m_callback_progress==callback_progress::step_ready) {"
+    },
+    {
+      "beforeOffset": 34558,
+      "afterOffset": 39918,
+      "before": "    require (m_command_continue && m_stop_retired && inferior_thread ()==m_gpu_thread\n             && all && step==0 && !m_infrun_trap && !m_infrun_inline,\n             failure::resume_scope);\n    m_command_continue=false; m_stop_retired=false;\n    // Frontend state is now RUNNING intent. Native STOP/PC and actual\n    // !executing/!resumed still hold before the target effect.\n    m_candidate_stop=query_stop (m_gpu_thread,false);\n    require (m_owner.consume_completion (current_identity (),m_candidate_stop,host,gpu,step,signal),\n             failure::resume_scope);\n    m_snapshot.revoke (snapshot_issue::resumed); // Before any existing resume effect.\n    m_path=path::completion;",
+      "after": "    resume_require (m_command_continue && m_stop_retired\n                    && inferior_thread ()==m_host && scope==m_host->ptid\n                    && host==1 && gpu==1 && step==0\n                    && !m_infrun_trap && !m_infrun_inline\n                    && m_completion.expects (completion_edge::cpu_begin),\n                    resume_site::completion_cpu_scope);\n    completion_current (false,false,false);\n    m_command_continue=false; m_stop_retired=false;\n    // Exactly one actual same-stop requery, before EITHER target effect.\n    // query_stop(false) reads the retained GPU, independent of selected host.\n    m_candidate_stop=query_stop (m_gpu_thread,false);\n    require (m_owner.consume_completion (current_identity (),m_candidate_stop,host,gpu,step,signal),\n             failure::resume_scope);\n    m_snapshot.revoke (snapshot_issue::resumed);\n    resume_require (m_completion.advance (completion_edge::cpu_begin),\n                    resume_site::completion_cpu_scope);\n    m_path=path::completion;"
+    },
+    {
+      "beforeOffset": 35542,
+      "afterOffset": 41230,
+      "before": "  if (m_path==path::publication || m_path==path::completion)\n    require (m_owner.cpu_resume_returned (),failure::native_result);",
+      "after": "  if (m_path==path::completion)\n    resume_require (m_completion.advance (completion_edge::cpu_return),\n                    resume_site::cpu_return);\n  if (m_path==path::publication || m_path==path::completion)\n    require (m_owner.cpu_resume_returned (),failure::native_result);"
+    },
+    {
+      "beforeOffset": 35802,
+      "afterOffset": 41640,
+      "before": "  require (m_path==path::completion\n           && m_owner.wave_resume_returned (wave.handle,status),failure::native_result);",
+      "after": "  resume_require (m_path==path::completion\n                  && m_completion.advance (completion_edge::wave_return),\n                  resume_site::wave_return);\n  require (m_owner.wave_resume_returned (wave.handle,status),failure::native_result);"
+    },
+    {
+      "beforeOffset": 36192,
+      "afterOffset": 42153,
+      "before": "  if (m_path==path::publication || m_path==path::completion)\n    require (m_owner.resume_body_returned (),failure::native_result);\n  m_amd_body_returned=true;",
+      "after": "  if (m_path==path::completion) {\n    if (m_completion.expects (completion_edge::cpu_body))\n      resume_require (m_completion.advance (completion_edge::cpu_body),resume_site::body_return);\n    else {\n      resume_require (m_completion.advance (completion_edge::wave_body),resume_site::body_return);\n      require (m_owner.resume_body_returned (),failure::native_result);\n    }\n  } else if (m_path==path::publication)\n    require (m_owner.resume_body_returned (),failure::native_result);\n  m_amd_body_returned=true;"
+    },
+    {
+      "beforeOffset": 36599,
+      "afterOffset": 42917,
+      "before": "  m_generic_returned=true;\n}\nvoid native_adapter::before_generic_commit () {",
+      "after": "  if (m_path==path::completion) {\n    if (m_completion.expects (completion_edge::cpu_generic)) {\n      resume_require (m_completion.advance (completion_edge::cpu_generic),\n                      resume_site::generic_return);\n      m_amd_body_returned=false;\n      return; // First complete call; retain transaction, await exact wave call.\n    }\n    resume_require (m_completion.advance (completion_edge::wave_generic),\n                    resume_site::generic_return);\n  }\n  m_generic_returned=true;\n}\nvoid native_adapter::before_generic_commit () {"
+    },
+    {
+      "beforeOffset": 38556,
+      "afterOffset": 45346,
+      "before": "  require (m_path!=path::none && m_generic_returned && !m_generic_commit,\n           failure::commit, commit_site::before_pending);",
+      "after": "  if (m_path==path::completion) {\n    resume_require (!m_infrun_origin && !m_command_continue\n                    && m_generic_returned && m_amd_body_returned\n                    && m_completion.expects (completion_edge::commit_begin),\n                    resume_site::commit_begin);\n    completion_current (true,true,true);\n    resume_require (m_completion.advance (completion_edge::commit_begin),\n                    resume_site::commit_begin);\n  }\n  require (m_path!=path::none && m_generic_returned && !m_generic_commit,\n           failure::commit, commit_site::before_pending);"
+    },
+    {
+      "beforeOffset": 40374,
+      "afterOffset": 47615,
+      "before": "  m_amd_commit_returned=true;\n}\nvoid native_adapter::after_generic_commit () {",
+      "after": "  if (m_path==path::completion)\n    resume_require (m_completion.advance (completion_edge::commit_amd),\n                    resume_site::commit_amd);\n  m_amd_commit_returned=true;\n}\nvoid native_adapter::after_generic_commit () {"
+    },
+    {
+      "beforeOffset": 42482,
+      "afterOffset": 49873,
+      "before": "  if (m_path==path::publication || m_path==path::completion)\n    require (m_owner.commit_returned (),failure::commit, commit_site::owner_return_bridge);",
+      "after": "  if (m_path==path::completion)\n    resume_require (m_completion.advance (completion_edge::commit_generic),\n                    resume_site::commit_generic);\n  if (m_path==path::publication || m_path==path::completion)\n    require (m_owner.commit_returned (),failure::commit, commit_site::owner_return_bridge);"
+    }
+  ]
+}

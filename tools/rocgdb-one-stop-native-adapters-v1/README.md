@@ -98,3 +98,7 @@ The additive [physical-v7 package](physical-v7/README.md) labels first-failure c
 ## Separate disabled scalar checkpoint successor
 
 The additive [physical-v8 package](physical-v8/README.md) retains the checkpoint diagnostics and corrects the scalar host presentation mask from zero to lane-zero bit one. Its cumulative v6-to-v8 patch and self-contained controls leave physical-v7 and earlier packages unchanged. All activation, capture and publication gates remain disabled; source/CPU checks do not qualify a native capture.
+
+## Disabled paired completion successor
+
+The optional [physical-v9](physical-v9/README.md) source layer follows physical-v8 and adds the bounded, host-first paired CPU/wave completion transaction with actual-return and final-commit checks. Public activation, capture and publication remain disabled; source/CPU checks do not confer native qualification.
