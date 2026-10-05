@@ -13,6 +13,7 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceAllocationFrameV32 as Frame,
     ProductionSourceCorrespondenceV18 as Correspondence,
     ProductionSourceOwnedViewErrorV18 as SourceError,
+    ProductionSourceTileExpansionV159 as TileExpansion,
 };
 use std::{fmt::Write as _, mem::size_of};
 
@@ -56,6 +57,7 @@ pub(super) enum AllocationOrigin<'a> {
 
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
+    tile: Option<&'a TileExpansion<'a, 'source>>,
     operations: Vec<Operation>,
     frames: Vec<Option<Frame>>,
     source_order: Vec<(SourceKey, usize)>,
@@ -323,6 +325,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         let memory_types = memory_types::SourceMemoryTypesV51::derive(semantic.types(), &abi, out)?;
         Ok(Self {
             relation,
+            tile: None,
             operations,
             frames,
             source_order,
@@ -336,6 +339,59 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         })
     }
 
+    // The original descriptor index stays original. Expanded physical values
+    // are available only through the separately retained tile owner.
+    pub(super) fn derive_tile_v162(
+        plan: &InvocationPlan<'_, '_>,
+        tile: &'a TileExpansion<'a, 'source>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Self> {
+        let relation = tile.original_source_v162(out.budget)?;
+        let mut slots = Self::derive(plan, relation, out)?;
+        slots.tile = Some(tile);
+        slots.check_source(relation, out)?;
+        Ok(slots)
+    }
+
+    pub(super) fn tile_policy_v162(
+        &self,
+        root: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<(fe2o3_kernel_ir::ExecutionTileLayoutV1, u16)>> {
+        self.with_source_query_v42(out, |out| {
+            self.relation.source(out.budget)?.root(root, out.budget)?;
+            match self.tile {
+                Some(tile) => Ok(tile
+                    .root_policy_v162(root, out.budget)?
+                    .map(|(_, layout, lanes)| (layout, lanes))),
+                None => Ok(None),
+            }
+        })
+    }
+
+    pub(super) fn tile_leaf_v162(
+        &self,
+        original: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+        path: &[u32],
+        out: &mut Writer<'_, '_>,
+    ) -> Result<fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162> {
+        self.with_source_query_v42(out, |out| {
+            self.tile
+                .ok_or_else(mismatch)?
+                .aggregate_leaf_v162(original, path, out.budget)
+                .map_err(Into::into)
+        })
+    }
+
+    fn check_tile_custody_v162(&self, budget: &Budget<'_>) -> Result<()> {
+        if let Some(tile) = self.tile {
+            if !std::ptr::eq(tile.original_source_v162(budget)?, self.relation) {
+                return Err(mismatch());
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_source(
         &self,
         relation: &Correspondence<'_>,
@@ -345,6 +401,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             return Err(mismatch());
         }
         self.relation.source(out.budget)?;
+        self.check_tile_custody_v162(out.budget)?;
         out.budget.charge_work(2)?;
         if self.operations.len() != self.frames.len()
             || self.frames.len() != self.source_order.len()
@@ -374,6 +431,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         budget: &Budget<'_>,
     ) -> Result<()> {
         self.relation.check_query_v18(budget)?;
+        self.check_tile_custody_v162(budget)?;
         if budget.storage() < self.required || budget.storage() < required {
             return Err(self
                 .relation
@@ -389,6 +447,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         query: impl FnOnce(&mut Writer<'_, '_>) -> Result<T>,
     ) -> Result<T> {
         self.relation.check_query_v18(out.budget)?;
+        self.check_tile_custody_v162(out.budget)?;
         if out.budget.storage() < self.required {
             return Err(self
                 .relation
@@ -406,6 +465,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             other => other,
         };
         self.relation.check_query_v18(out.budget)?;
+        self.check_tile_custody_v162(out.budget)?;
         if out.budget.storage() < self.required {
             return Err(self
                 .relation
@@ -781,6 +841,9 @@ pub(super) fn headers() -> usize {
         )>()
         + h::<&InvocationPlan<'_, '_>>()
         + h::<&Correspondence<'_>>()
+        + h::<&TileExpansion<'_, '_>>()
+        + h::<Option<(fe2o3_kernel_ir::ExecutionTileLayoutV1, u16)>>()
+        + h::<fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162>()
         + h::<&super::super::super::Inventory<'_>>()
         + h::<&mut Writer<'_, '_>>()
         + 32 * size_of::<usize>()
@@ -802,6 +865,122 @@ mod tests {
     };
 
     const LIMIT: usize = 100_000_000;
+
+    fn run_tile_slots(
+        layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
+        examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+    ) -> (Result<()>, usize, usize, usize) {
+        super::super::super::invocations::tests::run_allocation_variant(
+            LIMIT,
+            LIMIT,
+            |plan, out| {
+                let source = plan.source(out)?;
+                let result = source.with_checked_mixed_fixedpoint_optimization_v18(
+                    out.budget,
+                    |original, optimized, budget| {
+                        let floor = budget.storage();
+                        let tile = optimized.prepare_tile_expansion_v159(0, layout, budget)?;
+                        let tile_floor = budget.storage();
+                        let result = (|| {
+                            let mut writer = Writer::new(budget)?;
+                            let slots = SourceSlots::derive_tile_v162(plan, &tile, &mut writer)?;
+                            slots.check_source(original, &mut writer)?;
+                            examine(&slots, &mut writer)
+                        })();
+                        if result.is_ok() {
+                            budget.release_storage(budget.storage() - tile_floor)?;
+                            tile.discard(budget)?;
+                            assert_eq!(budget.storage(), floor);
+                        }
+                        result.map(|()| ((), 0))
+                    },
+                );
+                match result {
+                    Ok((owner, (), _receipt)) => {
+                        drop(owner);
+                        Ok(())
+                    }
+                    Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Source(
+                        error,
+                    )) => Err(error.into()),
+                    Err(
+                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
+                        ),
+                    ) => Err(error),
+                    Err(error) => panic!("tile slot fixture preparation failed: {error:?}"),
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn original_mir_tile_slots_preserve_original_descriptors_and_explicit_root_policy() {
+        use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+        for layout in [Layout::Blocked, Layout::Striped] {
+            run_tile_slots(layout, |slots, out| {
+                let tile = slots.tile.unwrap();
+                assert!(std::ptr::eq(
+                    slots.correspondence(out)?,
+                    tile.original_source_v162(out.budget)?
+                ));
+                let (_, selected, lanes) = tile.root_policy_v162(0, out.budget)?.unwrap();
+                assert_eq!(selected, layout);
+                assert_eq!(slots.tile_policy_v162(0, out)?, Some((layout, lanes)));
+                assert_eq!(slots.tile_policy_v162(1, out)?, None);
+                assert_eq!(slots.frames.len(), 2);
+                for row in slots.frames.iter().flatten() {
+                    assert_eq!(slots.frame_by_allocation(row.allocation(), out)?, row);
+                }
+                Ok(())
+            })
+            .0
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn original_mir_tile_slots_do_not_infer_a_policy_without_a_live_expansion() {
+        run_slots(LIMIT, LIMIT, |slots, out| {
+            assert_eq!(slots.tile_policy_v162(0, out)?, None);
+            assert_eq!(slots.tile_policy_v162(1, out)?, None);
+            Err(slots.tile_policy_v162(usize::MAX, out).unwrap_err())
+        })
+        .0
+        .unwrap_err();
+    }
+
+    #[test]
+    fn original_mir_tile_slots_reject_foreign_accounts_and_refunded_storage() {
+        for foreign in [false, true] {
+            let mut reached = false;
+            let result = run_tile_slots(
+                fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked,
+                |slots, out| {
+                    reached = true;
+                    let error = if foreign {
+                        let mut work = Work::new(LIMIT);
+                        let mut budget = Budget::new(&mut work, LIMIT);
+                        budget.reserve_storage(out.budget.storage())?;
+                        let mut other = Writer::new(&mut budget)?;
+                        slots.tile_policy_v162(0, &mut other).unwrap_err()
+                    } else {
+                        out.budget.release_storage(1)?;
+                        slots.tile_policy_v162(0, out).unwrap_err()
+                    };
+                    assert!(matches!(
+                        error,
+                        Error::Resource(Resource::Accounting)
+                            | Error::Source(SourceError::Resource(Resource::Accounting))
+                    ));
+                    assert!(slots.correspondence(out).is_err());
+                    Err(error)
+                },
+            );
+            assert!(reached);
+            assert!(result.0.is_err());
+        }
+    }
 
     fn run_slots(
         work: usize,
