@@ -188,6 +188,13 @@ pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) 
 }
 
 impl<T: Send + 'static> NativeAttempt<'_, T> {
+    pub(crate) const fn original_policy_identity_quota() -> Quota {
+        Quota {
+            work: LOCAL_WORK + Resources::<Payload<T>>::ACCESS_WORK,
+            scratch: FRAME + Resources::<Payload<T>>::ACCESS_SCRATCH,
+        }
+    }
+
     /// Complete request costs above the FULL attempt for consuming attachment.
     /// Persistent cleanup funding is separate and stays on the original service.
     pub(crate) fn publication_observation_quota(maximum_handoff_bytes: usize) -> Result<Quota> {
