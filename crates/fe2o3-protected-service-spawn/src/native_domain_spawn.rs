@@ -17,13 +17,16 @@ pub(super) enum Placement {
 impl StagedProtectedServiceExecV2 {
     /// Additional work for fresh-domain creation and atomic clone placement.
     /// Normal child/profile work and retained cleanup reservation remain separate.
-    pub const FRESH_DOMAIN_WORK: usize =
-        Domain::PREPARE_WORK + Domain::CREATE_WORK + Domain::CLONE_FD_WORK;
+    pub const FRESH_DOMAIN_WORK: usize = Domain::PREPARE_WORK
+        + Domain::CREATE_WORK
+        + Domain::CLONE_FD_WORK
+        + Domain::DEVICE_FILTER_WORK;
     /// Additional request peak while the prepared domain enters child custody.
     pub const FRESH_DOMAIN_SCRATCH: usize = Domain::STORAGE
         + Domain::PREPARE_SCRATCH
         + Domain::CREATE_SCRATCH
-        + Domain::CLONE_FD_SCRATCH;
+        + Domain::CLONE_FD_SCRATCH
+        + Domain::DEVICE_FILTER_SCRATCH;
 
     /// Creates a fresh root-controlled cgroup and places the child into it
     /// atomically at clone. Neither an existing domain nor a caller FD is admitted.
@@ -111,6 +114,9 @@ pub(super) fn clone_placed(
         let mut pending = PreparedDomain(Some((Domain::prepare()?, slot)));
         let (domain, _) = pending.0.as_mut().expect("prepared domain custody");
         domain.create()?;
+        if staged.has_runtime_checkpoints() {
+            domain.install_device_open_confinement()?;
+        }
         let fd = domain.clone_cgroup_fd()?;
         let (pid, pidfd, parent_mask) = syscall::clone_child_with_cgroup(
             staged,
