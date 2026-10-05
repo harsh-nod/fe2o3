@@ -112,6 +112,24 @@ pub fn mapping_file_range_is_allowed<'a>(
     let inode = inode
         .parse::<u64>()
         .map_err(|_| PolicyError("noncanonical process mapping inode"))?;
+    executable_object_range_is_allowed(
+        rustix::fs::makedev(major, minor),
+        inode,
+        offset,
+        length,
+        allowed,
+    )
+}
+
+/// Compare actual object scalars and the entire requested file interval. The
+/// caller supplies an owned descriptor observation; these integers are inert.
+pub fn executable_object_range_is_allowed<'a>(
+    device: u64,
+    inode: u64,
+    offset: u64,
+    length: u64,
+    allowed: impl IntoIterator<Item = ExecutableObjectRanges<'a>>,
+) -> Result<bool> {
     if inode == 0 {
         return Ok(false);
     }
@@ -124,8 +142,7 @@ pub fn mapping_file_range_is_allowed<'a>(
     }
     Ok(allowed.into_iter().any(|executable| {
         executable.inode == inode
-            && rustix::fs::major(executable.device) == major
-            && rustix::fs::minor(executable.device) == minor
+            && executable.device == device
             && executable
                 .ranges
                 .iter()
@@ -139,6 +156,26 @@ pub fn mapping_file_range_is_allowed<'a>(
 pub fn validate_executable_mapping_rows<'a>(
     maps: &str,
     allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
+) -> Result<()> {
+    executable_mapping_rows(maps, allowed, None)
+}
+
+/// Strict inert policy using separately derived exact kernel-image intervals.
+/// Unlike the legacy proof entry, map names never exempt executable rows.
+/// The caller must authenticate these intervals from the same stopped task's
+/// actual exec; supplied coordinates alone are not a kernel-image admission.
+pub fn validate_executable_mapping_rows_with_kernel_ranges<'a>(
+    maps: &str,
+    allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
+    kernel_ranges: &[(u64, u64)],
+) -> Result<()> {
+    executable_mapping_rows(maps, allowed, Some(kernel_ranges))
+}
+
+fn executable_mapping_rows<'a>(
+    maps: &str,
+    allowed: impl Iterator<Item = ExecutableObjectRanges<'a>> + Clone,
+    kernel_ranges: Option<&[(u64, u64)]>,
 ) -> Result<()> {
     let mut executable_count = 0_usize;
     for line in maps.lines() {
@@ -165,7 +202,16 @@ pub fn validate_executable_mapping_rows<'a>(
         let device = fields.next().ok_or(PolicyError("malformed process map"))?;
         let inode = fields.next().ok_or(PolicyError("malformed process map"))?;
         let path = fields.next().unwrap_or("");
-        if matches!(path, "[vdso]" | "[vsyscall]") {
+        let kernel = if let Some(ranges) = kernel_ranges {
+            permissions == "r-xp"
+                && file_offset == 0
+                && device == "00:00"
+                && inode == "0"
+                && ranges.contains(&(mapping_start, mapping_end))
+        } else {
+            matches!(path, "[vdso]" | "[vsyscall]")
+        };
+        if kernel {
             continue;
         }
         if path.is_empty() || path.starts_with('[') {

@@ -77,6 +77,9 @@ pub(crate) struct NativeCompilerExecutableInventory {
 }
 
 impl NativeCompilerExecutableInventory {
+    /// Bounded scalar/current-object checks, without rehashing immutable backing.
+    pub(crate) const IDENTITY_WORK: usize = 8 + MAX_ENTRIES * (4 * 1088 + 4096);
+    pub(crate) const RANGE_SCOPE_WORK: usize = 8 + 2 * Self::IDENTITY_WORK;
     /// Covers all bounded original-file reads, fstats, sorting and comparisons.
     /// Nested full-backing revalidation charges separately on the same account.
     pub(crate) const WORK: usize = 8 + MAX_ENTRIES
@@ -124,37 +127,87 @@ impl NativeCompilerExecutableInventory {
             .checked_add(self.retained)
             .ok_or(Resource::Arithmetic)?;
         b.with_prepaid_scope(floor, 8, Self::WORK, Self::FRAME, |b| {
-            if self.ledger != b.work_ledger_identity_v1()
-                || self.address != b as *const Budget<'_> as usize
-                || self.retained != storage_for(self.entries.capacity())?
-            {
-                return Err(Resource::Accounting.into());
-            }
+            self.check_original_account(b)?;
             backing.revalidate(b)?;
-            let mut derived = self.entries.iter();
-            for (index, (entry, file)) in backing.inventory_sources().entries().enumerate() {
-                if entry.role == Role::ProofExecutorHelper {
-                    continue;
-                }
-                let expected = derived
-                    .next()
-                    .ok_or(Error::Invalid("incomplete executable inventory"))?;
-                let stat = inspect(file, entry.length)?;
-                if expected.source_index != index
-                    || expected.device != stat.st_dev
-                    || expected.inode != stat.st_ino
-                    || expected.length != entry.length
-                {
-                    return Err(Error::Invalid(
-                        "executable inventory differs from original compiler files",
-                    ));
-                }
-            }
-            if derived.next().is_some() {
-                return Err(Error::Invalid("executable inventory has excess entries"));
-            }
-            Ok(())
+            self.check_original_objects(backing, b)
         })
+    }
+
+    /// Scoped inert range access through the original backing and original
+    /// account. Actual source FDs are checked before and after; full backing
+    /// revalidation remains mandatory at ownership transitions. The caller must
+    /// continuously retain immutable backing and exclude writes to it. These
+    /// metadata comparisons establish neither condition nor an execution guard.
+    pub(crate) fn with_ranges<'budget, R, E>(
+        &self,
+        backing: &Backing,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(&Self, &mut Budget<'budget>) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource> + From<Error>,
+    {
+        let floor = backing
+            .retained_storage()
+            .checked_add(self.retained)
+            .ok_or(Resource::Arithmetic)?;
+        b.with_prepaid_scope(floor, 8, Self::RANGE_SCOPE_WORK, Self::FRAME, |b| {
+            self.check_original_objects(backing, b)?;
+            let result = operation(self, b)?;
+            self.check_original_objects(backing, b)?;
+            Ok(result)
+        })
+    }
+
+    fn check_original_objects(&self, backing: &Backing, b: &Budget<'_>) -> Result<()> {
+        self.check_original_account(b)?;
+        self.check_objects(backing.inventory_sources().entries())
+    }
+
+    fn check_original_account(&self, b: &Budget<'_>) -> Result<()> {
+        if self.ledger != b.work_ledger_identity_v1()
+            || self.address != b as *const Budget<'_> as usize
+            || self.retained != storage_for(self.entries.capacity())?
+        {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+
+    fn check_objects<'a>(
+        &self,
+        sources: impl Iterator<Item = (Entry<'a>, &'a File)>,
+    ) -> Result<()> {
+        let mut derived = self.entries.iter();
+        for (index, (entry, file)) in sources.enumerate() {
+            if index >= MAX_ENTRIES {
+                return Err(Error::Invalid(
+                    "original executable inventory exceeds bound",
+                ));
+            }
+            if entry.role == Role::ProofExecutorHelper {
+                continue;
+            }
+            let expected = derived
+                .next()
+                .ok_or(Error::Invalid("incomplete original executable inventory"))?;
+            let stat = inspect(file, entry.length)?;
+            if expected.source_index != index
+                || expected.device != stat.st_dev
+                || expected.inode != stat.st_ino
+                || expected.length != entry.length
+            {
+                return Err(Error::Invalid(
+                    "original executable object identity changed",
+                ));
+            }
+        }
+        if derived.next().is_some() {
+            return Err(Error::Invalid(
+                "original executable inventory has excess entries",
+            ));
+        }
+        Ok(())
     }
 
     /// Inert comparisons only. The private controller owns all observation,

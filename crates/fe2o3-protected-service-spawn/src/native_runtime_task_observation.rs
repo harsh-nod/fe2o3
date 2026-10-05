@@ -3,6 +3,7 @@ use super::*;
 use crate::native_spawn::ProtectedServiceSpawnStorageV2 as Storage;
 use rustix::{fs, io as rio, process};
 use std::{fs::File, mem::size_of};
+const AUXV_BYTES: usize = 4096;
 
 /// A held event-acquired task and exact stopped-census generation. No constructor,
 /// clone, mutable trace, independent PID authority or descriptor trait is exposed.
@@ -109,10 +110,20 @@ impl RuntimeTaskObservationV1<'_, '_> {
         Self::FRAME + crate::trace_runtime::MAX_MAP_BYTES + size_of::<(Vec<u8>, Storage)>();
     pub const PERSONALITY_WORK: usize = ENTRY + 12 * 1088;
     pub const PERSONALITY_SCRATCH: usize = Self::FRAME + 128;
+    pub const AUXV_BYTES: usize = AUXV_BYTES;
+    pub const AUXV_WORK: usize = ENTRY + Self::AUXV_BYTES * 64 + 16 * 1088;
+    pub const MEMORY_BYTES: usize = 64 * 1024;
+    pub const MEMORY_WORK: usize = ENTRY + Self::MEMORY_BYTES * 64 + 16 * 1088;
 
     /// Context only. The controller's unreaped custody, not this number, binds it.
     pub fn pid(&self) -> Pid {
         self.pid
+    }
+
+    /// Inert exact-stop classification. Subsequent reads still revalidate the
+    /// original stopped generation; this does not authenticate executable bytes.
+    pub fn is_exec_boundary(&self) -> bool {
+        self.stop == Stop::Exec
     }
 
     fn check(&self, b: &Budget<'_>) -> Result<()> {
@@ -242,8 +253,68 @@ impl RuntimeTaskObservationV1<'_, '_> {
         )
     }
 
+    /// Actual kernel-saved auxiliary vector of this same held task. No pathname,
+    /// supplied descriptor or caller byte string can substitute for this read.
+    pub fn read_auxv(&self, b: &mut Budget<'_>) -> Result<([u8; AUXV_BYTES], usize)> {
+        b.with_prepaid_scope(
+            self.owner.retained,
+            ENTRY,
+            Self::AUXV_WORK,
+            Self::FRAME + Self::AUXV_BYTES + 16,
+            |b| {
+                self.check(b)?;
+                let file = self.open_proc("auxv")?;
+                let mut bytes = [0; AUXV_BYTES];
+                let count =
+                    rio::read(&file, &mut bytes).map_err(|e| io("read retained task auxv", e))?;
+                let mut extra = [0; 1];
+                if count == 0
+                    || rio::read(&file, &mut extra)
+                        .map_err(|e| io("finish retained task auxv", e))?
+                        != 0
+                {
+                    return Err(Error::State("runtime auxiliary-vector byte bound exceeded"));
+                }
+                self.check(b)?;
+                Ok((bytes, count))
+            },
+        )
+    }
+
+    /// Copy bounded bytes from the actual held task, without exporting a proc
+    /// descriptor or accepting a PID. The address is data, not image authority.
+    /// The caller retains/funds the output buffer; short reads fail closed.
+    pub fn read_memory(&self, address: u64, out: &mut [u8], b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(
+            self.owner.retained,
+            ENTRY,
+            Self::MEMORY_WORK,
+            Self::FRAME,
+            |b| {
+                self.check(b)?;
+                if out.is_empty()
+                    || out.len() > Self::MEMORY_BYTES
+                    || address.checked_add(out.len() as u64).is_none()
+                {
+                    return Err(Error::State(
+                        "runtime memory observation exceeds bounded range",
+                    ));
+                }
+                let file = self.open_proc("mem")?;
+                if rio::pread(&file, out, address)
+                    .map_err(|e| io("read retained task memory", e))?
+                    != out.len()
+                {
+                    return Err(Error::State("runtime memory observation was short"));
+                }
+                self.check(b)?;
+                Ok(())
+            },
+        )
+    }
+
     fn open_proc(&self, member: &str) -> Result<std::os::fd::OwnedFd> {
-        if !matches!(member, "maps" | "personality") {
+        if !matches!(member, "maps" | "personality" | "auxv" | "mem") {
             return Err(Error::State("unsupported runtime proc member"));
         }
         let path = format!("/proc/{}/{member}", self.pid.as_raw_nonzero().get());
