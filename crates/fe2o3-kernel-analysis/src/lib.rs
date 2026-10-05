@@ -31,6 +31,7 @@ mod canonical_kir_sparse_scalar_v1;
 mod canonical_kir_sparse_v1;
 mod canonical_kir_store_forwarding_v1;
 mod canonical_kir_transition_v1;
+mod canonical_tile_convergence_v160;
 mod control_flow;
 mod formal_path_conflicts_v1;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -79,6 +80,7 @@ pub use canonical_kir_redundant_store_v1::*;
 pub use canonical_kir_sparse_v1::*;
 pub use canonical_kir_store_forwarding_v1::*;
 pub use canonical_kir_transition_v1::*;
+pub use canonical_tile_convergence_v160::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
     ControlFlowErrors, ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,

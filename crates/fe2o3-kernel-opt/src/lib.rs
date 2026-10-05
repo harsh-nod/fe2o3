@@ -47,6 +47,7 @@ mod owned_licm_v1;
 mod owned_loop_preheaders_v1;
 mod owned_loop_unroll_v1;
 mod owned_private_cell_promotion_v1;
+mod owned_tile_scalar_v18;
 mod private_cell_promotion_resources_v1;
 mod structural_replay_admission_v2;
 mod structural_replay_admission_v3;
@@ -82,6 +83,7 @@ pub use owned_licm_v1::*;
 pub use owned_loop_preheaders_v1::*;
 pub use owned_loop_unroll_v1::*;
 pub use owned_private_cell_promotion_v1::*;
+pub use owned_tile_scalar_v18::*;
 pub use structural_replay_admission_v2::*;
 pub use structural_replay_admission_v3::*;
 #[cfg(any(test, feature = "test-support"))]
