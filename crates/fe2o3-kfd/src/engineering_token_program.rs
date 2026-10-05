@@ -52,6 +52,117 @@ pub(crate) fn token_program_payload_bytes(definition: u32, kernarg: u32) -> io::
         .ok_or_else(|| invalid("token program transfer limit"))
 }
 
+fn validate_program_template(
+    definition: &TokenProgramDefinitionV1,
+    payload_bytes: usize,
+) -> io::Result<Vec<usize>> {
+    if !(1..=MAX_TOKEN_PROGRAM_DISPATCHES_V1).contains(&definition.dispatches.len())
+        || definition.slots.len() > MAX_TOKEN_PROGRAM_SLOTS_V1
+        || payload_bytes > MAX_TRANSFER_BYTES_V1 as usize
+    {
+        return Err(invalid("token program count limits"));
+    }
+    let mut offsets = Vec::with_capacity(definition.dispatches.len());
+    let mut total = 0usize;
+    for dispatch in &definition.dispatches {
+        if dispatch.payload_bytes > MAX_KERNARG_BYTES_V1
+            || dispatch.pointers.len() > MAX_POINTER_FIXUPS_V1
+        {
+            return Err(invalid("token program dispatch limits"));
+        }
+        offsets.push(total);
+        total = total
+            .checked_add(dispatch.payload_bytes as usize)
+            .filter(|total| *total <= MAX_TRANSFER_BYTES_V1 as usize)
+            .ok_or_else(|| invalid("token program payload overflow"))?;
+    }
+    if total != payload_bytes {
+        return Err(invalid("token program kernarg length"));
+    }
+    let mut occupied = BTreeSet::new();
+    for slot in &definition.slots {
+        match slot {
+            TokenProgramSlotV1::ScalarU32 {
+                dispatch,
+                offset,
+                minimum,
+                maximum,
+            } => {
+                let command = definition
+                    .dispatches
+                    .get(usize::from(*dispatch))
+                    .ok_or_else(|| invalid("token program dispatch index"))?;
+                let end = offset
+                    .checked_add(4)
+                    .filter(|end| *end <= command.payload_bytes)
+                    .ok_or_else(|| invalid("token program scalar extent"))?;
+                if minimum > maximum
+                    || (*offset..end).any(|byte| !occupied.insert((*dispatch, false, byte)))
+                {
+                    return Err(invalid("token program scalar slot"));
+                }
+                // Native registration additionally requires one exact four-byte
+                // by-value metadata field, ruling out partial/overlapping fields.
+            }
+            TokenProgramSlotV1::Pointer {
+                dispatch,
+                pointer,
+                buffers,
+                ..
+            } => {
+                let command = definition
+                    .dispatches
+                    .get(usize::from(*dispatch))
+                    .ok_or_else(|| invalid("token program dispatch index"))?;
+                if usize::from(*pointer) >= command.pointers.len()
+                    || buffers.is_empty()
+                    || buffers.len() > 8
+                    || buffers.contains(&0)
+                    || buffers.iter().copied().collect::<BTreeSet<_>>().len() != buffers.len()
+                    || !occupied.insert((*dispatch, true, u32::from(*pointer)))
+                {
+                    return Err(invalid("token program pointer slot"));
+                }
+            }
+        }
+    }
+    Ok(offsets)
+}
+
+#[derive(Default)]
+struct JsonByteCount {
+    bytes: usize,
+}
+
+impl io::Write for JsonByteCount {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| invalid("token program JSON count overflow"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Checks the same definition and payload limits as encoding without owning them.
+/// JSON is still traversed to preserve the exact serialized-size boundary.
+pub fn validate_token_program_encoding_v1(
+    definition: &TokenProgramDefinitionV1,
+    kernargs: &[u8],
+) -> io::Result<()> {
+    drop(validate_program_template(definition, kernargs.len())?);
+    let mut count = JsonByteCount::default();
+    serde_json::to_writer(&mut count, definition).map_err(|_| invalid("token program JSON"))?;
+    let definition_bytes = u32::try_from(count.bytes).map_err(|_| invalid("definition length"))?;
+    let kernarg_bytes = u32::try_from(kernargs.len()).map_err(|_| invalid("kernarg length"))?;
+    token_program_payload_bytes(definition_bytes, kernarg_bytes)?;
+    Ok(())
+}
+
 /// Encodes registration data for the separate default-off engineering command.
 pub fn encode_token_program_v1(
     definition: &TokenProgramDefinitionV1,
@@ -102,76 +213,7 @@ impl ProgramTemplate {
     }
 
     fn new(definition: TokenProgramDefinitionV1, payload: Vec<u8>) -> io::Result<Self> {
-        if !(1..=MAX_TOKEN_PROGRAM_DISPATCHES_V1).contains(&definition.dispatches.len())
-            || definition.slots.len() > MAX_TOKEN_PROGRAM_SLOTS_V1
-            || payload.len() > MAX_TRANSFER_BYTES_V1 as usize
-        {
-            return Err(invalid("token program count limits"));
-        }
-        let mut offsets = Vec::with_capacity(definition.dispatches.len());
-        let mut total = 0usize;
-        for dispatch in &definition.dispatches {
-            if dispatch.payload_bytes > MAX_KERNARG_BYTES_V1
-                || dispatch.pointers.len() > MAX_POINTER_FIXUPS_V1
-            {
-                return Err(invalid("token program dispatch limits"));
-            }
-            offsets.push(total);
-            total = total
-                .checked_add(dispatch.payload_bytes as usize)
-                .filter(|total| *total <= MAX_TRANSFER_BYTES_V1 as usize)
-                .ok_or_else(|| invalid("token program payload overflow"))?;
-        }
-        if total != payload.len() {
-            return Err(invalid("token program kernarg length"));
-        }
-        let mut occupied = BTreeSet::new();
-        for slot in &definition.slots {
-            match slot {
-                TokenProgramSlotV1::ScalarU32 {
-                    dispatch,
-                    offset,
-                    minimum,
-                    maximum,
-                } => {
-                    let command = definition
-                        .dispatches
-                        .get(usize::from(*dispatch))
-                        .ok_or_else(|| invalid("token program dispatch index"))?;
-                    let end = offset
-                        .checked_add(4)
-                        .filter(|end| *end <= command.payload_bytes)
-                        .ok_or_else(|| invalid("token program scalar extent"))?;
-                    if minimum > maximum
-                        || (*offset..end).any(|byte| !occupied.insert((*dispatch, false, byte)))
-                    {
-                        return Err(invalid("token program scalar slot"));
-                    }
-                    // Native registration additionally requires one exact four-byte
-                    // by-value metadata field, ruling out partial/overlapping fields.
-                }
-                TokenProgramSlotV1::Pointer {
-                    dispatch,
-                    pointer,
-                    buffers,
-                    ..
-                } => {
-                    let command = definition
-                        .dispatches
-                        .get(usize::from(*dispatch))
-                        .ok_or_else(|| invalid("token program dispatch index"))?;
-                    if usize::from(*pointer) >= command.pointers.len()
-                        || buffers.is_empty()
-                        || buffers.len() > 8
-                        || buffers.contains(&0)
-                        || buffers.iter().copied().collect::<BTreeSet<_>>().len() != buffers.len()
-                        || !occupied.insert((*dispatch, true, u32::from(*pointer)))
-                    {
-                        return Err(invalid("token program pointer slot"));
-                    }
-                }
-            }
-        }
+        let offsets = validate_program_template(&definition, payload.len())?;
         Ok(Self {
             definition,
             payload,

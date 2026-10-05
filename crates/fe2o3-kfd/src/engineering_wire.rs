@@ -30,7 +30,7 @@ pub(crate) use token_program::ProgramTemplate;
 pub use token_program::{
     MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1, MAX_TOKEN_PROGRAM_DISPATCHES_V1,
     MAX_TOKEN_PROGRAM_SLOTS_V1, TokenProgramDefinitionV1, TokenProgramSlotV1, TokenProgramUpdateV1,
-    encode_token_program_v1,
+    encode_token_program_v1, validate_token_program_encoding_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
