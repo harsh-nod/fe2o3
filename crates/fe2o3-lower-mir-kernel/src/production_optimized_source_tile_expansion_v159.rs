@@ -23,11 +23,16 @@ pub struct ProductionSourceTileOperationSpanV159 {
 /// A copied result is descriptive, not a source or native proof certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSourceTileLeafV162 {
+    /// Scalar value in the authenticated expanded function.
     Scalar {
+        /// Function coordinate in the expanded module.
         function: CanonicalKirFunctionCoordinateV1,
+        /// Exact value produced by the checked scalar recipe.
         value: ValueId,
+        /// Scalar type of the selected original aggregate component.
         scalar: ScalarType,
     },
+    /// Erased zero-sized marker, with no physical scalar value.
     Unit,
 }
 
