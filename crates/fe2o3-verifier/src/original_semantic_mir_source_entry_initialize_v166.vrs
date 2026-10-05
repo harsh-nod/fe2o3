@@ -18,3 +18,11 @@ spec fn invocation_source_entry_initialize_v166(
         ..source
     }
 }
+
+proof fn invocation_source_entry_initialize_pc_v166(
+    source: InvocationSourceByteStateV36, pc: int, begin: int, end: int,
+    frames: MemoryFrameRuntimeV30,
+)
+    ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,
+{
+}

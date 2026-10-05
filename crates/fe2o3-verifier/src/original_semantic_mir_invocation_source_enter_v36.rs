@@ -624,6 +624,7 @@ mod tests {
         let (_, body) = text
             .split_once(") -> InvocationSourceByteStateV36 {\n")
             .unwrap();
+        let (body, proof) = body.split_once("\nproof fn ").unwrap();
         assert_eq!(
             body,
             concat!(
@@ -647,6 +648,18 @@ mod tests {
         assert!(!text.contains("requires"));
         assert!(!text.contains("assume("));
         assert!(!text.contains("external_body"));
+        assert_eq!(
+            proof,
+            concat!(
+                "invocation_source_entry_initialize_pc_v166(\n",
+                "    source: InvocationSourceByteStateV36, pc: int, begin: int, end: int,\n",
+                "    frames: MemoryFrameRuntimeV30,\n",
+                ")\n",
+                "    ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,\n",
+                "{\n",
+                "}\n",
+            )
+        );
     }
 
     #[test]
