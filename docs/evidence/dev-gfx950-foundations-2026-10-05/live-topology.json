@@ -1,0 +1,8 @@
+{
+  "command": "/dev/shm/fe2o3-gfx950-foundations-20261005-xVmcjcrP/topology-test --exact topology::tests::target_selection::live_gfx950_topology_is_observed_without_gfx942_route_authority --ignored --nocapture --test-threads=1",
+  "chunk_id": "39f531",
+  "wall_time_seconds": 3.517649171,
+  "exit_code": 0,
+  "original_token_count": 726,
+  "output": "\nrunning 1 test\ntest topology::tests::target_selection::live_gfx950_topology_is_observed_without_gfx942_route_authority ... fe2o3.observed-topology.v1 target=gfx950 node=2 gpu_id=39903 uid=16366993098680759275 render_minor=128 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=3 gpu_id=22482 uid=10838076764495710945 render_minor=136 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=4 gpu_id=46071 uid=15340779317222226279 render_minor=144 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=5 gpu_id=32762 uid=17768109136179504279 render_minor=152 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=6 gpu_id=15294 uid=230301366604081239 render_minor=160 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=7 gpu_id=63411 uid=9271120227827419749 render_minor=168 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=8 gpu_id=5014 uid=10521817515609150476 render_minor=176 simds=1024 lds_kib=160 xccs=8\nfe2o3.observed-topology.v1 target=gfx950 node=9 gpu_id=57243 uid=7699048935395882881 render_minor=184 simds=1024 lds_kib=160 xccs=8\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1961 filtered out; finished in 0.01s\n\n"
+}

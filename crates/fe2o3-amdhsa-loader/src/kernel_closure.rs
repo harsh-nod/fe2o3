@@ -11,8 +11,8 @@ use fe2o3_hsaco::{
 use sha2::{Digest, Sha256};
 
 use super::{
-    AdmittedProfile, LOADER_PROFILE_ID, LoadPlan, MaterializationError, MetadataNote,
-    OwnedValidatedEnvelope, SegmentPermissions, ValidatedEnvelope,
+    AdmittedProfile, LoadPlan, MaterializationError, MetadataNote, OwnedValidatedEnvelope,
+    SegmentPermissions, ValidatedEnvelope,
 };
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
@@ -616,9 +616,9 @@ impl<'a> ValidatedEnvelope<'a> {
                 minor: metadata_version.minor(),
             });
         }
-        if inspection.target().processor() != "gfx942"
-            || inspection.target().amdhsa_elf_flags_v4_plus()
-                != AdmittedProfile::Gfx942XnackOffCov6.elf_flags()
+        let profile = self.plan.profile();
+        if inspection.target().processor() != profile.processor()
+            || inspection.target().amdhsa_elf_flags_v4_plus() != profile.elf_flags()
         {
             return Err(KernelClosureError::UnsupportedTarget);
         }
@@ -691,6 +691,7 @@ impl<'a> ValidatedEnvelope<'a> {
             SelectedKernelResourceBindingV1::new(selected_kernel, selected_binding.descriptor());
         let relocation = ClosedRelocationEvidenceV1 { private: () };
         let identity = identity_inputs(
+            profile,
             self.bytes,
             self.metadata_descriptor,
             descriptor_bytes,
@@ -816,6 +817,7 @@ fn mapping_matches(
 
 #[allow(clippy::too_many_arguments)]
 fn identity_inputs(
+    profile: AdmittedProfile,
     object: &[u8],
     metadata: &[u8],
     descriptor: &[u8],
@@ -836,7 +838,11 @@ fn identity_inputs(
 
     let mut hasher = Sha256::new();
     update_field(&mut hasher, b"domain", IDENTITY_DOMAIN);
-    update_field(&mut hasher, b"loader-profile", LOADER_PROFILE_ID.as_bytes());
+    update_field(
+        &mut hasher,
+        b"loader-profile",
+        profile.profile_id().as_bytes(),
+    );
     update_field(
         &mut hasher,
         b"relocation-policy",

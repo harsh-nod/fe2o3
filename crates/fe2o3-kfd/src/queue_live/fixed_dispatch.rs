@@ -98,6 +98,9 @@ impl CheckedGfx942XnackMinusDevice {
         kernargs: [TypedKernargImageV1; N],
         data: Vec<DeviceDataAllocationInputV1>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        super::super::dispatch_binding::validate_gfx942_kernel_profiles(core::slice::from_ref(
+            &kernel,
+        ))?;
         validate_fixed_batch_ring::<N>(ring_bytes)?;
         let geometry_plan = plan_gfx942_aql_queue_resources(
             self.topology_snapshot(),

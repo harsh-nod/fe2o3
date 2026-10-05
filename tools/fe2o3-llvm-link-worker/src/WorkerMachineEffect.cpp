@@ -59,29 +59,28 @@ constexpr StringRef nulTerminatedDomain(const char (&Value)[N]) {
 
 constexpr StringRef RequestDomain =
     nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0");
-constexpr StringRef EvidenceDomain =
-    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0");
-constexpr StringRef EvidenceIdentityDomain = nulTerminatedDomain(
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0");
-constexpr StringRef TraceEvidenceDomain =
-    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0");
-constexpr StringRef AnalysisBundleDomain =
-    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0");
-constexpr StringRef IdentityChallengeDomain = nulTerminatedDomain(
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0");
-constexpr StringRef IdentityResponseDomain = nulTerminatedDomain(
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0");
-constexpr StringRef RequestIdentityDomain = nulTerminatedDomain(
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0");
-constexpr StringRef AnalyzerIdentityDomain =
-    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-ANALYZER/V1\0");
-constexpr StringRef ToolchainIdentityDomain =
-    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-TOOLCHAIN/V1\0");
-constexpr StringLiteral PhysicalProfileMetadataTarget =
-    "amdgcn-amd-amdhsa--gfx942:xnack-";
-constexpr uint32_t PhysicalProfileElfFlags =
-    ELF::EF_AMDGPU_MACH_AMDGCN_GFX942 | ELF::EF_AMDGPU_FEATURE_XNACK_OFF_V4 |
-    ELF::EF_AMDGPU_FEATURE_SRAMECC_ANY_V4;
+#define PROFILE_DOMAIN(Target, Suffix)                                         \
+  ((Target) == PhysicalMachineTarget::Gfx942XnackMinusCov6                     \
+       ? nulTerminatedDomain("FE2O3/GFX942-" Suffix "/V1\0")                   \
+       : nulTerminatedDomain("FE2O3/GFX950-" Suffix "/V1\0"))
+
+bool supportedProfile(PhysicalMachineTarget Target) {
+  return Target == PhysicalMachineTarget::Gfx942XnackMinusCov6 ||
+         Target == PhysicalMachineTarget::Gfx950XnackMinusCov6;
+}
+
+StringRef profileCpu(PhysicalMachineTarget Target) {
+  return Target == PhysicalMachineTarget::Gfx942XnackMinusCov6 ? "gfx942"
+                                                               : "gfx950";
+}
+
+uint32_t profileElfFlags(PhysicalMachineTarget Target) {
+  return (Target == PhysicalMachineTarget::Gfx942XnackMinusCov6
+              ? ELF::EF_AMDGPU_MACH_AMDGCN_GFX942
+              : ELF::EF_AMDGPU_MACH_AMDGCN_GFX950) |
+         ELF::EF_AMDGPU_FEATURE_XNACK_OFF_V4 |
+         ELF::EF_AMDGPU_FEATURE_SRAMECC_ANY_V4;
+}
 constexpr uint16_t SchemaVersion = 1;
 constexpr size_t MaxEntries = 64;
 constexpr size_t MaxEdges = 256;
@@ -493,7 +492,8 @@ Expected<uint64_t> metadataUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
 }
 
 Expected<std::vector<MetadataKernel>>
-readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
+readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader,
+             PhysicalMachineTarget Profile) {
   const ELFFile<ELF64LE> &File = Object.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
@@ -533,9 +533,10 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
       auto CurrentTarget = metadataString(Root, "amdhsa.target");
       if (!CurrentTarget)
         return CurrentTarget.takeError();
-      if (!matchesPhysicalMachineEffectMetadataTargetV1(*CurrentTarget))
+      if (!matchesPhysicalMachineEffectMetadataTargetV1(*CurrentTarget,
+                                                        Profile))
         return analysisError(
-            "metadata target is not exact gfx942:xnack- profile");
+            "metadata target is not the requested exact xnack- profile");
       if (Target && *Target != *CurrentTarget)
         return analysisError("metadata target records disagree");
       Target = CurrentTarget->str();
@@ -1087,7 +1088,9 @@ struct McState {
   std::unique_ptr<MCInstrAnalysis> Analysis;
 };
 
-Expected<McState> createMcState() {
+Expected<McState> createMcState(PhysicalMachineTarget Profile) {
+  if (!supportedProfile(Profile))
+    return analysisError("unsupported physical machine target");
   static bool Initialized = [] {
     LLVMInitializeAMDGPUTargetInfo();
     LLVMInitializeAMDGPUTarget();
@@ -1106,8 +1109,8 @@ Expected<McState> createMcState() {
   McState Result;
   Result.Registers.reset(TargetValue->createMCRegInfo(TripleValue));
   Result.Instructions.reset(TargetValue->createMCInstrInfo());
-  Result.Subtarget.reset(
-      TargetValue->createMCSubtargetInfo(TripleValue, "gfx942", "-xnack"));
+  Result.Subtarget.reset(TargetValue->createMCSubtargetInfo(
+      TripleValue, profileCpu(Profile), "-xnack"));
   if (!Result.Registers || !Result.Instructions || !Result.Subtarget)
     return analysisError("AMDGPU MC tables are unavailable");
   MCTargetOptions Options;
@@ -1837,9 +1840,10 @@ makeInstructionTrace(StringRef FunctionName,
   return Result;
 }
 
-Expected<AnalyzedFunction>
-analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
-                bool ReturnPairIsLiveIn, McState &Mc) {
+Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
+                                           ArrayRef<SymbolRecord> Symbols,
+                                           bool ReturnPairIsLiveIn, McState &Mc,
+                                           PhysicalMachineTarget Profile) {
   auto Decoded = decodeFunction(Function, Mc);
   if (!Decoded)
     return Decoded.takeError();
@@ -1887,6 +1891,11 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     const MCInstrDesc &Descriptor =
         Mc.Instructions->get(Instruction.Inst.getOpcode());
     StringRef Name = Instruction.Name;
+    if (Profile == PhysicalMachineTarget::Gfx950XnackMinusCov6 &&
+        (Name.contains("ATOMIC") || Name.starts_with("DS_") ||
+         Name.starts_with("S_BARRIER") || Name.starts_with("S_TRAP")))
+      return analysisError(Twine("unsupported gfx950 effect classification ") +
+                           Name);
     size_t BlockOrdinal = Cfg->InstructionBlocks[Index];
     if (BlockOrdinal > std::numeric_limits<uint32_t>::max())
       return analysisError("machine instruction block exceeds trace bounds");
@@ -2192,13 +2201,33 @@ bool classifyGfx942WorkgroupBarrierOpcode(StringRef Name) {
 }
 
 bool matchesPhysicalMachineEffectMetadataTargetV1(StringRef Target) {
-  return Target == PhysicalProfileMetadataTarget;
+  return matchesPhysicalMachineEffectMetadataTargetV1(
+      Target, PhysicalMachineTarget::Gfx942XnackMinusCov6);
 }
 
-PhysicalMachineEffectIdentities physicalMachineEffectIdentities() {
+bool matchesPhysicalMachineEffectMetadataTargetV1(
+    StringRef Target, PhysicalMachineTarget Profile) {
+  if (!supportedProfile(Profile))
+    return false;
+  return Target == (Profile == PhysicalMachineTarget::Gfx942XnackMinusCov6
+                        ? "amdgcn-amd-amdhsa--gfx942:xnack-"
+                        : "amdgcn-amd-amdhsa--gfx950:xnack-");
+}
+
+PhysicalMachineEffectIdentities
+physicalMachineEffectIdentities(PhysicalMachineTarget Target) {
+  if (!supportedProfile(Target))
+    return {};
+  const auto AnalyzerIdentityDomain =
+      PROFILE_DOMAIN(Target, "PHYSICAL-MACHINE-EFFECT-ANALYZER");
+  const auto ToolchainIdentityDomain =
+      PROFILE_DOMAIN(Target, "PHYSICAL-MACHINE-EFFECT-TOOLCHAIN");
   std::string Analyzer =
-      (Twine(FE2O3_WORKER_BUILD_ID) + "|target=gfx942:xnack-|cov=6|profile="
-                                      "bounded-generic-v1")
+      (Twine(FE2O3_WORKER_BUILD_ID) + "|target=" + profileCpu(Target) +
+       ":xnack-|cov=6|profile=" +
+       (Target == PhysicalMachineTarget::Gfx942XnackMinusCov6
+            ? "bounded-generic-v1"
+            : "bounded-load-store-cfg-v1"))
           .str();
   std::string Toolchain =
       (Twine(FE2O3_LLVM_BUILD_ID) + "|llvm=" + LLVM_VERSION_STRING).str();
@@ -2206,15 +2235,22 @@ PhysicalMachineEffectIdentities physicalMachineEffectIdentities() {
           domainHash(ToolchainIdentityDomain, Toolchain)};
 }
 
-Error initializePhysicalMachineEffectRuntime() {
-  auto Mc = createMcState();
+Error initializePhysicalMachineEffectRuntime(PhysicalMachineTarget Target) {
+  auto Mc = createMcState(Target);
   if (!Mc)
     return Mc.takeError();
   return Error::success();
 }
 
 Expected<std::vector<uint8_t>>
-encodePhysicalMachineEffectIdentityResponse(ArrayRef<uint8_t> Request) {
+encodePhysicalMachineEffectIdentityResponse(ArrayRef<uint8_t> Request,
+                                            PhysicalMachineTarget Target) {
+  if (!supportedProfile(Target))
+    return analysisError("unsupported physical machine target");
+  const auto IdentityChallengeDomain =
+      PROFILE_DOMAIN(Target, "PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE");
+  const auto IdentityResponseDomain =
+      PROFILE_DOMAIN(Target, "PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE");
   Reader Input(Request);
   auto Domain = Input.take(IdentityChallengeDomain.size());
   if (!Domain)
@@ -2240,7 +2276,7 @@ encodePhysicalMachineEffectIdentityResponse(ArrayRef<uint8_t> Request) {
     return ErrorValue;
 
   PhysicalMachineEffectIdentities Identities =
-      physicalMachineEffectIdentities();
+      physicalMachineEffectIdentities(Target);
   std::vector<uint8_t> Output;
   Output.insert(Output.end(), IdentityResponseDomain.bytes_begin(),
                 IdentityResponseDomain.bytes_end());
@@ -2264,7 +2300,12 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
   auto Domain = Input.take(RequestDomain.size());
   if (!Domain)
     return Domain.takeError();
-  if (*Domain != arrayRefFromStringRef(RequestDomain))
+  PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6;
+  if (*Domain == arrayRefFromStringRef(
+                     PROFILE_DOMAIN(PhysicalMachineTarget::Gfx950XnackMinusCov6,
+                                    "PHYSICAL-MACHINE-EFFECT-REQUEST")))
+    Target = PhysicalMachineTarget::Gfx950XnackMinusCov6;
+  else if (*Domain != arrayRefFromStringRef(RequestDomain))
     return analysisError("request domain mismatch");
   auto Length = Input.u32();
   if (!Length)
@@ -2278,6 +2319,7 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
     return analysisError("unsupported request version");
 
   PhysicalMachineEffectRequest Result;
+  Result.Target = Target;
   auto ExecutionChallenge = Input.digest();
   if (!ExecutionChallenge)
     return ExecutionChallenge.takeError();
@@ -2348,18 +2390,30 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
     return analysisError("payload digest mismatch");
   Result.Payload.assign(Payload->begin(), Payload->end());
 
-  PhysicalMachineEffectIdentities Measured = physicalMachineEffectIdentities();
+  PhysicalMachineEffectIdentities Measured =
+      physicalMachineEffectIdentities(Target);
   if (Result.AnalyzerIdentity != Measured.Analyzer)
     return analysisError("analyzer identity mismatch");
   if (Result.ToolchainIdentity != Measured.Toolchain)
     return analysisError("toolchain identity mismatch");
-  Result.RequestIdentity = domainHash(RequestIdentityDomain, Bytes);
+  Result.RequestIdentity = domainHash(
+      PROFILE_DOMAIN(Target, "PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY"),
+      Bytes);
   Result.RequestBytes = Bytes.size();
   return Result;
 }
 
 Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     const PhysicalMachineEffectRequest &Request) {
+  if (Request.Target != PhysicalMachineTarget::Gfx942XnackMinusCov6)
+    return analysisError("gfx942 analyzer requires exact gfx942 request");
+  return analyzePhysicalMachineEffects(Request);
+}
+
+Expected<PhysicalMachineEffectEvidence>
+analyzePhysicalMachineEffects(const PhysicalMachineEffectRequest &Request) {
+  if (!supportedProfile(Request.Target))
+    return analysisError("unsupported physical machine target");
   if (Request.Entries.empty() || Request.Entries.size() > MaxEntries)
     return analysisError("request entry count exceeds bound");
   for (size_t I = 0; I < Request.Entries.size(); ++I) {
@@ -2373,7 +2427,8 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
       SHA256::hash(Request.Payload) != Request.PayloadDigest ||
       Request.Payload.size() != Request.PayloadBytes)
     return analysisError("request payload binding is invalid");
-  PhysicalMachineEffectIdentities Measured = physicalMachineEffectIdentities();
+  PhysicalMachineEffectIdentities Measured =
+      physicalMachineEffectIdentities(Request.Target);
   if (Request.AnalyzerIdentity != Measured.Analyzer ||
       Request.ToolchainIdentity != Measured.Toolchain)
     return analysisError("request measured identity is invalid");
@@ -2395,8 +2450,9 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
       Request.Payload[ELF::EI_OSABI] != ELF::ELFOSABI_AMDGPU_HSA ||
       Base->getEIdentABIVersion() != ELF::ELFABIVERSION_AMDGPU_HSA_V6)
     return analysisError("payload is not AMDHSA code object V6");
-  if (Base->getPlatformFlags() != PhysicalProfileElfFlags)
-    return analysisError("ELF target is not exact gfx942:xnack- profile");
+  if (Base->getPlatformFlags() != profileElfFlags(Request.Target))
+    return analysisError(
+        "ELF target is not the requested exact xnack- profile");
 
   auto Loader = buildLoaderView(*Object, Request.Payload);
   if (!Loader)
@@ -2405,7 +2461,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   if (!DynamicLoader)
     return DynamicLoader.takeError();
 
-  auto Metadata = readMetadata(*Object, *Loader);
+  auto Metadata = readMetadata(*Object, *Loader, Request.Target);
   if (!Metadata)
     return Metadata.takeError();
   if (Metadata->size() != Request.Entries.size())
@@ -2419,6 +2475,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     return Symbols.takeError();
 
   PhysicalMachineEffectEvidence Evidence;
+  Evidence.Target = Request.Target;
   Evidence.ExecutionChallenge = Request.ExecutionChallenge;
   Evidence.RequestIdentity = Request.RequestIdentity;
   Evidence.RequestBytes = Request.RequestBytes;
@@ -2439,7 +2496,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     Evidence.Entries.push_back(std::move(*EntryEvidence));
   }
 
-  auto Mc = createMcState();
+  auto Mc = createMcState(Request.Target);
   if (!Mc)
     return Mc.takeError();
   std::map<std::string, AnalyzedFunction> Functions;
@@ -2460,8 +2517,9 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     if (!Function)
       return analysisError(Twine("reachable function symbol is absent: ") +
                            Name);
-    auto Analyzed = analyzeFunction(
-        *Function, *Symbols, !KernelEntries.contains(Name), *Mc);
+    auto Analyzed =
+        analyzeFunction(*Function, *Symbols, !KernelEntries.contains(Name), *Mc,
+                        Request.Target);
     if (!Analyzed)
       return Analyzed.takeError();
     for (const std::string &Callee : Analyzed->Evidence.DirectCallees)
@@ -2509,6 +2567,10 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
 
 Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
     const PhysicalMachineEffectEvidence &Evidence) {
+  if (!supportedProfile(Evidence.Target))
+    return analysisError("unsupported physical machine target");
+  const auto EvidenceDomain =
+      PROFILE_DOMAIN(Evidence.Target, "PHYSICAL-MACHINE-EFFECT-EVIDENCE");
   if (Evidence.Entries.empty() || Evidence.Entries.size() > MaxEntries ||
       Evidence.Functions.empty() ||
       Evidence.Functions.size() > MaxPhysicalMachineEffectFunctions ||
@@ -2532,7 +2594,7 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
                 Evidence.AnalyzerIdentity.end());
   Output.insert(Output.end(), Evidence.ToolchainIdentity.begin(),
                 Evidence.ToolchainIdentity.end());
-  appendU16(Output, 1);
+  appendU16(Output, static_cast<uint16_t>(Evidence.Target));
 
   appendU16(Output, static_cast<uint16_t>(Evidence.Entries.size()));
   for (const PhysicalMachineEntryEvidence &Entry : Evidence.Entries) {
@@ -2582,6 +2644,12 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
 Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
     const PhysicalMachineEffectEvidence &Evidence,
     ArrayRef<uint8_t> CanonicalEffectEvidence) {
+  if (!supportedProfile(Evidence.Target))
+    return analysisError("unsupported physical machine target");
+  const auto TraceEvidenceDomain =
+      PROFILE_DOMAIN(Evidence.Target, "PHYSICAL-MACHINE-TRACE-EVIDENCE");
+  const auto EvidenceIdentityDomain = PROFILE_DOMAIN(
+      Evidence.Target, "PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY");
   if (Evidence.Blocks.empty() ||
       Evidence.Blocks.size() > MaxPhysicalMachineTraceBlocks ||
       Evidence.Instructions.empty() ||
@@ -2610,7 +2678,7 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
                 Evidence.AnalyzerIdentity.end());
   Output.insert(Output.end(), Evidence.ToolchainIdentity.begin(),
                 Evidence.ToolchainIdentity.end());
-  appendU16(Output, 1);
+  appendU16(Output, static_cast<uint16_t>(Evidence.Target));
 
   appendU32(Output, static_cast<uint32_t>(Evidence.Blocks.size()));
   for (const PhysicalMachineBasicBlockTrace &Block : Evidence.Blocks) {
@@ -2697,6 +2765,10 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
 
 Expected<std::vector<uint8_t>> encodePhysicalMachineAnalysisBundle(
     const PhysicalMachineEffectEvidence &Evidence) {
+  if (!supportedProfile(Evidence.Target))
+    return analysisError("unsupported physical machine target");
+  const auto AnalysisBundleDomain =
+      PROFILE_DOMAIN(Evidence.Target, "PHYSICAL-MACHINE-ANALYSIS-BUNDLE");
   auto Effects = encodePhysicalMachineEffectEvidence(Evidence);
   if (!Effects)
     return Effects.takeError();

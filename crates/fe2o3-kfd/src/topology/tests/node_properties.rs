@@ -369,7 +369,7 @@ fn gpu_missing_keys_preserve_admission_order_and_optional_sdma_fields() {
             assert!(check(&text).is_ok());
             let properties = fixed::parse(&path, &text).unwrap();
             assert!(
-                matches!(parse_gpu_node(1, 1001, "ip discovery".to_owned(), &path, &properties),
+                matches!(parse_gpu_node(1, 1001, "ip discovery".to_owned(), &path, &properties, GfxTarget::Gfx942),
                     Err(TopologyError::MissingProperty { path: p, key }) if p == path && key == first)
             );
         }
@@ -386,7 +386,15 @@ fn gpu_missing_keys_preserve_admission_order_and_optional_sdma_fields() {
             })
             .collect();
         let properties = fixed::parse(&path, &text).unwrap();
-        let gpu = parse_gpu_node(1, 1001, "ip discovery".to_owned(), &path, &properties).unwrap();
+        let gpu = parse_gpu_node(
+            1,
+            1001,
+            "ip discovery".to_owned(),
+            &path,
+            &properties,
+            GfxTarget::Gfx942,
+        )
+        .unwrap();
         let capability = gpu.sdma_topology_capability;
         assert_eq!(
             [
@@ -409,7 +417,15 @@ fn gpu_missing_keys_preserve_admission_order_and_optional_sdma_fields() {
         })
         .collect();
     let properties = fixed::parse(&path, &zero_optional).unwrap();
-    let gpu = parse_gpu_node(1, 1001, "ip discovery".to_owned(), &path, &properties).unwrap();
+    let gpu = parse_gpu_node(
+        1,
+        1001,
+        "ip discovery".to_owned(),
+        &path,
+        &properties,
+        GfxTarget::Gfx942,
+    )
+    .unwrap();
     let capability = gpu.sdma_topology_capability;
     assert_eq!(
         [

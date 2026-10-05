@@ -1,10 +1,38 @@
 # Working Multi-GPU Critical Path
 
-Priority refresh: 2026-10-04. This is an implementation work order, not an A3
+Priority refresh: 2026-10-05. This is an implementation work order, not an A3
 completion claim. Native agents reviewed Context admission, backend custody and
-existing MI300X evidence independently. Primary owns edits, integration and tests.
+existing MI300X evidence independently. Primary owns integration and final qualification.
 
 ## Immediate Priority
+
+The [gfx950 foundations checkpoint](evidence/dev-gfx950-foundations-2026-10-05/README.md)
+establishes the next target-specific work order. SSH now reaches all four hosts:
+`mi300x`, `mi300x-2`, `mi350` and `mi350-2`. Both MI350 hosts support noninteractive
+root via sudo; MI350 has eight gfx950 GPUs and MI350-2 has one. The required fixed
+services remain absent. These access observations do not establish a free GPU
+pair or a production deployment.
+
+One read-only target-specific topology test passes on MI350, correlating all
+eight GPUs with their render nodes and hardware UIDs. Default gfx942 discovery
+and gfx942 route authority reject gfx950. The exact-target gfx950 loader and
+native machine analyzer pass scoped CPU qualification. All four native CTest
+groups, real authenticated gfx950 analysis and the existing authenticated gfx942
+fill regression pass on the MI350-built ROCm 7.2.1 worker. Retained gfx950 records
+also reopen offline. Existing gfx942 authority and evidence scopes remain
+unchanged. **No native gfx950 application execution is claimed.** Native gfx950
+device/model, queue/CWSR and SDMA admission, separate
+conditional-fill machine semantic refinement and runtime authority, a protected
+gfx950 source campaign and the actual two-GPU application remain open.
+The [native-admission work order](runtime-gfx950-native-admission-work-order.md)
+maps the exact code boundaries, smallest unimplemented slices and required tests.
+Its queue-target/device-target agreement gate must precede any second queue-model
+target; gfx950 must not enter gfx942-named authority.
+
+### Retained Application Prerequisites
+
+The October 4 results below retain their original target and source scope; they
+do not admit gfx950 by substitution.
 
 The [committed host binding and application checkpoint](evidence/dev-production-host-binding-2026-10-04/README.md)
 now passes the genuine installed CPU application campaign: selected device
@@ -44,30 +72,39 @@ the existing Rust runtime pin and macro identity checks remain unchanged. This
 closes the application-input projection gate, not the host linker closure or
 two-GPU execution gate.
 
-Current work order:
+### Current Work Order
 
-1. Transport the reviewed application and proof/service inputs and establish the
-   required real-root private service launch on MI300X. The source/toolchain/
-   offline-cache projection is implemented and qualified locally. The optional
+1. Implement exact gfx950 model/profile admission and read-only queue/CWSR
+   planning, including the queue-target/device-profile safety gate. Preserve the
+   now-qualified loader/analyzer cross-target and old gfx942 identity controls.
+   Parsed code objects and authenticated traces grant no native launch or machine
+   semantic authority.
+2. Implement native gfx950 device/memory/queue custody, qualify a bounded
+   barrier-only probe, then add directional peer/SDMA admission. Establish
+   separate conditional-fill machine semantic refinement and runtime authority
+   without reusing gfx942 capabilities or widening their acceptance.
+3. Transport the reviewed application and proof/service inputs and establish the
+   required real-root private service launch on MI350, then qualify the protected
+   gfx950 source campaign. The source/toolchain/offline-cache projection is
+   implemented and qualified locally for its recorded scope. The optional
    [host-link observer](runtime-host-link-observation-v1.md) diagnoses actual GCC/
    bundled-LLD inputs without changing production admission. Host setup tools and
    dynamic-loader resolution remain installed-host premises; a new general DSO
-   packager is not a prerequisite for the two-GPU smoke. Windows OpenSSH read-only
-   checks reach `sharkmi300x-1` using the existing trusted host keys, but the fixed
-   services remain absent, noninteractive sudo requires a password and direct
-   root SSH is denied. Do not bypass admission or weaken device permissions.
-2. Select two freshly observed free physical GPUs, resolve their hardware IDs and
+   packager is not a prerequisite for the two-GPU smoke. The fixed services must
+   be installed in the owned private campaign scope. Do not bypass admission or
+   weaken device permissions.
+4. Select two freshly observed free MI350 GPUs, resolve their hardware IDs and
    expose only their render nodes plus KFD in the private application namespace.
    The harness preserves application UID1000 and derives necessary numeric GPU
    groups. KFD remains process-global; this is not kernel-enforced GPU isolation.
-   The latest read-only check found live users on all eight devices; sampled 0%
-   utilization did not establish a free pair. No remote workload was started.
-3. Execute 65-element fills with G128/WG64 on both devices, then stage their actual
-   completed bytes into PUBLIC native peer copies in both directions. Require two
-   native peer completions, complete payload/source checks, separate sentinel
+   The eight-device topology result does not establish idleness; recheck live
+   users immediately before any workload. MI350-2 alone cannot provide a pair.
+5. Execute 65-element fills with G128/WG64 on both admitted devices, then stage
+   their actual completed bytes into PUBLIC native peer copies in both directions.
+   Require two native peer completions, complete payload/source checks, separate sentinel
    destinations and intact guards. Require explicit successful drain/release;
    timeouts, process exit and quarantined work are not native settlement.
-4. After the first positive execution, qualify the now-implemented
+6. After the first positive execution, qualify the now-implemented
    [second-coverage-rejection and queued-peer-deadline controls](evidence/dev-two-gpu-controls-2026-10-04/README.md).
    They require exact expected errors, control-only records and inspected release/
    refund. The peer control explicitly cancels before submission; it is not a
@@ -78,6 +115,13 @@ The immediate exit is one admitted two-device application with exact output and
 explicit native settlement, not completion of all A1/A2 or A3-A7 acceptance cells.
 Do not expand general loader packaging, opcode coverage, GPU counts, collectives
 or performance work ahead of that exit unless an actual blocker requires it.
+No full HIP/HSA parity or order-of-magnitude performance claim is supported.
+
+### Earlier Host And Qualification Observations
+
+The following dated observations remain historical evidence. The October 5
+access and target-specific work order above supersede their then-current host
+blocker and next-step wording.
 
 Read-only MI300X refresh at **2026-10-05 04:15 UTC**: every GPU still has a live
 KFD process owned by another user, the two fixed units are absent, and `sudo -n

@@ -1,0 +1,12 @@
+{
+  "host": "mi350",
+  "owned_directory": "/dev/shm/fe2o3-gfx950-foundations-20261005-xVmcjcrP",
+  "native_sessions": "all completed and reaped before cleanup",
+  "owned_process_prefix_check": "no matches after native tests",
+  "delete_command": "find -P /dev/shm/fe2o3-gfx950-foundations-20261005-xVmcjcrP -xdev -depth -delete",
+  "delete_exit_code": 0,
+  "independent_absence_command": "test ! -e /dev/shm/fe2o3-gfx950-foundations-20261005-xVmcjcrP",
+  "independent_absence_exit_code": 0,
+  "global_packages_or_services_changed": false,
+  "gpu_work_submitted": false
+}

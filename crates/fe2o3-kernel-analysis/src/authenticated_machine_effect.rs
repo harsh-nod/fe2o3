@@ -36,14 +36,6 @@ const RUNTIME_CLOSURE_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-RUNTIME-CLOSURE/V1\0";
 const RUNTIME_MAPPING_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-RUNTIME-MAPPINGS/V1\0";
-const RECEIPT_IDENTITY_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-AUTHENTICATED-RECEIPT/V1\0";
-const RECEIPT_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-AUTHENTICATED-RECEIPT-RECORD/V1\0";
-const IDENTITY_CHALLENGE_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
-const IDENTITY_RESPONSE_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0";
 const WORKER_READY_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-READY/V1\0";
 const WORKER_DONE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-DONE/V1\0";
 const WORKER_ACK_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-ACK/V1\0";
@@ -103,6 +95,7 @@ impl PhysicalMachineWorkerExecutableIdentityV1 {
 /// are bound separately in the authenticated receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectWorkerPolicyV1 {
+    target: crate::PhysicalMachineTargetV1,
     executable: PhysicalMachineWorkerExecutableIdentityV1,
     runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
     analyzer: PhysicalMachineAnalyzerIdentityV1,
@@ -111,6 +104,22 @@ pub struct PhysicalMachineEffectWorkerPolicyV1 {
 
 impl PhysicalMachineEffectWorkerPolicyV1 {
     pub fn new(
+        executable: PhysicalMachineWorkerExecutableIdentityV1,
+        runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
+        analyzer: PhysicalMachineAnalyzerIdentityV1,
+        toolchain: PhysicalMachineToolchainIdentityV1,
+    ) -> Result<Self, AuthenticatedPhysicalMachineEffectErrorV1> {
+        Self::new_for_target(
+            crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6,
+            executable,
+            runtime_closure,
+            analyzer,
+            toolchain,
+        )
+    }
+
+    pub fn new_for_target(
+        target: crate::PhysicalMachineTargetV1,
         executable: PhysicalMachineWorkerExecutableIdentityV1,
         runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
         analyzer: PhysicalMachineAnalyzerIdentityV1,
@@ -129,6 +138,7 @@ impl PhysicalMachineEffectWorkerPolicyV1 {
             ));
         }
         Ok(Self {
+            target,
             executable,
             runtime_closure,
             analyzer,
@@ -138,6 +148,10 @@ impl PhysicalMachineEffectWorkerPolicyV1 {
 
     pub const fn executable(self) -> PhysicalMachineWorkerExecutableIdentityV1 {
         self.executable
+    }
+
+    pub const fn target(self) -> crate::PhysicalMachineTargetV1 {
+        self.target
     }
 
     pub const fn runtime_closure(self) -> PhysicalMachineRuntimeClosureIdentityV1 {
@@ -401,7 +415,10 @@ impl AuthenticatedPhysicalMachineAnalysisExecutionV1 {
 
     pub fn identity(&self) -> AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1 {
         AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1 {
-            sha256: domain_hash(RECEIPT_IDENTITY_DOMAIN, &self.canonical_receipt),
+            sha256: domain_hash(
+                self.request.target().receipt_identity_domain(),
+                &self.canonical_receipt,
+            ),
             byte_len: self.canonical_receipt.len() as u64,
         }
     }
@@ -430,19 +447,24 @@ impl AuthenticatedPhysicalMachineAnalysisExecutionV1 {
     }
 }
 
-fn encode_identity_challenge(challenge: PhysicalMachineExecutionChallengeV1) -> Vec<u8> {
-    let mut output = Vec::with_capacity(IDENTITY_CHALLENGE_DOMAIN.len() + 38);
-    output.extend_from_slice(IDENTITY_CHALLENGE_DOMAIN);
+fn encode_identity_challenge(
+    target: crate::PhysicalMachineTargetV1,
+    challenge: PhysicalMachineExecutionChallengeV1,
+) -> Vec<u8> {
+    let domain = target.identity_challenge_domain();
+    let mut output = Vec::with_capacity(domain.len() + 38);
+    output.extend_from_slice(domain);
     push_u32(&mut output, 0);
     push_u16(&mut output, SCHEMA_VERSION);
     output.extend_from_slice(&challenge.as_bytes());
     let length = output.len() as u32;
-    let offset = IDENTITY_CHALLENGE_DOMAIN.len();
+    let offset = domain.len();
     output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
     output
 }
 
 fn decode_identity_response(
+    target: crate::PhysicalMachineTargetV1,
     bytes: &[u8],
     challenge: PhysicalMachineExecutionChallengeV1,
 ) -> Result<
@@ -452,13 +474,14 @@ fn decode_identity_response(
     ),
     AuthenticatedPhysicalMachineEffectErrorV1,
 > {
-    let expected = IDENTITY_RESPONSE_DOMAIN.len() + 4 + 2 + 32 + 32 + 32;
-    if bytes.len() != expected || !bytes.starts_with(IDENTITY_RESPONSE_DOMAIN) {
+    let domain = target.identity_response_domain();
+    let expected = domain.len() + 4 + 2 + 32 + 32 + 32;
+    if bytes.len() != expected || !bytes.starts_with(domain) {
         return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
             AuthenticatedPhysicalMachineEffectErrorKindV1::IdentityProbe,
         ));
     }
-    let mut position = IDENTITY_RESPONSE_DOMAIN.len();
+    let mut position = domain.len();
     let length = u32::from_le_bytes(bytes[position..position + 4].try_into().unwrap()) as usize;
     position += 4;
     let version = u16::from_le_bytes(bytes[position..position + 2].try_into().unwrap());
@@ -492,8 +515,9 @@ fn encode_receipt(
     runtime_mapping: PhysicalMachineRuntimeMappingIdentityV1,
     analysis: &PhysicalMachineAnalysisEvidenceV1,
 ) -> Vec<u8> {
-    let mut output = Vec::with_capacity(RECEIPT_DOMAIN.len() + 256);
-    output.extend_from_slice(RECEIPT_DOMAIN);
+    let domain = policy.target.receipt_domain();
+    let mut output = Vec::with_capacity(domain.len() + 256);
+    output.extend_from_slice(domain);
     push_u32(&mut output, 0);
     push_u16(&mut output, SCHEMA_VERSION);
     output.extend_from_slice(&policy.executable.sha256);
@@ -514,7 +538,7 @@ fn encode_receipt(
     output.extend_from_slice(&analysis_identity.sha256());
     push_u64(&mut output, analysis_identity.byte_len());
     let length = output.len() as u32;
-    let offset = RECEIPT_DOMAIN.len();
+    let offset = domain.len();
     output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
     output
 }
@@ -939,7 +963,8 @@ mod platform {
             AuthenticatedPhysicalMachineEffectErrorV1,
         > {
             let challenge = fresh_challenge()?;
-            let request = PhysicalMachineEffectRequestV1::new(
+            let request = PhysicalMachineEffectRequestV1::new_for_target(
+                self.policy.target,
                 challenge,
                 self.analyzer_identity,
                 self.toolchain_identity,
@@ -952,7 +977,7 @@ mod platform {
                 )
             })?;
             let execution = self.run(
-                "--machine-analysis-gfx942-v1",
+                self.policy.target.analysis_argument(),
                 request.canonical_bytes(),
                 challenge,
                 limits,
@@ -1010,9 +1035,9 @@ mod platform {
             AuthenticatedPhysicalMachineEffectErrorV1,
         > {
             let challenge = fresh_challenge()?;
-            let request = encode_identity_challenge(challenge);
+            let request = encode_identity_challenge(self.policy.target, challenge);
             let execution = self.run(
-                "--machine-effects-gfx942-identities-v1",
+                self.policy.target.identities_argument(),
                 &request,
                 challenge,
                 AuthenticatedPhysicalMachineEffectLimitsV1 {
@@ -1022,9 +1047,12 @@ mod platform {
                 expected_runtime,
             )?;
             validate_success(&execution.capture)?;
-            let (analyzer, toolchain) =
-                decode_identity_response(&execution.capture.stdout.bytes, challenge)
-                    .map_err(|error| process_error((*error.kind).clone(), &execution.capture))?;
+            let (analyzer, toolchain) = decode_identity_response(
+                self.policy.target,
+                &execution.capture.stdout.bytes,
+                challenge,
+            )
+            .map_err(|error| process_error((*error.kind).clone(), &execution.capture))?;
             Ok((analyzer, toolchain, execution.observation.runtime_closure))
         }
 
@@ -1132,8 +1160,22 @@ mod platform {
         limits: AuthenticatedPhysicalMachineEffectLimitsV1,
     ) -> Result<PhysicalMachineEffectWorkerCandidateV1, AuthenticatedPhysicalMachineEffectErrorV1>
     {
+        inspect_physical_machine_effect_worker_candidate_for_target_v1(
+            path,
+            crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6,
+            limits,
+        )
+    }
+
+    pub fn inspect_physical_machine_effect_worker_candidate_for_target_v1(
+        path: impl AsRef<Path>,
+        target: crate::PhysicalMachineTargetV1,
+        limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+    ) -> Result<PhysicalMachineEffectWorkerCandidateV1, AuthenticatedPhysicalMachineEffectErrorV1>
+    {
         let (image, descriptor_path, snapshot, executable) = capture_and_seal(path.as_ref(), None)?;
         let provisional = PhysicalMachineEffectWorkerPolicyV1 {
+            target,
             executable,
             runtime_closure: PhysicalMachineRuntimeClosureIdentityV1::from_parts([1; 32], 1),
             analyzer: PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([1; 32]),
@@ -1150,7 +1192,8 @@ mod platform {
         let (analyzer_identity, toolchain_identity, runtime_closure) =
             worker.probe_identities(limits, None)?;
         Ok(PhysicalMachineEffectWorkerCandidateV1 {
-            policy: PhysicalMachineEffectWorkerPolicyV1::new(
+            policy: PhysicalMachineEffectWorkerPolicyV1::new_for_target(
+                target,
                 executable,
                 runtime_closure,
                 analyzer_identity,
@@ -2946,7 +2989,9 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 pub use platform::{
-    AuthenticatedPhysicalMachineEffectWorkerV1, inspect_physical_machine_effect_worker_candidate_v1,
+    AuthenticatedPhysicalMachineEffectWorkerV1,
+    inspect_physical_machine_effect_worker_candidate_for_target_v1,
+    inspect_physical_machine_effect_worker_candidate_v1,
 };
 
 #[cfg(target_os = "linux")]
@@ -2985,6 +3030,17 @@ pub fn inspect_physical_machine_effect_worker_candidate_v1(
 }
 
 #[cfg(not(target_os = "linux"))]
+pub fn inspect_physical_machine_effect_worker_candidate_for_target_v1(
+    _path: impl AsRef<Path>,
+    _target: crate::PhysicalMachineTargetV1,
+    _limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+) -> Result<PhysicalMachineEffectWorkerCandidateV1, AuthenticatedPhysicalMachineEffectErrorV1> {
+    Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+        AuthenticatedPhysicalMachineEffectErrorKindV1::UnsupportedPlatform,
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
 fn persist_receipt(
     _path: &Path,
     _bytes: &[u8],
@@ -2992,4 +3048,64 @@ fn persist_receipt(
     Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
         AuthenticatedPhysicalMachineEffectErrorKindV1::UnsupportedPlatform,
     ))
+}
+
+#[cfg(test)]
+mod target_binding_tests {
+    use super::*;
+    use crate::PhysicalMachineTargetV1 as Target;
+
+    #[test]
+    fn identity_responses_are_target_separated() {
+        let challenge = PhysicalMachineExecutionChallengeV1::from_sha256_bytes([0x31; 32]);
+        let targets = [Target::Gfx942XnackMinusCov6, Target::Gfx950XnackMinusCov6];
+        assert_ne!(
+            encode_identity_challenge(targets[0], challenge),
+            encode_identity_challenge(targets[1], challenge)
+        );
+        for target in targets {
+            let mut response = target.identity_response_domain().to_vec();
+            let length = response.len() as u32 + 102;
+            response.extend_from_slice(&length.to_le_bytes());
+            response.extend_from_slice(&1_u16.to_le_bytes());
+            response.extend_from_slice(&challenge.as_bytes());
+            response.extend_from_slice(&[0x41; 32]);
+            response.extend_from_slice(&[0x51; 32]);
+            assert!(decode_identity_response(target, &response, challenge).is_ok());
+            for other in targets {
+                if target != other {
+                    assert!(decode_identity_response(other, &response, challenge).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn policy_target_and_receipt_domains_do_not_alias() {
+        let base = PhysicalMachineEffectWorkerPolicyV1::new(
+            PhysicalMachineWorkerExecutableIdentityV1::from_parts([1; 32], 64),
+            PhysicalMachineRuntimeClosureIdentityV1::from_parts([2; 32], 64),
+            PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([3; 32]),
+            PhysicalMachineToolchainIdentityV1::from_sha256_bytes([4; 32]),
+        )
+        .unwrap();
+        let gfx950 = PhysicalMachineEffectWorkerPolicyV1::new_for_target(
+            Target::Gfx950XnackMinusCov6,
+            base.executable(),
+            base.runtime_closure(),
+            base.analyzer(),
+            base.toolchain(),
+        )
+        .unwrap();
+        assert_eq!(base.target(), Target::Gfx942XnackMinusCov6);
+        assert_ne!(base, gfx950);
+        assert_ne!(
+            base.target().receipt_domain(),
+            gfx950.target().receipt_domain()
+        );
+        assert_ne!(
+            base.target().receipt_identity_domain(),
+            gfx950.target().receipt_identity_domain()
+        );
+    }
 }

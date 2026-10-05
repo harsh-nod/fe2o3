@@ -12,6 +12,11 @@
 
 namespace fe2o3::worker {
 
+enum class PhysicalMachineTarget : uint16_t {
+  Gfx942XnackMinusCov6 = 1,
+  Gfx950XnackMinusCov6 = 2,
+};
+
 inline constexpr size_t MaxPhysicalMachineEffectPayloadBytes = 64 * 1024 * 1024;
 inline constexpr size_t MaxPhysicalMachineEffectEvidenceBytes = 8 * 1024 * 1024;
 inline constexpr size_t MaxPhysicalMachineEffectFunctions = 64;
@@ -42,6 +47,7 @@ struct PhysicalMachineEffectEntryRequest {
 };
 
 struct PhysicalMachineEffectRequest {
+  PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6;
   std::array<uint8_t, 32> ExecutionChallenge{};
   std::array<uint8_t, 32> AnalyzerIdentity{};
   std::array<uint8_t, 32> ToolchainIdentity{};
@@ -141,6 +147,7 @@ struct PhysicalMachineInstructionTrace {
 };
 
 struct PhysicalMachineEffectEvidence {
+  PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6;
   std::array<uint8_t, 32> ExecutionChallenge{};
   std::array<uint8_t, 32> RequestIdentity{};
   uint64_t RequestBytes = 0;
@@ -161,17 +168,23 @@ uint16_t classifyGfx942DsAtomicOpcodeWidth(llvm::StringRef Name);
 bool classifyGfx942DsCollectiveOpcode(llvm::StringRef Name);
 bool classifyGfx942WorkgroupBarrierOpcode(llvm::StringRef Name);
 
-PhysicalMachineEffectIdentities physicalMachineEffectIdentities();
+PhysicalMachineEffectIdentities physicalMachineEffectIdentities(
+    PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6);
 
 // Materializes the same LLVM AMDGPU Object/MC runtime used by analysis. The
 // authenticated entrypoint calls this before READY so runtime-map custody
 // observes the complete analyzer closure rather than lazy first-use mappings.
-llvm::Error initializePhysicalMachineEffectRuntime();
+llvm::Error initializePhysicalMachineEffectRuntime(
+    PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6);
 
 llvm::Expected<std::vector<uint8_t>>
-encodePhysicalMachineEffectIdentityResponse(llvm::ArrayRef<uint8_t> Request);
+encodePhysicalMachineEffectIdentityResponse(
+    llvm::ArrayRef<uint8_t> Request,
+    PhysicalMachineTarget Target = PhysicalMachineTarget::Gfx942XnackMinusCov6);
 
 bool matchesPhysicalMachineEffectMetadataTargetV1(llvm::StringRef Target);
+bool matchesPhysicalMachineEffectMetadataTargetV1(
+    llvm::StringRef Target, PhysicalMachineTarget Profile);
 
 llvm::Expected<PhysicalMachineEffectRequest>
 decodePhysicalMachineEffectRequest(llvm::ArrayRef<uint8_t> Bytes);
@@ -182,6 +195,9 @@ decodePhysicalMachineEffectRequest(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<PhysicalMachineEffectEvidence>
 analyzeGfx942PhysicalMachineEffects(
     const PhysicalMachineEffectRequest &Request);
+
+llvm::Expected<PhysicalMachineEffectEvidence>
+analyzePhysicalMachineEffects(const PhysicalMachineEffectRequest &Request);
 
 llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
     const PhysicalMachineEffectEvidence &Evidence);

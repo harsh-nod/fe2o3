@@ -60,6 +60,9 @@ impl Gfx942InstructionRegisterFactsV1 {
     pub fn derive(
         instruction: &PhysicalMachineInstructionTraceV1,
     ) -> Result<Self, Gfx942RegisterFactsErrorV1> {
+        if instruction.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(Gfx942RegisterFactsErrorV1::UnsupportedTarget);
+        }
         derive_instruction_register_facts(instruction)
     }
 
@@ -266,6 +269,7 @@ fn decode_indexed_alias(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Gfx942RegisterFactsErrorV1 {
+    UnsupportedTarget,
     UnsupportedRegister(String),
     NonCanonicalRegister(String),
     MixedRegisterAlias(String),

@@ -1,9 +1,10 @@
-//! Payload-derived machine effects for bounded gfx942 entry-point sets.
+//! Payload-derived machine effects for bounded, target-bound AMDGPU entry sets.
 //!
 //! The native worker derives this record from finalized HSACO with LLVM
 //! Object/MC APIs. This crate binds and validates the record but grants no
 //! load or launch authority.
 
+use crate::PhysicalMachineTargetV1;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -13,10 +14,6 @@ pub const PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
 pub const PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0";
-const REQUEST_IDENTITY_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0";
-const EVIDENCE_IDENTITY_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0";
 
 pub const PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1: u16 = 1;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_PAYLOAD_BYTES_V1: usize = 64 * 1024 * 1024;
@@ -176,6 +173,7 @@ impl PhysicalMachineEffectRequestIdentityV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectRequestV1 {
+    target: PhysicalMachineTargetV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,
     analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
     toolchain_identity: PhysicalMachineToolchainIdentityV1,
@@ -192,6 +190,24 @@ impl PhysicalMachineEffectRequestV1 {
     }
 
     pub fn new(
+        execution_challenge: PhysicalMachineExecutionChallengeV1,
+        analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
+        toolchain_identity: PhysicalMachineToolchainIdentityV1,
+        payload: Vec<u8>,
+        entries: Vec<PhysicalMachineEffectEntryRequestV1>,
+    ) -> Result<Self, PhysicalMachineEffectRequestErrorV1> {
+        Self::new_for_target(
+            PhysicalMachineTargetV1::Gfx942XnackMinusCov6,
+            execution_challenge,
+            analyzer_identity,
+            toolchain_identity,
+            payload,
+            entries,
+        )
+    }
+
+    pub fn new_for_target(
+        target: PhysicalMachineTargetV1,
         execution_challenge: PhysicalMachineExecutionChallengeV1,
         analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
         toolchain_identity: PhysicalMachineToolchainIdentityV1,
@@ -234,6 +250,7 @@ impl PhysicalMachineEffectRequestV1 {
 
         let payload_identity = PhysicalMachinePayloadIdentityV1::calculate(&payload);
         let mut result = Self {
+            target,
             execution_challenge,
             analyzer_identity,
             toolchain_identity,
@@ -244,6 +261,10 @@ impl PhysicalMachineEffectRequestV1 {
         };
         result.canonical_bytes = encode_request(&result)?;
         Ok(result)
+    }
+
+    pub const fn target(&self) -> PhysicalMachineTargetV1 {
+        self.target
     }
 
     pub const fn execution_challenge(&self) -> PhysicalMachineExecutionChallengeV1 {
@@ -276,15 +297,10 @@ impl PhysicalMachineEffectRequestV1 {
 
     pub fn identity(&self) -> PhysicalMachineEffectRequestIdentityV1 {
         PhysicalMachineEffectRequestIdentityV1 {
-            sha256: domain_hash(REQUEST_IDENTITY_DOMAIN, &self.canonical_bytes),
+            sha256: domain_hash(self.target.request_identity_domain(), &self.canonical_bytes),
             byte_len: self.canonical_bytes.len() as u64,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum PhysicalMachineTargetV1 {
-    Gfx942XnackMinusCov6,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -406,6 +422,7 @@ impl PhysicalMachineEffectEvidenceIdentityV1 {
 /// prove OOB absence, race freedom, compiler refinement, or source properties.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectEvidenceV1 {
+    target: PhysicalMachineTargetV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,
     request_identity: PhysicalMachineEffectRequestIdentityV1,
     payload_identity: PhysicalMachinePayloadIdentityV1,
@@ -430,7 +447,7 @@ impl PhysicalMachineEffectEvidenceV1 {
     }
 
     pub const fn target(&self) -> PhysicalMachineTargetV1 {
-        PhysicalMachineTargetV1::Gfx942XnackMinusCov6
+        self.target
     }
 
     pub const fn analysis_basis(&self) -> PhysicalMachineEffectAnalysisBasisV1 {
@@ -475,7 +492,7 @@ impl PhysicalMachineEffectEvidenceV1 {
 
     pub fn identity(&self) -> PhysicalMachineEffectEvidenceIdentityV1 {
         PhysicalMachineEffectEvidenceIdentityV1 {
-            sha256: domain_hash(EVIDENCE_IDENTITY_DOMAIN, &self.canonical_bytes),
+            sha256: domain_hash(self.target.effect_identity_domain(), &self.canonical_bytes),
             byte_len: self.canonical_bytes.len() as u64,
         }
     }
@@ -507,7 +524,7 @@ fn encode_request(
     let mut output = Vec::with_capacity(
         PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1.len() + request.payload.len() + 256,
     );
-    output.extend_from_slice(PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1);
+    output.extend_from_slice(request.target.request_domain());
     push_u32(&mut output, 0);
     push_u16(&mut output, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1);
     output.extend_from_slice(&request.execution_challenge.0);
@@ -539,7 +556,13 @@ fn decode_request(
         return Err(PhysicalMachineEffectRequestErrorV1::RecordTooLarge);
     }
     let mut input = RequestReader::new(bytes);
-    input.expect(PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1)?;
+    let target =
+        if bytes.starts_with(PhysicalMachineTargetV1::Gfx950XnackMinusCov6.request_domain()) {
+            PhysicalMachineTargetV1::Gfx950XnackMinusCov6
+        } else {
+            PhysicalMachineTargetV1::Gfx942XnackMinusCov6
+        };
+    input.expect(target.request_domain())?;
     if input.u32()? as usize != bytes.len() {
         return Err(PhysicalMachineEffectRequestErrorV1::LengthMismatch);
     }
@@ -584,7 +607,8 @@ fn decode_request(
     let payload = input.take(payload_len)?.to_vec();
     input.finish()?;
 
-    let request = PhysicalMachineEffectRequestV1::new(
+    let request = PhysicalMachineEffectRequestV1::new_for_target(
+        target,
         execution_challenge,
         analyzer_identity,
         toolchain_identity,
@@ -608,7 +632,7 @@ fn decode_evidence_for(
         return Err(PhysicalMachineEffectEvidenceErrorV1::RecordTooLarge);
     }
     let mut input = Reader::new(bytes);
-    input.expect(PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1)?;
+    input.expect(request.target.effect_domain())?;
     if input.u32()? as usize != bytes.len() {
         return Err(PhysicalMachineEffectEvidenceErrorV1::LengthMismatch);
     }
@@ -641,7 +665,7 @@ fn decode_evidence_for(
     if toolchain_identity != request.toolchain_identity {
         return Err(PhysicalMachineEffectEvidenceErrorV1::ToolchainIdentityMismatch);
     }
-    if input.u16()? != 1 {
+    if input.u16()? != request.target.wire_tag() {
         return Err(PhysicalMachineEffectEvidenceErrorV1::TargetMismatch);
     }
 
@@ -743,6 +767,7 @@ fn decode_evidence_for(
     validate_effects(request, &functions, &closures, &effects)?;
 
     Ok(PhysicalMachineEffectEvidenceV1 {
+        target: request.target,
         execution_challenge,
         request_identity,
         payload_identity,

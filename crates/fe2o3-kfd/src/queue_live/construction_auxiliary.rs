@@ -221,6 +221,7 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
         E::Memory: PreparationMemoryV1,
     {
         self.dispatch_capacity.validate_batch::<N>()?;
+        super::super::dispatch_binding::validate_gfx942_kernel_profiles(programs)?;
         self.preallocate_generation()?;
         capture_returned_preparation_v1(memory, &mut self.data, prepare_data)?;
         self.preparation = Some(FixedDispatchPreparationCustodyV1::new(
@@ -521,7 +522,10 @@ pub(super) fn run_auxiliary_construction_with_v1<const N: usize, P: AuxiliaryPar
 where
     <P::Environment as PrimaryEnvironmentV1>::Memory: PreparationMemoryV1,
 {
-    if let Err(error) = scope.construction.preallocate_generation() {
+    if let Err(error) = super::super::dispatch_binding::validate_gfx942_kernel_profiles(programs)
+        .map_err(ComputeAqlQueueSessionErrorV1::from)
+        .and_then(|()| scope.construction.preallocate_generation())
+    {
         // The consuming boundary cannot return captures that may own native DATA.
         // Retain them without running destructors, as with the rejected scope.
         core::mem::forget(prepare_data);

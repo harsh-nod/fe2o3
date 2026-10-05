@@ -1,4 +1,4 @@
-//! Strict, read-only discovery of the reviewed KFD `gfx942` topology profile.
+//! Strict, target-explicit read-only discovery of KFD topology observations.
 //!
 //! Values returned by this module are contracted sysfs observations. They are
 //! not authenticated device identity and grant no VM, memory, queue, or ioctl
@@ -50,6 +50,7 @@ const MAX_LINK_ENTRIES: usize = 4096;
 const MAX_MODULE_FIELD_BYTES: usize = 128;
 const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
 const GFX942_TARGET_VERSION: u64 = 90_402;
+const GFX950_TARGET_VERSION: u64 = 90_500;
 const MIN_DRM_RENDER_MINOR: u64 = 128;
 const MAX_DRM_RENDER_MINOR: u64 = 255;
 const KFD_IOLINK_TYPE_XGMI_V1: u32 = 11;
@@ -59,22 +60,27 @@ const GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
 const GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
     GFX942_SDMA_ENGINE_COUNT_V1 + GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
 
-/// The only GPU target admitted by the initial direct-KFD runtime profile.
+/// Exact targets supported by read-only topology discovery.
+///
+/// Discovery support does not admit a target for native device or queue use.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum GfxTarget {
     Gfx942,
+    Gfx950,
 }
 
 impl GfxTarget {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Gfx942 => "gfx942",
+            Self::Gfx950 => "gfx950",
         }
     }
 
     pub const fn encoded_version(self) -> u32 {
         match self {
             Self::Gfx942 => GFX942_TARGET_VERSION as u32,
+            Self::Gfx950 => GFX950_TARGET_VERSION as u32,
         }
     }
 }
@@ -651,6 +657,7 @@ pub enum Gfx942XgmiRouteErrorV1 {
     SameGpu,
     UnknownGpu(u32),
     GpuIdOutOfRange(u64),
+    UnsupportedTarget,
     DifferentOrMissingHive,
     MissingDirectionalLink,
     AmbiguousDirectionalLink,
@@ -823,6 +830,9 @@ impl TopologySnapshot {
             find_gpu(source_gpu_id).ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(source_gpu_id))?;
         let destination = find_gpu(destination_gpu_id)
             .ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(destination_gpu_id))?;
+        if source.target != GfxTarget::Gfx942 || destination.target != GfxTarget::Gfx942 {
+            return Err(Gfx942XgmiRouteErrorV1::UnsupportedTarget);
+        }
         if source.hive_id == 0 || source.hive_id != destination.hive_id {
             return Err(Gfx942XgmiRouteErrorV1::DifferentOrMissingHive);
         }
@@ -908,8 +918,8 @@ impl HostTopologySnapshot {
     }
 }
 
-/// Discovers the default KFD topology without opening a device or granting
-/// runtime authority.
+/// Discovers gfx942 KFD topology without opening a device or granting runtime
+/// authority. Other targets require explicit read-only selection.
 pub fn discover_default_topology() -> Result<HostTopologySnapshot, TopologyError> {
     discover_default_topology_with::<crate::currentness_diagnostic::Disabled>()
         .map(|(snapshot, ())| snapshot)
@@ -917,14 +927,34 @@ pub fn discover_default_topology() -> Result<HostTopologySnapshot, TopologyError
 
 pub(crate) fn discover_default_topology_with<M: crate::currentness_diagnostic::Mode>()
 -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
-    discover_host_topology_with::<M>(&DiscoveryPaths {
-        topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
-        boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
-        os_release: Path::new(DEFAULT_OS_RELEASE_PATH),
-        amdgpu_module_root: Path::new(DEFAULT_AMDGPU_MODULE_ROOT),
-        device_character_root: Path::new(DEFAULT_DEVICE_CHARACTER_ROOT),
-        sysfs_devices_root: Path::new(DEFAULT_SYSFS_DEVICES_ROOT),
-    })
+    discover_default_topology_for_target_with::<M>(GfxTarget::Gfx942)
+}
+
+/// Observes exactly one selected target across the complete KFD GPU inventory.
+///
+/// A mismatched or mixed inventory is rejected. This does not grant device,
+/// memory, queue, dispatch, or gfx942-specific route authority for gfx950.
+pub fn discover_default_topology_for_target(
+    target: GfxTarget,
+) -> Result<HostTopologySnapshot, TopologyError> {
+    discover_default_topology_for_target_with::<crate::currentness_diagnostic::Disabled>(target)
+        .map(|(snapshot, ())| snapshot)
+}
+
+fn discover_default_topology_for_target_with<M: crate::currentness_diagnostic::Mode>(
+    target: GfxTarget,
+) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    discover_host_topology_with::<M>(
+        &DiscoveryPaths {
+            topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
+            boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
+            os_release: Path::new(DEFAULT_OS_RELEASE_PATH),
+            amdgpu_module_root: Path::new(DEFAULT_AMDGPU_MODULE_ROOT),
+            device_character_root: Path::new(DEFAULT_DEVICE_CHARACTER_ROOT),
+            sysfs_devices_root: Path::new(DEFAULT_SYSFS_DEVICES_ROOT),
+        },
+        target,
+    )
 }
 
 #[derive(Debug)]
@@ -2050,9 +2080,10 @@ fn parse_gpu_node(
     name: String,
     properties_path: &Path,
     properties: &node_properties::NodeProperties,
+    target: GfxTarget,
 ) -> Result<GpuTopologyNode, TopologyError> {
     let encoded_target = required_property(properties, properties_path, "gfx_target_version")?;
-    if encoded_target != GFX942_TARGET_VERSION {
+    if encoded_target != u64::from(target.encoded_version()) {
         return Err(TopologyError::UnsupportedTarget {
             node_id,
             encoded: encoded_target,
@@ -2157,7 +2188,7 @@ fn parse_gpu_node(
         node_id,
         gpu_id,
         name,
-        target: GfxTarget::Gfx942,
+        target,
         pci_device_id: pci_device_id as u16,
         drm_render_minor: drm_render_minor as u16,
         unique_id,
@@ -2325,10 +2356,11 @@ fn correlate_render_node(
 
 fn discover_host_topology_with<M: crate::currentness_diagnostic::Mode>(
     paths: &DiscoveryPaths<'_>,
+    target: GfxTarget,
 ) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
     use crate::currentness_diagnostic::Timing;
     let mut timer = M::Timer::<4>::new();
-    let topology = timer.measure(0, || discover_topology_at(paths.topology_root))?;
+    let topology = timer.measure(0, || discover_topology_at(paths.topology_root, target))?;
     let (boot_id, kernel_release, amdgpu_module) = timer.measure(1, || {
         let boot_id = read_boot_id(paths.boot_id)?;
         let kernel_release = read_kernel_release(paths.os_release)?;
@@ -2382,7 +2414,7 @@ fn discover_host_topology_with<M: crate::currentness_diagnostic::Mode>(
     ))
 }
 
-fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> {
+fn discover_topology_at(root: &Path, target: GfxTarget) -> Result<TopologySnapshot, TopologyError> {
     let root_identity = ensure_directory(root)?;
     validate_root(root)?;
     let generation_path = root.join("generation_id");
@@ -2423,7 +2455,14 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
         let properties_path = path.join("properties");
         let properties = parse_properties(&properties_path)?;
         if gpu_id != 0 {
-            let mut node = parse_gpu_node(*node_id, gpu_id, name, &properties_path, &properties)?;
+            let mut node = parse_gpu_node(
+                *node_id,
+                gpu_id,
+                name,
+                &properties_path,
+                &properties,
+                target,
+            )?;
             node.io_links = parse_topology_links(
                 path,
                 *node_id,
@@ -2517,6 +2556,7 @@ pub(crate) mod tests {
     mod link_properties;
     mod node_properties;
     pub(super) mod prechecked_reads;
+    mod target_selection;
 
     pub(crate) fn count_allocations_for_test<R>(operation: impl FnOnce() -> R) -> (R, usize) {
         directory_entries::allocation_counter::counted(operation)
@@ -2670,7 +2710,7 @@ pub(crate) mod tests {
         }
 
         fn discover(&self) -> Result<TopologySnapshot, TopologyError> {
-            discover_topology_at(&self.root)
+            discover_topology_at(&self.root, GfxTarget::Gfx942)
         }
     }
 
@@ -3135,7 +3175,7 @@ pub(crate) mod tests {
         let fixture = Fixture::valid(1);
         let alias = fixture.root.with_extension("alias");
         symlink(&fixture.root, &alias).unwrap();
-        let error = discover_topology_at(&alias).unwrap_err();
+        let error = discover_topology_at(&alias, GfxTarget::Gfx942).unwrap_err();
         fs::remove_file(alias).unwrap();
         assert!(matches!(error, TopologyError::Symlink(_)));
     }

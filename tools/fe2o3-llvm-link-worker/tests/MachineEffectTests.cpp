@@ -116,7 +116,7 @@ std::string takeError(Error ErrorValue) {
   return toString(std::move(ErrorValue));
 }
 
-std::unique_ptr<TargetMachine> createMachine() {
+std::unique_ptr<TargetMachine> createMachine(StringRef Cpu = "gfx942") {
   static bool Initialized = [] {
     LLVMInitializeAMDGPUTargetInfo();
     LLVMInitializeAMDGPUTarget();
@@ -133,15 +133,16 @@ std::unique_ptr<TargetMachine> createMachine() {
   require(TargetValue != nullptr, LookupError);
   TargetOptions Options;
   std::unique_ptr<TargetMachine> Result(TargetValue->createTargetMachine(
-      TripleValue, "gfx942", "", Options, Reloc::PIC_, CodeModel::Small,
+      TripleValue, Cpu, "", Options, Reloc::PIC_, CodeModel::Small,
       CodeGenOptLevel::None));
   require(Result != nullptr, "cannot create gfx942 target machine");
   return Result;
 }
 
-void configureKernel(Function &Kernel, LLVMContext &Context) {
+void configureKernel(Function &Kernel, LLVMContext &Context,
+                     StringRef Cpu = "gfx942") {
   Kernel.setCallingConv(CallingConv::AMDGPU_KERNEL);
-  Kernel.addFnAttr("target-cpu", "gfx942");
+  Kernel.addFnAttr("target-cpu", Cpu);
   Kernel.addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
   Kernel.addFnAttr("amdgpu-flat-work-group-size", "256,256");
   Metadata *Workgroup[] = {
@@ -153,10 +154,11 @@ void configureKernel(Function &Kernel, LLVMContext &Context) {
 
 std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
                                        uint32_t CodeObjectFlag = 600,
-                                       bool WithNestedHelper = false) {
+                                       bool WithNestedHelper = false,
+                                       StringRef Cpu = "gfx942") {
   LLVMContext Context;
   Module ModuleValue("physical-machine-effect-fixture", Context);
-  auto Machine = createMachine();
+  auto Machine = createMachine(Cpu);
   ModuleValue.setTargetTriple(Triple(TripleName));
   ModuleValue.setDataLayout(Machine->createDataLayout());
   ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version",
@@ -173,7 +175,7 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
       NestedHelper = Function::Create(HelperType, GlobalValue::InternalLinkage,
                                       "alpha_nested_helper", ModuleValue);
       NestedHelper->addFnAttr(Attribute::NoInline);
-      NestedHelper->addFnAttr("target-cpu", "gfx942");
+      NestedHelper->addFnAttr("target-cpu", Cpu);
       NestedHelper->addFnAttr("target-features",
                               "-wavefrontsize32,+wavefrontsize64");
       BasicBlock *NestedBlock =
@@ -186,7 +188,7 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
     Helper = Function::Create(HelperType, GlobalValue::InternalLinkage,
                               "alpha_helper", ModuleValue);
     Helper->addFnAttr(Attribute::NoInline);
-    Helper->addFnAttr("target-cpu", "gfx942");
+    Helper->addFnAttr("target-cpu", Cpu);
     Helper->addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
     BasicBlock *Block = BasicBlock::Create(Context, "entry", Helper);
     IRBuilder<> Builder(Block);
@@ -206,7 +208,7 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
         FunctionType::get(Type::getVoidTy(Context), Arguments, false);
     Function *Kernel =
         Function::Create(Type, GlobalValue::ExternalLinkage, Name, ModuleValue);
-    configureKernel(*Kernel, Context);
+    configureKernel(*Kernel, Context, Cpu);
     BasicBlock *Block = BasicBlock::Create(Context, "entry", Kernel);
     IRBuilder<> Builder(Block);
     if (WithHelper && Name == "alpha") {
@@ -338,10 +340,10 @@ std::vector<uint8_t> makeTrapKernelBitcode() {
   return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
 }
 
-std::vector<uint8_t> makeAtomicBarrierKernelBitcode() {
+std::vector<uint8_t> makeAtomicBarrierKernelBitcode(StringRef Cpu = "gfx942") {
   LLVMContext Context;
   Module ModuleValue("physical-machine-atomic-barrier-fixture", Context);
-  auto Machine = createMachine();
+  auto Machine = createMachine(Cpu);
   ModuleValue.setTargetTriple(Triple(TripleName));
   ModuleValue.setDataLayout(Machine->createDataLayout());
   ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
@@ -352,7 +354,7 @@ std::vector<uint8_t> makeAtomicBarrierKernelBitcode() {
       FunctionType::get(Type::getVoidTy(Context), {GlobalPointer}, false);
   Function *Alpha = Function::Create(AlphaType, GlobalValue::ExternalLinkage,
                                      "alpha", ModuleValue);
-  configureKernel(*Alpha, Context);
+  configureKernel(*Alpha, Context, Cpu);
   BasicBlock *AlphaEntry = BasicBlock::Create(Context, "entry", Alpha);
   IRBuilder<> AlphaBuilder(AlphaEntry);
   AlphaBuilder.CreateAtomicRMW(
@@ -363,7 +365,7 @@ std::vector<uint8_t> makeAtomicBarrierKernelBitcode() {
   FunctionType *ZetaType = FunctionType::get(Type::getVoidTy(Context), false);
   Function *Zeta = Function::Create(ZetaType, GlobalValue::ExternalLinkage,
                                     "zeta", ModuleValue);
-  configureKernel(*Zeta, Context);
+  configureKernel(*Zeta, Context, Cpu);
   BasicBlock *ZetaEntry = BasicBlock::Create(Context, "entry", Zeta);
   IRBuilder<> ZetaBuilder(ZetaEntry);
   ZetaBuilder.CreateCall(
@@ -408,9 +410,12 @@ PhysicalMachineEffectBudget generousBudget() { return {64, 32, 16, 16, 8}; }
 
 PhysicalMachineEffectRequest
 directRequest(std::vector<uint8_t> Payload,
-              PhysicalMachineEffectBudget Budget = generousBudget()) {
-  auto Identities = physicalMachineEffectIdentities();
+              PhysicalMachineEffectBudget Budget = generousBudget(),
+              PhysicalMachineTarget Target =
+                  PhysicalMachineTarget::Gfx942XnackMinusCov6) {
+  auto Identities = physicalMachineEffectIdentities(Target);
   PhysicalMachineEffectRequest Result;
+  Result.Target = Target;
   Result.AnalyzerIdentity = Identities.Analyzer;
   Result.ToolchainIdentity = Identities.Toolchain;
   Result.ExecutionChallenge.fill(0x50);
@@ -449,11 +454,17 @@ void appendText(std::vector<uint8_t> &Output, StringRef Value) {
 std::vector<uint8_t> encodeRequest(
     ArrayRef<uint8_t> Payload,
     ArrayRef<std::pair<std::string, PhysicalMachineEffectBudget>> Entries,
-    std::optional<std::array<uint8_t, 32>> Digest = std::nullopt) {
-  auto Identities = physicalMachineEffectIdentities();
+    std::optional<std::array<uint8_t, 32>> Digest = std::nullopt,
+    PhysicalMachineTarget Target =
+        PhysicalMachineTarget::Gfx942XnackMinusCov6) {
+  const auto Domain =
+      Target == PhysicalMachineTarget::Gfx942XnackMinusCov6
+          ? RequestDomain
+          : nulTerminatedDomain(
+                "FE2O3/GFX950-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0");
+  auto Identities = physicalMachineEffectIdentities(Target);
   std::vector<uint8_t> Output;
-  Output.insert(Output.end(), RequestDomain.bytes_begin(),
-                RequestDomain.bytes_end());
+  Output.insert(Output.end(), Domain.bytes_begin(), Domain.bytes_end());
   appendU32(Output, 0);
   appendU16(Output, 1);
   Output.insert(Output.end(), 32, 0x50);
@@ -760,7 +771,6 @@ void decoderBindsBytesSymbolsAndIdentities() {
   auto WrongIdentity = decodePhysicalMachineEffectRequest(Bytes);
   require(!WrongIdentity, "analyzer identity substitution was accepted");
   consumeError(WrongIdentity.takeError());
-
 }
 
 size_t symbolFileOffset(ArrayRef<uint8_t> Payload, StringRef Name) {
@@ -1742,12 +1752,100 @@ void scalarLoadWidthsUseExactMcEncodings() {
   }
 }
 
+void gfx950TargetBindingIsIndependent() {
+  constexpr auto Gfx950 = PhysicalMachineTarget::Gfx950XnackMinusCov6;
+  const auto Identities942 = physicalMachineEffectIdentities();
+  const auto Identities950 = physicalMachineEffectIdentities(Gfx950);
+  require(Identities942.Analyzer != Identities950.Analyzer &&
+              Identities942.Toolchain != Identities950.Toolchain,
+          "target-specific measured identities alias");
+  require(matchesPhysicalMachineEffectMetadataTargetV1(
+              "amdgcn-amd-amdhsa--gfx950:xnack-", Gfx950) &&
+              !matchesPhysicalMachineEffectMetadataTargetV1(
+                  "amdgcn-amd-amdhsa--gfx942:xnack-", Gfx950) &&
+              !matchesPhysicalMachineEffectMetadataTargetV1(
+                  "amdgcn-amd-amdhsa--gfx950:xnack+", Gfx950) &&
+              !matchesPhysicalMachineEffectMetadataTargetV1(
+                  "amdgcn-amd-amdhsa--gfx950:xnack-"),
+          "target-specific metadata envelope admits another profile");
+  auto Payload =
+      finalize(makeKernelBitcode(false, 600, false, "gfx950"), "gfx950:xnack-");
+  auto Bytes = encodeRequest(
+      Payload, {{"alpha", generousBudget()}, {"zeta", generousBudget()}},
+      std::nullopt, Gfx950);
+  auto RequestValue = decodePhysicalMachineEffectRequest(Bytes);
+  if (!RequestValue)
+    fail(takeError(RequestValue.takeError()));
+  require(RequestValue->Target == Gfx950, "gfx950 request lost target");
+  auto Evidence = analyzePhysicalMachineEffects(*RequestValue);
+  if (!Evidence)
+    fail(takeError(Evidence.takeError()));
+  require(Evidence->Target == Gfx950 && !Evidence->Instructions.empty(),
+          "gfx950 analysis lost target or instructions");
+  auto Bundle = encodePhysicalMachineAnalysisBundle(*Evidence);
+  if (!Bundle)
+    fail(takeError(Bundle.takeError()));
+  const auto BundleDomain =
+      nulTerminatedDomain("FE2O3/GFX950-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0");
+  require(ArrayRef<uint8_t>(*Bundle).take_front(BundleDomain.size()) ==
+              arrayRefFromStringRef(BundleDomain),
+          "gfx950 bundle used another target domain");
+  auto OldEntry = analyzeGfx942PhysicalMachineEffects(*RequestValue);
+  require(!OldEntry, "gfx942 compatibility entry admitted gfx950");
+  consumeError(OldEntry.takeError());
+
+  auto ExpectReject = [](const PhysicalMachineEffectRequest &RequestValue) {
+    auto Result = analyzePhysicalMachineEffects(RequestValue);
+    require(!Result, "cross-target or unsupported request was admitted");
+    consumeError(Result.takeError());
+  };
+  ExpectReject(directRequest(Payload));
+  ExpectReject(directRequest(finalize(makeKernelBitcode(false)),
+                             generousBudget(), Gfx950));
+  auto WrongIdentity = *RequestValue;
+  WrongIdentity.AnalyzerIdentity = Identities942.Analyzer;
+  ExpectReject(WrongIdentity);
+  auto Unknown = *RequestValue;
+  Unknown.Target = static_cast<PhysicalMachineTarget>(3);
+  ExpectReject(Unknown);
+  auto WrongMetadata = Payload;
+  support::endian::write32le(WrongMetadata.data() + 48, 0x64c);
+  ExpectReject(directRequest(std::move(WrongMetadata)));
+
+  auto Atomic = directRequest(
+      finalize(makeAtomicBarrierKernelBitcode("gfx950"), "gfx950:xnack-"),
+      generousBudget(), Gfx950);
+  auto Unsupported = analyzePhysicalMachineEffects(Atomic);
+  require(!Unsupported, "gfx950 atomic/barrier classification was admitted");
+  require(takeError(Unsupported.takeError())
+                  .find("unsupported gfx950 effect classification") !=
+              std::string::npos,
+          "gfx950 atomic/barrier rejection occurred for an unrelated reason");
+
+  std::vector<uint8_t> Challenge;
+  const auto ChallengeDomain = nulTerminatedDomain(
+      "FE2O3/GFX950-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0");
+  Challenge.insert(Challenge.end(), ChallengeDomain.bytes_begin(),
+                   ChallengeDomain.bytes_end());
+  appendU32(Challenge, ChallengeDomain.size() + 38);
+  appendU16(Challenge, 1);
+  Challenge.insert(Challenge.end(), 32, 0x6a);
+  auto Identity =
+      encodePhysicalMachineEffectIdentityResponse(Challenge, Gfx950);
+  if (!Identity)
+    fail(takeError(Identity.takeError()));
+  auto CrossIdentity = encodePhysicalMachineEffectIdentityResponse(Challenge);
+  require(!CrossIdentity, "gfx942 identity probe admitted gfx950 challenge");
+  consumeError(CrossIdentity.takeError());
+}
+
 } // namespace
 
 int main(int ArgumentCount, char **ArgumentValues) {
   require(ArgumentCount == 1 || ArgumentCount == 2,
           "expected at most one HSACO output path");
   closedAtomicCollectiveOpcodeGrammarIsExact();
+  gfx950TargetBindingIsIndependent();
   identityProbeBindsFreshChallenge();
   targetEnvelopeRejectsAlternatives();
   exactDynamicSymbolicDeclarationIsAccepted();

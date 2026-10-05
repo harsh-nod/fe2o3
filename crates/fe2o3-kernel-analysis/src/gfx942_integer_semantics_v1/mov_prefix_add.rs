@@ -46,6 +46,11 @@ impl Gfx942MovPrefixAddU32V1 {
         add_offset: u64,
     ) -> Result<Self, Gfx942MovPrefixAddErrorV1> {
         use Gfx942MovPrefixAddErrorV1 as E;
+        if trace.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(E::Instruction(
+                Gfx942IntegerSemanticsErrorV1::UnsupportedTarget,
+            ));
+        }
         if first_offset > add_offset {
             return Err(E::Interval);
         }

@@ -136,6 +136,9 @@ impl Gfx942ExecControlV1 {
     pub fn derive(
         trace: &PhysicalMachineTraceEvidenceV1,
     ) -> Result<Self, Gfx942ExecControlErrorV1> {
+        if trace.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(Gfx942ExecControlErrorV1::UnsupportedTarget);
+        }
         derive_exec_control(trace)
     }
 
@@ -534,6 +537,7 @@ fn consume_work(work: &mut usize) -> Result<(), Gfx942ExecControlErrorV1> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Gfx942ExecControlErrorV1 {
+    UnsupportedTarget,
     Dataflow(Gfx942MachineDataflowErrorV1),
     RegisterFacts(Gfx942RegisterFactsErrorV1),
     UnknownFunction(String),

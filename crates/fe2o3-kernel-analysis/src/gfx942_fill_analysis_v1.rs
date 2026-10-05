@@ -66,6 +66,9 @@ pub fn check_gfx942_fill_analysis_v1<'a>(
     symbol: &str,
 ) -> Result<CheckedGfx942FillAnalysisV1<'a>, Gfx942FillAnalysisErrorV1> {
     use Gfx942FillAnalysisErrorV1 as E;
+    if execution.request().target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+        return Err(E::UnsupportedTarget);
+    }
     let [requested] = execution.request().entries() else {
         return Err(E::Entry);
     };
@@ -199,6 +202,7 @@ fn check_profile(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942FillAnalysisErrorV1 {
+    UnsupportedTarget,
     Entry,
     Descriptor,
     Kernel(Gfx942FillErrorV1),

@@ -744,6 +744,7 @@ name = "fe2o3-amdhsa-loader"
 version = "0.1.0"
 dependencies = [
  "fe2o3-hsaco",
+ "rmpv",
  "sha2 0.11.0",
 ]
 
@@ -1348,6 +1349,7 @@ dependencies = [
  "fe2o3-resource-accounting",
  "fe2o3-runtime-model",
  "libc",
+ "rmpv",
  "rustix",
  "sha2 0.11.0",
  "zeroize",

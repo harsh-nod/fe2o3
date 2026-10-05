@@ -10,15 +10,16 @@ dispatch. Envelope planning and materialization allocate nothing; the optional
 semantic closure composes the repository's bounded, allocating
 `fe2o3-hsaco` inspector instead of maintaining a second metadata parser.
 
-## Admitted foundation profile
+## Admitted foundation profiles
 
-The first profile is intentionally the envelope currently emitted by fe2o3's
-pinned LLVM/LLD finalizer:
+Both profiles require the same bounded LLVM/LLD load-envelope shape, with
+independently selected, exact target flags:
 
 - ELF64, little-endian, AMDGPU HSA OSABI, ABI byte 4 (COV6), `ET_DYN`, and
   `EM_AMDGPU`;
-- zero ELF entry point and exact `e_flags = 0x64c`, meaning `gfx942`, XNACK
-  disabled, and SRAM-ECC unspecified;
+- zero ELF entry point and exact `e_flags = 0x64c` for `Gfx942XnackOffCov6`,
+  or `0x64f` for `Gfx950XnackOffCov6`; both require XNACK disabled and
+  SRAM-ECC unspecified;
 - exactly one each of the reviewed `PT_PHDR`, `PT_DYNAMIC`, `PT_NOTE`,
   `PT_GNU_STACK`, and `PT_GNU_RELRO` records, plus exactly three `PT_LOAD`
   records with `R`, `R|X`, and `R|W` permissions;
@@ -33,6 +34,23 @@ pinned LLVM/LLD finalizer:
 The returned segments are sorted by virtual address independent of program
 header order. Every range and page rounding is checked before it is exposed.
 The plan is validated data only; it grants no load or launch authority.
+
+The original `LOADER_PROFILE_ID` and gfx942 closure encoding remain unchanged.
+`GFX950_LOADER_PROFILE_ID` is separate; `AdmittedProfile::profile_id()` selects
+the identity used in the closure digest. The profile retained by the envelope
+must match the metadata processor and feature flags, not only the ELF header.
+Adding this inert profile does not extend any gfx942 runtime, device-admission,
+Worker V3, machine-refinement, or exact vecadd authority.
+
+Flag values follow LLVM's [AMDGPU ELF definitions](https://github.com/llvm/llvm-project/blob/main/llvm/include/llvm/BinaryFormat/ELF.h).
+Descriptor validation reuses `fe2o3-hsaco`'s existing explicit gfx950 checks,
+including register capacity, accumulator offset, reserved resource bits, and
+architected-flat-scratch restrictions. The encoding granules agree with LLVM's
+[AMDGPU register encoding helpers](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/Utils/AMDGPUBaseInfo.cpp).
+Loader tests use clearly labeled synthetic metadata mutations and preserve a
+pre-change gfx942 closure digest. An optional externally supplied gfx950 object
+test checks a real envelope, but neither test establishes instruction semantics
+or hardware execution.
 
 ## Content-bound envelope and safe materialization
 
@@ -72,7 +90,8 @@ without substitution and enforce the remaining lifecycle.
 `ValidatedEnvelope::bind_kernel` consumes the content-bound envelope and runs
 the repository's existing bounded `fe2o3-hsaco` MessagePack, symbol, descriptor,
 and resource inspector over the same retained byte slice. The composition
-requires COV6 metadata 1.2 for exact `gfx942:xnack-`; rejects unknown metadata
+requires COV6 metadata 1.2 for the selected exact `gfx942:xnack-` or
+`gfx950:xnack-` profile; rejects unknown metadata
 fields and malformed or over-limit documents through the inspector; and
 requires both parsers to identify the same physical metadata descriptor offset
 and length. `printf` roots, init/fini kernels, dynamic stacks, and device

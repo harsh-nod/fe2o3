@@ -102,7 +102,10 @@ fn prefix_machine_coordinates(
     add_offset: u64,
 ) -> Result<PrefixCoordinates, Gfx942LocalMovPrefixCheckedU32AddErrorV1> {
     use Gfx942LocalMovPrefixCheckedU32AddErrorV1 as E;
-    if analysis.effects().request_identity() != request.identity()
+    if request.target() != fe2o3_kernel_analysis::PhysicalMachineTargetV1::Gfx942XnackMinusCov6
+        || analysis.effects().target() != request.target()
+        || analysis.trace().target() != request.target()
+        || analysis.effects().request_identity() != request.identity()
         || analysis.effects().payload_identity() != request.payload_identity()
         || request
             .entries()

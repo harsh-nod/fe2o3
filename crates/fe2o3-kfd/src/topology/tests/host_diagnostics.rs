@@ -111,7 +111,7 @@ impl HostFixture {
     }
 
     fn discover<M: Mode>(&self) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
-        discover_host_topology_with::<M>(&self.paths())
+        discover_host_topology_with::<M>(&self.paths(), GfxTarget::Gfx942)
     }
 }
 

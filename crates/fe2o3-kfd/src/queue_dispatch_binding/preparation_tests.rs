@@ -15,6 +15,13 @@ mod template_binding_tests;
 #[path = "conditional_fill_tests.rs"]
 mod conditional_fill_tests;
 
+#[path = "target_profile_tests.rs"]
+mod target_profile_tests;
+
+pub(in crate::queue) use target_profile_tests::{
+    synthetic_gfx950_image_v1, synthetic_gfx950_program_v1,
+};
+
 pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourceOwnerV1) {
     let mut memory = Memory::new(true);
     let data = memory.roster();

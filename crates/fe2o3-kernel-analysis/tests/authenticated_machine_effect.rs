@@ -293,6 +293,100 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     );
 }
 
+#[test]
+#[ignore = "requires a deployed immutable native analyzer and an actual gfx950 HSACO"]
+fn configured_native_gfx950_worker_retains_target_bound_analysis() {
+    use fe2o3_kernel_analysis::{
+        Gfx942FillAnalysisErrorV1, PhysicalMachineTargetV1 as Target,
+        check_gfx942_fill_analysis_v1,
+        inspect_physical_machine_effect_worker_candidate_for_target_v1,
+    };
+    let path = std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER").expect("native worker");
+    let payload = std::env::var_os("FE2O3_MACHINE_ANALYSIS_NATIVE_HSACO").expect("gfx950 HSACO");
+    let symbol = std::env::var("FE2O3_MACHINE_ANALYSIS_NATIVE_ENTRY").expect("single entry symbol");
+    let native_limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+        DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1 * 2,
+        1024 * 1024,
+        16 * 1024,
+    )
+    .unwrap();
+    let target = Target::Gfx950XnackMinusCov6;
+    let candidate = inspect_physical_machine_effect_worker_candidate_for_target_v1(
+        &path,
+        target,
+        native_limits,
+    )
+    .unwrap();
+    let worker =
+        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), native_limits)
+            .unwrap();
+    worker
+        .verify_deployed_no_fork_profile_for_test(native_limits)
+        .unwrap();
+    assert_eq!(worker.policy().target(), target);
+    let wrong_policy = PhysicalMachineEffectWorkerPolicyV1::new(
+        candidate.policy().executable(),
+        candidate.policy().runtime_closure(),
+        candidate.analyzer_identity(),
+        candidate.toolchain_identity(),
+    )
+    .unwrap();
+    assert!(
+        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, wrong_policy, native_limits)
+            .is_err()
+    );
+    let execution = worker
+        .analyze(
+            fs::read(payload).unwrap(),
+            vec![
+                PhysicalMachineEffectEntryRequestV1::new(
+                    &symbol,
+                    PhysicalMachineEffectBudgetV1::new(64, 32, 16, 16, 8),
+                )
+                .unwrap(),
+            ],
+            native_limits,
+        )
+        .unwrap();
+    assert_eq!(execution.request().target(), target);
+    assert_eq!(execution.analysis().target(), target);
+    assert_eq!(execution.analysis().trace().target(), target);
+    assert!(execution.analysis().trace().instructions().len() > 2);
+    assert!(execution.authenticates_analyzer_execution());
+    assert!(!execution.analysis().establishes_machine_semantics());
+    assert!(!execution.analysis().establishes_compiler_refinement());
+    assert!(!execution.grants_launch_authority());
+    assert!(
+        execution.canonical_receipt_bytes().starts_with(
+            b"FE2O3/GFX950-PHYSICAL-MACHINE-ANALYSIS-AUTHENTICATED-RECEIPT-RECORD/V1\0"
+        )
+    );
+    assert_eq!(
+        check_gfx942_fill_analysis_v1(&execution, &symbol).unwrap_err(),
+        Gfx942FillAnalysisErrorV1::UnsupportedTarget
+    );
+    persist_configured_native_record(
+        "FE2O3_MACHINE_ANALYSIS_NATIVE_REQUEST_PATH",
+        execution.request().canonical_bytes(),
+    );
+    persist_configured_native_record(
+        "FE2O3_MACHINE_ANALYSIS_NATIVE_BUNDLE_PATH",
+        execution.analysis().canonical_bytes(),
+    );
+    if let Some(path) = std::env::var_os("FE2O3_MACHINE_ANALYSIS_NATIVE_RECEIPT_PATH") {
+        execution.persist_create_new(&path).unwrap();
+        assert_eq!(fs::read(path).unwrap(), execution.canonical_receipt_bytes());
+    }
+    eprintln!(
+        "native gfx950 analysis: request_sha256={} bundle_sha256={} receipt_sha256={} blocks={} instructions={}",
+        hex_sha256(execution.request().identity().sha256()),
+        hex_sha256(execution.analysis().identity().sha256()),
+        hex_sha256(execution.identity().sha256()),
+        execution.analysis().trace().blocks().len(),
+        execution.analysis().trace().instructions().len()
+    );
+}
+
 fn hex_sha256(bytes: [u8; 32]) -> String {
     use std::fmt::Write as _;
 

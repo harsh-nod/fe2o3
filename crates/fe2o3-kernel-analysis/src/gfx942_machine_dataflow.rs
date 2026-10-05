@@ -85,6 +85,9 @@ impl Gfx942MachineDataflowV1 {
     pub fn derive(
         trace: &PhysicalMachineTraceEvidenceV1,
     ) -> Result<Self, Gfx942MachineDataflowErrorV1> {
+        if trace.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(Gfx942MachineDataflowErrorV1::UnsupportedTarget);
+        }
         derive_dataflow(trace)
     }
 
@@ -552,6 +555,7 @@ fn consume_work(work: &mut usize) -> Result<(), Gfx942MachineDataflowErrorV1> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Gfx942MachineDataflowErrorV1 {
+    UnsupportedTarget,
     RegisterFacts(Gfx942RegisterFactsErrorV1),
     FunctionSetMismatch,
     UnknownFunction(String),

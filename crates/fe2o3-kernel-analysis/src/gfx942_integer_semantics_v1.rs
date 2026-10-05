@@ -88,6 +88,9 @@ impl Gfx942SAddU32V1 {
         instruction: &PhysicalMachineInstructionTraceV1,
     ) -> Result<Self, Gfx942IntegerSemanticsErrorV1> {
         use Gfx942IntegerSemanticsErrorV1 as E;
+        if instruction.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(E::UnsupportedTarget);
+        }
         let encoding = instruction.encoding();
         let word_bytes: [u8; 4] = encoding
             .get(..4)
@@ -221,6 +224,7 @@ fn matches_source(value: &PhysicalMachineOperandValueV1, source: Gfx942U32Source
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942IntegerSemanticsErrorV1 {
+    UnsupportedTarget,
     InvalidEncodingLength,
     UnsupportedEncoding,
     UnsupportedDestination(u8),

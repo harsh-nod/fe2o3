@@ -76,6 +76,31 @@ impl Fixture {
         PhysicalMachineEffectRequestV1,
         PhysicalMachineAnalysisEvidenceV1,
     ) {
+        self.analysis_for_target(PhysicalMachineTargetV1::Gfx942XnackMinusCov6)
+    }
+
+    pub fn analysis_for_target(
+        &self,
+        target: PhysicalMachineTargetV1,
+    ) -> (
+        PhysicalMachineEffectRequestV1,
+        PhysicalMachineAnalysisEvidenceV1,
+    ) {
+        let (effect_domain, trace_domain, bundle_domain, tag): (&[u8], &[u8], &[u8], u16) =
+            match target {
+                PhysicalMachineTargetV1::Gfx942XnackMinusCov6 => (
+                    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1,
+                    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1,
+                    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1,
+                    1,
+                ),
+                PhysicalMachineTargetV1::Gfx950XnackMinusCov6 => (
+                    b"FE2O3/GFX950-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0",
+                    b"FE2O3/GFX950-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0",
+                    b"FE2O3/GFX950-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0",
+                    2,
+                ),
+            };
         assert!(!self.instructions.is_empty());
         assert!(!(self.backedge && self.split_at.is_some()));
         let mut payload = vec![0; 4];
@@ -95,7 +120,8 @@ impl Fixture {
         }
         let end_offset = payload.len() as u64;
         payload.extend_from_slice(&[0, 0, 0x81, 0xbf]);
-        let request = PhysicalMachineEffectRequestV1::new(
+        let request = PhysicalMachineEffectRequestV1::new_for_target(
+            target,
             PhysicalMachineExecutionChallengeV1::from_sha256_bytes([0x10; 32]),
             PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0x11; 32]),
             PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0x22; 32]),
@@ -109,7 +135,7 @@ impl Fixture {
             ],
         )
         .unwrap();
-        let mut effects = Vec::from(PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1);
+        let mut effects = Vec::from(effect_domain);
         u32v(&mut effects, 0);
         u16v(&mut effects, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1);
         effects.extend_from_slice(&request.execution_challenge().as_bytes());
@@ -125,7 +151,7 @@ impl Fixture {
         );
         effects.extend_from_slice(&request.analyzer_identity().as_bytes());
         effects.extend_from_slice(&request.toolchain_identity().as_bytes());
-        u16v(&mut effects, 1);
+        u16v(&mut effects, tag);
         u16v(&mut effects, 1);
         text(&mut effects, &self.function);
         effects.extend_from_slice(&[0x33; 32]);
@@ -142,10 +168,10 @@ impl Fixture {
         u64v(&mut effects, end_offset);
         effects.push(4);
         u16v(&mut effects, 0);
-        finish(&mut effects, PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1);
+        finish(&mut effects, effect_domain);
         let effects =
             PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &effects).unwrap();
-        let mut trace = Vec::from(PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1);
+        let mut trace = Vec::from(trace_domain);
         u32v(&mut trace, 0);
         u16v(&mut trace, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1);
         trace.extend_from_slice(&request.execution_challenge().as_bytes());
@@ -166,7 +192,7 @@ impl Fixture {
         );
         trace.extend_from_slice(&request.analyzer_identity().as_bytes());
         trace.extend_from_slice(&request.toolchain_identity().as_bytes());
-        u16v(&mut trace, 1);
+        u16v(&mut trace, tag);
         let split = self.split_at.unwrap_or(self.instructions.len());
         let two_blocks = self.split_at.is_some() || self.backedge;
         if self.backedge {
@@ -278,8 +304,8 @@ impl Fixture {
             u16v(&mut trace, 0);
         }
         tail(&mut trace, 4, 0, 4);
-        finish(&mut trace, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1);
-        let mut bundle = Vec::from(PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1);
+        finish(&mut trace, trace_domain);
+        let mut bundle = Vec::from(bundle_domain);
         u32v(&mut bundle, 0);
         u16v(
             &mut bundle,
@@ -289,7 +315,7 @@ impl Fixture {
         bundle.extend_from_slice(effects.canonical_bytes());
         u32v(&mut bundle, trace.len() as u32);
         bundle.extend_from_slice(&trace);
-        finish(&mut bundle, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1);
+        finish(&mut bundle, bundle_domain);
         let analysis =
             PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &bundle).unwrap();
         (request, analysis)

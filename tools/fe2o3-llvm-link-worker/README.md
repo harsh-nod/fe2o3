@@ -48,8 +48,9 @@ machine code or grant source-to-machine refinement authority.
 
 ## Physical machine effects
 
-The companion machine-effect analyzer reads a bounded `gfx942:xnack-` COV6
-HSACO, validates its loader-visible ELF and metadata views, resolves a bounded
+The companion machine-effect analyzer reads a bounded, explicitly selected
+`gfx942:xnack-` or `gfx950:xnack-` COV6 HSACO, validates its loader-visible ELF
+and metadata views, resolves a bounded
 direct-call graph, and emits one canonical analysis bundle. The bundle contains
 both static global-address, global-read, global-write, and return sites and the
 complete decoded instruction/CFG trace: exact encodings, operands, explicit and
@@ -61,7 +62,7 @@ keeps both records indivisible at the worker boundary.
 
 The analyzer accepts arbitrary canonical entry symbols and uses LLVM MC
 instruction properties rather than a workload-specific opcode or CFG profile.
-Unsupported memory spaces, atomics, indirect control flow, self-targeting
+Unsupported memory spaces, unclassified atomics/collectives, indirect control flow, self-targeting
 instructions, recursion, and unmodeled side effects fail closed. The exact
 gfx942 `S_TRAP_vi` form is retained as a `may_trap` trace fact so a downstream
 machine-semantics checker can prove the site unreachable; analyzer acceptance
@@ -75,6 +76,19 @@ bytes. Accepting a backedge does not prove termination, a trip count,
 loop-carried dataflow, or recurrence semantics. The evidence also does not
 prove dynamic execution counts, concrete addresses, bounds, race freedom,
 compiler refinement, source properties, or launch safety.
+
+The gfx950 profile currently covers ordinary scalar/global loads, global stores,
+and bounded decoded control flow. Atomics, DS operations, workgroup barriers,
+and traps are rejected in both the native analyzer and Rust trace decoder until
+their target-specific classification is reviewed. It does not reuse a gfx942
+semantic theorem. Requests, effects, instruction traces, bundles, identity
+probes, and authenticated receipts retain distinct GFX950 domains and target
+tag 2; gfx942 domains and tag 1 are unchanged. Existing gfx942 APIs still select
+only gfx942. The explicit target API is
+`inspect_physical_machine_effect_worker_candidate_for_target_v1`, followed by
+opening the candidate's exact target-bound deployment policy. A candidate remains
+inert measurement, not deployment approval. Existing gfx942 semantic consumers
+reject gfx950 evidence even when its instruction bytes happen to match.
 
 The Rust authenticated execution API copies the exact worker into a sealed
 memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains

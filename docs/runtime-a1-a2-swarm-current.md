@@ -2,7 +2,8 @@
 
 ## Milestone Snapshot
 
-Local qualification snapshot: 2026-10-03 UTC.
+Status snapshot: 2026-10-05 UTC. Earlier qualification results below retain their
+original source, target and campaign scope.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 2026-10-03: the issue remained Open. Published baseline `bafbfe739` includes
 public native-peer opt-in, cold copy-only admission, repeated ring reuse
@@ -45,6 +46,19 @@ earlier DNS failures were worker-namespace observations, not evidence of a host
 outage. Its process roster shows GPU 0 occupied and admits GPUs 1/6/7. Every
 native run still requires a new occupancy check; no exclusive reservation or
 performance qualification follows from that observation.
+The [October 5 gfx950 foundations checkpoint](evidence/dev-gfx950-foundations-2026-10-05/README.md)
+updates host access and target prerequisites: SSH now reaches `mi300x`,
+`mi300x-2`, `mi350` and `mi350-2`; noninteractive root via sudo works on both MI350
+hosts. MI350 exposes eight gfx950 GPUs and MI350-2 exposes one. The required
+fixed services remain absent. One read-only target-specific topology test passes
+on MI350, correlating all eight GPUs with their render nodes and hardware UIDs.
+Default gfx942 discovery and gfx942 route authority still reject gfx950.
+The exact-target gfx950 loader and native machine analyzer pass their scoped
+CPU qualification. All four native CTest groups pass, as do real authenticated
+gfx950 analysis and the existing gfx942 authenticated fill regression on the
+MI350-built ROCm 7.2.1 worker. Retained gfx950 records reopen offline. These are
+data/analysis foundations, not native gfx950 application execution, a gfx950
+semantic theorem or milestone closure. Existing gfx942 authority is not widened.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -53,7 +67,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
 | A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Finite compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar/list forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; incomplete | Application kernel authority, native generated-argument qualification, eight-GPU coverage and post-arm/native partial-failure qualification remain |
+| A3: local multi-GPU | Finite gfx942 compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar/list forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; gfx950 data/analysis foundations scoped-qualified; incomplete | Application kernel authority, native generated-argument qualification, gfx950 native/proof admission and admitted two-GPU application, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures, ordinary native cleanup and narrowly certified pre-arm host rejection exist; isolated device/network/participant/collective fault campaigns remain |
@@ -66,10 +80,36 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Current Priority: Working Multi-GPU
 
-Expedited work order (2026-10-03): distinguish usable native multi-GPU from
+Expedited work order (2026-10-05): distinguish usable native multi-GPU from
 protected admission of ordinary application kernels. The existing finite
-compute and production copy-only paths are functional; adding compiler evidence
+gfx942 compute and production copy-only paths are functional; adding compiler evidence
 must not become a prerequisite for running their already-admitted smoke tests.
+
+The current MI350 path requires exact-target authority before GPU execution:
+
+1. Implement the separate gfx950 device model and read-only queue/CWSR planning,
+   with explicit queue-target/device-profile agreement and independent contracts.
+2. Add native device/memory/queue custody and a bounded barrier-only probe, then
+   directional peer/SDMA admission. Preserve the qualified cross-target rejection;
+   read-only topology and parsed machine facts do not grant these capabilities.
+3. Establish gfx950 conditional-fill machine semantic refinement and runtime
+   authority, then qualify the protected gfx950 source campaign with the required
+   private services. Existing gfx942 proofs and approvals are not transferable.
+4. Select a freshly observed free MI350 pair and run the admitted two-GPU
+   application with exact output, bidirectional native peers and explicit cleanup.
+   Root access and an eight-GPU inventory do not establish device idleness.
+
+Follow the [current multi-GPU work order](runtime-multi-gpu-critical-path.md) for
+the deployment and hardware gates. The
+[gfx950 native-admission work order](runtime-gfx950-native-admission-work-order.md)
+maps the unimplemented device/model and queue/CWSR slices, including mandatory
+queue-target/device-target agreement. No full HIP/HSA parity, performance advantage
+or order-of-magnitude speedup is established by this work.
+
+### Retained October 3 Checkpoints
+
+These checkpoints retain their original qualification scope. Their next-step
+wording is superseded by the October 5 work order above.
 
 1. Selected-pair qualification is now repeatable on shared hardware. The
    [four-case MI300X checkpoint](evidence/mi300x-selected-pair-smoke-2026-10-03/README.md)

@@ -46,6 +46,80 @@ fn scaled_scope(capacity: Gfx942FixedDispatchCapacityV1) -> (Box<ScaledScope>, R
 }
 
 #[test]
+fn auxiliary_rejects_gfx950_before_initializer_or_native_parent_entry() {
+    use crate::queue::dispatch_binding::preparation::{
+        synthetic_gfx950_image_v1, synthetic_gfx950_program_v1,
+    };
+    let image = synthetic_gfx950_image_v1();
+    let programs = [synthetic_gfx950_program_v1(&image)];
+    let (scope, trace) = scaled_scope(Gfx942FixedDispatchCapacityV1::default());
+    let before = scope
+        .parent
+        .original
+        .as_ref()
+        .unwrap()
+        .primary
+        .completed
+        .as_ref()
+        .unwrap()
+        .engine
+        .backend
+        .session
+        .observation();
+    let calls = trace.borrow().calls.clone();
+    let dropped = Cell::new(0);
+    let capture = PanickingCapture(&dropped);
+    let mut retained = None;
+    let result = run_auxiliary_construction_with_v1(
+        scope,
+        4096,
+        &programs,
+        PreparedAuxiliaryComputeLaneSlotV1 {
+            index: 0,
+            generation: 1,
+            append: true,
+        },
+        move |_| {
+            let _ = &capture;
+            panic!("wrong-target initializer must not execute")
+        },
+        |scope| retained = Some(scope),
+    );
+    assert!(matches!(
+        result,
+        Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+            Gfx942DispatchBindingErrorV1::InvalidCode(
+                "kernel target profile is not gfx942:xnack-/COV6"
+            )
+        ))
+    ));
+    assert_eq!(dropped.get(), 0);
+    assert_eq!(trace.borrow().calls, calls);
+    let retained = retained.unwrap();
+    assert!(retained.terminal_parent.is_none());
+    assert!(!retained.parent.poisoned);
+    assert!(retained.construction.preparation.is_none());
+    assert!(retained.construction.data.is_none());
+    assert!(retained.construction.prepared_generation.is_none());
+    assert_eq!(
+        retained
+            .parent
+            .original
+            .as_ref()
+            .unwrap()
+            .primary
+            .completed
+            .as_ref()
+            .unwrap()
+            .engine
+            .backend
+            .session
+            .observation(),
+        before
+    );
+}
+
+#[test]
 fn scaled_auxiliary_preflight_retains_uninvoked_captures_without_parent_mutation() {
     for record_exhaustion in [false, true] {
         for retain_panics in [false, true] {

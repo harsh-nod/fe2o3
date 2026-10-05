@@ -27,6 +27,9 @@ impl Gfx942SMovB32V1 {
         instruction: &PhysicalMachineInstructionTraceV1,
     ) -> Result<Self, Gfx942IntegerSemanticsErrorV1> {
         use Gfx942IntegerSemanticsErrorV1 as E;
+        if instruction.target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+            return Err(E::UnsupportedTarget);
+        }
         let encoding = instruction.encoding();
         let word_bytes: [u8; 4] = encoding
             .get(..4)

@@ -61,7 +61,7 @@ use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrayvec::ArrayVec;
-use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
+use fe2o3_amdhsa_loader::{AdmittedProfile, KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
     AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
     AqlRingCapacityV1, Cov6ImplicitDispatchShapeV1, ObservedGpuAddressV1,
@@ -3529,6 +3529,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
     data: Vec<DeviceDataAllocationInputV1>,
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
+    validate_gfx942_kernel_profile(&kernel)?;
     let generation = DispatchGenerationOwnerV1::new()?;
     let resources = kernel.resources();
     let plan = *kernel.envelope().plan();
@@ -3804,6 +3805,23 @@ fn validate_packet_program_indices<const N: usize>(
     Ok(())
 }
 
+fn validate_gfx942_kernel_profile(
+    kernel: &ValidatedKernelEnvelope<'_>,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if kernel.envelope().plan().profile() != AdmittedProfile::Gfx942XnackOffCov6 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "kernel target profile is not gfx942:xnack-/COV6",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_gfx942_kernel_profiles(
+    programs: &[ValidatedKernelEnvelope<'_>],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    programs.iter().try_for_each(validate_gfx942_kernel_profile)
+}
+
 fn plan_public_fixed_dispatch_resources<const N: usize>(
     programs: &[ValidatedKernelEnvelope<'_>],
     packets: &[Gfx942FixedDispatchPacketV1; N],
@@ -3817,6 +3835,7 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
             maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
         });
     }
+    validate_gfx942_kernel_profiles(programs)?;
     if data_layouts.is_empty() || data_layouts.len() > MAX_DISPATCH_DATA_LEASES_V1 {
         return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
             requested: data_layouts.len(),
@@ -3984,6 +4003,7 @@ pub fn project_gfx942_fixed_host_packet_v1(
     mut packet: Gfx942FixedDispatchPacketV1,
     buffer_lengths: &[usize],
 ) -> Result<Gfx942FixedDispatchPacketV1, Gfx942DispatchBindingErrorV1> {
+    validate_gfx942_kernel_profile(program)?;
     if buffer_lengths.is_empty() || buffer_lengths.len() > MAX_DISPATCH_DATA_LEASES_V1 {
         return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
             requested: buffer_lengths.len(),

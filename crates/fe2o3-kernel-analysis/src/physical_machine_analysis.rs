@@ -1,4 +1,4 @@
-//! One canonical response from the gfx942 physical-machine analyzer.
+//! One canonical response from an exact-target physical-machine analyzer.
 //!
 //! The bundle keeps static effects and the exact LLVM/MC instruction trace
 //! indivisible at the worker boundary. Decoding independently validates both
@@ -17,8 +17,6 @@ use std::{error::Error, fmt};
 
 pub const PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0";
-const PHYSICAL_MACHINE_ANALYSIS_BUNDLE_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE-IDENTITY/V1\0";
 pub const PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1: u16 = 1;
 pub const MAX_PHYSICAL_MACHINE_ANALYSIS_BUNDLE_BYTES_V1: usize =
     MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1 + MAX_PHYSICAL_MACHINE_TRACE_BYTES_V1 + 1024;
@@ -55,7 +53,7 @@ impl PhysicalMachineAnalysisEvidenceV1 {
             return Err(PhysicalMachineAnalysisEvidenceErrorV1::RecordTooLarge);
         }
         let mut input = BundleReader::new(bytes);
-        input.expect(PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1)?;
+        input.expect(request.target().bundle_domain())?;
         if input.u32()? as usize != bytes.len() {
             return Err(PhysicalMachineAnalysisEvidenceErrorV1::LengthMismatch);
         }
@@ -90,6 +88,10 @@ impl PhysicalMachineAnalysisEvidenceV1 {
         &self.effects
     }
 
+    pub const fn target(&self) -> crate::PhysicalMachineTargetV1 {
+        self.effects.target()
+    }
+
     pub const fn trace(&self) -> &PhysicalMachineTraceEvidenceV1 {
         &self.trace
     }
@@ -101,7 +103,7 @@ impl PhysicalMachineAnalysisEvidenceV1 {
     pub fn identity(&self) -> PhysicalMachineAnalysisBundleIdentityV1 {
         PhysicalMachineAnalysisBundleIdentityV1 {
             sha256: domain_hash(
-                PHYSICAL_MACHINE_ANALYSIS_BUNDLE_IDENTITY_DOMAIN_V1,
+                self.target().bundle_identity_domain(),
                 &self.canonical_bytes,
             ),
             byte_len: self.canonical_bytes.len() as u64,

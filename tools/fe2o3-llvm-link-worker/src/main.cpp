@@ -238,18 +238,20 @@ int writeResponse(Response ResponseValue) {
 }
 
 int runPhysicalMachineAnalysis(llvm::ArrayRef<uint8_t> Bytes,
-                               const std::array<uint8_t, 32> &Challenge) {
+                               const std::array<uint8_t, 32> &Challenge,
+                               PhysicalMachineTarget Target) {
   auto RequestValue = decodePhysicalMachineEffectRequest(Bytes);
   if (!RequestValue) {
     std::string Diagnostic = llvm::toString(RequestValue.takeError());
     std::fprintf(stderr, "%s\n", Diagnostic.c_str());
     return 65;
   }
-  if (RequestValue->ExecutionChallenge != Challenge) {
-    std::fprintf(stderr, "control and request challenges disagree\n");
+  if (RequestValue->ExecutionChallenge != Challenge ||
+      RequestValue->Target != Target) {
+    std::fprintf(stderr, "control and request target/challenge disagree\n");
     return 65;
   }
-  auto Evidence = analyzeGfx942PhysicalMachineEffects(*RequestValue);
+  auto Evidence = analyzePhysicalMachineEffects(*RequestValue);
   if (!Evidence) {
     std::string Diagnostic = llvm::toString(Evidence.takeError());
     std::fprintf(stderr, "%s\n", Diagnostic.c_str());
@@ -269,14 +271,15 @@ int runPhysicalMachineAnalysis(llvm::ArrayRef<uint8_t> Bytes,
 }
 
 int runPhysicalMachineEffectIdentity(llvm::ArrayRef<uint8_t> Bytes,
-                                     const std::array<uint8_t, 32> &Challenge) {
+                                     const std::array<uint8_t, 32> &Challenge,
+                                     PhysicalMachineTarget Target) {
   if (Bytes.size() < Challenge.size() ||
       !std::equal(Challenge.begin(), Challenge.end(),
                   Bytes.end() - Challenge.size())) {
     std::fprintf(stderr, "control and identity challenges disagree\n");
     return 65;
   }
-  auto Encoded = encodePhysicalMachineEffectIdentityResponse(Bytes);
+  auto Encoded = encodePhysicalMachineEffectIdentityResponse(Bytes, Target);
   if (!Encoded) {
     std::string Diagnostic = llvm::toString(Encoded.takeError());
     std::fprintf(stderr, "%s\n", Diagnostic.c_str());
@@ -301,13 +304,26 @@ int v1DecodeFailure(const char *Diagnostic) {
 } // namespace
 
 int main(int ArgumentCount, char **ArgumentValues) {
-  bool PhysicalMachineAnalysis =
+  const bool Gfx950Analysis =
       ArgumentCount == 4 &&
-      std::strcmp(ArgumentValues[1], "--machine-analysis-gfx942-v1") == 0;
-  bool PhysicalMachineEffectIdentity =
+      std::strcmp(ArgumentValues[1], "--machine-analysis-gfx950-v1") == 0;
+  const bool Gfx950Identity =
       ArgumentCount == 4 &&
       std::strcmp(ArgumentValues[1],
-                  "--machine-effects-gfx942-identities-v1") == 0;
+                  "--machine-effects-gfx950-identities-v1") == 0;
+  const PhysicalMachineTarget Target =
+      Gfx950Analysis || Gfx950Identity
+          ? PhysicalMachineTarget::Gfx950XnackMinusCov6
+          : PhysicalMachineTarget::Gfx942XnackMinusCov6;
+  bool PhysicalMachineAnalysis =
+      Gfx950Analysis ||
+      (ArgumentCount == 4 &&
+       std::strcmp(ArgumentValues[1], "--machine-analysis-gfx942-v1") == 0);
+  bool PhysicalMachineEffectIdentity =
+      Gfx950Identity ||
+      (ArgumentCount == 4 &&
+       std::strcmp(ArgumentValues[1],
+                   "--machine-effects-gfx942-identities-v1") == 0);
   bool PhysicalMachineEffectContainment =
       ArgumentCount == 4 &&
       std::strcmp(ArgumentValues[1],
@@ -322,7 +338,8 @@ int main(int ArgumentCount, char **ArgumentValues) {
                                      !verifyMachineEffectSecurityProfile()))
     return 70;
   if (AuthenticatedMachineEffect) {
-    if (llvm::Error ErrorValue = initializePhysicalMachineEffectRuntime()) {
+    if (llvm::Error ErrorValue =
+            initializePhysicalMachineEffectRuntime(Target)) {
       llvm::consumeError(std::move(ErrorValue));
       return 70;
     }
@@ -354,9 +371,10 @@ int main(int ArgumentCount, char **ArgumentValues) {
   if (AuthenticatedMachineEffect) {
     int Result = 0;
     if (PhysicalMachineAnalysis)
-      Result = runPhysicalMachineAnalysis(Bytes, *ControlChallenge);
+      Result = runPhysicalMachineAnalysis(Bytes, *ControlChallenge, Target);
     else if (PhysicalMachineEffectIdentity)
-      Result = runPhysicalMachineEffectIdentity(Bytes, *ControlChallenge);
+      Result =
+          runPhysicalMachineEffectIdentity(Bytes, *ControlChallenge, Target);
     else if (Bytes != std::vector<uint8_t>{0} ||
              std::fwrite(MachineEffectContainmentResponse, 1,
                          sizeof(MachineEffectContainmentResponse),

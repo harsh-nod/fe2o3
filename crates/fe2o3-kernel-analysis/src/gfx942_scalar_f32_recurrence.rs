@@ -418,6 +418,7 @@ impl AuthenticatedGfx942ScalarF32RecurrenceStepAnalysisV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Gfx942ScalarF32RecurrenceStepAnalysisErrorV1 {
+    UnsupportedTarget,
     InvalidKernelSymbol,
     KernelNotRequested,
     WrongMultiplyCount { actual: usize },
@@ -559,6 +560,9 @@ fn analyze_recurrence_step(
     execution: &AuthenticatedPhysicalMachineAnalysisExecutionV1,
     kernel_symbol: &str,
 ) -> Result<Gfx942ScalarF32RecurrenceStepArtifactV1, Gfx942ScalarF32RecurrenceStepAnalysisErrorV1> {
+    if execution.request().target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+        return Err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::UnsupportedTarget);
+    }
     if !valid_symbol(kernel_symbol) {
         return Err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::InvalidKernelSymbol);
     }

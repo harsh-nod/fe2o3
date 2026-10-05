@@ -106,6 +106,9 @@ impl ComputeAqlQueueSessionV1 {
                 session.preflight_fixed_dispatch_rebind_v1::<N>(
                     root.data.as_ref().expect("rooted rebind inputs"),
                 )?;
+                super::super::dispatch_binding::validate_gfx942_kernel_profiles(
+                    root.programs.as_ref().expect("rooted programs"),
+                )?;
                 PreparedDispatchGenerationV1::validate_target(
                     &root.prepared_generation,
                     Some(session.key),

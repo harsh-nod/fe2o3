@@ -1,4 +1,4 @@
-//! Canonical LLVM/MC instruction and control-flow trace for one exact gfx942 HSACO.
+//! Canonical LLVM/MC instruction and control-flow trace for one exact AMDGPU HSACO.
 //!
 //! The trace is decoded independently from the native analyzer output and is
 //! checked against the exact payload bytes and the closed physical-effect
@@ -19,8 +19,6 @@ use std::{error::Error, fmt};
 pub const PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0";
 pub const PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1: u16 = 1;
-const TRACE_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE-IDENTITY/V1\0";
 
 pub const MAX_PHYSICAL_MACHINE_TRACE_BYTES_V1: usize = 16 * 1024 * 1024;
 pub const MAX_PHYSICAL_MACHINE_TRACE_BLOCKS_V1: usize = 4_096;
@@ -224,6 +222,7 @@ impl PhysicalMachineBasicBlockTraceV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineInstructionTraceV1 {
+    target: crate::PhysicalMachineTargetV1,
     function_symbol: String,
     instruction_offset: u64,
     block_ordinal: u32,
@@ -240,6 +239,10 @@ pub struct PhysicalMachineInstructionTraceV1 {
 }
 
 impl PhysicalMachineInstructionTraceV1 {
+    pub const fn target(&self) -> crate::PhysicalMachineTargetV1 {
+        self.target
+    }
+
     pub fn function_symbol(&self) -> &str {
         &self.function_symbol
     }
@@ -296,12 +299,17 @@ impl PhysicalMachineInstructionTraceV1 {
 /// Independently decoded, exact-byte-bound instruction and finite-CFG trace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineTraceEvidenceV1 {
+    target: crate::PhysicalMachineTargetV1,
     blocks: Vec<PhysicalMachineBasicBlockTraceV1>,
     instructions: Vec<PhysicalMachineInstructionTraceV1>,
     canonical_bytes: Vec<u8>,
 }
 
 impl PhysicalMachineTraceEvidenceV1 {
+    pub const fn target(&self) -> crate::PhysicalMachineTargetV1 {
+        self.target
+    }
+
     pub fn decode_canonical_for(
         request: &PhysicalMachineEffectRequestV1,
         effects: &PhysicalMachineEffectEvidenceV1,
@@ -324,7 +332,7 @@ impl PhysicalMachineTraceEvidenceV1 {
 
     pub fn identity(&self) -> PhysicalMachineTraceEvidenceIdentityV1 {
         PhysicalMachineTraceEvidenceIdentityV1 {
-            sha256: domain_hash(TRACE_IDENTITY_DOMAIN_V1, &self.canonical_bytes),
+            sha256: domain_hash(self.target.trace_identity_domain(), &self.canonical_bytes),
             byte_len: self.canonical_bytes.len() as u64,
         }
     }
@@ -359,7 +367,7 @@ fn decode_trace(
         return Err(PhysicalMachineTraceEvidenceErrorV1::RecordTooLarge);
     }
     let mut input = TraceReader::new(bytes);
-    input.expect(PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1)?;
+    input.expect(request.target().trace_domain())?;
     if input.u32()? as usize != bytes.len() {
         return Err(PhysicalMachineTraceEvidenceErrorV1::LengthMismatch);
     }
@@ -399,7 +407,7 @@ fn decode_trace(
         request.toolchain_identity().as_bytes(),
         "toolchain",
     )?;
-    if input.u16()? != 1 {
+    if input.u16()? != request.target().wire_tag() || effects.target() != request.target() {
         return Err(PhysicalMachineTraceEvidenceErrorV1::TargetMismatch);
     }
 
@@ -448,7 +456,7 @@ fn decode_trace(
     }
     let mut instructions = Vec::with_capacity(instruction_count);
     for _ in 0..instruction_count {
-        instructions.push(decode_instruction(&mut input)?);
+        instructions.push(decode_instruction(&mut input, request.target())?);
     }
     input.finish()?;
     if !instructions
@@ -460,6 +468,7 @@ fn decode_trace(
 
     validate_trace(request, effects, &blocks, &instructions)?;
     Ok(PhysicalMachineTraceEvidenceV1 {
+        target: request.target(),
         blocks,
         instructions,
         canonical_bytes: bytes.to_vec(),
@@ -468,11 +477,20 @@ fn decode_trace(
 
 fn decode_instruction(
     input: &mut TraceReader<'_>,
+    target: crate::PhysicalMachineTargetV1,
 ) -> Result<PhysicalMachineInstructionTraceV1, PhysicalMachineTraceEvidenceErrorV1> {
     let function_symbol = input.token()?;
     let instruction_offset = input.u64()?;
     let block_ordinal = input.u32()?;
     let opcode = input.token()?;
+    if target == crate::PhysicalMachineTargetV1::Gfx950XnackMinusCov6
+        && (opcode.contains("ATOMIC")
+            || opcode.starts_with("DS_")
+            || opcode.starts_with("S_BARRIER")
+            || opcode.starts_with("S_TRAP"))
+    {
+        return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstruction);
+    }
     let encoding_len = input.u16()? as usize;
     if encoding_len == 0 || encoding_len > MAX_PHYSICAL_MACHINE_INSTRUCTION_BYTES_V1 {
         return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstruction);
@@ -556,6 +574,7 @@ fn decode_instruction(
     };
     validate_instruction_shape(branch_kind, flags, memory_access)?;
     Ok(PhysicalMachineInstructionTraceV1 {
+        target,
         function_symbol,
         instruction_offset,
         block_ordinal,

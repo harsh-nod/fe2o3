@@ -245,6 +245,7 @@ impl CheckedGfx942AtomicCollectiveMachineStructureV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Gfx942MachineStructureErrorV1 {
+    UnsupportedTarget,
     InvalidKernelSymbol,
     KernelNotRequested,
     AmbiguousKernelEntry,
@@ -342,6 +343,9 @@ fn check_structure(
     execution: &AuthenticatedPhysicalMachineAnalysisExecutionV1,
     kernel_symbol: &str,
 ) -> Result<CheckedParts, Gfx942MachineStructureErrorV1> {
+    if execution.request().target() != crate::PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+        return Err(Gfx942MachineStructureErrorV1::UnsupportedTarget);
+    }
     if !valid_symbol(kernel_symbol) {
         return Err(Gfx942MachineStructureErrorV1::InvalidKernelSymbol);
     }

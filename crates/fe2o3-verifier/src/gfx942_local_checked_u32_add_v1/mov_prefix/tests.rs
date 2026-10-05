@@ -21,6 +21,33 @@ fn fixture(inputs: &ValidatedCompilerProofInputsV4, instructions: Vec<Instructio
 }
 
 #[test]
+fn self_consistent_gfx950_prefix_cannot_enter_gfx942_refinement() {
+    let inputs = source_fixture::source_inputs();
+    let fixture = fixture(
+        &inputs,
+        vec![
+            Instruction::mov(5, 36),
+            Instruction::mov(7, 129),
+            Instruction::add(9, 5, 7),
+        ],
+    );
+    let (request942, analysis942) = fixture.analysis();
+    assert!(prefix_machine_coordinates(source(&inputs), &request942, &analysis942, 4, 12).is_ok());
+    let (request, analysis) =
+        fixture.analysis_for_target(trace_api::PhysicalMachineTargetV1::Gfx950XnackMinusCov6);
+    assert_eq!(
+        request.exact_payload_bytes(),
+        request942.exact_payload_bytes()
+    );
+    assert_eq!(analysis.effects().request_identity(), request.identity());
+    assert_eq!(analysis.target(), request.target());
+    assert!(matches!(
+        prefix_machine_coordinates(source(&inputs), &request, &analysis, 4, 12),
+        Err(Gfx942LocalMovPrefixCheckedU32AddErrorV1::MachineBinding)
+    ));
+}
+
+#[test]
 fn borrowed_prefix_coordinates_derive_original_entry_and_real_machine_result() {
     let inputs = source_fixture::source_inputs();
     let fixture = fixture(

@@ -105,6 +105,7 @@ where
 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         parent.preflight::<N>()?;
+        super::super::dispatch_binding::validate_gfx942_kernel_profiles(&root.programs)?;
         let capacity = parent.dispatch_capacity();
         capacity.validate_batch::<N>()?;
         if data_count > GFX942_MAX_FIXED_DISPATCH_DATA_V1 {

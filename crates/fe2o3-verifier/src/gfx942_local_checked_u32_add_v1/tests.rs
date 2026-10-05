@@ -268,6 +268,26 @@ fn changed_machine_literal_register_profile_and_encoding_reject() {
 }
 
 #[test]
+fn self_consistent_gfx950_analysis_cannot_enter_gfx942_refinement() {
+    let inputs = source_fixture::source_inputs();
+    let fixture = machine(&source(&inputs).function, 1);
+    let (request942, analysis942) = fixture.analysis();
+    assert!(machine_coordinates(source(&inputs), &request942, &analysis942, 4).is_ok());
+    let (request, analysis) =
+        fixture.analysis_for_target(trace_api::PhysicalMachineTargetV1::Gfx950XnackMinusCov6);
+    assert_eq!(
+        request.exact_payload_bytes(),
+        request942.exact_payload_bytes()
+    );
+    assert_eq!(analysis.effects().request_identity(), request.identity());
+    assert_eq!(analysis.target(), request.target());
+    assert!(matches!(
+        machine_coordinates(source(&inputs), &request, &analysis, 4),
+        Err(Gfx942LocalCheckedU32AddErrorV1::MachineBinding)
+    ));
+}
+
+#[test]
 fn substituted_analysis_request_function_and_offset_reject() {
     let inputs = source_fixture::source_inputs();
     let function = source(&inputs).function;

@@ -10,6 +10,66 @@ use crate::queue::live::initial_bind::{
 struct InitializerDrop;
 
 #[test]
+fn initial_binding_rejects_gfx950_before_currentness_or_initializer() {
+    use crate::queue::dispatch_binding::preparation::{
+        synthetic_gfx950_image_v1, synthetic_gfx950_program_v1,
+    };
+    let image = synthetic_gfx950_image_v1();
+    let (memory, trace) = setup_memory();
+    trace.borrow_mut().local_gate = Some(LocalGateV1::new());
+    let constructor = Root::<()>::new_with(memory, ());
+    let (mut constructor, result) = run_with(
+        constructor,
+        QueueRingBackingV1::AqlSpecial,
+        None,
+        |_| Ok(()),
+    );
+    assert!(result.is_ok());
+    let mut parent = Some(parent_from_completed(constructor.completed.take().unwrap()));
+    let before = parent
+        .as_ref()
+        .unwrap()
+        .engine
+        .backend
+        .session
+        .observation();
+    let mut calls = trace.borrow().calls.clone();
+    calls.push("release-validate-owners");
+    let (_, [packet, _, _]) = recipe();
+    let root = InitialBindingCustodyV1::new(
+        vec![synthetic_gfx950_program_v1(&image)],
+        [packet],
+        |_: &mut Memory, _| panic!("wrong-target initializer must not execute"),
+    );
+    let mut retained = None;
+    assert!(matches!(
+        bind_initial_with_v1(&mut parent, root, 1, |root| retained = Some(root)),
+        Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+            Gfx942DispatchBindingErrorV1::InvalidCode(
+                "kernel target profile is not gfx942:xnack-/COV6"
+            )
+        ))
+    ));
+    assert!(!parent.as_ref().unwrap().poisoned);
+    assert_eq!(
+        parent
+            .as_ref()
+            .unwrap()
+            .engine
+            .backend
+            .session
+            .observation(),
+        before
+    );
+    assert_eq!(trace.borrow().calls, calls);
+    let retained = retained.unwrap();
+    assert!(retained.terminal_parent.is_none());
+    assert!(retained.preparation.is_none());
+    assert!(retained.prepared_generation.is_none());
+    assert!(retained.data.is_empty());
+}
+
+#[test]
 fn scaled_initial_binding_preserves_bootstrap_capacity_and_bounds_inputs_before_effects() {
     let (memory, trace) = setup_memory();
     trace.borrow_mut().local_gate = Some(LocalGateV1::new());

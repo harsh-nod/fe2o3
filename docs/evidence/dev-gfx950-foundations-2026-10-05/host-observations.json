@@ -1,0 +1,42 @@
+[
+  {
+    "command": "modinfo -F srcversion amdgpu",
+    "chunk_id": "ef427a",
+    "wall_time_seconds": 4.61431728,
+    "exit_code": 0,
+    "original_token_count": 411,
+    "output": "703B1127E578BC5D4BD6615\n"
+  },
+  {
+    "command": "head -v /sys/module/amdgpu/parameters/mes /sys/module/amdgpu/parameters/sched_policy /sys/module/amdgpu/parameters/cwsr_enable",
+    "chunk_id": "64ab89",
+    "wall_time_seconds": 3.003091739,
+    "exit_code": 0,
+    "original_token_count": 443,
+    "output": "==> /sys/module/amdgpu/parameters/mes <==\n0\n\n==> /sys/module/amdgpu/parameters/sched_policy <==\n0\n\n==> /sys/module/amdgpu/parameters/cwsr_enable <==\n1\n"
+  },
+  {
+    "command": "head -v -n 80 /sys/class/kfd/kfd/topology/nodes/2/properties /sys/class/kfd/kfd/topology/nodes/3/properties /sys/class/kfd/kfd/topology/nodes/2/gpu_id /sys/class/kfd/kfd/topology/nodes/3/gpu_id",
+    "chunk_id": "afe066",
+    "wall_time_seconds": 2.945405991,
+    "exit_code": 0,
+    "original_token_count": 839,
+    "output": "==> /sys/class/kfd/kfd/topology/nodes/2/properties <==\ncpu_cores_count 0\nsimd_count 1024\nmem_banks_count 1\ncaches_count 552\nio_links_count 8\np2p_links_count 1\ncpu_core_id_base 0\nsimd_id_base 2147487744\nmax_waves_per_simd 8\nlds_size_in_kb 160\ngds_size_in_kb 0\nnum_gws 64\nwave_front_size 64\narray_count 32\nsimd_arrays_per_engine 1\ncu_per_simd_array 9\nsimd_per_cu 4\nmax_slots_scratch_cu 32\ngfx_target_version 90500\nvendor_id 4098\ndevice_id 30112\nlocation_id 1280\ndomain 0\ndrm_render_minor 128\nhive_id 4409598424993686390\nnum_sdma_engines 2\nnum_sdma_xgmi_engines 14\nnum_sdma_queues_per_engine 8\nnum_cp_queues 24\nmax_engine_clk_fcompute 2200\nlocal_mem_size 0\nfw_version 41\ncapability 2889327232\ncapability2 1\ndebug_prop 1494\nsdma_fw_version 12\nunique_id 16366993098680759275\nnum_xcc 8\nmax_engine_clk_ccompute 3300\n\n==> /sys/class/kfd/kfd/topology/nodes/3/properties <==\ncpu_cores_count 0\nsimd_count 1024\nmem_banks_count 1\ncaches_count 546\nio_links_count 8\np2p_links_count 1\ncpu_core_id_base 0\nsimd_id_base 2147487780\nmax_waves_per_simd 8\nlds_size_in_kb 160\ngds_size_in_kb 0\nnum_gws 64\nwave_front_size 64\narray_count 32\nsimd_arrays_per_engine 1\ncu_per_simd_array 9\nsimd_per_cu 4\nmax_slots_scratch_cu 32\ngfx_target_version 90500\nvendor_id 4098\ndevice_id 30112\nlocation_id 5376\ndomain 0\ndrm_render_minor 136\nhive_id 4409598424993686390\nnum_sdma_engines 2\nnum_sdma_xgmi_engines 14\nnum_sdma_queues_per_engine 8\nnum_cp_queues 24\nmax_engine_clk_fcompute 2200\nlocal_mem_size 0\nfw_version 41\ncapability 2889327232\ncapability2 1\ndebug_prop 1494\nsdma_fw_version 12\nunique_id 10838076764495710945\nnum_xcc 8\nmax_engine_clk_ccompute 3300\n\n==> /sys/class/kfd/kfd/topology/nodes/2/gpu_id <==\n39903\n\n==> /sys/class/kfd/kfd/topology/nodes/3/gpu_id <==\n22482\n"
+  },
+  {
+    "command": "df -h /home/harmenon /dev/shm",
+    "chunk_id": "851909",
+    "wall_time_seconds": 3.083027138,
+    "exit_code": 0,
+    "original_token_count": 439,
+    "output": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p2  3.5T  3.2T   81G  98% /\ntmpfs           1.5T  838M  1.5T   1% /dev/shm\n"
+  },
+  {
+    "command": "ls -d /usr/src/amdgpu-* /opt/rocm/include/hsakmt /opt/rocm/llvm/bin",
+    "chunk_id": "33ad92",
+    "wall_time_seconds": 3.149550055,
+    "exit_code": 0,
+    "original_token_count": 425,
+    "output": "/opt/rocm/include/hsakmt\n/opt/rocm/llvm/bin\n/usr/src/amdgpu-6.16.13-2303411.24.04\n"
+  }
+]

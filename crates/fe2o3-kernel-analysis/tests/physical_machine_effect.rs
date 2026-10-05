@@ -125,7 +125,15 @@ fn evidence_with_entry_range(
     effects: &[Effect<'_>],
 ) -> Vec<u8> {
     let mut output = Vec::new();
-    output.extend_from_slice(PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1);
+    let (domain, tag): (&[u8], u16) = match request.target() {
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6 => {
+            (PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, 1)
+        }
+        PhysicalMachineTargetV1::Gfx950XnackMinusCov6 => {
+            (b"FE2O3/GFX950-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0", 2)
+        }
+    };
+    output.extend_from_slice(domain);
     push_u32(&mut output, 0);
     push_u16(&mut output, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1);
     output.extend_from_slice(&request.execution_challenge().as_bytes());
@@ -135,7 +143,7 @@ fn evidence_with_entry_range(
     push_u64(&mut output, request.payload_identity().byte_len());
     output.extend_from_slice(&request.analyzer_identity().as_bytes());
     output.extend_from_slice(&request.toolchain_identity().as_bytes());
-    push_u16(&mut output, 1);
+    push_u16(&mut output, tag);
 
     push_u16(&mut output, request.entries().len() as u16);
     for entry in request.entries() {
@@ -242,6 +250,17 @@ fn loop_trace_fixture() -> (
     Vec<u8>,
     TraceMutationOffsets,
 ) {
+    loop_trace_fixture_for(PhysicalMachineTargetV1::Gfx942XnackMinusCov6)
+}
+
+fn loop_trace_fixture_for(
+    target: PhysicalMachineTargetV1,
+) -> (
+    PhysicalMachineEffectRequestV1,
+    PhysicalMachineEffectEvidenceV1,
+    Vec<u8>,
+    TraceMutationOffsets,
+) {
     let mut payload = vec![0_u8; 64];
     let encodings = [
         [0x10, 0x11, 0x12, 0x13],
@@ -256,7 +275,15 @@ fn loop_trace_fixture() -> (
         let offset = 8 + index * 4;
         payload[offset..offset + 4].copy_from_slice(encoding);
     }
-    let request = request_with(&payload, vec![entry("loop_entry", budget())]);
+    let request = PhysicalMachineEffectRequestV1::new_for_target(
+        target,
+        PhysicalMachineExecutionChallengeV1::from_sha256_bytes([0x10; 32]),
+        PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0x11; 32]),
+        PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0x22; 32]),
+        payload,
+        vec![entry("loop_entry", budget())],
+    )
+    .unwrap();
     let function = Function {
         symbol: "loop_entry",
         offset: 8,
@@ -390,7 +417,11 @@ fn loop_trace_fixture() -> (
         TraceInstruction {
             offset: 20,
             block: 2,
-            opcode: "S_TRAP_vi",
+            opcode: if target == PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+                "S_TRAP_vi"
+            } else {
+                "S_NOP_vi"
+            },
             encoding: encodings[3],
             definitions: 0,
             operands: vec![TraceOperand::Signed(2)],
@@ -398,7 +429,11 @@ fn loop_trace_fixture() -> (
             implicit_uses: Vec::new(),
             branch: 0,
             target: 0,
-            flags: 32,
+            flags: if target == PhysicalMachineTargetV1::Gfx942XnackMinusCov6 {
+                32
+            } else {
+                0
+            },
             memory: 0,
             width: 0,
         },
@@ -637,7 +672,15 @@ fn encode_trace(
     instructions: &[TraceInstruction<'_>],
 ) -> (Vec<u8>, TraceMutationOffsets) {
     let mut output = Vec::new();
-    output.extend_from_slice(PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1);
+    let (domain, tag): (&[u8], u16) = match request.target() {
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6 => {
+            (PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, 1)
+        }
+        PhysicalMachineTargetV1::Gfx950XnackMinusCov6 => {
+            (b"FE2O3/GFX950-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0", 2)
+        }
+    };
+    output.extend_from_slice(domain);
     push_u32(&mut output, 0);
     push_u16(&mut output, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1);
     output.extend_from_slice(&request.execution_challenge().as_bytes());
@@ -649,7 +692,7 @@ fn encode_trace(
     push_u64(&mut output, request.payload_identity().byte_len());
     output.extend_from_slice(&request.analyzer_identity().as_bytes());
     output.extend_from_slice(&request.toolchain_identity().as_bytes());
-    push_u16(&mut output, 1);
+    push_u16(&mut output, tag);
 
     push_u32(&mut output, blocks.len() as u32);
     let mut conditional_successor = 0;
@@ -732,8 +775,25 @@ fn encode_trace(
 }
 
 fn encode_analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {
+    encode_analysis_bundle_for(
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6,
+        effects,
+        trace,
+    )
+}
+
+fn encode_analysis_bundle_for(
+    target: PhysicalMachineTargetV1,
+    effects: &[u8],
+    trace: &[u8],
+) -> Vec<u8> {
     let mut output = Vec::new();
-    output.extend_from_slice(PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1);
+    output.extend_from_slice(match target {
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6 => PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1,
+        PhysicalMachineTargetV1::Gfx950XnackMinusCov6 => {
+            b"FE2O3/GFX950-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0"
+        }
+    });
     push_u32(&mut output, 0);
     push_u16(
         &mut output,
@@ -747,6 +807,208 @@ fn encode_analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {
     let offset = PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1.len();
     output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
     output
+}
+
+#[test]
+fn gfx950_records_bind_exact_target_without_machine_semantics() {
+    let (request, effects, trace, _) =
+        loop_trace_fixture_for(PhysicalMachineTargetV1::Gfx950XnackMinusCov6);
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(request.canonical_bytes()).unwrap(),
+        request
+    );
+    let bytes = encode_analysis_bundle_for(request.target(), effects.canonical_bytes(), &trace);
+    let analysis =
+        PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &bytes).unwrap();
+    assert_eq!(
+        analysis.target(),
+        PhysicalMachineTargetV1::Gfx950XnackMinusCov6
+    );
+    assert_eq!(analysis.trace().target(), request.target());
+    assert!(
+        analysis
+            .trace()
+            .instructions()
+            .iter()
+            .all(|instruction| instruction.target() == request.target())
+    );
+    assert!(!analysis.establishes_machine_semantics());
+    assert!(!analysis.establishes_compiler_refinement());
+    assert!(!analysis.grants_launch_authority());
+    assert!(matches!(
+        Gfx942MachineDataflowV1::derive(analysis.trace()),
+        Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnsupportedTarget)
+    ));
+    assert!(matches!(
+        Gfx942ExecControlV1::derive(analysis.trace()),
+        Err(Gfx942ExecControlErrorV1::UnsupportedTarget)
+    ));
+    for instruction in analysis.trace().instructions() {
+        assert_eq!(
+            Gfx942InstructionRegisterFactsV1::derive(instruction).unwrap_err(),
+            Gfx942RegisterFactsErrorV1::UnsupportedTarget
+        );
+        assert_eq!(
+            fe2o3_kernel_analysis::Gfx942SAddU32V1::decode(instruction).unwrap_err(),
+            fe2o3_kernel_analysis::Gfx942IntegerSemanticsErrorV1::UnsupportedTarget
+        );
+        assert_eq!(
+            fe2o3_kernel_analysis::Gfx942SMovB32V1::decode(instruction).unwrap_err(),
+            fe2o3_kernel_analysis::Gfx942IntegerSemanticsErrorV1::UnsupportedTarget
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires retained gfx950 request and bundle paths; offline decoding only"]
+fn configured_retained_gfx950_machine_analysis_reopens_offline() {
+    let request = PhysicalMachineEffectRequestV1::decode_canonical(
+        &fs::read(
+            std::env::var_os("FE2O3_GFX950_RETAINED_REQUEST").expect("retained gfx950 request"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let analysis = PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(
+        &request,
+        &fs::read(
+            std::env::var_os("FE2O3_GFX950_RETAINED_BUNDLE").expect("retained gfx950 bundle"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let symbol = std::env::var("FE2O3_GFX950_RETAINED_ENTRY").expect("retained gfx950 entry");
+    assert_eq!(
+        request.target(),
+        PhysicalMachineTargetV1::Gfx950XnackMinusCov6
+    );
+    assert_eq!(request.entries().len(), 1);
+    assert_eq!(request.entries()[0].symbol(), symbol);
+    assert_eq!(analysis.target(), request.target());
+    assert_eq!(analysis.trace().target(), request.target());
+    assert!(!analysis.trace().instructions().is_empty());
+    assert!(
+        analysis
+            .trace()
+            .instructions()
+            .iter()
+            .all(|instruction| instruction.target() == request.target())
+    );
+    assert!(analysis.binds_exact_payload_instruction_bytes());
+    assert!(!analysis.establishes_machine_semantics());
+    assert!(!analysis.establishes_compiler_refinement());
+    assert!(!analysis.grants_load_authority());
+    assert!(!analysis.grants_launch_authority());
+    assert!(matches!(
+        Gfx942MachineDataflowV1::derive(analysis.trace()),
+        Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnsupportedTarget)
+    ));
+    assert!(matches!(
+        Gfx942ExecControlV1::derive(analysis.trace()),
+        Err(Gfx942ExecControlErrorV1::UnsupportedTarget)
+    ));
+}
+
+#[test]
+fn machine_target_domains_and_tags_reject_cross_target_substitution() {
+    let (request942, effects942, trace942, _) = loop_trace_fixture();
+    let (request950, effects950, trace950, _) =
+        loop_trace_fixture_for(PhysicalMachineTargetV1::Gfx950XnackMinusCov6);
+    assert_eq!(
+        request942.exact_payload_bytes(),
+        request950.exact_payload_bytes()
+    );
+    assert_ne!(request942.identity(), request950.identity());
+    for (request, other_effects, other_trace) in [
+        (&request942, &effects950, &trace950),
+        (&request950, &effects942, &trace942),
+    ] {
+        assert!(
+            PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+                request,
+                other_effects.canonical_bytes()
+            )
+            .is_err()
+        );
+        assert!(
+            PhysicalMachineTraceEvidenceV1::decode_canonical_for(
+                request,
+                other_effects,
+                other_trace
+            )
+            .is_err()
+        );
+        let own_effects = if request.target() == request942.target() {
+            &effects942
+        } else {
+            &effects950
+        };
+        assert!(
+            PhysicalMachineTraceEvidenceV1::decode_canonical_for(request, own_effects, other_trace)
+                .is_err()
+        );
+        let wrong_bundle = encode_analysis_bundle_for(
+            other_effects.target(),
+            other_effects.canonical_bytes(),
+            other_trace,
+        );
+        assert!(
+            PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(request, &wrong_bundle)
+                .is_err()
+        );
+    }
+    let mut wrong_tag = effects950.canonical_bytes().to_vec();
+    let tag = PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 40 + 40 + 32 + 32;
+    wrong_tag[tag..tag + 2].copy_from_slice(&1_u16.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request950, &wrong_tag).unwrap_err(),
+        PhysicalMachineEffectEvidenceErrorV1::TargetMismatch
+    );
+    let mut wrong_trace_tag = trace950.clone();
+    let tag = PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 40 + 40 + 40 + 32 + 32;
+    wrong_trace_tag[tag..tag + 2].copy_from_slice(&1_u16.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(
+            &request950,
+            &effects950,
+            &wrong_trace_tag
+        )
+        .unwrap_err(),
+        PhysicalMachineTraceEvidenceErrorV1::TargetMismatch
+    );
+    let mut unknown = request950.canonical_bytes().to_vec();
+    unknown[11] = b'9';
+    assert!(PhysicalMachineEffectRequestV1::decode_canonical(&unknown).is_err());
+}
+
+#[test]
+fn gfx950_trace_rejects_unreviewed_effect_families() {
+    let (request, effects, trace, _) =
+        loop_trace_fixture_for(PhysicalMachineTargetV1::Gfx950XnackMinusCov6);
+    for opcode in [
+        "S_TRAP_vi",
+        "DS_READ_B32_vi",
+        "GLOBAL_ATOMIC_ADD_vi",
+        "S_BARRIER_vi",
+    ] {
+        let old = b"S_NOP_vi";
+        let start = trace
+            .windows(old.len())
+            .position(|window| window == old)
+            .unwrap();
+        let mut changed = trace.clone();
+        changed.splice(start..start + old.len(), opcode.bytes());
+        changed[start - 2..start].copy_from_slice(&(opcode.len() as u16).to_le_bytes());
+        let len = changed.len() as u32;
+        let offset = PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len();
+        changed[offset..offset + 4].copy_from_slice(&len.to_le_bytes());
+        assert_eq!(
+            PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &changed)
+                .unwrap_err(),
+            PhysicalMachineTraceEvidenceErrorV1::InvalidInstruction,
+            "{opcode}"
+        );
+    }
 }
 
 #[test]
