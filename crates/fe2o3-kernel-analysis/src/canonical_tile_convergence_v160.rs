@@ -390,6 +390,8 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
 ///
 /// Acyclic postdominance costs O((blocks + CFG edges) log blocks); propagation is
 /// linear in definitions, operations, uses, edges, and derived control dependencies.
+/// Enumerating control dependencies can require O(CFG edges * blocks) in the
+/// worst case. Each postdominator-chain visit is charged to the work budget.
 /// Memory validity, undefined arithmetic, and original-source semantics remain
 /// independent obligations; this analysis is conditional on defined execution.
 pub fn check_canonical_tile_convergence_v160(

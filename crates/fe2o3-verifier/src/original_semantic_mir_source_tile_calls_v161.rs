@@ -59,8 +59,8 @@ fn local(operand: &Operand, move_only: bool) -> Result<(usize, bool)> {
 }
 
 impl TileCall {
-    /// Policy is private generator input, obtained from the live checked target
-    /// expansion. A missing selection always refuses an original tile load.
+    /// Policy comes only from the retained source slots' live expansion owner.
+    /// A missing selection always refuses an original tile load.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn derive(
         slots: &SourceSlots<'_, '_>,
@@ -71,7 +71,6 @@ impl TileCall {
         block: usize,
         call: &Call,
         callable: &Callable,
-        policy: Option<ExecutionTileLayoutV1>,
         out: &mut Writer<'_, '_>,
     ) -> Result<Option<Self>> {
         out.budget.charge_work(4)?;
@@ -152,8 +151,12 @@ impl TileCall {
                 if tile != output_type {
                     return Err(mismatch());
                 }
-                let layout = policy.ok_or_else(unsupported)?;
+                let (layout, selected_lanes) =
+                    slots.tile_policy_v162(root, out)?.ok_or_else(unsupported)?;
                 let (lanes, elements) = geometry(semantic.types(), tile, false)?;
+                if lanes != selected_lanes {
+                    return Err(mismatch());
+                }
                 let (input, moved_input) = local(input, false)?;
                 let base = body.call_argument(block, 2, out)?;
                 if base.scalar()
