@@ -237,7 +237,7 @@ fn tile_convergence_checks_parallel_edge_control_and_each_incoming_value() {
     check(&diamond(false, false)).unwrap();
     assert!(matches!(
         check(&diamond(true, false)),
-        Err(Error::VaryingArrival(_))
+        Err(Error::VaryingTileInput(_))
     ));
     assert!(matches!(
         check(&diamond(false, true)),
@@ -327,7 +327,7 @@ fn tile_convergence_refuses_opaque_arrival_even_without_results() {
 }
 
 #[test]
-fn tile_convergence_ignores_unreachable_edges_but_not_reachable_reconvergence() {
+fn tile_convergence_ignores_unreachable_edges() {
     let mut input = diamond(true, false);
     let body = input.functions[0].body.as_mut().unwrap();
     let mut dead = BasicBlock::new(BlockId(99));
@@ -346,25 +346,131 @@ fn tile_convergence_ignores_unreachable_edges_but_not_reachable_reconvergence() 
 
 #[test]
 fn tile_convergence_exact_and_one_short_work_and_storage() {
-    with_inventory(&loop_module(false), |inventory| {
-        let mut work = Work::new(usize::MAX);
-        let mut budget = Budget::new(&mut work, usize::MAX);
-        budget.reserve_storage(31).unwrap();
-        check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget).unwrap();
-        let used = budget.work();
-        let peak = budget.peak_storage();
-        assert_eq!(budget.storage(), 31);
-        for (work_limit, storage_limit) in [(used, peak), (used - 1, peak), (used, peak - 1)] {
-            let mut work = Work::new(work_limit);
-            let mut budget = Budget::new(&mut work, storage_limit);
+    for module in [loop_module(false), reconverging_diamond(false, false)] {
+        with_inventory(&module, |inventory| {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
             budget.reserve_storage(31).unwrap();
-            let result = check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget);
-            if work_limit == used && storage_limit == peak {
-                result.unwrap();
-            } else {
-                assert!(matches!(result, Err(Error::Resource(_))), "{result:?}");
-            }
+            check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget).unwrap();
+            let used = budget.work();
+            let peak = budget.peak_storage();
             assert_eq!(budget.storage(), 31);
+            for (work_limit, storage_limit) in [(used, peak), (used - 1, peak), (used, peak - 1)] {
+                let mut work = Work::new(work_limit);
+                let mut budget = Budget::new(&mut work, storage_limit);
+                budget.reserve_storage(31).unwrap();
+                let result =
+                    check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget);
+                if work_limit == used && storage_limit == peak {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(Error::Resource(_))), "{result:?}");
+                }
+                assert_eq!(budget.storage(), 31);
+            }
+        });
+    }
+}
+
+fn reconverging_diamond(selected_base: bool, early_exit: bool) -> Module {
+    let mut entry = BasicBlock::new(BlockId(91));
+    entry.operations = vec![
+        index(3, IndexKind::Local),
+        value(
+            4,
+            Type::BOOL,
+            Kind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(3),
+                rhs: ValueId(1),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(22),
+        then_arguments: vec![],
+        else_target: BlockId(23),
+        else_arguments: vec![],
+    });
+    let mut left = BasicBlock::new(BlockId(22));
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(17),
+        arguments: if selected_base {
+            vec![ValueId(1)]
+        } else {
+            vec![]
+        },
+    });
+    let mut right = BasicBlock::new(BlockId(23));
+    right
+        .operations
+        .push(value(5, Type::INDEX, Kind::Constant(Constant::Index(0))));
+    right.terminator = Some(if early_exit {
+        Terminator::Return { values: vec![] }
+    } else {
+        Terminator::Branch {
+            target: BlockId(17),
+            arguments: if selected_base {
+                vec![ValueId(5)]
+            } else {
+                vec![]
+            },
         }
     });
+    let mut join = tile_block(17, if selected_base { 20 } else { 1 });
+    if selected_base {
+        join.parameters
+            .push(ValueDef::new(ValueId(20), Type::INDEX));
+    }
+    // A postdominator can precede its predecessors in physical block order.
+    module(vec![entry, join, right, left])
+}
+
+#[test]
+fn tile_convergence_reconverges_acyclic_arrival_without_clearing_selected_values() {
+    check(&reconverging_diamond(false, false)).unwrap();
+    assert!(matches!(
+        check(&reconverging_diamond(true, false)),
+        Err(Error::VaryingTileInput(_))
+    ));
+    assert!(matches!(
+        check(&reconverging_diamond(false, true)),
+        Err(Error::VaryingArrival(_))
+    ));
+}
+
+#[test]
+fn tile_convergence_nested_diamonds_retain_outer_control_until_its_postdominator() {
+    let mut input = reconverging_diamond(false, false);
+    let blocks = &mut input.functions[0].body.as_mut().unwrap().blocks;
+    let mut nested = BasicBlock::new(BlockId(30));
+    nested.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(31),
+        then_arguments: vec![],
+        else_target: BlockId(32),
+        else_arguments: vec![],
+    });
+    let mut a = BasicBlock::new(BlockId(31));
+    a.terminator = Some(Terminator::Branch {
+        target: BlockId(17),
+        arguments: vec![],
+    });
+    let mut b = BasicBlock::new(BlockId(32));
+    b.terminator = Some(Terminator::Branch {
+        target: BlockId(17),
+        arguments: vec![],
+    });
+    blocks[3].terminator = Some(Terminator::Branch {
+        target: BlockId(30),
+        arguments: vec![],
+    });
+    blocks.extend([nested, a, b]);
+    check(&input).unwrap();
+    // Move the collective into only one nested arm: its uniform selector is
+    // insufficient because the enclosing branch is lane-varying.
+    let blocks = &mut input.functions[0].body.as_mut().unwrap().blocks;
+    blocks[5].operations = std::mem::take(&mut blocks[1].operations);
+    assert!(matches!(check(&input), Err(Error::VaryingArrival(_))));
 }
