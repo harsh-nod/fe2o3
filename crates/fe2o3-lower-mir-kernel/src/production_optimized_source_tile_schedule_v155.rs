@@ -6,6 +6,10 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrModuleV18,
 };
 
+#[path = "production_optimized_source_tile_scalar_v156.rs"]
+mod scalar;
+pub use scalar::{ProductionTileScalarFunctionV156, ProductionTileScalarLoadV156};
+
 /// A borrowed schedule for one retained tile-load effect site. The original
 /// source, checked transition and output owner remain live throughout its use.
 /// This does not discharge lifecycle, target, uniformity, memory or refinement

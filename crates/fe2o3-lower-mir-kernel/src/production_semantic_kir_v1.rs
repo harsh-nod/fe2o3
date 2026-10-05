@@ -34527,10 +34527,10 @@ pub use optimized_source_v18::{
     ProductionOptimizedSourceGapV18, ProductionOptimizedSourceMemoryAccessV18,
     ProductionOptimizedSourceOperationV18, ProductionOptimizedSourcePayloadV18,
     ProductionOptimizedSourceSpanV18, ProductionOptimizedSourceTerminatorV18,
-    ProductionOptimizedTileLoadScheduleV155,
-    ProductionPredicatedMemoryCheckedNativePoliciesV89,
+    ProductionOptimizedTileLoadScheduleV155, ProductionPredicatedMemoryCheckedNativePoliciesV89,
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
+    ProductionTileScalarFunctionV156, ProductionTileScalarLoadV156,
 };
 include!("production_source_ranked_relation_v18.rs");
 include!("production_source_optimizer_entry_v18.rs");
