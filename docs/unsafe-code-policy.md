@@ -41,6 +41,25 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The 2026-10-05 clone-compatibility follow-up reviews four inventory entries from
+`65468c727` and `0921d0091`; it changes no runtime operation. The closed Linux
+x86-64 ABI helper adds nine unsafe blocks and two functions. Its initialized
+signal-mask and clone records stay live across each syscall, and the returned
+pidfd is adopted exactly once. Only ENOSYS selects the unmapped legacy clone;
+mapped or cgroup-placed children keep their clone3-only requirements. The legacy
+child inherits blocked handlers, resets dispositions before unmasking, and must
+exec or exit without allocation or Rust cleanup. The parent adopts all cleanup
+owners before restoring its exact mask through a non-Send, non-Sync token.
+
+The supervisor loses one block as its duplicate clone ABI moves into the helper;
+the shared spawn implementation adds one block for that helper call while
+retaining the original clone3 path. Fifteen test-only blocks use initialized
+capability and signal records, self-installed seccomp filters in disposable
+subprocesses, atomically owned pidfds, and exclusive terminal waits. The real
+restricted-capability test has separately passed, but neither this inventory nor
+that diagnostic establishes compiler/proof admission or production activation.
+No unrelated inventory allowance is refreshed.
+
 The 2026-09-30 native-custody audit reconciles seventeen omitted or stale
 inventory entries. All seventeen source files are unchanged from the published
 `edd71e6762252d1990d10d84d10cc53b666d09b7` checkpoint; this is a review record,

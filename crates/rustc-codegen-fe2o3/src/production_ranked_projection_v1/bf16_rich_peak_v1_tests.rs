@@ -474,7 +474,7 @@ pub(in crate::production_ranked_projection_v1) fn close_group() {
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     fn reset() {
         STATE.with(|s| *s.borrow_mut() = State::empty());
     }
@@ -649,10 +649,12 @@ mod tests {
         let b = Budget::new(&mut w, 1000);
         // Synthetic closed-group boundary; no source/capability authority.
         STATE.with(|s| s.borrow_mut().next = 7);
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _guard = begin_probe(&b);
-        }))
-        .is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _guard = begin_probe(&b);
+            }))
+            .is_err()
+        );
         assert!(STATE.with(|s| s.borrow().poisoned));
         assert!(catch_unwind(AssertUnwindSafe(close_group)).is_err());
         reset();

@@ -627,23 +627,27 @@ fn missing_duplicate_uninhabited_or_aliased_result_alternatives_refuse() {
         }
         let mut work = Work::new(LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, 0);
-        assert!(result_discriminants(
-            &rows,
-            SemanticTypeIdV1::from_index(7),
-            SemanticTypeIdV1::from_index(9),
-            &mut budget
-        )
-        .is_err());
+        assert!(
+            result_discriminants(
+                &rows,
+                SemanticTypeIdV1::from_index(7),
+                SemanticTypeIdV1::from_index(9),
+                &mut budget
+            )
+            .is_err()
+        );
     }
     let mut work = Work::new(LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, 0);
-    assert!(result_discriminants(
-        &variants(0, 1),
-        SemanticTypeIdV1::from_index(7),
-        SemanticTypeIdV1::from_index(7),
-        &mut budget
-    )
-    .is_err());
+    assert!(
+        result_discriminants(
+            &variants(0, 1),
+            SemanticTypeIdV1::from_index(7),
+            SemanticTypeIdV1::from_index(7),
+            &mut budget
+        )
+        .is_err()
+    );
 }
 #[test]
 fn actual_explicit_and_default_edges_preserve_ok_zero_and_reversed_discriminants() {

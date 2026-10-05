@@ -412,7 +412,7 @@
     "function": 1
   },
   "crates/fe2o3-compiler-execution-supervisor/src/process.rs": {
-    "block": 29,
+    "block": 28,
     "extern_block": 1,
     "function": 5
   },
@@ -1135,6 +1135,13 @@
     "function": 7,
     "trait": 2
   },
+  "crates/fe2o3-protected-service-spawn/src/clone_compat.rs": {
+    "block": 9,
+    "function": 2
+  },
+  "crates/fe2o3-protected-service-spawn/src/clone_compat_tests.rs": {
+    "block": 15
+  },
   "crates/fe2o3-protected-service-spawn/src/creator_scope.rs": {
     "block": 1,
     "function": 2
@@ -1242,7 +1249,7 @@
     "block": 5
   },
   "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
-    "block": 42,
+    "block": 43,
     "function": 9
   },
   "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope.rs": {
