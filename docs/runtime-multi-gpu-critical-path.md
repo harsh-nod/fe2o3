@@ -14,12 +14,19 @@ The proof manager and compiler coordinator remain live through the successful
 application. This closes the composed admission prerequisite, not native GPU
 execution, A3/A7, full HIP/HSA parity or a general formal-verification claim.
 
+The [optional two-GPU fixture](evidence/dev-two-gpu-application-fixture-2026-10-04/README.md)
+is now implemented and CPU-qualified. It retains one artifact across both
+generated fills and exact result receipts, uses charged-result staging, requires
+two native peer retirements plus full payload/source/guard checks, and inspects
+drain, native shutdown and credit refund before emitting its hardware success
+record. The device kernel is unchanged. **This branch has not executed on GPUs.**
+
 Current work order:
 
-1. Extend the same admitted fixture with an optional exact two-device path; keep
-   its no-argument admission test and original device kernel unchanged. Retain one
-   remote artifact through both generated fills, exact completion receipts,
-   full output readback and owned current-thread engine shutdown.
+1. Add the separate `genuine-two-gpu` harness campaign without changing the
+   zero-argument control. Use existing checked topology discovery, preserve exact
+   selected device nodes through every private namespace layer, and require a
+   matching hardware success record from bounded application stdout.
 2. Make the required installed service deployment available on MI300X. Read-only
    checks reach the host, but the fixed services are absent, noninteractive sudo
    requires a password and direct root SSH is unavailable. This is a deployment
@@ -32,13 +39,20 @@ Current work order:
    native peer completions, complete payload/source checks, separate sentinel
    destinations and intact guards. Require explicit successful drain/release;
    timeouts, process exit and quarantined work are not native settlement.
+5. Exercise second-invocation and transfer-deadline failure controls. Require no
+   hardware success record and inspect owned shutdown/quarantine.
 
-Latest frontend qualification: **436 unit tests passed, 7 ignored**, plus the
+Latest fixture qualification: **4 pure tests passed**, full host typecheck and
+strict binding-only Clippy passed. A fresh genuine zero-argument campaign passes
+1/1 in 484.47 seconds including isolated deployment/cleanup with the GPU branch
+compiled into the binary. No GPU or performance run is claimed.
+
+Prior frontend qualification: **436 unit tests passed, 7 ignored**, plus the
 real static Cargo warm-cache test and strict scoped Clippy. The genuine campaign
-passes 1/1 in 470.89 seconds including isolated deployment/cleanup. Two existing
+then passed 1/1 in 470.89 seconds including isolated deployment/cleanup. Two existing
 source-string contract assertions still fail in a broader integration check;
 the new host/device boundary check passes. See the evidence for exact limits.
-No GPU work or performance measurement was performed in this checkpoint.
+Those broader suites were not rerun for this fixture-only change.
 
 General performance tuning, wider opcode/collective coverage, additional GPU
 counts and same-process reopen remain behind this two-device correctness path.

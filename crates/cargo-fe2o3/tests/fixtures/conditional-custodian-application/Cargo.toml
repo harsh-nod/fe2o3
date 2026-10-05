@@ -11,6 +11,8 @@ fe2o3-device = { path = "../../../../fe2o3-device" }
 
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../../../fe2o3-host" }
+fe2o3-runtime = { path = "../../../../fe2o3-runtime" }
+fe2o3-aql = { path = "../../../../fe2o3-aql" }
 
 [profile.dev]
 debug = 0

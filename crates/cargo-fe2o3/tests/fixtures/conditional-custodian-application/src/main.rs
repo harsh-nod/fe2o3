@@ -1,3 +1,6 @@
+mod gpu;
+mod native_case;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use fe2o3_conditional_custodian_application::fill_write_only_gpu;
     use fe2o3_host::{
@@ -6,9 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     use std::time::{Duration, Instant};
 
-    if std::env::args_os().count() != 1 {
-        return Err("this admission application accepts no arguments".into());
-    }
+    let devices = native_case::parse_devices(std::env::args_os().skip(1))?;
     assert!(std::env::var_os("FE2O3_PRODUCTION_HOST_BINDING_MODE_V1").is_none());
     for descriptor in [200, 201] {
         let error = std::fs::symlink_metadata(format!("/proc/self/fd/{descriptor}"))
@@ -26,5 +27,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(artifact.descriptor().kernel_id(), kernel);
     assert!(!artifact.grants_launch_authority());
     println!("genuine compiler audit and retained conditional proof admitted");
+    if let Some(devices) = devices {
+        gpu::run(std::sync::Arc::new(artifact), devices, deadline)?;
+        println!(
+            "{{\"schema\":\"fe2o3.genuine-two-gpu.v1\",\"devices\":[\"{:#018x}\",\"{:#018x}\"],\"elements\":65,\"native_peer_completions\":2,\"shutdown\":\"released\"}}",
+            devices[0], devices[1]
+        );
+    }
     Ok(())
 }

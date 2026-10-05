@@ -16,15 +16,29 @@ the AMDGPU compilation. The device phase selects the package library, whose
 AMDGPU branch is `no_std`; the host phase selects the ordinary binary. AMDGPU
 does not support a binary crate target.
 
-Qualification is currently failing at compiler-time proof execution: protected
-Cargo's inherited exec-monitoring filter conflicts with the local proof
-controller's unfiltered-process requirement. Host marker projection is another
-remaining gate. This fixture has not yet reached its successful host admission
-message; the ignored campaign intentionally reports failure until those joins
-work. See `docs/runtime-multi-gpu-critical-path.md` for the ordered work.
+The zero-argument genuine campaign now passes installed compiler/currentness,
+ordinary host binding and retained proof admission. It performs no GPU work.
+See `docs/runtime-multi-gpu-critical-path.md` for qualification evidence and the
+remaining hardware deployment work.
 
-This is an admission fixture, not a two-GPU application or a HIP/HSA parity
-claim. The remote artifact itself grants no native launch authority. The next
-application stage must retain that one artifact across both devices' conditional
-invocations and their completion/drain, then validate real completed bytes over
-the native XGMI path.
+The optional hardware mode accepts exactly two distinct, nonzero GPU unique IDs
+after Cargo's `--`, each written with a `0x` prefix. These are hardware IDs, not
+HIP ordinals or render-node indices. Missing hardware never silently selects the
+admission-only mode. Hardware qualification requires the installed services and
+KFD plus the selected render nodes in the application's private namespace.
+
+The hardware path retains one remote artifact across two conditional invocations
+of the unchanged device kernel (65 elements, grid 128, workgroup 64). Exact
+completion receipts gate charged result extraction. It stages the actual completed
+bytes into PUBLIC allocations, copies both peer directions, requires two native
+XGMI retirements, and checks every source, destination and guard byte. It then
+revalidates the retained artifact, drains, inspects owned shutdown and verifies
+result-credit refund before emitting the `fe2o3.genuine-two-gpu.v1` JSON record.
+An operation timeout or quarantined shutdown is failure, not successful settlement.
+
+`tests/conditional_native_case.rs` exercises the fixture's actual parser and data
+oracles without constructing proof or native authority. These tests and host
+typechecking do not qualify GPU execution. The two fills produce identical index
+payloads; distinct destination sentinels reject missing copies, but this is not a
+data-differentiated routing benchmark or a physical-overlap measurement. Full
+HIP/HSA parity and performance remain separate gates.
