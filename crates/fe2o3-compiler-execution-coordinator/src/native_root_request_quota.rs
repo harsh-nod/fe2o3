@@ -275,6 +275,8 @@ pub(super) fn launch() -> Result<Quota> {
             Output::WORK,
             Stage::STAGING_WORK,
             Stage::COMPILER_CHILD_CHANNEL_STAGING_WORK,
+            Stage::RUNTIME_CHECKPOINT_STAGING_WORK,
+            Stage::RUNTIME_CHECKPOINT_CHILD_WORK,
             // Also bounds compiler-only child setup above generic spawn work.
             Stage::COMPILER_CHILD_CHANNEL_STAGING_WORK,
             2 * Stage::spawn_work_for(
@@ -305,6 +307,7 @@ pub(super) fn launch() -> Result<Quota> {
             helper,
             compiler,
             2 * staging,
+            Stage::RUNTIME_CHECKPOINT_STAGING_SCRATCH,
             image.scratch(),
             refusal()?.scratch(),
             Stage::spawn_retaining_scratch::<proof_helper_launch::Payload>(helper)

@@ -692,7 +692,8 @@ checkpoints include executable-memory operations and descriptor imports;
 `creat`, `openat2`, and replacement `seccomp` calls are denied. Only the same
 retained parent trace may mediate those checkpoints. Staging and filter
 installation alone do not establish runtime enforcement or authorize a gate
-release, and the production attempt does not yet select this mode.
+release. The gated production attempt selects this mode, but retains its closed
+gate; original-trace arming and the complete runtime guard are still required.
 
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
