@@ -21,6 +21,9 @@ pub(super) fn derive(
     model.check(out)?;
     out.budget.reserve_storage(40 * size_of::<usize>())?;
     out.budget.charge_work(4)?;
+    if entry.arguments.len() != call.arguments.len() {
+        return Err(mismatch());
+    }
     let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
     let start = add(row.blocks.start, block)?;
     let mut current = start;
@@ -101,6 +104,10 @@ pub(super) fn emit(
 ) -> Result<()> {
     model.check(out)?;
     out.budget.reserve_storage(48 * size_of::<usize>())?;
+    out.budget.charge_work(1)?;
+    if entry.arguments.len() != call.arguments.len() {
+        return Err(mismatch());
+    }
     let pc = cut.source;
     emit!(
         out,

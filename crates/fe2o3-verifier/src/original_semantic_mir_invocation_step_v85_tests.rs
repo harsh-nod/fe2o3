@@ -67,6 +67,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let entry = hints.entries[index].as_ref().unwrap();
                                 let map = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_map_v85"));
                                 let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
+                                assert_eq!(entry.arguments.len(), hint.call.as_ref().unwrap().arguments.len());
                                 assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});")));
@@ -193,6 +194,33 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
             },
         ).0.unwrap();
     }
+}
+
+#[test]
+fn original_mir_step_constructor_refuses_truncated_entry_captures() {
+    super::super::super::invocations::tests::run_root_variant(
+        LIMIT,
+        LIMIT,
+        true,
+        false,
+        2,
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let program = SourceByteProgram::derive(plan, slots, out)?;
+                let mut paired =
+                    PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                let hints = paired.roots[0].step_hints.as_mut().unwrap();
+                let call = hints.cuts.iter().find_map(|cut| cut.call.as_ref()).unwrap();
+                let entry = hints.entries[call.child].as_mut().unwrap();
+                assert_eq!(entry.arguments.len(), call.arguments.len());
+                assert!(entry.arguments.pop().is_some());
+                assert!(paired.emit(out).is_err());
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
 }
 
 fn run_target_follow_topology(
