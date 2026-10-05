@@ -229,8 +229,9 @@ fn prepared(budget: &mut Budget<'_>) -> Result<ProductionPreparedSourceV18> {
         });
         offset = offset.checked_add(layout.size_bytes().unwrap()).unwrap();
     }
+    let binding = entry.kernel_binding_identity();
     let abi_roots = [ProductionKernelArgumentAbiRootV18 {
-        kernel_binding: entry.kernel_binding_identity().as_bytes(),
+        kernel_binding: binding.as_bytes(),
         export,
         arguments: &arguments,
         explicit_argument_bytes: offset.try_into().unwrap(),
