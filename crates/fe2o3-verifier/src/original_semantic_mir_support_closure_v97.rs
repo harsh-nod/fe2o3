@@ -9,7 +9,7 @@ const PACKETS: [&str; 2] = [
     include_str!("original_semantic_mir_source_constructor_laws_v81.vrs"),
     include_str!("original_semantic_mir_cut_frame_laws_v93.vrs"),
 ];
-const MAX_SUPPORT: usize = 20;
+const MAX_SUPPORT: usize = 21;
 
 #[derive(Clone, Copy)]
 struct Support {
@@ -411,5 +411,38 @@ mod tests {
             run_packets(&text, &[DENSE_PACKET], work, storage - 1).0,
             Err(Error::Resource(Resource::Storage(_)))
         ));
+    }
+
+    #[test]
+    fn proof_support_closure_accounts_for_exact_compiler_owned_roster() {
+        let text = PACKETS.concat();
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        let mut support = [EMPTY; MAX_SUPPORT];
+        assert_eq!(
+            collect(&text, &PACKETS, &mut support, &mut budget).unwrap(),
+            MAX_SUPPORT
+        );
+        assert_eq!(
+            support
+                .iter()
+                .filter(|item| item.name == "invocation_source_scalar_copy_valid_identity_v164")
+                .count(),
+            1
+        );
+        const EXTRA: &str = concat!(
+            "// fe2o3_optional_support_v97: extra\nproof fn extra() { }\n",
+            "// fe2o3_optional_support_v97: END\n",
+        );
+        let overflow = format!("{text}{EXTRA}");
+        assert!(
+            collect(
+                &overflow,
+                &[PACKETS[0], PACKETS[1], EXTRA],
+                &mut support,
+                &mut budget
+            )
+            .is_err()
+        );
     }
 }
