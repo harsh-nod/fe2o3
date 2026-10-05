@@ -413,7 +413,8 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         } else {
             self.owners.len() - 1
         };
-        write!(out, "spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        out.budget.charge_work(3)?;
+        write!(out, "spec fn invocation_source_entry_refuses_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> bool {{\n !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
         write!(
             out,
             " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",
@@ -462,7 +463,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
-        write!(out, " {{ invocation_source_byte_refused_v36(source) }} else {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, "\n}}\nspec fn invocation_source_entry_body_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.root, self.instance, self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
         if self.instance == 0 {
             write!(out, "source.machine.frames").map_err(|_| out.error())?;
         } else {
@@ -522,7 +523,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
         }
-        write!(out, " entered\n }}\n}}\n").map_err(|_| out.error())
+        write!(out, " entered\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
     }
 }
 
