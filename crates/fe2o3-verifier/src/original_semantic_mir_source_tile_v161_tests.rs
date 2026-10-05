@@ -71,6 +71,25 @@ fn original_tile_model_generation_has_exact_and_one_short_resource_boundaries() 
     }
 }
 
+#[test]
+#[ignore = "diagnostic complete shared-model export; grants no source tile or proof authority"]
+fn diagnostic_complete_original_tile_shared_model_export_without_execution_v161() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    run_model(LIMIT, LIMIT, |text| {
+        assert!(text.len() <= 16 * 1024 * 1024);
+        let mut output = BufWriter::new(std::io::stdout().lock());
+        write!(output, "{{\"kind\":\"fe2o3-original-tile-shared-model-v161\",\"scope\":\"shared equations only\",\"bytes\":{},\"sha256\":\"{:x}\",\"model_hex\":\"", text.len(), Sha256::digest(text.as_bytes())).unwrap();
+        for byte in text.as_bytes() {
+            write!(output, "{byte:02x}").unwrap();
+        }
+        writeln!(output, "\"}}").unwrap();
+        output.flush().unwrap();
+    })
+    .0
+    .unwrap();
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
