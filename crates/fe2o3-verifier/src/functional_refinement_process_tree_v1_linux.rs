@@ -108,12 +108,6 @@ const RUST_PROCESS_CLONE3_FLAGS: u64 = 0x0000_0001_0000_4100;
 const SIGCHLD: u64 = 17;
 const MAX_CLONE_STACK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_TRACEES: usize = 32;
-const ELF_HEADER_BYTES: usize = 64;
-const ELF_PROGRAM_HEADER_BYTES: usize = 56;
-const MAX_ELF_PROGRAM_HEADERS: usize = 256;
-const ELF_LOAD_SEGMENT: u32 = 1;
-const ELF_EXECUTABLE_FLAG: u32 = 1;
-const SYSTEM_PAGE_BYTES: u64 = 4096;
 const PRCTL_SYSCALL: u32 = 157;
 const PR_SET_NAME: u64 = 15;
 const SENSITIVE_SYSCALLS: [u32; 14] = [
@@ -394,103 +388,50 @@ pub(super) fn allowed_runtime_executable(
     identity: ObjectIdentityV2,
     path: &Path,
 ) -> Result<Option<AllowedRuntimeExecutableV1>, RetainedFunctionalRefinementRuntimeErrorV1> {
+    use fe2o3_protected_service_spawn::trace_runtime::elf;
     let retained_file_bytes = rustix::fs::fstat(file)
         .map_err(|error| io_error("inspect runtime ELF length", error))?
         .st_size;
     let retained_file_bytes = u64::try_from(retained_file_bytes)
         .map_err(|_| process_failure("runtime ELF has a negative length"))?;
-    let mut header = [0_u8; ELF_HEADER_BYTES];
+    let mut header = [0_u8; elf::HEADER_BYTES];
     let count = rustix::io::pread(file, &mut header, 0).map_err(|error| {
         io_error(
             &format!("read runtime ELF header {}", path.display()),
             error,
         )
     })?;
-    if count < 7 || header[..7] != [0x7f, b'E', b'L', b'F', 2, 1, 1] {
+    // The generic reader keeps the existing I/O error type and original file;
+    // the shared parser is only a bounded byte/range calculation.
+    enum ReadError {
+        Policy(fe2o3_protected_service_spawn::trace_runtime::PolicyError),
+        Io(RetainedFunctionalRefinementRuntimeErrorV1),
+    }
+    impl From<fe2o3_protected_service_spawn::trace_runtime::PolicyError> for ReadError {
+        fn from(error: fe2o3_protected_service_spawn::trace_runtime::PolicyError) -> Self {
+            Self::Policy(error)
+        }
+    }
+    let ranges = elf::executable_file_ranges::<ReadError>(
+        retained_file_bytes,
+        &header[..count],
+        |offset, program| {
+            rustix::io::pread(file, program, offset)
+                .map_err(|error| ReadError::Io(io_error("read runtime ELF program header", error)))
+        },
+    )
+    .map_err(|error| match error {
+        ReadError::Policy(error) => process_failure(error.message()),
+        ReadError::Io(error) => error,
+    })?;
+    let Some(ranges) = ranges else {
         return Ok(None);
-    }
-    if count != header.len() {
-        return Err(process_failure(format!(
-            "runtime ELF header {} is truncated",
-            path.display()
-        )));
-    }
-    let file_type = u16::from_le_bytes(header[16..18].try_into().expect("two-byte field"));
-    let machine = u16::from_le_bytes(header[18..20].try_into().expect("two-byte field"));
-    if !matches!(file_type, 2 | 3) || machine != 62 {
-        return Ok(None);
-    }
-    let program_offset = u64::from_le_bytes(header[32..40].try_into().expect("eight-byte field"));
-    let program_entry_bytes =
-        u16::from_le_bytes(header[54..56].try_into().expect("two-byte field")) as usize;
-    let program_count =
-        u16::from_le_bytes(header[56..58].try_into().expect("two-byte field")) as usize;
-    if program_entry_bytes != ELF_PROGRAM_HEADER_BYTES
-        || !(1..=MAX_ELF_PROGRAM_HEADERS).contains(&program_count)
-    {
-        return Err(process_failure(format!(
-            "runtime ELF program-header table {} is outside the pinned x86-64 ABI",
-            path.display()
-        )));
-    }
-    let mut ranges = Vec::new();
-    for index in 0..program_count {
-        let offset = program_offset
-            .checked_add((index * ELF_PROGRAM_HEADER_BYTES) as u64)
-            .ok_or_else(|| process_failure("runtime ELF program-header offset overflow"))?;
-        let mut program = [0_u8; ELF_PROGRAM_HEADER_BYTES];
-        let count = rustix::io::pread(file, &mut program, offset)
-            .map_err(|error| io_error("read runtime ELF program header", error))?;
-        if count != program.len() {
-            return Err(process_failure(format!(
-                "runtime ELF program-header table {} is truncated",
-                path.display()
-            )));
-        }
-        let segment_type = u32::from_le_bytes(program[0..4].try_into().expect("four-byte field"));
-        let flags = u32::from_le_bytes(program[4..8].try_into().expect("four-byte field"));
-        if segment_type != ELF_LOAD_SEGMENT || flags & ELF_EXECUTABLE_FLAG == 0 {
-            continue;
-        }
-        let file_offset = u64::from_le_bytes(program[8..16].try_into().expect("eight-byte field"));
-        let segment_file_bytes =
-            u64::from_le_bytes(program[32..40].try_into().expect("eight-byte field"));
-        if segment_file_bytes == 0 {
-            continue;
-        }
-        let segment_file_end = file_offset
-            .checked_add(segment_file_bytes)
-            .ok_or_else(|| process_failure("runtime ELF executable range overflow"))?;
-        if segment_file_end > retained_file_bytes {
-            return Err(process_failure(format!(
-                "runtime ELF executable segment {} exceeds the retained file",
-                path.display()
-            )));
-        }
-        let start = file_offset & !(SYSTEM_PAGE_BYTES - 1);
-        let end = segment_file_end
-            .checked_add(SYSTEM_PAGE_BYTES - 1)
-            .map(|value| value & !(SYSTEM_PAGE_BYTES - 1))
-            .ok_or_else(|| process_failure("runtime ELF executable range overflow"))?;
-        ranges.push((start, end));
-    }
-    if ranges.is_empty() {
-        return Err(process_failure(format!(
-            "runtime ELF image {} has no executable load segment",
-            path.display()
-        )));
-    }
-    ranges.sort_unstable();
-    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
-    for (start, end) in ranges {
-        if let Some((_, previous_end)) = merged.last_mut()
-            && start <= *previous_end
-        {
-            *previous_end = (*previous_end).max(end);
-        } else {
-            merged.push((start, end));
-        }
-    }
+    };
+    let mut merged = Vec::new();
+    merged
+        .try_reserve_exact(ranges.as_slice().len())
+        .map_err(|_| process_failure("runtime ELF range allocation failed"))?;
+    merged.extend_from_slice(ranges.as_slice());
     Ok(Some(AllowedRuntimeExecutableV1 {
         identity,
         executable_file_ranges: merged,
