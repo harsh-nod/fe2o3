@@ -231,7 +231,7 @@ fn source_state(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.reserve_storage(13 * size_of::<usize>())?;
-    out.budget.charge_work(21)?;
+    out.budget.charge_work(24)?;
     let fuel = add(hint.statements, 1)?;
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
         return Err(mismatch());
@@ -250,7 +250,9 @@ fn source_state(
     }
     emit!(
         out,
-        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        call.child,
+        call.child,
         call.child,
         hint.instance,
         add(hint.operands, 1)?
@@ -263,18 +265,31 @@ fn source_state(
     out.budget.charge_work(1)?;
     emit!(out, " let copied_0 = source;\n");
     for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
-        out.budget.charge_work(4)?;
+        out.budget.charge_work(5)?;
         if *moved {
             return Err(mismatch());
         }
         let next = add(ordinal, 1)?;
         emit!(
             out,
-            " invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{next} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;\n",
+            " invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n let captured_{ordinal} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{next} = captured_{ordinal}.source;\n",
             hint.instance,
             hint.instance
         );
     }
+    out.budget.charge_work(3)?;
+    emit!(out, " let entered_arguments = seq![");
+    for ordinal in 0..call.arguments.len() {
+        out.budget.charge_work(1)?;
+        emit!(out, "captured_{ordinal}.value,");
+    }
+    emit!(out, "];\n");
+    emit!(
+        out,
+        " invocation_source_entry_select_success_v167(copied_{0}, invocation_source_entry_refuses_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()), invocation_source_entry_body_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()));\n",
+        call.arguments.len(),
+        call.child
+    );
     out.budget.charge_work(4)?;
     emit!(
         out,
@@ -295,9 +310,11 @@ fn source_state(
             " && invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}])\n"
         );
     }
+    out.budget.charge_work(1)?;
     emit!(
         out,
-        " && invocation_source_observations_v39(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36()) == Seq::empty()) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_observations_v39);\n }}\n",
+        " && invocation_source_observations_v39(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36()) == Seq::empty()) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_entry_body_{root}_{}_v167);\n reveal(invocation_source_observations_v39);\n }}\n",
+        call.child,
         call.child
     );
     emit!(

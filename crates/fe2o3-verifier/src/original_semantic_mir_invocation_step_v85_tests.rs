@@ -150,6 +150,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(state.contains(&format!("hide(invocation_constructor_source_{root}_{pc}_v162);")));
                                     let source_name = format!("invocation_constructor_source_state_{root}_{pc}_v165");
                                     let source_state = theorem(&out.text, &source_name);
+                                    let call = hint.call.as_ref().unwrap();
                                     assert_leading_opacity_headers(source_state);
                                     assert_eq!(state.matches(&format!(" {source_name}(source);")).count(), 1);
                                     assert!(!source_state.contains("target"));
@@ -158,6 +159,13 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(source_state.contains("hide(invocation_source_value_evaluate_v42);"));
                                     assert!(source_state.contains("hide(invocation_source_entry_initialize_v166);"));
                                     assert!(!source_state.contains("reveal(invocation_source_entry_initialize_v166);"));
+                                    assert!(source_state.contains("hide(invocation_source_entry_select_v167);"));
+                                    assert!(!source_state.contains("reveal(invocation_source_entry_select_v167);"));
+                                    assert!(source_state.contains(&format!("hide(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
+                                    assert!(!source_state.contains(&format!("reveal(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
+                                    assert!(source_state.contains(&format!("hide(invocation_source_entry_body_{root}_{}_v167);", call.child)));
+                                    assert_eq!(source_state.matches("invocation_source_entry_select_success_v167(").count(), 1);
+                                    assert!(source_state.contains(&format!("invocation_source_entry_select_success_v167(copied_{0}, invocation_source_entry_refuses_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()), invocation_source_entry_body_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()));", call.arguments.len(), call.child)));
                                     assert_eq!(source_state.matches("invocation_source_entry_initialize_pc_v166(").count(), 1);
                                     assert!(source_state.contains(&format!("invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
                                     assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);")));
@@ -165,13 +173,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(source_state.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                     assert!(!state.contains("reveal_with_fuel(invocation_source_micro_run_"));
                                     assert!(!state.contains("invocation_source_scalar_copy_valid_identity_v164("));
-                                    let call = hint.call.as_ref().unwrap();
                                     assert_eq!(source_state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
                                     for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
                                         assert!(!moved);
                                         assert!(source_state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
-                                        assert!(source_state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
+                                        assert!(source_state.contains(&format!(" let captured_{ordinal} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{} = captured_{ordinal}.source;", hint.instance, ordinal + 1)));
                                     }
+                                    let arguments = (0..call.arguments.len()).map(|ordinal| format!("captured_{ordinal}.value,")).collect::<String>();
+                                    assert!(source_state.contains(&format!(" let entered_arguments = seq![{arguments}];")));
                                     assert_eq!(source_state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 2);
                                     assert!(!state.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
@@ -181,6 +190,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(source_state.find(&valid).unwrap() < source_state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let source_projection = source_state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
                                     assert!(source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(source_projection.contains(&format!("reveal(invocation_source_entry_body_{root}_{}_v167);", call.child)));
                                     assert!(!source_projection.contains("invocation_byte_boundary_"));
                                     let target_projection = state.split_once(&format!(" assert(invocation_byte_boundary_{root}_v36(target).state ==")).unwrap().1.split_once("\n }\n").unwrap().0;
                                     assert!(target_projection.contains(&format!("reveal(invocation_byte_boundary_{root}_v36);")));
