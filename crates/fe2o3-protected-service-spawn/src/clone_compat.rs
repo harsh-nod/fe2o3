@@ -30,15 +30,32 @@ struct CloneArgs {
 }
 
 /// A blocked calling-thread mask; restore only after adopting all child custody.
+///
+/// The pending restoration cannot move to another thread:
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::clone_compat::ParentSignalMask;
+/// let mask = ParentSignalMask::unchanged();
+/// std::thread::spawn(move || mask.restore());
+/// ```
+/// Nor can its state be shared between threads:
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::clone_compat::ParentSignalMask;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<ParentSignalMask>();
+/// ```
 #[must_use]
 pub struct ParentSignalMask {
     previous: Option<u64>,
+    thread_affine: core::marker::PhantomData<*mut ()>,
 }
 
 impl ParentSignalMask {
     /// Represents a clone3 path that never changed the calling thread's mask.
     pub const fn unchanged() -> Self {
-        Self { previous: None }
+        Self {
+            previous: None,
+            thread_affine: core::marker::PhantomData,
+        }
     }
 
     /// Restores the caller's exact prior mask after its child is cleanup-owned.
@@ -147,6 +164,7 @@ pub unsafe fn clone_unmapped(pidfd: &mut c_int) -> rustix::io::Result<(c_long, P
         let error = unsafe { *libc::__errno_location() };
         ParentSignalMask {
             previous: Some(previous),
+            thread_affine: core::marker::PhantomData,
         }
         .restore()?;
         return Err(rustix::io::Errno::from_raw_os_error(error));
@@ -155,6 +173,7 @@ pub unsafe fn clone_unmapped(pidfd: &mut c_int) -> rustix::io::Result<(c_long, P
         result,
         ParentSignalMask {
             previous: if result == 0 { None } else { Some(previous) },
+            thread_affine: core::marker::PhantomData,
         },
     ))
 }
