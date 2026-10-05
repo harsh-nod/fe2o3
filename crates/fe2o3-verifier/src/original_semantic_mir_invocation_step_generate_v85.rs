@@ -342,15 +342,17 @@ fn unfold(
     observations: bool,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    for (instance, fuel) in hints.fuels.iter().enumerate() {
-        out.budget.charge_work(1)?;
-        if *fuel != 0 {
-            emit!(
-                out,
-                " reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});\n"
-            );
-        }
+    out.budget.charge_work(2)?;
+    let instance = cut.instance;
+    let fuel = add(cut.statements, 1)?;
+    if fuel > *hints.fuels.get(instance).ok_or_else(mismatch)? {
+        return Err(mismatch());
     }
+    // One source cut stops at its terminator, including entry to another frame.
+    emit!(
+        out,
+        " reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {fuel});\n"
+    );
     emit!(
         out,
         " reveal_with_fuel(invocation_byte_follow_{root}_v36, {});\n",

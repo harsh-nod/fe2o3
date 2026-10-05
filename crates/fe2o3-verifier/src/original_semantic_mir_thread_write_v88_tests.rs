@@ -706,6 +706,11 @@ fn original_thread_write_composition_consumes_opaque_steps_without_store_facts()
                     checked += 1;
                 }
                 if name.ends_with("_map_v85") {
+                    assert_eq!(
+                        body.matches("reveal_with_fuel(invocation_source_micro_run_")
+                            .count(),
+                        1
+                    );
                     if body.contains(" invocation_scalar_store_facts_v92();") {
                         store_cuts += 1;
                     } else {

@@ -62,6 +62,9 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let index = child - row.instances.start;
                                 let entry = hints.entries[index].as_ref().unwrap();
                                 let map = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_map_v85"));
+                                let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
+                                assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
+                                assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));
@@ -132,6 +135,8 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert!(!out.text.contains(&format!("proof fn invocation_paired_cut_{root}_pc{pc}_map_v85(")));
                                 let fallback = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_all_v85"));
                                 assert!(fallback.contains("reveal_with_fuel(invocation_source_micro_run_"));
+                                assert_eq!(fallback.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
+                                assert!(fallback.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(!fallback.contains("constructor_clear_well_formed"));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
