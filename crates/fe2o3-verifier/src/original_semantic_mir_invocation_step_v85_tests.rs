@@ -43,6 +43,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     // Copied proof coordinates do not prevent the original owner from emitting.
                     program.emit(out)?;
                     paired.emit(out)?;
+                    assert!(!out.text.contains("proof fn invocation_source_cut_summary_"));
+                    assert!(!out.text.contains("proof fn invocation_related_target_inputs_v96"));
                     for (root, row) in paired.roots.iter().enumerate() {
                         let hints = row.step_hints.as_ref().unwrap();
                         assert!(hints.conserves_heap);
@@ -117,6 +119,7 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                 let paired = PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
                 program.emit(out)?;
                 paired.emit(out)?;
+                assert!(!out.text.contains("proof fn invocation_source_cut_summary_"));
                 let mut found = 0;
                 for (root, row) in paired.roots.iter().enumerate() {
                     check_four(&out.text, &format!("invocation_paired_step_{root}_v36"), root);

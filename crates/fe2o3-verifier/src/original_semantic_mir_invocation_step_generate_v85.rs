@@ -10,6 +10,9 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
+#[path = "original_semantic_mir_cut_summary_generate_v96.rs"]
+mod summaries;
+
 #[derive(Clone, Copy)]
 enum Goal {
     All,
@@ -42,6 +45,7 @@ pub(super) fn emit(
     root: usize,
     row: &Root,
     hints: &SourceStepHintsV85,
+    summary_shared: &mut bool,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.reserve_storage(headers())?;
@@ -69,11 +73,20 @@ pub(super) fn emit(
     }
     header(root, None, Goal::All, out)?;
     emit!(out, "}}\n");
-    for cut in row.cuts.iter().flatten() {
+    for (block, cut) in row.cuts.iter().enumerate() {
+        let Some(cut) = cut else { continue };
         out.budget.charge_work(1)?;
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
-        let partition = constructor.is_some() || !hints.conserves_heap;
+        let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
+        if let Some(summary) = &summary {
+            if !*summary_shared {
+                emit!(out, "{}", summaries::SHARED);
+                *summary_shared = true;
+            }
+            summaries::emit(model, root, row, cut, hint, summary, out)?;
+        }
+        let partition = summary.is_none() && (constructor.is_some() || !hints.conserves_heap);
         if partition {
             for goal in [
                 Goal::Map,
@@ -139,7 +152,9 @@ pub(super) fn emit(
             }
         }
         header(root, Some(cut.source), Goal::All, out)?;
-        if partition {
+        if summary.is_some() {
+            summaries::compose(root, cut.source, out)?;
+        } else if partition {
             for goal in [
                 Goal::Relation,
                 Goal::Observations,
@@ -155,6 +170,30 @@ pub(super) fn emit(
         emit!(out, "}}\n");
     }
     Ok(())
+}
+
+pub(super) fn uses_summary(
+    model: &PairedInvocations<'_, '_, '_>,
+    root: usize,
+    pc: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<bool> {
+    model.check(out)?;
+    out.budget.reserve_storage(headers())?;
+    let row = model.roots.get(root).ok_or_else(mismatch)?;
+    let Some(hints) = row.step_hints.as_ref() else {
+        return Ok(false);
+    };
+    for (block, cut) in row.cuts.iter().enumerate() {
+        out.budget.charge_work(1)?;
+        if let Some(cut) = cut {
+            if cut.source == pc {
+                let hint = source_hint(row, hints, cut, out)?;
+                return Ok(summaries::derive(model, row, hints, block, cut, hint, out)?.is_some());
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn source_hint<'a>(
@@ -451,6 +490,9 @@ pub(super) fn dispatch(root: usize, row: &Root, out: &mut Writer<'_, '_>) -> Res
 
 fn headers() -> usize {
     size_of::<Goal>()
+        + size_of::<Option<summaries::Summary>>()
+        + size_of::<Result<Option<summaries::Summary>>>()
+        + size_of::<std::iter::Enumerate<std::slice::Iter<'static, Option<Cut>>>>()
         + 2 * size_of::<bool>()
         + size_of::<Option<usize>>()
         + size_of::<Result<&'static SourceCutHintsV85>>()

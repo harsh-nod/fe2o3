@@ -32,6 +32,7 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
         "{}",
         include_str!("original_semantic_mir_enum_bindings_v49.vrs")
     );
+    let mut summary_shared = false;
     for (root, row) in model.roots.iter().enumerate() {
         out.budget.charge_work(1)?;
         control(model, root, row, out)?;
@@ -42,11 +43,20 @@ pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '
             if hints.conserves_heap {
                 conservation::emit(root, &hints.fuels, out)?;
             }
-            step::emit(model, root, row, hints, out)?;
+            step::emit(model, root, row, hints, &mut summary_shared, out)?;
         }
         proofs(root, row, out)?;
     }
     Ok(())
+}
+
+pub(super) fn uses_cut_summary(
+    model: &PairedInvocations<'_, '_, '_>,
+    root: usize,
+    pc: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<bool> {
+    step::uses_summary(model, root, pc, out)
 }
 
 fn control(
@@ -716,7 +726,7 @@ spec fn invocation_actual_boundary_join_v36(block: int, head: MemoryBlockResultV
 "#;
 
 fn headers() -> usize {
-    2 * size_of::<bool>()
+    3 * size_of::<bool>()
         + size_of::<std::slice::Iter<'_, Root>>()
         + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
