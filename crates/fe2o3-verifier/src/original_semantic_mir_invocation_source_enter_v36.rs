@@ -228,6 +228,16 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .types()
                 .get(declaration.ty().index() as usize)
                 .ok_or_else(mismatch)?;
+            if super::source_bytes::execution_loans::nominal_reference(
+                semantic.types(),
+                declaration.ty(),
+            )?
+            .is_some()
+            {
+                return Err(Error::Statement(
+                    "original helper execution reference requires loan snapshot transport",
+                ));
+            }
             let class = if let Some(recipe) = descriptor_helpers::entry_recipe(
                 slots,
                 plan,

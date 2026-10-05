@@ -264,6 +264,22 @@ fn run_fixture(
         &mut Writer<'_, '_>,
     ) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
+    run_fixture_with_plan(layout, work, storage, |_, slots, tile, out| {
+        examine(slots, tile, out)
+    })
+}
+
+fn run_fixture_with_plan(
+    layout: Layout,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(
+        &InvocationPlan<'_, '_>,
+        &SourceSlots<'_, '_>,
+        &TileExpansion<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
     super::super::super::invocations::tests::run_prepared(work, storage, prepared, |plan, out| {
         let source = plan.source(out)?;
         let result = source.with_checked_mixed_fixedpoint_optimization_v18(
@@ -276,7 +292,7 @@ fn run_fixture(
                     let mut writer = Writer::new(budget)?;
                     let slots = SourceSlots::derive_tile_v162(plan, &tile, &mut writer)?;
                     slots.check_source(original, &mut writer)?;
-                    examine(&slots, &tile, &mut writer)
+                    examine(plan, &slots, &tile, &mut writer)
                 })();
                 if result.is_ok() {
                     budget.release_storage(budget.storage() - tile_floor)?;
@@ -432,5 +448,122 @@ fn original_tile_fixture_has_exact_and_one_short_complete_resource_boundaries() 
             Err(Error::Resource(Resource::Storage(error)))
                 | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
                 if error.actual() == baseline.3 && error.limit() == baseline.3 - 1));
+    }
+}
+
+fn generate_actual_tile_source_v168(
+    plan: &InvocationPlan<'_, '_>,
+    slots: &SourceSlots<'_, '_>,
+    _tile: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    let mut program = SourceByteProgram::derive(plan, slots, out)?;
+    program.emit(out)?;
+    for (operation, expected) in [
+        ("ContextIssue", 1),
+        ("WorkgroupDerive", 1),
+        ("TileLoad", 2),
+        ("TileTransport", 4),
+    ] {
+        assert_eq!(
+            out.text
+                .matches(&format!(
+                    "let event = InvocationSourceByteEventV36::{operation}("
+                ))
+                .count(),
+            expected,
+            "actual source call census for {operation}"
+        );
+    }
+    assert!(
+        out.text
+            .contains("InvocationSourceByteEventV36::ExecutionLoan(")
+    );
+    assert!(
+        out.text
+            .contains("InvocationSourceExecutionRoleV168::Context")
+    );
+    assert!(
+        out.text
+            .contains("InvocationSourceExecutionRoleV168::Workgroup")
+    );
+    assert!(
+        out.text
+            .contains("TileLoad(InvocationSourceExecutionTileLoadV168 { workgroup:")
+    );
+    Ok(())
+}
+
+#[test]
+fn original_execution_tile_source_dispatch_uses_actual_loans_and_selected_layouts() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture_with_plan(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |plan, slots, tile, out| {
+                generate_actual_tile_source_v168(plan, slots, tile, out)?;
+                let (selected, absent) = match layout {
+                    Layout::Blocked => ("Blocked", "Striped"),
+                    Layout::Striped => ("Striped", "Blocked"),
+                };
+                assert_eq!(
+                    out.text
+                        .matches(&format!(
+                            "layout: InvocationSourceTileLayoutV161::{selected}"
+                        ))
+                        .count(),
+                    2
+                );
+                assert!(
+                    !out.text
+                        .contains(&format!("layout: InvocationSourceTileLayoutV161::{absent}"))
+                );
+                Ok(())
+            },
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_tile_source_dispatch_has_exact_and_one_short_resources() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let baseline = run_fixture_with_plan(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_actual_tile_source_v168,
+        );
+        baseline.0.unwrap();
+        let exact = run_fixture_with_plan(
+            layout,
+            baseline.1,
+            baseline.3,
+            generate_actual_tile_source_v168,
+        );
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        for (work, storage, is_work) in [
+            (baseline.1 - 1, baseline.3, true),
+            (baseline.1, baseline.3 - 1, false),
+        ] {
+            let result =
+                run_fixture_with_plan(layout, work, storage, generate_actual_tile_source_v168).0;
+            use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+            assert!(if is_work {
+                matches!(result, Err(Error::Resource(Resource::Work(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                    if error.actual() == baseline.1 && error.limit() == work)
+            } else {
+                matches!(result, Err(Error::Resource(Resource::Storage(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                    if error.actual() == baseline.3 && error.limit() == storage)
+            });
+        }
     }
 }

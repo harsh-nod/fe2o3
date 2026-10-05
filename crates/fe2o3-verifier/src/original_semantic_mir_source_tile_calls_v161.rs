@@ -1,4 +1,5 @@
 //! Original nominal tile calls; no target operation supplies a source value.
+use super::super::source_bytes::execution_loans::{self, ExecutionOperand, Role as LoanRole};
 use super::*;
 use fe2o3_kernel_ir::ExecutionTileLayoutV1;
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -9,7 +10,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
 #[derive(Clone, Copy, Debug)]
 enum Action {
     ContextIssue,
+    WorkgroupDerive {
+        context: ExecutionOperand,
+    },
     Load {
+        workgroup: ExecutionOperand,
         input: usize,
         moved_input: bool,
         base: TypedOperand,
@@ -82,9 +87,6 @@ impl TileCall {
         else {
             return Ok(None);
         };
-        if matches!(operation, Execution::WorkgroupDerive { .. }) {
-            return Ok(None);
-        }
         out.budget.reserve_storage(headers())?;
         out.budget.charge_work(24)?;
         let row = plan.instance(root, instance, out)?;
@@ -157,6 +159,12 @@ impl TileCall {
                 if lanes != selected_lanes {
                     return Err(mismatch());
                 }
+                let workgroup =
+                    execution_loans::call_argument(slots, plan, root, instance, block, 0, out)?
+                        .ok_or_else(mismatch)?;
+                if workgroup.recipe.role != LoanRole::Workgroup || workgroup.recipe.mutable {
+                    return Err(mismatch());
+                }
                 let (input, moved_input) = local(input, false)?;
                 let base = body.call_argument(block, 2, out)?;
                 if base.scalar()
@@ -169,6 +177,7 @@ impl TileCall {
                 }
                 (
                     Action::Load {
+                        workgroup,
                         input: flat(input)?,
                         moved_input,
                         base,
@@ -215,8 +224,28 @@ impl TileCall {
                     elements,
                 )
             }
-            Execution::WorkgroupDerive { .. } => {
-                return Err(mismatch());
+            Execution::WorkgroupDerive { context, workgroup } => {
+                if call.arguments().len() != 1
+                    || workgroup != output_type
+                    || semantic
+                        .types()
+                        .get(workgroup.index() as usize)
+                        .map(TypeDecl::rust_type_kind)
+                        != Some(RustType::Execution(Role::Workgroup))
+                {
+                    return Err(mismatch());
+                }
+                let input =
+                    execution_loans::call_argument(slots, plan, root, instance, block, 0, out)?
+                        .ok_or_else(mismatch)?;
+                if input.recipe.role != LoanRole::Context
+                    || !input.recipe.mutable
+                    || !input.moved
+                    || input.recipe.source_type != context.index()
+                {
+                    return Err(mismatch());
+                }
+                (Action::WorkgroupDerive { context: input }, 0)
             }
         };
         Ok(Some(Self {
@@ -245,7 +274,13 @@ impl TileCall {
             Action::ContextIssue => {
                 write!(out, "ContextIssue(InvocationSourceContextIssueV161 {{ destination: {}, source_type: {} }});\n", self.destination, self.output_type.index()).map_err(|_| out.error())?;
             }
+            Action::WorkgroupDerive { context } => {
+                write!(out, "WorkgroupDerive(InvocationSourceWorkgroupDeriveV168 {{ destination: {}, source_type: {}, context: ", self.destination, self.output_type.index()).map_err(|_| out.error())?;
+                context.emit(out)?;
+                write!(out, " }});\n").map_err(|_| out.error())?;
+            }
             Action::Load {
+                workgroup,
                 input,
                 moved_input,
                 base,
@@ -256,9 +291,15 @@ impl TileCall {
                     ExecutionTileLayoutV1::Blocked => "Blocked",
                     ExecutionTileLayoutV1::Striped => "Striped",
                 };
-                write!(out, "TileLoad(InvocationSourceTileLoadV161 {{ destination: {}, source_type: {}, input: {input}, moved_input: {moved_input}, lanes: {lanes}, elements: {}, layout: InvocationSourceTileLayoutV161::{layout}, base: ", self.destination, self.output_type.index(), self.elements).map_err(|_| out.error())?;
+                write!(
+                    out,
+                    "TileLoad(InvocationSourceExecutionTileLoadV168 {{ workgroup: "
+                )
+                .map_err(|_| out.error())?;
+                workgroup.emit(out)?;
+                write!(out, ", load: InvocationSourceTileLoadV161 {{ destination: {}, source_type: {}, input: {input}, moved_input: {moved_input}, lanes: {lanes}, elements: {}, layout: InvocationSourceTileLayoutV161::{layout}, base: ", self.destination, self.output_type.index(), self.elements).map_err(|_| out.error())?;
                 base.emit_scalar_value_v161(out)?;
-                write!(out, " }});\n").map_err(|_| out.error())?;
+                write!(out, " }} }});\n").map_err(|_| out.error())?;
             }
             Action::Transport {
                 input,
@@ -276,6 +317,7 @@ fn headers() -> usize {
     size_of::<TileCall>()
         + 2 * size_of::<Result<Option<TileCall>>>()
         + size_of::<TypedOperand>()
+        + execution_loans::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }

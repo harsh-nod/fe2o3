@@ -94,6 +94,12 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             return Err(mismatch());
         }
         let ty = function.abi().return_type();
+        if super::source_bytes::execution_loans::nominal_reference(semantic.types(), ty)?.is_some()
+        {
+            return Err(Error::Statement(
+                "original helper execution reference return requires loan snapshot transport",
+            ));
+        }
         let class = if descriptor_helpers::nominal_reference(slots, ty, out)? {
             if instance == 0 || row.incoming.is_none() {
                 return Err(mismatch());

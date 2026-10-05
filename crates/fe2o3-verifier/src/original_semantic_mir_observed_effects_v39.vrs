@@ -90,8 +90,14 @@ spec fn invocation_source_statement_observations_v39(
             else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
                 observation.before, observation.after) }
         },
+        Some(InvocationSourceByteEventV36::WorkgroupDerive(derive)) => {
+            let result = invocation_source_workgroup_derive_v168(observation.before, derive);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
         Some(InvocationSourceByteEventV36::TileLoad(load)) => {
-            let result = invocation_source_tile_load_v161(observation.before, load,
+            let result = invocation_source_execution_tile_load_v168(observation.before, load,
                 observation.root, observation.instance, little_endian);
             if result.source == observation.after { result.observations }
             else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
@@ -166,7 +172,8 @@ spec fn invocation_source_statement_observations_v39(
             };
             reads + invocation_source_observe_effects_v39(writes, evaluated.source, observation.after)
         },
-        Some(event @ InvocationSourceByteEventV36::Checked { .. })
+        Some(event @ InvocationSourceByteEventV36::ExecutionLoan(_))
+        | Some(event @ InvocationSourceByteEventV36::Checked { .. })
         | Some(event @ InvocationSourceByteEventV36::AggregateTransfer { .. })
         | Some(event @ InvocationSourceByteEventV36::AggregateDeinitialize(_))
         | Some(event @ InvocationSourceByteEventV36::AggregateReset { .. }) => {

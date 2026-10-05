@@ -4,6 +4,8 @@ use std::fmt::Write as _;
 
 const TILE_MODEL: &str = include_str!("original_semantic_mir_source_tile_v161.vrs");
 const TILE_LAWS: &str = include_str!("original_semantic_mir_source_tile_v161_tests.vrs");
+const EXECUTION_LAWS: &str =
+    include_str!("original_semantic_mir_source_execution_loans_v168_tests.vrs");
 const LIMIT: usize = 512 * 1024 * 1024;
 
 fn run_model(
@@ -25,7 +27,8 @@ fn run_model(
                 EndiannessV2::Little,
                 out,
             )?;
-            write!(out, "\nverus! {{\n{TILE_LAWS}\n}}\n").map_err(|_| out.error())?;
+            write!(out, "\nverus! {{\n{TILE_LAWS}\n{EXECUTION_LAWS}\n}}\n")
+                .map_err(|_| out.error())?;
             examine(&out.text);
             Ok(())
         })
@@ -37,6 +40,7 @@ fn original_tile_model_is_in_the_complete_source_step_and_effect_model() {
     let (result, _, floor, _) = run_model(LIMIT, LIMIT, |text| {
         assert_eq!(text.matches(TILE_MODEL).count(), 1);
         assert_eq!(text.matches(TILE_LAWS).count(), 1);
+        assert_eq!(text.matches(EXECUTION_LAWS).count(), 1);
         for operation in ["ContextIssue", "TileLoad", "TileTransport"] {
             assert_eq!(
                 text.matches(&format!("InvocationSourceByteEventV36::{operation}("))
@@ -47,6 +51,7 @@ fn original_tile_model_is_in_the_complete_source_step_and_effect_model() {
         for forbidden in ["assume(", "admit(", "external_body", "uninterpreted"] {
             assert!(!TILE_MODEL.contains(forbidden));
             assert!(!TILE_LAWS.contains(forbidden));
+            assert!(!EXECUTION_LAWS.contains(forbidden));
         }
         // These shared equations are not evidence of a source tile constructor
         // or source-to-expanded whole-kernel refinement succeeding.

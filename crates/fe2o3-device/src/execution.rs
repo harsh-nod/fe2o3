@@ -50,7 +50,10 @@ struct WorkgroupEpoch<'workgroup, KernelBrand, Epoch: SynchronizationEpoch> {
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_capability_v1"]
 pub struct WorkgroupCapability<'workgroup, KernelBrand, Epoch: SynchronizationEpoch = InitialEpoch>
 {
+    // Authenticated issuance records the total number of work-items here.
     _size: u64,
+    // X-fastest linear work-item rank within this workgroup, matching
+    // group::Workgroup::thread_rank; not launch dimensionality or group index.
     _rank: u64,
     _epoch: WorkgroupEpoch<'workgroup, KernelBrand, Epoch>,
     _not_send_sync: PhantomData<*mut ()>,

@@ -62,6 +62,18 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
                 "invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len() as int)",
                 1,
             );
+            let anchor = " && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>";
+            assert_eq!(expected.matches(anchor).count(), 1);
+            expected = expected.replacen(anchor, &format!(
+                " && (forall|local: int| source.logical.execution_references.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local)){anchor}"
+            ), 1);
+        }
+        if marker == "spec fn invocation_source_logical_well_formed_v38(" {
+            let anchor = " && (forall|i: int| logical.descriptor_references.contains_key(i) ==>";
+            assert_eq!(expected.matches(anchor).count(), 1);
+            expected = expected.replacen(anchor, &format!(
+                " && invocation_source_execution_ancestry_v168(logical.execution_references) && (forall|i: int| logical.execution_references.contains_key(i) ==> 0 <= i < count && invocation_source_execution_reference_shape_v168(logical.execution_references[i], logical.versions) && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i) && !logical.descriptor_references.contains_key(i) && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i)){anchor}"
+            ), 1);
         }
         assert_eq!(
             warning_tokens_v65(warning_definition_v65(source, marker)),
@@ -84,9 +96,11 @@ fn generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped(
         descriptor,
         concat!(
             "    Descriptor(InvocationSourceDescriptorEventV51),\n",
+            "    ExecutionLoan(InvocationSourceExecutionEventV168),\n",
             "    ThreadWrite(InvocationSourceThreadWriteV88),\n",
             "    ContextIssue(InvocationSourceContextIssueV161),\n",
-            "    TileLoad(InvocationSourceTileLoadV161),\n",
+            "    WorkgroupDerive(InvocationSourceWorkgroupDeriveV168),\n",
+            "    TileLoad(InvocationSourceExecutionTileLoadV168),\n",
             "    TileTransport(InvocationSourceTileTransportV161),\n",
         ),
         1,

@@ -75,8 +75,14 @@ spec fn invocation_source_statement_effects_v36(
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
+            Some(InvocationSourceByteEventV36::WorkgroupDerive(derive)) => {
+                let result = invocation_source_workgroup_derive_v168(observation.before, derive);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::TileLoad(load)) => {
-                let result = invocation_source_tile_load_v161(observation.before, load,
+                let result = invocation_source_execution_tile_load_v168(observation.before, load,
                     observation.root, observation.instance, little_endian);
                 if result.source == observation.after {
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)

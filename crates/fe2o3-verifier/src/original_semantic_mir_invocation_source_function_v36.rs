@@ -134,6 +134,7 @@ enum End {
     Descriptor(descriptor_calls::DescriptorCall),
     DescriptorIndex(descriptor_indices::DescriptorIndexCall),
     ThreadWrite(thread_write::ThreadWriteCall),
+    Tile(tile_calls::TileCall),
     Assert(assertions::SourceAssertControlV40),
     Return,
 }
@@ -243,6 +244,7 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
                 | End::Descriptor(_)
                 | End::DescriptorIndex(_)
                 | End::ThreadWrite(_)
+                | End::Tile(_)
                 | End::Abort
         ))
     }
@@ -582,6 +584,18 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         if source_trap_call_v55(call, semantic.callables(), semantic.types(), out)?
                         {
                             End::Abort
+                        } else if let Some(tile) = tile_calls::TileCall::derive(
+                            slots,
+                            plan,
+                            &body,
+                            root,
+                            instance,
+                            block,
+                            call,
+                            &semantic.callables()[call.callee().index() as usize],
+                            out,
+                        )? {
+                            End::Tile(tile)
                         } else if let Some(write) = thread_write::ThreadWriteCall::derive(
                             slots,
                             plan,
@@ -767,6 +781,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 End::Descriptor(call) => call.emit(out)?,
                 End::DescriptorIndex(call) => call.emit(out)?,
                 End::ThreadWrite(call) => call.emit(r, i, block, out)?,
+                End::Tile(call) => call.emit(r, i, block, out)?,
                 End::Assert(assertion) => assertion.emit(r, i, block, out)?,
                 End::Abort => {
                     write!(out, " let source = invocation_source_byte_trap_v40(cursor.source);\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
