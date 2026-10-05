@@ -578,6 +578,7 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-device",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
@@ -637,6 +638,7 @@ name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
  "fe2o3-kernel-ir",
+ "fe2o3-mir-model",
 ]
 
 [[package]]
@@ -1141,7 +1143,7 @@ dependencies = [
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "awint",
  "combine",
@@ -1168,7 +1170,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "combine",
  "convert_case",
