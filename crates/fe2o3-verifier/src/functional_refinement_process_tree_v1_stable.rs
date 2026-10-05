@@ -68,46 +68,62 @@ fn park_all(
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    for pid in tree.pids() {
-        if parked(&tree[&pid]) {
-            continue;
-        }
-        // Do not interrupt an already queued stop unnecessarily. An event racing
-        // INTERRUPT is retained, never replaced by an assumed synthetic stop.
+    runtime_policy::stable::park_all(&mut StoppedProofCensus(tree), deadline, progress)
+}
+
+struct StoppedProofCensus<'a>(&'a mut Tracees);
+
+impl runtime_policy::stable::StoppedCensus for StoppedProofCensus<'_> {
+    type Task = i32;
+    type Snapshot = std::iter::Take<std::array::IntoIter<i32, { MAX_TRACEES + 1 }>>;
+    type Error = RetainedFunctionalRefinementRuntimeErrorV1;
+
+    fn tasks(&self) -> Self::Snapshot {
+        self.0.pids()
+    }
+
+    fn parked(&self, pid: i32) -> bool {
+        parked(&self.0[&pid])
+    }
+
+    fn observe_and_remember(&mut self, pid: i32) -> Result<bool> {
         if let Some(status) = wait_for_specific_nonblocking(pid)? {
-            remember(tree, pid, status)?;
+            remember(self.0, pid, status)?;
+            Ok(true)
         } else {
-            ptrace(PTRACE_INTERRUPT, pid, 0)?;
+            Ok(false)
         }
     }
-    while tree.values().any(|task| !parked(task)) {
-        checkpoint(deadline, progress)?;
-        for pid in tree.pids() {
-            if !parked(&tree[&pid])
-                && let Some(status) = wait_for_specific_nonblocking(pid)?
-            {
-                remember(tree, pid, status)?;
-            }
-        }
-        if tree.values().any(|task| !parked(task)) {
-            thread::sleep(ACTIVE_TREE_POLL_INTERVAL);
-        }
+
+    fn interrupt(&mut self, pid: i32) -> Result<()> {
+        ptrace(PTRACE_INTERRUPT, pid, 0)
     }
-    // Creation can only occur in complete_request, where its child is registered
-    // before either side is resumed. Anything else is missing lifecycle custody.
-    if tree.values().any(|t| {
-        t.queued_status.is_some_and(|s| {
-            matches!(
-                (s as u32) >> 16,
-                PTRACE_EVENT_FORK | PTRACE_EVENT_VFORK | PTRACE_EVENT_CLONE | PTRACE_EVENT_EXIT
-            )
+
+    fn escaped_lifecycle(&self) -> bool {
+        self.0.values().any(|task| {
+            task.queued_status.is_some_and(|status| {
+                matches!(
+                    (status as u32) >> 16,
+                    PTRACE_EVENT_FORK | PTRACE_EVENT_VFORK | PTRACE_EVENT_CLONE | PTRACE_EVENT_EXIT
+                )
+            })
         })
-    }) {
-        return Err(process_failure(
-            "creation or exit escaped the stable syscall boundary",
-        ));
     }
-    census(tree)
+
+    fn lifecycle_error(&self) -> Self::Error {
+        process_failure("creation or exit escaped the stable syscall boundary")
+    }
+
+    fn timeout_error(&self) -> Self::Error {
+        controller_error(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
+            "stable proof syscall boundary exceeded its deadline",
+        )
+    }
+
+    fn validate_census(&mut self) -> Result<()> {
+        census(self.0)
+    }
 }
 
 pub(super) fn park_for_inspection(
@@ -274,17 +290,9 @@ fn completed_result(pid: i32, syscall: u64, status: i32) -> Result<i64> {
             "kernel did not authenticate a syscall-exit boundary",
         ));
     }
-    let result = i64::from_ne_bytes(info[24..32].try_into().unwrap());
     let registers = read_registers(pid)?;
-    if registers.orig_rax != syscall
-        || registers.rax as i64 != result
-        || matches!(result, -4 | -512 | -513 | -514 | -516)
-    {
-        return Err(process_failure(
-            "sensitive syscall completion changed or requires restart",
-        ));
-    }
-    Ok(result)
+    runtime_policy::validate_syscall_exit(&info, syscall, registers.orig_rax, registers.rax)
+        .map_err(|error| process_failure(error.message()))
 }
 
 fn register_child(
