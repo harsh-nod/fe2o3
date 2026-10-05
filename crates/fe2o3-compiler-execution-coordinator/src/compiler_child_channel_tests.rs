@@ -312,6 +312,13 @@ fn run_native(case: usize, pool: &mut Cleanup) {
     );
     assert!(trace.resume(&mut b).is_err());
     assert!(!trace.needs_foreground_cancellation());
+    assert!(
+        trace
+            .with_runtime_backing(&mut b, |_, _, _| -> Result<()> {
+                panic!("unarmed trace exposed runtime backing")
+            })
+            .is_err()
+    );
     if case == 9 {
         trace.interrupt_for_runtime(&mut b).unwrap();
         loop {
@@ -339,6 +346,25 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         assert!(runtime_full > full);
         assert!(trace.needs_foreground_cancellation());
         assert_eq!(trace.pid().as_raw_pid() as u32, child_pid);
+        let original_account = b.work_ledger_identity_v1();
+        let original_address = &b as *const _ as usize;
+        let work = b.work();
+        let peak = b.peak_storage();
+        let floor = b.storage();
+        trace
+            .with_runtime_backing(&mut b, |runtime, (_, cwd, _, _), same| -> Result<()> {
+                assert!(same.work_ledger_identity_v1() == original_account);
+                assert_eq!(same as *const _ as usize, original_address);
+                assert_eq!(runtime.pid().as_raw_pid() as u32, child_pid);
+                assert!(cwd.metadata().unwrap().is_dir());
+                assert!(!runtime.is_trace_retired());
+                Ok(())
+            })
+            .unwrap();
+        let quota = CompilerTrace::<()>::runtime_backing_quota().unwrap();
+        assert!(b.work() - work <= quota.work());
+        assert!(b.peak_storage() <= peak.max(floor + quota.scratch()));
+        assert_eq!(b.storage(), floor);
         trace
             .with_backing(&mut b, |(_, cwd, _, _), _| -> Result<()> {
                 assert!(cwd.metadata().unwrap().is_dir());
@@ -366,6 +392,13 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             trace
                 .with_runtime(&mut b, |_, _| -> Result<()> {
                     panic!("cancelled compiler exposed runtime execution")
+                })
+                .is_err()
+        );
+        assert!(
+            trace
+                .with_runtime_backing(&mut b, |_, _, _| -> Result<()> {
+                    panic!("cancelled trace exposed runtime backing")
                 })
                 .is_err()
         );

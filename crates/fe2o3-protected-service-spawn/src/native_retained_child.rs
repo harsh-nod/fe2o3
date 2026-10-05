@@ -380,6 +380,33 @@ impl<'work, T: Send + 'static> RootRetainedRuntimeTraceV1<'work, T> {
             self.resources.with(b, operation)
         })
     }
+
+    /// Borrow the original runtime and its retained inputs in one metered
+    /// scope. This permits stopped-task policy checks without cloning inputs or
+    /// reconstructing trace custody. It does not admit a resume or publication.
+    /// The callback funds all runtime/policy operations on this same budget;
+    /// it must not recursively acquire this backing's non-reentrant mutex.
+    /// Neither the backing borrow nor the mutable runtime borrow can escape.
+    pub fn with_runtime_resources<'budget, R, E>(
+        &mut self,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(
+            &mut RootRuntimeTraceV1<'work>,
+            &T,
+            &mut Budget<'budget>,
+        ) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource>
+            + From<crate::RetainedResourceAccessErrorV2>
+            + From<super::ProtectedServiceSpawnErrorV2>,
+    {
+        b.with_prepaid_scope(self.retained_storage(), 0, 0, 0, |b| {
+            self.trace.check_budget(b)?;
+            self.resources
+                .with(b, |resources, b| operation(&mut self.trace, resources, b))
+        })
+    }
 }
 
 impl<T: Send + 'static> fmt::Debug for RootRetainedTaskTraceV2<'_, T> {

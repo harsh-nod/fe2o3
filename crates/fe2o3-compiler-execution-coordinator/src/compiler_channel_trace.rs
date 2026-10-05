@@ -209,6 +209,35 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         })
     }
 
+    /// The private checkpoint controller uses the actual runtime and its
+    /// original locked backing together. Callback work/scratch is additional;
+    /// returned observations grant no permission to resume or publish.
+    pub(crate) fn with_runtime_backing<R>(
+        &mut self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&mut RootRuntimeTraceV1<'work>, &T, &mut Budget<'_>) -> Result<R>,
+    ) -> Result<R> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase == Phase::Cancelled {
+                return Err(Error::Invalid("compiler runtime execution is cancelled"));
+            }
+            match &mut self.trace {
+                TraceOwner::Runtime(trace) => trace.with_runtime_resources(b, operation),
+                TraceOwner::Original(_) => {
+                    Err(Error::Invalid("compiler runtime trace is not armed"))
+                }
+            }
+        })
+    }
+
+    pub(crate) fn runtime_backing_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::RetainedResourcesV2 as Resources;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, Resources::<T>::ACCESS_WORK])?,
+            scratch: native::sum(&[FRAME, Resources::<T>::ACCESS_SCRATCH])?,
+        })
+    }
+
     /// Drive original funded cancellation; Pending preserves foreground custody.
     /// A terminal trace is necessary but not sufficient for domain retirement.
     pub(crate) fn cancel_step(&mut self, b: &mut Budget<'_>) -> Result<CleanupPoll> {
