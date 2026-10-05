@@ -9,6 +9,9 @@
 
 extern crate alloc;
 
+mod peer_dependency;
+pub use peer_dependency::*;
+
 use alloc::boxed::Box;
 use core::{
     mem::{align_of, offset_of, size_of},

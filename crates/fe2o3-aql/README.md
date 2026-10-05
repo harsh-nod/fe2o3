@@ -13,6 +13,8 @@ It provides:
 - the exact INVALID unpublished 64-byte zero-dependency BARRIER_AND packet,
   including zero reserved/dependency fields and the system-scoped `0x1403`
   release header;
+- an additive two-dependency BARRIER_AND packet with system fences and local
+  wait-for-prior ordering (`0x1503`), plus ordered mixed kernel/barrier batches;
 - a linear prepared value that exposes only the invariant system-scoped final
   header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
@@ -62,6 +64,32 @@ The prepared-batch target preserves body-before-header call order but remains
 inert. Its callback trait does not authenticate a target implementation,
 perform a release atomic, or prove that indices name the reservation's native
 slots. Those joins remain private responsibilities of the queue owner.
+
+## Peer Dependency Packets
+
+`AqlPeerBarrierAndPacketV1` requires two distinct nonzero, 64-byte-aligned
+dependency handles and a distinct completion handle. The other three dependency
+slots and every reserved field are zero. `AqlPreparedPeerPacketBatchV1` accepts
+1 through 8192 packets and rejects kernels without `WaitForPrior`. It writes
+all INVALID bodies before exposing any release header. A failed callback stops
+publication; it does not roll back a queue that has already become visible.
+
+The new `is_reviewed_aql_peer_publication_v1` gate is separate from
+`is_reviewed_aql_publication_v1`: the old gate still rejects `0x1503`. A native
+owner must explicitly implement the new publication path. This crate alone
+does not map signals to another GPU or make a dependency graph executable.
+
+The native owner must validate signal allocations, peer mappings, queue epochs,
+unique completion slots, acyclic dependencies and retirement before storage
+reuse. A packet completion is not proof of a kernel's application-level task
+state or numerical result. When buffers are reused, a producer must also wait
+for every previous consumer, not merely for the preceding producer.
+
+`tests/peer_dependency.rs` covers exact packet bytes, signal constraints,
+publication failure ordering, packet-count limits and old/new header isolation.
+`tests/oracles/aql_peer_dependency.c` independently checks the 64-byte image and
+header against ROCm's `hsa.h`. These CPU checks do not qualify peer visibility
+or device execution; that requires a bounded two-GPU producer/consumer test.
 
 The prepared BARRIER_AND value is likewise inert. Its exact bytes and typed
 publication callback do not by themselves prove queue consumption, signal
