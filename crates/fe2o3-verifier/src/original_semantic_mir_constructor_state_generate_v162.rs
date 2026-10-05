@@ -303,10 +303,10 @@ fn source_state(
         out,
         " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
     );
-    out.budget.charge_work(4)?;
+    out.budget.charge_work(5)?;
     emit!(
         out,
-        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_source_entry_initialize_v166);\n }}\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
+        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_source_entry_initialize_v166);\n }}\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
     );
     Ok(())
 }
