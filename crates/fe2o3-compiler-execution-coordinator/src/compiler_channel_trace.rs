@@ -141,6 +141,30 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         })
     }
 
+    pub(crate) fn gated_operation_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2 as Task;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, Task::OPERATION_WORK])?,
+            scratch: native::sum(&[FRAME, Task::OPERATION_SCRATCH])?,
+        })
+    }
+
+    pub(crate) fn runtime_confirmation_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2 as Task;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[
+                LOCAL_WORK,
+                RootRuntimeTraceV1::OPERATION_WORK,
+                Task::CONFIRM_EXEC_WORK,
+            ])?,
+            scratch: native::sum(&[
+                FRAME,
+                RootRuntimeTraceV1::OPERATION_SCRATCH,
+                Task::CONFIRM_EXEC_SCRATCH,
+            ])?,
+        })
+    }
+
     /// Stop the original gated task; arming still requires its consumed stop.
     pub(crate) fn interrupt_for_runtime(&mut self, b: &mut Budget<'_>) -> Result<()> {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {

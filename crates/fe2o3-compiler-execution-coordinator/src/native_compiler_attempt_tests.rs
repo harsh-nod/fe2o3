@@ -76,3 +76,30 @@ fn runtime_arm_and_cancellation_quotes_include_the_outer_attempt() {
     assert_eq!(cancel.work(), LOCAL_WORK + issued.work());
     assert_eq!(cancel.scratch(), FRAME + issued.scratch());
 }
+
+#[test]
+fn runtime_poll_confirmation_and_capture_have_closed_finite_quotes() {
+    let poll = Attempt::runtime_poll_quota().unwrap();
+    let original = Trace::gated_operation_quota().unwrap();
+    assert_eq!(
+        (poll.work(), poll.scratch()),
+        (original.work(), original.scratch())
+    );
+    let confirm = Attempt::runtime_confirmation_quota().unwrap();
+    let inner = Trace::runtime_confirmation_quota().unwrap();
+    assert_eq!(confirm.work(), LOCAL_WORK + inner.work());
+    assert_eq!(confirm.scratch(), FRAME + inner.scratch());
+    let validation = super::super::quota::refusal().unwrap();
+    let interrupt = super::super::quota::runtime_interrupt().unwrap();
+    assert_eq!(interrupt.work(), validation.work() + original.work());
+    let capture = super::super::quota::runtime_capture().unwrap();
+    let trace = Trace::runtime_backing_quota().unwrap();
+    assert_eq!(
+        capture.work(),
+        validation.work() + trace.work() + Controller::INITIAL_IMAGE_WORK
+    );
+    assert_eq!(
+        capture.scratch(),
+        validation.scratch() + trace.scratch() + Controller::INITIAL_IMAGE_SCRATCH
+    );
+}

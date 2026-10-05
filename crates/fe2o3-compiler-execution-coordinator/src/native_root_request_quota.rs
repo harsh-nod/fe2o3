@@ -187,6 +187,45 @@ pub(super) fn refusal() -> Result<Quota> {
     })
 }
 
+/// Full original-stage revalidation followed by one gated interrupt. The
+/// existing refusal schedule conservatively includes the same backing/transfer
+/// closure; retaining its extra intake checks does not renew any account.
+pub(super) fn runtime_interrupt() -> Result<Quota> {
+    let validation = refusal()?;
+    let interrupt =
+        crate::compiler_child_channel::CompilerTrace::<ManagedProofHelper>::gated_operation_quota(
+        )?;
+    Ok(Quota {
+        work: sum(&[validation.work(), interrupt.work()])?,
+        scratch: sum(&[validation.scratch(), interrupt.scratch()])?,
+    })
+}
+
+/// First-exec transition: ready helper content validation, original inventory
+/// revalidation and the non-resuming image/census check. The fixed refusal
+/// schedule already funds four full compiler checks (this path needs three)
+/// and its helper image/profile/access closure; checkpoint turns use the narrow
+/// non-hashing accessor instead. No larger deployment budget is selected here.
+pub(super) fn runtime_capture() -> Result<Quota> {
+    let validation = refusal()?;
+    let trace =
+        crate::compiler_child_channel::CompilerTrace::<ManagedProofHelper>::runtime_backing_quota(
+        )?;
+    use crate::native_runtime_controller::NativeRuntimeController as Controller;
+    Ok(Quota {
+        work: sum(&[
+            validation.work(),
+            trace.work(),
+            Controller::INITIAL_IMAGE_WORK,
+        ])?,
+        scratch: sum(&[
+            validation.scratch(),
+            trace.scratch(),
+            Controller::INITIAL_IMAGE_SCRATCH,
+        ])?,
+    })
+}
+
 fn image_quota(
     operation: ImageOperation,
 ) -> Result<fe2o3_protected_static_executable::ProtectedStaticExecutableQuotaV2> {
