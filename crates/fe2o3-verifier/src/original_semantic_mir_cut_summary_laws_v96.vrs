@@ -1,0 +1,14 @@
+#[verifier::spinoff_prover]
+proof fn invocation_related_target_inputs_v96(
+    source: MemoryStateV30, target: MemoryStateV30, map: InvocationByteMapV36,
+)
+    requires invocation_byte_states_related_v36(source, target, map),
+    ensures byte_state_memory_well_formed_v30(target),
+        invocation_view_registries_related_v40(source.memory, target.memory),
+{
+    hide(byte_memory_well_formed_v30);
+    hide(byte_frame_runtime_well_formed_v30);
+    hide(byte_private_frames_live_v30);
+    hide(private_generation_counters_valid_v30);
+    hide(invocation_view_registries_related_v40);
+}

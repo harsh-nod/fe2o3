@@ -287,7 +287,7 @@ fn generate_refinement_inner_v49(
         out.source_section_error(error, "original paired invocation obligations")
     })?;
     byte_source
-        .emit_cut_frame_proofs_v93(out)
+        .emit_cut_frame_proofs_v93(Some(&paired), out)
         .map_err(|error| out.source_section_error(error, "original source cut frame proofs"))?;
     byte_source
         .emit_thread_write_normal_proofs_v94(out)

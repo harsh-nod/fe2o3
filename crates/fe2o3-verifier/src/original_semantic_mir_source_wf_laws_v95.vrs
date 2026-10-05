@@ -1,3 +1,10 @@
+spec fn invocation_source_logical_frame_equal_v95(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+) -> bool {
+    invocation_source_constructor_frame_equal_v93(before, after)
+        && after.objects == before.objects && after.slots == before.slots
+}
+
 // Generic constructor proofs; caller obligations are not added to paired theorems.
 #[verifier::spinoff_prover]
 proof fn invocation_source_carrier_wf_v95(source: InvocationSourceByteStateV36,
@@ -5,13 +12,34 @@ proof fn invocation_source_carrier_wf_v95(source: InvocationSourceByteStateV36,
     requires invocation_source_byte_state_well_formed_v36(source),
     ensures invocation_source_byte_state_well_formed_v36(
         invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source),
+        invocation_source_logical_frame_equal_v95(source, invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source),
+        ({ let evaluated = invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits);
+            evaluated.source.machine.valid ==> source.machine.valid
+                && 0 <= local < source.machine.values.len()
+                && evaluated.value == source.machine.values[local]
+                && evaluated.source.machine.values == (if moved {
+                    source.machine.values.update(local, MemoryValueV30::Undefined)
+                } else { source.machine.values }) }),
 {
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_byte_put_local_v36);
+    invocation_source_carrier_evaluate_preserves_heap_v78(source, local, moved, metadata_bits);
+    invocation_cut_frame_carrier_pc_v93(source, local, moved, metadata_bits);
+    let after = invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source;
+    assert(after.objects == source.objects && after.slots == source.slots) by {
+        reveal(invocation_source_byte_put_local_v36);
+    }
     invocation_source_put_local_well_formed_v78(source, -1, MemoryValueV30::Undefined);
     assert(invocation_source_byte_put_local_v36(source, -1, MemoryValueV30::Undefined)
         == invocation_source_byte_refused_v36(source)) by { reveal(invocation_source_byte_put_local_v36); }
     invocation_source_put_local_well_formed_v78(source, local, MemoryValueV30::Undefined);
+    assert(({ let evaluated = invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits);
+            evaluated.source.machine.valid ==> source.machine.valid
+                && 0 <= local < source.machine.values.len()
+                && evaluated.value == source.machine.values[local]
+                && evaluated.source.machine.values == (if moved {
+                    source.machine.values.update(local, MemoryValueV30::Undefined)
+                } else { source.machine.values }) })) by { reveal(invocation_source_byte_put_local_v36); }
 }
 
 #[verifier::spinoff_prover]
@@ -23,10 +51,25 @@ proof fn invocation_source_slice_copy_wf_v95(source: InvocationSourceByteStateV3
         source, InvocationSourcePointerEventV36::Copy { destination,
             operand: InvocationSourceOperandV36::Slice { local, moved, metadata_bits: operand_bits },
             metadata_bits }, root, instance, little_endian)),
+        invocation_source_logical_frame_equal_v95(source, invocation_source_pointer_step_v36(source,
+        InvocationSourcePointerEventV36::Copy { destination,
+            operand: InvocationSourceOperandV36::Slice { local, moved, metadata_bits: operand_bits },
+            metadata_bits }, root, instance, little_endian)),
+        ({ let after = invocation_source_pointer_step_v36(source,
+            InvocationSourcePointerEventV36::Copy { destination,
+                operand: InvocationSourceOperandV36::Slice { local, moved, metadata_bits: operand_bits },
+                metadata_bits }, root, instance, little_endian);
+            after.machine.valid ==> source.machine.valid
+                && 0 <= local < source.machine.values.len()
+                && 0 <= destination < source.machine.values.len()
+                && after.machine.values == (if moved {
+                    source.machine.values.update(local, MemoryValueV30::Undefined)
+                } else { source.machine.values }).update(destination, source.machine.values[local]) }),
 {
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_byte_put_local_v36);
     hide(invocation_source_carrier_evaluate_v36);
+    invocation_cut_frame_slice_copy_v93(source, destination, local, moved, operand_bits, metadata_bits, root, instance, little_endian);
     invocation_source_put_local_well_formed_v78(source, -1, MemoryValueV30::Undefined);
     assert(invocation_source_byte_put_local_v36(source, -1, MemoryValueV30::Undefined)
         == invocation_source_byte_refused_v36(source)) by { reveal(invocation_source_byte_put_local_v36); }
@@ -36,6 +79,20 @@ proof fn invocation_source_slice_copy_wf_v95(source: InvocationSourceByteStateV3
     assert(invocation_source_byte_put_local_v36(evaluated.source, -1, MemoryValueV30::Undefined)
         == invocation_source_byte_refused_v36(evaluated.source)) by { reveal(invocation_source_byte_put_local_v36); }
     invocation_source_put_local_well_formed_v78(evaluated.source, destination, evaluated.value);
+    assert(invocation_source_byte_put_local_v36(evaluated.source, destination, evaluated.value).objects == evaluated.source.objects
+        && invocation_source_byte_put_local_v36(evaluated.source, destination, evaluated.value).slots == evaluated.source.slots) by {
+        reveal(invocation_source_byte_put_local_v36);
+    }
+    assert(({ let after = invocation_source_pointer_step_v36(source,
+            InvocationSourcePointerEventV36::Copy { destination,
+                operand: InvocationSourceOperandV36::Slice { local, moved, metadata_bits: operand_bits },
+                metadata_bits }, root, instance, little_endian);
+            after.machine.valid ==> source.machine.valid
+                && 0 <= local < source.machine.values.len()
+                && 0 <= destination < source.machine.values.len()
+                && after.machine.values == (if moved {
+                    source.machine.values.update(local, MemoryValueV30::Undefined)
+                } else { source.machine.values }).update(destination, source.machine.values[local]) })) by { reveal(invocation_source_byte_put_local_v36); }
 }
 
 #[verifier::spinoff_prover]
@@ -44,10 +101,26 @@ proof fn invocation_source_descriptor_length_wf_v95(source: InvocationSourceByte
     requires invocation_source_byte_state_well_formed_v36(source),
     ensures invocation_source_byte_state_well_formed_v36(
         invocation_source_descriptor_length_v51(source, destination, input, recipe, moved)),
+        invocation_source_logical_frame_equal_v95(source, invocation_source_descriptor_length_v51(source, destination, input, recipe, moved)),
+        ({ let after = invocation_source_descriptor_length_v51(source, destination, input, recipe, moved);
+            after.machine.valid ==> source.machine.valid
+                && 0 <= input < source.machine.values.len()
+                && 0 <= destination < source.machine.values.len()
+                && match source.machine.values[input] {
+                    MemoryValueV30::Slice(slice) => after.machine.values == (if moved {
+                        source.machine.values.update(input, MemoryValueV30::Undefined)
+                    } else { source.machine.values }).update(destination, MemoryValueV30::Scalar(slice.length)),
+                    _ => false,
+                } }),
 {
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_descriptor_reference_current_v51);
     hide(invocation_source_byte_put_local_v36);
+    invocation_cut_frame_descriptor_length_v93(source, destination, input, recipe, moved);
+    let after = invocation_source_descriptor_length_v51(source, destination, input, recipe, moved);
+    assert(after.objects == source.objects && after.slots == source.slots) by {
+        reveal(invocation_source_byte_put_local_v36);
+    }
     invocation_source_put_local_well_formed_v78(source, -1, MemoryValueV30::Undefined);
     assert(invocation_source_byte_put_local_v36(source, -1, MemoryValueV30::Undefined)
         == invocation_source_byte_refused_v36(source)) by { reveal(invocation_source_byte_put_local_v36); }
@@ -68,6 +141,16 @@ proof fn invocation_source_descriptor_length_wf_v95(source: InvocationSourceByte
             invocation_source_put_local_well_formed_v78(consumed, destination, MemoryValueV30::Scalar(slice.length)),
         _ => {},
     }
+    assert(({ let after = invocation_source_descriptor_length_v51(source, destination, input, recipe, moved);
+            after.machine.valid ==> source.machine.valid
+                && 0 <= input < source.machine.values.len()
+                && 0 <= destination < source.machine.values.len()
+                && match source.machine.values[input] {
+                    MemoryValueV30::Slice(slice) => after.machine.values == (if moved {
+                        source.machine.values.update(input, MemoryValueV30::Undefined)
+                    } else { source.machine.values }).update(destination, MemoryValueV30::Scalar(slice.length)),
+                    _ => false,
+                } })) by { reveal(invocation_source_byte_put_local_v36); }
 }
 
 #[verifier::spinoff_prover]
@@ -78,6 +161,9 @@ proof fn invocation_source_descriptor_install_wf_v95(source: InvocationSourceByt
         invocation_source_descriptor_reference_shape_v51(reference, source.machine.values.len() as int),
     ensures invocation_source_byte_state_well_formed_v36(invocation_source_descriptor_install_v51(
         source, destination, MemoryValueV30::Slice(slice), reference)),
+        invocation_source_logical_frame_equal_v95(source, invocation_source_descriptor_install_v51(source, destination, MemoryValueV30::Slice(slice), reference)),
+        invocation_source_descriptor_install_v51(source, destination, MemoryValueV30::Slice(slice), reference).machine.values
+            == source.machine.values.update(destination, MemoryValueV30::Slice(slice)),
 {
     hide(byte_memory_well_formed_v30);
     hide(byte_frame_runtime_well_formed_v30);
@@ -87,6 +173,7 @@ proof fn invocation_source_descriptor_install_wf_v95(source: InvocationSourceByt
     hide(invocation_source_descriptor_reference_shape_v51);
     hide(invocation_source_enum_well_formed_v47);
     hide(invocation_source_aggregate_well_formed_v42);
+    invocation_cut_frame_descriptor_install_v93(source, destination, MemoryValueV30::Slice(slice), reference);
     invocation_source_put_local_well_formed_v78(source, destination, MemoryValueV30::Slice(slice));
     let changed = invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Slice(slice));
     let after = invocation_source_descriptor_install_v51(source, destination, MemoryValueV30::Slice(slice), reference);
@@ -114,6 +201,11 @@ proof fn invocation_source_descriptor_borrow_wf_v95(source: InvocationSourceByte
             InvocationSourceDescriptorEventV51::Borrow { destination, recipe, parent: None }).machine.valid,
     ensures invocation_source_byte_state_well_formed_v36(invocation_source_descriptor_step_v51(source,
         InvocationSourceDescriptorEventV51::Borrow { destination, recipe, parent: None })),
+        invocation_source_logical_frame_equal_v95(source, invocation_source_descriptor_step_v51(source,
+        InvocationSourceDescriptorEventV51::Borrow { destination, recipe, parent: None })),
+        invocation_source_descriptor_step_v51(source,
+            InvocationSourceDescriptorEventV51::Borrow { destination, recipe, parent: None }).machine.values
+            == source.machine.values.update(destination, source.machine.values[recipe.origin]),
 {
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_descriptor_install_v51);

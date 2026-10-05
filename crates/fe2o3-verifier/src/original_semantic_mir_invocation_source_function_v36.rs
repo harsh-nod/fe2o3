@@ -71,6 +71,10 @@ pub(super) struct SourceCutHintsV85 {
 }
 
 impl SourceCutHintsV85 {
+    pub(super) fn descriptor_continuation_v96(&self) -> Option<usize> {
+        self.descriptor_wf.map(|(_, call)| call.continuation())
+    }
+
     pub(super) fn has_descriptor_wf(&self) -> bool {
         self.descriptor_wf.is_some()
     }
@@ -183,8 +187,12 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         Ok(())
     }
 
-    pub(super) fn emit_cut_frame_proofs_v93(&self, out: &mut Writer<'_, '_>) -> Result<()> {
-        cut_frames::emit(self, out)
+    pub(super) fn emit_cut_frame_proofs_v93(
+        &self,
+        paired: Option<&super::paired::PairedInvocations<'_, '_, '_>>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        cut_frames::emit(self, paired, out)
     }
 
     pub(super) fn step_hints(

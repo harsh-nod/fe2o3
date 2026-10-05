@@ -366,7 +366,7 @@ fn run_write_shape_attempt(
                                         )))
                                     ));
                                     assert!(matches!(
-                                        program.emit_cut_frame_proofs_v93(&mut writer),
+                                        program.emit_cut_frame_proofs_v93(None, &mut writer),
                                         Err(Error::Source(SourceError::Resource(
                                             Resource::Accounting
                                         )))
@@ -393,7 +393,7 @@ fn run_write_shape_attempt(
                                     Err(Error::Source(SourceError::Resource(Resource::Accounting)))
                                 ));
                                 assert!(matches!(
-                                    program.emit_cut_frame_proofs_v93(out),
+                                    program.emit_cut_frame_proofs_v93(None, out),
                                     Err(Error::Source(SourceError::Resource(Resource::Accounting)))
                                 ));
                                 assert!(matches!(
@@ -676,7 +676,10 @@ fn writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains()
                 )));
                 summaries += 1;
             }
-            assert!(summaries >= 2);
+            let composed = text
+                .matches("proof fn invocation_source_cut_summary_")
+                .count();
+            assert_eq!(summaries + composed, 2);
             // These conditional support laws do not replace either root's step theorem.
             assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
             assert!(!text.contains("invocation_paired_source_preserved_"));
@@ -717,18 +720,17 @@ fn descriptor_wf_composition_uses_authentic_events_and_retains_map_obligations()
         run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
             assert_eq!(text.matches(laws).count(), 1);
             let mut mapped = 0;
-            for proof in text.split("proof fn invocation_paired_cut_").skip(1) {
+            for proof in text.split("proof fn invocation_source_cut_summary_").skip(1) {
                 let proof = proof.split("proof fn ").next().unwrap();
-                if !proof.contains(" invocation_source_descriptor_length_wf_v95(") {
-                    continue;
-                }
                 let (header, body) = proof.split_once("\n{\n").unwrap();
-                let (coordinates, _) = header.split_once("_map_v85(").unwrap();
-                let (root, pc) = coordinates.split_once("_pc").unwrap();
+                let (coordinates, _) = header.split_once("_v96(").unwrap();
+                let (root, pc) = coordinates.split_once('_').unwrap();
                 let (premises, conclusion) = header.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap();
-                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
-                assert_eq!(conclusion.trim(), format!("invocation_source_byte_map_valid_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),"));
-                assert!(body.starts_with(" hide(invocation_source_byte_state_well_formed_v36);\n"));
+                assert!(premises.contains(&format!("source.machine.pc == {pc}")));
+                assert!(premises.contains(&format!("invocation_paired_source_defined_{root}_v36(source, 1)")));
+                assert!(!premises.contains("target"));
+                assert!(conclusion.contains(&format!("invocation_source_byte_state_well_formed_v36(invocation_paired_source_step_{root}_v36(source).state)")));
+                assert!(body.starts_with(" hide(invocation_source_descriptor_step_v51);\n"));
                 assert!(body.contains(" invocation_source_slice_copy_wf_v95("));
                 assert!(body.contains(" invocation_source_descriptor_borrow_wf_v95("));
                 assert!(body.contains("assert(!c"));
@@ -742,6 +744,68 @@ fn descriptor_wf_composition_uses_authentic_events_and_retains_map_obligations()
             assert_eq!(mapped, 2);
             assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
         }).0.unwrap();
+    }
+}
+
+#[test]
+fn descriptor_cut_summaries_keep_four_obligations_without_unreachable_partitions() {
+    let projection = include_str!("original_semantic_mir_cut_summary_laws_v96.vrs");
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(text.matches(projection).count(), 1);
+            let mut selected = 0;
+            for source in text.split("proof fn invocation_source_cut_summary_").skip(1) {
+                let coordinates = source.split_once("_v96(").unwrap().0;
+                let (root, pc) = coordinates.split_once('_').unwrap();
+                let name = format!("proof fn invocation_paired_cut_{root}_pc{pc}_all_v85(");
+                let cut = text.split_once(&name).unwrap().1.split("proof fn ").next().unwrap();
+                let (header, body) = cut.split_once("\n{\n").unwrap();
+                let (premises, conclusions) = header.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap();
+                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
+                assert_eq!(conclusions.trim(), format!("invocation_paired_related_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),\n invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events),\n invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted,\nsource.machine.pc >= 0 ==> invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target)),"));
+                assert!(body.contains(&format!("invocation_source_cut_summary_{coordinates}_v96(source);")));
+                assert!(body.contains(&format!("invocation_target_cut_summary_{coordinates}_v96(target);")));
+                assert!(body.contains("invocation_related_target_inputs_v96(source.machine, target,"));
+                assert!(body.contains("invocation_cut_frame_states_related_v93("));
+                for suffix in ["map", "heap", "residual", "relation", "observations", "halted", "control"] {
+                    assert!(!text.contains(&format!("invocation_paired_cut_{root}_pc{pc}_{suffix}_v85(")));
+                }
+                assert!(!text.contains(&format!("invocation_cut_source_frame_{coordinates}_v93(")));
+                selected += 1;
+            }
+            assert_eq!(selected, 2);
+            assert_eq!(text.matches("proof fn invocation_target_cut_summary_").count(), 2);
+            // Writing cuts retain their complete partition and normalization path.
+            assert_eq!(text.matches(" let normalized_write = ").count(), 2);
+            assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
+        }).0.unwrap();
+    }
+}
+
+#[test]
+fn descriptor_cut_summary_laws_keep_values_frames_and_conditional_validity() {
+    let laws = include_str!("original_semantic_mir_source_wf_laws_v95.vrs");
+    assert_eq!(laws.matches("proof fn ").count(), 5);
+    for required in [
+        "after.objects == before.objects && after.slots == before.slots",
+        "evaluated.source.machine.valid ==> source.machine.valid",
+        "evaluated.value == source.machine.values[local]",
+        "source.machine.values.update(local, MemoryValueV30::Undefined)",
+        "invocation_source_logical_frame_equal_v95(source,",
+        "!source.objects.contains_key(destination)",
+        "invocation_source_byte_state_well_formed_v36(source)",
+    ] {
+        assert!(laws.contains(required), "{required}");
+    }
+    let projection = include_str!("original_semantic_mir_cut_summary_laws_v96.vrs");
+    assert_eq!(projection.matches("proof fn ").count(), 1);
+    assert!(
+        projection.contains("requires invocation_byte_states_related_v36(source, target, map)")
+    );
+    for text in [laws, projection] {
+        for forbidden in ["assume(", "admit(", "external_body", "pc == 0"] {
+            assert!(!text.contains(forbidden), "{forbidden}");
+        }
     }
 }
 

@@ -18,6 +18,10 @@ pub(super) struct DescriptorCall {
 }
 
 impl DescriptorCall {
+    pub(super) fn continuation(self) -> usize {
+        self.continuation
+    }
+
     pub(super) fn derive(
         slots: &SourceSlots<'_, '_>,
         plan: &InvocationPlan<'_, '_>,

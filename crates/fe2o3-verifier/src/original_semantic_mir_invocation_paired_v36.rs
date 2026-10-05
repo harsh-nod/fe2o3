@@ -1014,6 +1014,28 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         generate::emit(self, out)
     }
 
+    pub(super) fn uses_cut_summary_v96(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        root: usize,
+        pc: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        self.check_cut_summary_owner_v96(slots, out)?;
+        generate::uses_cut_summary(self, root, pc, out)
+    }
+
+    pub(super) fn check_cut_summary_owner_v96(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        if !std::ptr::eq(self.slots, slots) {
+            return Err(mismatch());
+        }
+        self.check(out)
+    }
+
     fn check(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         self.slots
             .check_query_storage_floor(self.required, out.budget)?;

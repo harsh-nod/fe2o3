@@ -36,8 +36,12 @@ pub(super) fn supports(
 
 pub(super) fn emit(
     program: &SourceByteProgram<'_, '_, '_>,
+    paired: Option<&super::super::paired::PairedInvocations<'_, '_, '_>>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    if let Some(paired) = paired {
+        paired.check_cut_summary_owner_v96(program.slots, out)?;
+    }
     program.source_slots(out)?;
     out.budget.reserve_storage(headers())?;
     let mut shared = false;
@@ -79,7 +83,14 @@ pub(super) fn emit(
                 write!(out, "{}", source_wf::SHARED).map_err(|_| out.error())?;
                 wf_shared = true;
             }
-            emit_cut(function, block, out)?;
+            // Only the matching single-cut composition makes this wrapper
+            // unreachable. Shared constructor laws remain retained dependencies.
+            if !match paired {
+                Some(paired) => paired.uses_cut_summary_v96(program.slots, root, hint.pc, out)?,
+                None => false,
+            } {
+                emit_cut(function, block, out)?;
+            }
         }
     }
     Ok(())
@@ -125,7 +136,9 @@ fn emit_cut(
 }
 
 fn headers() -> usize {
-    16 * size_of::<usize>()
+    size_of::<Option<&super::super::paired::PairedInvocations<'_, '_, '_>>>()
+        + size_of::<Result<bool>>()
+        + 16 * size_of::<usize>()
         + 12 * size_of::<&()>()
         + 3 * size_of::<bool>()
         + size_of::<Event>()
