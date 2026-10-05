@@ -974,6 +974,18 @@ mod tests {
                             fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
                         ),
                     ) => Err(error),
+                    Err(
+                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+                        ),
+                    ) => Err(error.into()),
+                    Err(
+                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Observation(
+                            fe2o3_pliron::KirNeutralOptimizationErrorV18::Execution(
+                                fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
+                            ),
+                        ),
+                    ) => Err(error.into()),
                     Err(error) => panic!("tile slot fixture preparation failed: {error:?}"),
                 }
             },
@@ -1541,7 +1553,9 @@ mod tests {
                     fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
                     usize
                 )>()
-                + 4 * h::<&()>()
+                + 5 * h::<&()>()
+                + h::<Option<(fe2o3_kernel_ir::ExecutionTileLayoutV1, u16)>>()
+                + h::<fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162>()
                 + 32 * size_of::<usize>()
                 + 24 * size_of::<&()>()
                 + 4 * size_of::<std::result::Result<usize, SourceError>>()
