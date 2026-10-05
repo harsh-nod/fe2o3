@@ -615,25 +615,33 @@ fn require_close_on_exec(descriptor: &OwnedFd) -> Result<(), CompilerExecutionCh
 }
 
 fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), CompilerExecutionChildChannelErrorV1> {
-    require_not_poll_ready(pidfd, CompilerExecutionChildChannelErrorV1::ChildExited)
+    require_not_poll_ready(
+        pidfd,
+        libc::POLLIN,
+        CompilerExecutionChildChannelErrorV1::ChildExited,
+    )
 }
 
 fn require_service_peer_live(
     service_peer: &OwnedFd,
 ) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    // The child may queue its first request before its parent transfers this endpoint.
+    // Readability is not disconnection; RDHUP also detects a write-side half-close.
     require_not_poll_ready(
         service_peer,
+        libc::POLLRDHUP,
         CompilerExecutionChildChannelErrorV1::ServicePeerClosed,
     )
 }
 
 fn require_not_poll_ready(
     descriptor: &OwnedFd,
+    readiness: i16,
     ready_error: CompilerExecutionChildChannelErrorV1,
 ) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     let mut descriptor = libc::pollfd {
         fd: descriptor.as_raw_fd(),
-        events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+        events: readiness | libc::POLLERR | libc::POLLHUP,
         revents: 0,
     };
     // SAFETY: descriptor is a live one-element pollfd array for the complete nonblocking call.
@@ -767,6 +775,52 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_request_does_not_disconnect_live_service_peer() {
+        for packet in [&b"request"[..], &b""[..]] {
+            let (client, service) = seqpacket_pair().unwrap();
+            rustix::net::send(&client, packet, rustix::net::SendFlags::empty()).unwrap();
+            require_service_peer_live(&service).unwrap();
+            let identity = peer_identity(&service).unwrap();
+            let launch = CompilerExecutionServiceLaunchV1 {
+                service_peer: service,
+                client_pidfd: open_pidfd(std::process::id()).unwrap(),
+                client: identity,
+                submitter: identity,
+            };
+            launch.revalidate_for_supervisor_handoff().unwrap();
+            let mut received = [0u8; 16];
+            let (count, _) = rustix::net::recv(
+                &launch.service_peer,
+                &mut received,
+                rustix::net::RecvFlags::DONTWAIT,
+            )
+            .unwrap();
+            assert_eq!(&received[..count], packet);
+        }
+    }
+
+    #[test]
+    fn queued_request_cannot_hide_closed_or_half_closed_service_peer() {
+        for shutdown in [
+            None,
+            Some(rustix::net::Shutdown::Write),
+            Some(rustix::net::Shutdown::Both),
+        ] {
+            let (client, service) = seqpacket_pair().unwrap();
+            rustix::net::send(&client, b"request", rustix::net::SendFlags::empty()).unwrap();
+            if let Some(how) = shutdown {
+                rustix::net::shutdown(&client, how).unwrap();
+            } else {
+                drop(client);
+            }
+            assert!(matches!(
+                require_service_peer_live(&service),
+                Err(CompilerExecutionChildChannelErrorV1::ServicePeerClosed)
+            ));
+        }
+    }
 
     #[test]
     fn service_peer_validation_preserves_os_error_and_source() {
