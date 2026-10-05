@@ -183,7 +183,10 @@ fn mixed_v89_final_module_layout_matches_strict_publication_transcript_on_both_t
             final_module.descriptor_source_identity,
             Some(DescriptorSourceIdentity::Mixed89(_))
         ));
-        assert_eq!(final_module.descriptor_binding_version_for_test_v3(), Some(89));
+        assert_eq!(
+            final_module.descriptor_binding_version_for_test_v3(),
+            Some(89)
+        );
         for kind in 0..5 {
             let mut hostile = final_module.clone();
             match kind {

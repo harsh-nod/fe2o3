@@ -168,7 +168,14 @@ fn census_target_resolves_exact_profiles_and_refuses_non_cpu_spellings() {
     for (cpu, expected) in [("gfx942", "gfx942:xnack-"), ("gfx950", "gfx950:xnack-")] {
         assert_eq!(census_target(cpu).unwrap(), expected);
     }
-    for cpu in ["", "gfx90a", "GFX942", "gfx942 ", "gfx942:xnack-", "gfx950:xnack+"] {
+    for cpu in [
+        "",
+        "gfx90a",
+        "GFX942",
+        "gfx942 ",
+        "gfx942:xnack-",
+        "gfx950:xnack+",
+    ] {
         let error = census_target(cpu).unwrap_err();
         assert_eq!(error.stage, SourceStage::Manifest);
     }
@@ -192,17 +199,31 @@ fn census_header_keeps_exact_target_features_after_profile_resolution() {
         });
         fixed_census_observation::check_header(&report, &args, cwd, 4, expected, run_id, true)
             .unwrap();
-        for wrong in ["gfx942", "gfx950", "gfx942:xnack+", "gfx950:xnack+", "gfx90a:xnack-"] {
+        for wrong in [
+            "gfx942",
+            "gfx950",
+            "gfx942:xnack+",
+            "gfx950:xnack+",
+            "gfx90a:xnack-",
+        ] {
             report["selection"]["value"]["target"] = wrong.into();
-            assert!(fixed_census_observation::check_header(
-                &report, &args, cwd, 4, expected, run_id, true,
-            ).is_err());
+            assert!(
+                fixed_census_observation::check_header(
+                    &report, &args, cwd, 4, expected, run_id, true,
+                )
+                .is_err()
+            );
         }
-        let other = if cpu == "gfx942" { "gfx950:xnack-" } else { "gfx942:xnack-" };
+        let other = if cpu == "gfx942" {
+            "gfx950:xnack-"
+        } else {
+            "gfx942:xnack-"
+        };
         report["selection"]["value"]["target"] = other.into();
-        assert!(fixed_census_observation::check_header(
-            &report, &args, cwd, 4, expected, run_id, true,
-        ).is_err());
+        assert!(
+            fixed_census_observation::check_header(&report, &args, cwd, 4, expected, run_id, true,)
+                .is_err()
+        );
     }
 }
 
