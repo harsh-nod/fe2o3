@@ -197,10 +197,10 @@ pub(super) fn emit(
         );
     }
     emit!(out, "{{\n");
-    out.budget.charge_work(8)?;
+    out.budget.charge_work(9)?;
     emit!(
         out,
-        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n",
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n",
         call.child
     );
     residual_context(root, out)?;
@@ -211,6 +211,21 @@ pub(super) fn emit(
         out,
         " assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
     );
+    out.budget.charge_work(1)?;
+    emit!(out, " let copied_0 = source;\n");
+    for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
+        out.budget.charge_work(4)?;
+        if *moved {
+            return Err(mismatch());
+        }
+        let next = add(ordinal, 1)?;
+        emit!(
+            out,
+            " invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{next} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;\n",
+            hint.instance,
+            hint.instance
+        );
+    }
     emit!(
         out,
         " assert(invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source)\n && invocation_source_block_runtime_{root}_v36(source).returned.is_none()\n && invocation_source_block_runtime_{root}_v36(source).operands.len() == {}\n",
