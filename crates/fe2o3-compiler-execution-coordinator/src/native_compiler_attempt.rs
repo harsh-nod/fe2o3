@@ -240,9 +240,10 @@ fn validate(
         .revalidate(b)
         .map_err(ProofHelperBackingError::Compiler)?;
     let invalid = || Failure::Invalid("incomplete original compiler stage");
-    if !stage.has_runtime_checkpoints() {
-        return Err(Failure::Invalid("compiler stage lacks runtime checkpoints"));
-    }
+    require_stage_modes(
+        stage.has_runtime_checkpoints(),
+        stage.has_output_write_confinement(),
+    )?;
     compiler
         .runtime()
         .validate_rustc_exec_transfer(stage.executable(), b)
@@ -290,6 +291,18 @@ fn validate(
             (false, None) => {}
             _ => return Err(invalid()),
         }
+    }
+    Ok(())
+}
+
+fn require_stage_modes(checkpoints: bool, output_confinement: bool) -> AttemptResult<()> {
+    if !checkpoints {
+        return Err(Failure::Invalid("compiler stage lacks runtime checkpoints"));
+    }
+    if !output_confinement {
+        return Err(Failure::Invalid(
+            "compiler stage lacks output write confinement",
+        ));
     }
     Ok(())
 }
