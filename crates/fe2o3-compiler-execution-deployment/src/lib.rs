@@ -772,15 +772,63 @@ fn verify_directory_children(
     if observed.len() != expected.len()
         || observed
             .iter()
-            .zip(expected)
+            .zip(expected.iter().copied())
             .any(|(observed, expected)| observed != expected)
     {
+        let difference = observed
+            .iter()
+            .zip(expected.iter().copied())
+            .position(|(observed, expected)| observed != expected)
+            .unwrap_or(observed.len().min(expected.len()));
+        let observed_name = observed.get(difference).map(OsString::as_os_str);
+        let metadata = match observed_name {
+            Some(name) => {
+                match rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+                    Ok(value) => format!(
+                        "dev={} inode={} mode=0o{:o} uid={} gid={} nlink={} size={}",
+                        value.st_dev,
+                        value.st_ino,
+                        value.st_mode,
+                        value.st_uid,
+                        value.st_gid,
+                        value.st_nlink,
+                        value.st_size,
+                    ),
+                    Err(error) => format!("unavailable errno={}", error.raw_os_error()),
+                }
+            }
+            None => "absent".to_owned(),
+        };
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidInventory,
-            format!("{role} has an extra, missing, or substituted entry"),
+            format!(
+                "{role} has an extra, missing, or substituted entry: observed_count={} expected_count={} first_difference={} observed={} expected={} observed_stat=[{}]",
+                observed.len(),
+                expected.len(),
+                difference,
+                inventory_name_diagnostic(observed_name),
+                inventory_name_diagnostic(expected.get(difference).copied()),
+                metadata,
+            ),
         ));
     }
     Ok(())
+}
+
+fn inventory_name_diagnostic(name: Option<&OsStr>) -> String {
+    let Some(name) = name else {
+        return "<absent>".to_owned();
+    };
+    let mut escaped = String::new();
+    for byte in name.as_bytes() {
+        let sequence = std::ascii::escape_default(*byte);
+        if escaped.len() + sequence.len() > 128 {
+            escaped.push_str("...");
+            break;
+        }
+        escaped.extend(sequence.map(char::from));
+    }
+    format!("\"{escaped}\"")
 }
 
 fn canonical_directory_children(
@@ -1444,6 +1492,73 @@ mod tests {
     const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     include!("installed_namespace_v77_tests.rs");
+
+    #[test]
+    fn inventory_diagnostics_preserve_exact_closed_roster_rejections() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("a"), b"a").unwrap();
+        let root = File::open(directory.path()).unwrap();
+        verify_directory_children(&root, &["a"], "fixture").unwrap();
+        for (expected, detail) in [
+            (
+                &[][..],
+                "observed_count=1 expected_count=0 first_difference=0 observed=\"a\" expected=<absent>",
+            ),
+            (
+                &["a", "b"][..],
+                "observed_count=1 expected_count=2 first_difference=1 observed=<absent> expected=\"b\"",
+            ),
+            (
+                &["b"][..],
+                "observed_count=1 expected_count=1 first_difference=0 observed=\"a\" expected=\"b\"",
+            ),
+        ] {
+            let error = verify_directory_children(&root, expected, "fixture").unwrap_err();
+            assert_eq!(
+                error.kind(),
+                DeploymentVerificationErrorKindV1::InvalidInventory
+            );
+            assert!(error.to_string().contains(detail), "{error}");
+        }
+    }
+
+    #[test]
+    fn inventory_name_diagnostic_bounds_escaped_bytes_and_controls() {
+        assert_eq!(inventory_name_diagnostic(None), "<absent>");
+        assert_eq!(
+            inventory_name_diagnostic(Some(OsStr::new("a\n\"b"))),
+            "\"a\\n\\\"b\""
+        );
+        let arbitrary = OsString::from_vec((0..=255).collect());
+        let escaped = inventory_name_diagnostic(Some(&arbitrary));
+        assert!(escaped.is_ascii() && escaped.bytes().all(|byte| !byte.is_ascii_control()));
+        assert!(escaped.len() <= 133 && escaped.ends_with("...\""));
+        let expanded = OsString::from_vec(vec![0xff; 255]);
+        assert_eq!(
+            inventory_name_diagnostic(Some(&expanded)),
+            format!("\"{}...\"", "\\xff".repeat(32))
+        );
+    }
+
+    #[test]
+    fn inventory_diagnostic_observes_symlink_not_its_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target-that-does-not-exist");
+        symlink(&target, directory.path().join("link\nname")).unwrap();
+        let root = File::open(directory.path()).unwrap();
+        let metadata = fs::symlink_metadata(directory.path().join("link\nname")).unwrap();
+        let error = verify_directory_children(&root, &[], "fixture").unwrap_err();
+        let description = error.to_string();
+        assert_eq!(
+            error.kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        assert!(description.contains("observed=\"link\\nname\""));
+        assert!(description.contains("mode=0o120777"));
+        assert!(description.contains(&format!("size={}", metadata.len())));
+        assert!(!description.contains("target-that-does-not-exist"));
+        assert!(!description.contains('\n'));
+    }
 
     #[test]
     fn manifest_sources_follow_sha256sum_byte_order() {
