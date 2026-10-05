@@ -1,6 +1,9 @@
 use super::*;
 use std::path::{Component, Path, PathBuf};
 
+#[path = "boot_image_v160.rs"]
+mod image_v160;
+
 const RUNTIME_DIRECTORY_V86: &str = "run/fe2o3";
 const STAGING_CHILDREN_V86: &[&str] =
     &["base", "evidence", "root", "run", "state", "upper", "work"];
@@ -101,6 +104,7 @@ pub(super) struct MachineRuntimeSourceV86 {
     target: File,
     target_snapshot: crate::ObjectSnapshotV1,
     runtime: MachineRuntimeDirectoryV86,
+    image: image_v160::MachineImageSourceV160,
 }
 
 impl MachineRuntimeSourceV86 {
@@ -129,6 +133,7 @@ impl MachineRuntimeSourceV86 {
         let target = alias_target(&stage, owner)?;
         let target_snapshot = exact_snapshot(&target)?;
         let runtime = MachineRuntimeDirectoryV86::open(root, owner)?;
+        let image = image_v160::MachineImageSourceV160::capture(&stage, owner)?;
         Ok(Self {
             stage_path,
             stage,
@@ -137,6 +142,7 @@ impl MachineRuntimeSourceV86 {
             target,
             target_snapshot,
             runtime,
+            image,
         })
     }
 
@@ -182,6 +188,7 @@ impl MachineRuntimeSourceV86 {
         .map_err(|source| io_error("attach child-private machine runtime alias", source))?;
         let path = self.stage_path.join("run");
         let mounted = absolute_directory(&path)?;
+        let image = self.image.attach(&self.stage_path, &root, owner)?;
         let alias = MachineRuntimeAliasV86 {
             path,
             stage,
@@ -193,6 +200,7 @@ impl MachineRuntimeSourceV86 {
             root_snapshot: self.root_snapshot,
             runtime_snapshot: runtime.snapshot,
             owner,
+            image,
         };
         alias.revalidate()?;
         Ok(alias)
@@ -212,6 +220,7 @@ pub(super) struct MachineRuntimeAliasV86 {
     root_snapshot: crate::ObjectSnapshotV1,
     runtime_snapshot: crate::ObjectSnapshotV1,
     owner: (u32, u32),
+    image: image_v160::MachineImageAliasV160,
 }
 
 impl MachineRuntimeAliasV86 {
@@ -219,7 +228,12 @@ impl MachineRuntimeAliasV86 {
         &self.path
     }
 
+    pub(super) fn image_root(&self) -> &File {
+        self.image.root()
+    }
+
     pub(super) fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
+        self.image.revalidate()?;
         let named = absolute_directory(&self.path)?;
         let stage = absolute_directory(
             self.path

@@ -223,7 +223,7 @@ pub fn execute_compiler_execution_systemd_machine_tool_v1(
     )?;
 
     let inherited_base = inherit_exec_descriptor(&runtime.base, 10)?;
-    let inherited_root = inherit_exec_descriptor(&runtime.root, 11)?;
+    let inherited_root = inherit_exec_descriptor(runtime.image_root(), 11)?;
     // This attached alias survives nspawn's next NEWNS and /run overmount. A raw
     // inherited mount FD would instead remain tied to our old mount namespace.
     runtime.revalidate()?;
